@@ -8,8 +8,66 @@ picking favourites — which device is in charge when a room full of devices fir
 
 ## Rejoin & reconnect
 
+**Intent:** get a dropped device back into its seat — a phone that lost the Wi-Fi, an app the phone killed and the user reopened, a laptop shut for lunch — and you are reaching for a resume token to save, a `(room, device) → seat` record, a reconnect loop, or a "hold the slot open" timer.
+**Primitive:** nothing to call. Return is automatic: build the rooms with `SeamRoomFactory(…, deviceKeyStore = …)` over this device's `DeviceKeyStore` (`us.tractat.kuilt.identity`), and that store is the whole of the app's part. Every return opens with the same handshake as a first join, in which the device proves it holds its key, and the key decides the way back:
+
+| Away for… | What happens | What every member sees |
+|---|---|---|
+| less than the host holds the seat (its reconnect window, 60 s by default) | the same membership comes back, whether the link healed or the app was killed and reopened | `MembershipEvent.Resumed` under the same peer id; under a new one, `Left(old, LeaveReason.Superseded(by = new))` and then `Joined` |
+| less than its pass lasts (`GrantTerms.readmitFor`, by default 1 hour since last contact) | let back in without asking the host's `AdmissionPolicy` | `Joined`, with `returning` set to a `ReturningMark` |
+| longer, or its passes were revoked | an ordinary admission: the policy decides, as for anyone new | `Joined` |
+
+Nobody is asked anything on the way back, and the app makes no call between the drop and the return; `RoomConformanceSuite` holds every room to both. **Don't save `Room.resumeToken` or drive `Room.resume` yourself.** They are left from when the app carried the credential; the key carries it now. The passes, and who gets one, are [Device identity & return](#device-identity--return).
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#returnIsAutomaticSample -->
+```kotlin
+public suspend fun returnIsAutomaticSample(
+    loom: Loom,
+    scope: CoroutineScope,
+    clock: () -> Instant,
+    keyStore: DeviceKeyStore,
+    tag: Tag,
+): Room {
+    // One store per device, opened once at launch and shared by every room: it IS the device. On a
+    // phone or a browser that is DeviceKeyStore.platform("my-app"); a fresh InMemoryDeviceKeyStore()
+    // every launch makes this a new device every launch, and nothing comes back.
+    val factory = SeamRoomFactory(loom = loom, scope = scope, clock = clock, deviceKeyStore = keyStore)
+    // The first join and the join after an app kill are the same call. While the host still holds
+    // this device's seat, it hands that seat back, whatever peer id the fabric gives us this time.
+    return factory.join(tag, memberName = "Ada")
+}
+```
+
+**The loom decides whether the room object survives the drop.**
+
+- A loom that heals the **same seam**, with the same `selfId` — `MuxClientLoom`, `NwLoom` — keeps this room. Its own reconnect loop says hello again on the healed link and proves the key; members see `Partitioned`, then `Resumed`.
+- A loom that hands back a new seam leaves this room torn, and it ends in `HostLost`. Join again through the same factory. The host knows the key, and if it still holds the seat it hands it back, under the new peer id if the fabric gave a new one. That `join`, and the one at launch, are all the rejoin code there is.
+- **A comeback quicker than the host's detector gets a second seat.** The host gives a key's seat to a new peer id only once it has seen that seat go quiet. A phone back under a new id within the heartbeat timeout finds its old seat still live, so it is admitted beside it, as a second browser tab would be, and the old seat leaves later with `PartitionExpired`. Match members by `Member.key`, never by one seat per device.
+- **A room told it was superseded is over.** When another process of this device takes this room's seat — the app reopened while the old process lingered — this room sees `Left(selfId, LeaveReason.Superseded(by))` and closes. Do not rejoin from it: the device is already back, in the other process.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#whoCameBackSample -->
+```kotlin
+public suspend fun whoCameBackSample(room: Room) {
+    room.events.collect { event ->
+        when (event) {
+            // Same seat, same peer id: nothing on anyone's screen needs to change.
+            is MembershipEvent.Resumed -> Unit
+            is MembershipEvent.Left -> when (val reason = event.reason) {
+                // Same device under a new peer id. Move whatever you keyed on event.peerId over to
+                // reason.by, and the Joined that follows is not a stranger.
+                is LeaveReason.Superseded -> Unit // "Ada is back"
+                // On this room's own id it means another process of this device took the seat: this
+                // room is over, and the device is already back. Do not rejoin from here.
+                else -> Unit // really gone
+            }
+            else -> Unit
+        }
+    }
+}
+```
+
 **Intent:** a per-game / per-session id both peers agree on — to key a durable `(session, device) → seat` record, scope a log, or name a table.
-**Primitive:** `Room.roomId` (`us.tractat.kuilt.session`). Agreed in the admit handshake at zero extra traffic — don't mint your own and replicate it over a side channel, and don't use the host's peer id, which names the *device* and repeats across every room it hosts.
+**Primitive:** `Room.roomId` (`us.tractat.kuilt.session`). Agreed in the admit handshake at zero extra traffic — don't mint your own and replicate it over a side channel, and don't use the host's peer id, which names the *device* and repeats across every room it hosts. To name a *device* across rooms, use `Member.key` ([below](#device-identity--return)).
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#perSessionIdSample -->
 ```kotlin
@@ -24,7 +82,7 @@ public suspend fun perSessionIdSample(room: Room) {
 ```
 
 **Intent:** the room's identity is decided *outside* kuilt — a lobby code, an invite link, a matchmaker-assigned game id — and every member must read back that exact value.
-**Primitive:** `RoomFactory.host(pattern, roomId = …)`. Note what this is **not**: supplying an id does not make a *host restart* resumable. A restarted host has no roster and no reconnect-window registry, so a `ResumeToken` it accepts on identity grounds still cannot complete — cold-start rejoin is [#1593](https://github.com/tractat-us/kuilt/issues/1593), and reusing an id does not solve it.
+**Primitive:** `RoomFactory.host(pattern, roomId = …)`. A restarted host holds no seats, so a stable id brings none back. What it does keep alive is a room pass: the pass names the room by its id, so it still works after a host restart only if the room comes back under the same id ([Device identity & return](#device-identity--return)).
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#callerSuppliedRoomIdSample -->
 ```kotlin
@@ -40,68 +98,20 @@ public suspend fun callerSuppliedRoomIdSample(
 }
 ```
 
-**Intent:** rejoin / reconnect after a dropped connection; "hold the slot open" for a grace window.
-**Primitive:** `ResumeToken` (`us.tractat.kuilt.session.partition`) presented to `Room.resume` — `Room.resumeToken` mints it, `Room` is the whole public surface. (`SeamRoom`, which this entry used to name, is `internal`; `SeamRoomFactory` builds it.) Don't re-track the grace window yourself.
-
-Keep the existing room. After a transport tear, a joiner built by `SeamRoomFactory` attempts
-resume automatically within the reconnect window; the explicit call below is for manual control.
-This requires a loom that heals the **same seam instance** the room already holds, with the
-**same `selfId`**. `MuxClientLoom` and `NwLoom` provide that stable handle. The host keys the held seat by
-`token.peerId`, so a new transport identity cannot take it over.
-
-A loom that returns a new seam on each join leaves the old room's seam torn: reconnect ends in
-`HostLost`, and a later `resume` on that room returns `WindowClosed` without asking the host.
-Rebuilding the room sends `Hello` for fresh admission; it does not restore the held seat.
-Presenting a saved token when rebuilding is the separate
-[cold-start rejoin gap (#1593)](https://github.com/tractat-us/kuilt/issues/1593).
-
-<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#resumeAfterDropSample -->
-```kotlin
-public suspend fun resumeAfterDropSample(room: Room): Boolean {
-    // After the admit handshake the joiner holds a reconnect credential — save it.
-    val token: ResumeToken = room.resumeToken ?: return false
-    // Keep this room: its loom must heal the SAME seam with the SAME selfId (e.g. MuxClientLoom).
-    // SeamRoomFactory joiners attempt resume automatically after a tear; this is manual control.
-    // Once that seam is usable again, present the token within the host's reconnect window.
-    return when (val outcome = room.resume(token)) {
-        ResumeResult.Success -> false // back in the room; state resync follows
-        // The host answered, and said no. WHY is in the code, never in the message: an elapsed
-        // window and a token for another room are terminal, a window the host has not opened
-        // yet is not. See classifyRejectCodeSample.
-        is ResumeResult.Refused -> outcome.code.retryable
-        // No reply within resumeTimeout, or the seam tore under the Resume: the host is unreachable now.
-        ResumeResult.TimedOut -> true
-        // We never asked: this room is already over (left, or the host was lost), or the frame
-        // could not be sent. Re-join fresh.
-        ResumeResult.WindowClosed -> false
-    }
-}
-```
-
-Those four arms are the whole of `ResumeResult.JoinerOutcome`. The host's own verdicts —
-`WindowNotYetOpen`, `TokenInvalid` — are the other half of the hierarchy (`ResumeResult.HostVerdict`)
-and never travel to a joiner as values; they arrive as the `RejectCode` on `Refused`. Branching on
-one here is a **compile error**, which is how this entry stopped being able to advertise a
-discrimination the API does not offer (#2364). Until then it listed both, the sample compiled, and a
-consumer reading `WindowClosed -> // grace window elapsed` acted on a value that also meant "wrong
-room" and "the host hasn't noticed your drop yet" — the last of which is *transient*, and re-joining
-fresh is the wrong move for it.
-
 **Intent:** decide whether a host's *refusal* is worth retrying, instead of string-matching the reason.
-**Primitive:** `RejectCode` on `ResumeResult.Refused` / `FailureReason.Refused` / `AdmissionFailure.Rejected` (`us.tractat.kuilt.session.admit`) — branch on the code and treat anything unrecognised as retryable. The same classifier serves an in-flight resume and a session that already ended.
+**Primitive:** `RejectCode` on `FailureReason.Refused` / `AdmissionFailure.Rejected` (`us.tractat.kuilt.session.admit`) — branch on the code and treat anything unrecognised as retryable. Two refusals are about the key, and both are final: `BadProof` (the device's proof did not check out) and `KeyConflict` (another device holds this peer id's live seat). A code an app's own policy made up arrives as `RejectCode.Unknown`, carrying the `retryable` the app gave it.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#classifyRejectCodeSample -->
 ```kotlin
 public fun classifyRejectCodeSample(reason: FailureReason.Refused): Boolean =
     when (reason.code) {
-        // Terminal: the window closed, the credential can never validate here, or the two peers
-        // speak incompatible protocol versions (retrying a version you don't support is futile).
-        RejectCode.ResumeWindowExpired, RejectCode.ResumeTokenInvalid,
+        // Terminal: this device's proof was refused, another device holds this peer id's live seat,
+        // or the two peers speak incompatible protocol versions. Retrying changes none of them.
+        RejectCode.BadProof, RejectCode.KeyConflict,
         RejectCode.RoomMismatch, RejectCode.ProtocolMismatch,
         -> false
-        // Transient: the host hasn't opened the window yet (the fast-reconnect race).
-        RejectCode.ResumeWindowNotYetOpen -> true
-        // Anything else, including a code this build has never heard of.
+        // Anything else — the host's policy failing, a code an app's policy made up, a code this build
+        // has never heard of — says for itself whether a retry can help.
         else -> reason.code.retryable
     }
 ```
