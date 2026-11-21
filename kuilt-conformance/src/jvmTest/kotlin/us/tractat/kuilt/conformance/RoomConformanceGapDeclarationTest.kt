@@ -61,16 +61,19 @@ class RoomConformanceGapDeclarationTest {
             override fun newHarness(scope: CoroutineScope): RoomHarness {
                 var clockMs = 0L
                 val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
-                val factory = SeamRoomFactory(
-                    loom = InMemoryLoom(),
+                val loom = InMemoryLoom()
+                // One device per factory, as [RoomHarness] requires: a shared store would make the
+                // joiner a second tab of the host's device.
+                fun factory() = SeamRoomFactory(
+                    loom = loom,
                     scope = scope,
                     clock = clock,
                     deviceKeyStore = InMemoryDeviceKeyStore(),
                     heartbeatConfig = fastHeartbeatConfig,
                 )
                 return RoomHarness(
-                    hostFactory = factory,
-                    joinerFactory = factory,
+                    hostFactory = factory(),
+                    joinerFactory = factory(),
                     faults = FaultInjection.Unsupported(trackingUrl),
                     clock = clock,
                     advanceClock = { ms -> clockMs += ms },
