@@ -65,14 +65,13 @@ internal object KeyAdmission {
      * is wrong with it. The proof must name this room ([roomId]), this host by its key ([hostKey]) and
      * peer id ([hostPeerId]), the fabric [sender] it arrived from as the joiner, the device id the
      * joiner's Hello sent (`""` for none, as [AdmissionProof.sign] writes it), and the nonce this host
-     * chose for [pending]; and it must be signed by [joinerKey], the key that Hello named.
+     * chose for [pending]; and it must be signed by the key that Hello named.
      *
      * The signature is checked last, so a proof that is wrong in any field costs no verify.
      */
     suspend fun checkProof(
         statement: ByteArray,
         pending: PendingChallenges.Pending,
-        joinerKey: DidKey,
         roomId: String,
         hostKey: DidKey,
         hostPeerId: PeerId,
@@ -86,8 +85,8 @@ internal object KeyAdmission {
             proof.hostPeerId != hostPeerId.value -> ProofFault.WrongHostPeer
             proof.joinerPeerId != sender.value -> ProofFault.WrongJoinerPeer
             !proof.hostNonce.contentEquals(pending.hostNonce) -> ProofFault.WrongNonce
-            proof.deviceId != pending.hello.deviceId.orEmpty() -> ProofFault.WrongDeviceId
-            !proof.isSignedBy(joinerKey, scheme) -> ProofFault.BadSignature
+            proof.deviceId != pending.keyed.hello.deviceId.orEmpty() -> ProofFault.WrongDeviceId
+            !proof.isSignedBy(pending.keyed.key, scheme) -> ProofFault.BadSignature
             else -> null
         }
     }

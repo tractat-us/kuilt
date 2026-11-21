@@ -1856,7 +1856,7 @@ internal class SeamRoom(
      */
     private fun challengeJoiner(sender: PeerId, keyed: KeyedHello) {
         val hostNonce = CryptoRand.Default.nextBytes(ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE))
-        val generation = pendingChallenges.open(sender, keyed.hello, hostNonce, clock() + admitTimeout)
+        val generation = pendingChallenges.open(sender, keyed, hostNonce, clock() + admitTimeout)
         scope.launch { sendChallenge(sender, keyed, hostNonce, generation) }
     }
 
@@ -1871,7 +1871,7 @@ internal class SeamRoom(
             KeyAdmission.signChallenge(device.key, signedRoomId(), selfId, sender, keyed.joinerNonce, hostNonce)
         } catch (failure: Throwable) {
             currentCoroutineContext().ensureActive()
-            logger.warn { "room.challenge.sign-failed peer=${sender.value}: $failure" }
+            logger.warn(failure) { "room.challenge.sign-failed peer=${sender.value}" }
             if (pendingChallenges.retire(sender, generation)) {
                 val reject = AdmitMessage.Reject("challenge-failed: the host could not sign", RejectCode.Unspecified)
                 runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
@@ -1905,13 +1905,10 @@ internal class SeamRoom(
      * P-256 checks with ECDSA whatever a joiner sends.
      */
     private suspend fun handleProof(sender: PeerId, msg: AdmitMessage.Proof, pending: PendingChallenges.Pending) {
-        // Only a Hello that passed the keyed gate opens a challenge, so this is never null.
-        val keyed = pending.hello.keyed() ?: return
         val fault = try {
             KeyAdmission.checkProof(
                 statement = msg.statement,
                 pending = pending,
-                joinerKey = keyed.key,
                 roomId = signedRoomId(),
                 hostKey = device.key.id,
                 hostPeerId = selfId,
@@ -1920,7 +1917,7 @@ internal class SeamRoom(
             )
         } catch (failure: Throwable) {
             currentCoroutineContext().ensureActive()
-            logger.warn { "room.proof.check-failed peer=${sender.value}: $failure" }
+            logger.warn(failure) { "room.proof.check-failed peer=${sender.value}" }
             if (pendingChallenges.retire(sender, pending.generation)) {
                 val reject = AdmitMessage.Reject("proof-check-failed: the host could not check", RejectCode.Unspecified)
                 runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
@@ -1935,7 +1932,7 @@ internal class SeamRoom(
             }
             return
         }
-        admitPeer(sender, keyed, pending.generation)
+        admitPeer(sender, pending.keyed, pending.generation)
     }
 
     /**
@@ -1952,7 +1949,7 @@ internal class SeamRoom(
             KeyAdmission.answerChallenge(msg.statement, nonce, selfId, sender, device.scheme, device.key, deviceId)
         } catch (failure: Throwable) {
             currentCoroutineContext().ensureActive()
-            logger.warn { "room.challenge.answer-failed from=${sender.value}: $failure" }
+            logger.warn(failure) { "room.challenge.answer-failed from=${sender.value}" }
             return
         }
         if (answer == null) {
