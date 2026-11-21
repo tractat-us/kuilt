@@ -173,7 +173,7 @@ internal class SeamElectionLobby(
         }
     }
 
-    override suspend fun start(memberName: String?): Room {
+    override suspend fun start(memberName: String?, deviceId: String?): Room {
         // Host collapse (the transport-tear watcher in guardElection handles a fabric that latches Torn;
         // startElection itself handles the membership-drain case where the seam stays Woven).
         answersPings.value = true
@@ -184,7 +184,7 @@ internal class SeamElectionLobby(
             guardElection(collapseSignals = listOf(membersLostSignal())) {
                 runHostElection()
             }
-            adoptAfterCommit(SessionRole.Host, memberName)
+            adoptAfterCommit(SessionRole.Host, memberName, deviceId)
         } catch (e: LobbyTornException) {
             stopAnsweringPings()
             throw e
@@ -292,7 +292,7 @@ internal class SeamElectionLobby(
             result
         }
 
-    override suspend fun awaitRoom(memberName: String?): ElectionOutcome {
+    override suspend fun awaitRoom(memberName: String?, deviceId: String?): ElectionOutcome {
         answersPings.value = true
         return try {
             guardElection(
@@ -308,7 +308,7 @@ internal class SeamElectionLobby(
             }
             // Adoption OUTSIDE guardElection (finding #1): once the Commit is received the race is over,
             // so the became-host/tear collapse signals can no longer cancel adoptRoom mid-commit.
-            ElectionOutcome.Adopted(adoptAfterCommit(SessionRole.Joiner, memberName))
+            ElectionOutcome.Adopted(adoptAfterCommit(SessionRole.Joiner, memberName, deviceId))
         } catch (e: PromotedToHostSignal) {
             logger.info { "lobby.awaitRoom.promoted self=${selfId.value} roster=${e.roster.map { it.value }} → BecameHost (recovery: start() on this lobby)" }
             ElectionOutcome.BecameHost
@@ -584,9 +584,9 @@ internal class SeamElectionLobby(
      * we adopt is surfaced as a clean retryable [LobbyTornException]; a tear *during* the fast, now
      * uncancellable adopt is handled by the room's own `runTornWatcher` (a born-dead room), not a wedge.
      */
-    private suspend fun adoptAfterCommit(role: SessionRole, memberName: String?): Room {
+    private suspend fun adoptAfterCommit(role: SessionRole, memberName: String?, deviceId: String?): Room {
         (seam.state.value as? SeamState.Torn)?.let { throw LobbyTornException(it.reason) }
-        return adoptRoom(role, memberName)
+        return adoptRoom(role, memberName, deviceId)
     }
 
     /**
@@ -594,7 +594,7 @@ internal class SeamElectionLobby(
      * the lobby collector has fully stopped before the room starts its own collector (single-collection).
      * Callable at most once.
      */
-    private suspend fun adoptRoom(role: SessionRole, memberName: String?): Room =
+    private suspend fun adoptRoom(role: SessionRole, memberName: String?, deviceId: String?): Room =
         adoptMutex.withLock {
             check(!adopted) { "lobby already adopted a room" }
             adopted = true
@@ -610,7 +610,7 @@ internal class SeamElectionLobby(
             // attemptReconnect. Without a reweave that lane ends at HostLost(Unrecoverable) with no
             // WindowOpened; with it, a path that returns inside the window resumes the same room instead
             // of collapsing it and forcing a re-election. A tear past the window still ends terminal.
-            factory.adopt(seam, role, memberName = memberName, roomKey = roomKey, reweave = { seam })
+            factory.adopt(seam, role, memberName = memberName, roomKey = roomKey, reweave = { seam }, deviceId = deviceId)
         }
 
     private companion object {

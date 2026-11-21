@@ -2,15 +2,20 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.election.ElectionOutcome
+import us.tractat.kuilt.session.election.SeamElectionLobby
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
+import kotlin.test.assertIs
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.time.Instant
@@ -60,6 +65,48 @@ class JoinDeviceIdTest {
             assertEquals("d-2", hostRoom.roster.first { it.size == 1 }.single().identity.deviceId)
 
             joinerRoom.leave()
+            hostRoom.leave()
+        }
+
+    /**
+     * A joiner that reaches its room through the election lobby sends its `deviceId` too (#3271).
+     * Until `awaitRoom` took one, every lobby-admitted joiner sent null, and from the admission proof
+     * on (#3211) the proof signs that field, so the device could not be told from one with no id.
+     */
+    @Test
+    fun lobbyJoinerSendsItsDeviceId() =
+        runTest {
+            val loom = InMemoryLoom()
+            // Two devices, two factories, two lobbies over one mesh. `electLobby` weaves `New` on every
+            // peer, which a flat InMemoryLoom refuses twice, so the second peer weaves `Existing`.
+            fun lobby(seam: Seam, device: Int) = SeamElectionLobby(
+                seam = seam,
+                factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(device)),
+                scope = backgroundScope,
+                clock = clock,
+                roomKey = null,
+            )
+            val lobbies = listOf(
+                lobby(loom.weave(Rendezvous.New(Pattern("lobby"))), device = 5),
+                lobby(loom.weave(Rendezvous.Existing(InMemoryTag("lobby"))), device = 6),
+            )
+            val elected = lobbies[0].host.first { lobbies[0].peers.value.size == 2 }
+            lobbies[1].host.first { lobbies[1].peers.value.size == 2 }
+            val hostLobby = lobbies.single { it.selfId == elected }
+            val memberLobby = lobbies.single { it.selfId != elected }
+
+            val memberOutcome = async { memberLobby.awaitRoom(memberName = "Bob", deviceId = "d-lobby") }
+            val hostRoom = hostLobby.start(memberName = "Alice", deviceId = "d-host")
+            val memberRoom = assertIs<ElectionOutcome.Adopted>(memberOutcome.await()).room
+
+            // The rig: the host admitted exactly the one lobby joiner, so its Hello reached the host.
+            val admitted = hostRoom.roster.first { it.size == 1 }.single()
+            assertAll(
+                { assertEquals(memberLobby.selfId, admitted.id) },
+                { assertEquals("d-lobby", admitted.identity.deviceId) },
+            )
+
+            memberRoom.leave()
             hostRoom.leave()
         }
 }
