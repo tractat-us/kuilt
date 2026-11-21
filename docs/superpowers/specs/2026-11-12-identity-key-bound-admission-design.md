@@ -179,6 +179,18 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
       Decided 18 releases the id's partitioned seat, the proven key is decided again under this rule.
     - Decided 18's same-id, different-key, **connected** refusal stands: that is another device
       claiming a live member's peer id, not a second tab.
+31. **`Room.resumeToken` and `Room.resume` are removed, not kept (Iain, 2026-11-20, #3159 census).**
+    Once the secret is gone, a token proves nothing, and return is the joiner's own re-Hello (Task
+    1.7). Task 1.8 therefore deletes `Room.resumeToken`, `Room.resume`, `RoomFactory`'s token
+    plumbing, `ResumeToken` itself and `mintTokenIfAbsent`. "If we find we are wrong we can add it
+    back." Consequences:
+    - Nothing is minted any more, so census P12 (when a joiner mints a token) is moot.
+    - `ResumeResult.TokenInvalid` goes with the token. `ResumeResult.WindowNotYetOpen` and
+      `tryResume`'s other verdicts stay only if the host-side `ProvenResume` path (Task 1.5) still
+      produces them. 1.8 greps for a producer and deletes any code that has none (census P11).
+    - Every KDoc, cookbook entry and Writerside topic that teaches app-driven resume is rewritten in
+      1.8 or 1.9. That includes the #1593 citations on `Room.roomId` and `RoomFactory.host`, and the
+      spike's #1637 probe (census P13).
 
 ## Goals
 
