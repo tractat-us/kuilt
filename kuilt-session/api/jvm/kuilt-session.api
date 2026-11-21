@@ -88,6 +88,17 @@ public final class us/tractat/kuilt/session/LeaveReason$PartitionExpired : us/tr
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/session/LeaveReason$Superseded : us/tractat/kuilt/session/LeaveReason {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun copy-ngToHgY (Ljava/lang/String;)Lus/tractat/kuilt/session/LeaveReason$Superseded;
+	public static synthetic fun copy-ngToHgY$default (Lus/tractat/kuilt/session/LeaveReason$Superseded;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/LeaveReason$Superseded;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBy-PaHlmAU ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface class us/tractat/kuilt/session/Liveness {
 }
 
@@ -524,15 +535,17 @@ public final class us/tractat/kuilt/session/admit/AdmitMessage$Companion {
 
 public final class us/tractat/kuilt/session/admit/AdmitMessage$Farewell : us/tractat/kuilt/session/admit/AdmitMessage {
 	public static final field Companion Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell$Companion;
-	public fun <init> (Ljava/lang/String;Z)V
-	public synthetic fun <init> (Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;ZLjava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ZLjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Z
-	public final fun copy (Ljava/lang/String;Z)Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell;Ljava/lang/String;ZILjava/lang/Object;)Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;ZLjava/lang/String;)Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell;Ljava/lang/String;ZLjava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getExpired ()Z
 	public final fun getPeerId ()Ljava/lang/String;
+	public final fun getSupersededBy ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

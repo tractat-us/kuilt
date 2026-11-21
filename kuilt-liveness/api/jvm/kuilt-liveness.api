@@ -24,6 +24,7 @@ public final class us/tractat/kuilt/liveness/HeartbeatPartitionDetector : us/tra
 	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Ljava/lang/String;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Ljava/lang/String;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun getEvents ()Lkotlinx/coroutines/flow/Flow;
+	public final fun getLastHeard ()Lkotlin/time/Instant;
 	public fun observedPeer-ngToHgY (Ljava/lang/String;)V
 	public fun onBackpressure-ngToHgY (Ljava/lang/String;)V
 	public fun start (Lkotlinx/coroutines/CoroutineScope;)V
