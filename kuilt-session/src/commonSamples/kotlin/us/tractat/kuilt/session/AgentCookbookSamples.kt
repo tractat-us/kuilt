@@ -432,8 +432,8 @@ public suspend fun hostAdmissionSample(
     blocked: StateFlow<Set<DidKey>>,
     store: DurableStore,
 ): HostAdmission {
-    // RejectCode is open, but the joiner sees only the id: this arrives as RejectCode.Unknown("not-welcome"),
-    // which is treated as retryable.
+    // RejectCode is open. The joiner sees this as RejectCode.Unknown("not-welcome"), retryable, since
+    // this code does not say otherwise: its id and its retryable cross the wire, and nothing else.
     val notWelcome = object : RejectCode {
         override val id: String = "not-welcome"
     }
