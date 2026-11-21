@@ -265,9 +265,8 @@ class ProvenRestoreConcurrencyTest {
      * him afresh. The loss is about the membership that is over, so it must not evict the new one.
      *
      * The detector's window is one heartbeat interval, so its loss lands a few milliseconds after the
-     * drop. The challenge is drawn before the drop, so the Proof is the only frame from bob after it,
-     * sent at a random moment around the loss: before the detector looks (it heals), between its look
-     * and its loss, or after the loss. A loss already taken off the detector's channel when the
+     * drop. Bob's Hello and Proof are sent at a random moment around it: before the detector looks
+     * (it heals), between its look and its loss, or after the loss. A loss already taken off the detector's channel when the
      * release stops that detector is handled anyway, after the readmission: that is the interleaving
      * which, with the detector check gone from `handlePeerLost`, evicts the new bob.
      */
@@ -289,13 +288,14 @@ class ProvenRestoreConcurrencyTest {
                     rig.start(stage)
                     rig.controller.onAsk = { _, _ -> ResumeResult.WindowClosed }
                     for (round in 0 until LOSS_ROUNDS) {
-                        val challenge = rig.hello(bob)
                         rig.partitionBob(stage, round)
                         val recoveredBefore = rig.controller.recovered.get()
                         val introsBefore = rig.hostIntrosTo(bob)
                         val wait = jitter.nextLong(0, LOSS_PROOF_DELAY_NANOS)
                         delay(wait / 1_000_000)
                         spin(wait % 1_000_000)
+                        // Not before the drop: leaving the fabric forgets a sender's open challenge.
+                        val challenge = rig.hello(bob)
                         rig.inbound.send(Swatch(AdmitMessage.encode(handProof(challenge, host, TEST_DEVICE_A)), sender = bob))
                         stage.at("round $round: awaiting the restore or readmission") { rig.snapshot() }
                         val edge = rig.events.first { events -> events.any { it.isEdgeOf(bob) } }.first { it.isEdgeOf(bob) }
