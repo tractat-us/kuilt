@@ -1873,7 +1873,7 @@ internal class SeamRoom(
             currentCoroutineContext().ensureActive()
             logger.warn(failure) { "room.challenge.sign-failed peer=${sender.value}" }
             if (pendingChallenges.retire(sender, generation)) {
-                val reject = AdmitMessage.Reject("challenge-failed: the host could not sign", RejectCode.Unspecified)
+                val reject = AdmitMessage.Reject("host-failed: the host could not sign its challenge", RejectCode.HostFailed)
                 runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
             }
             return
@@ -1919,7 +1919,7 @@ internal class SeamRoom(
             currentCoroutineContext().ensureActive()
             logger.warn(failure) { "room.proof.check-failed peer=${sender.value}" }
             if (pendingChallenges.retire(sender, pending.generation)) {
-                val reject = AdmitMessage.Reject("proof-check-failed: the host could not check", RejectCode.Unspecified)
+                val reject = AdmitMessage.Reject("host-failed: the host could not check the proof", RejectCode.HostFailed)
                 runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
             }
             return

@@ -489,9 +489,44 @@ class KeyAdmissionTest {
         say(seam, eve, proof(seam.challengesTo(eve).single(), joiner = eveKey))
 
         assertAll(
-            { assertEquals(1, refused.size, "the joiner hears a Reject") },
-            { assertTrue(refused.single().code.retryable, "the host's own failure is retryable") },
+            { assertEquals(listOf(RejectCode.HostFailed), refused.map { it.code }, "the joiner hears the host failed") },
+            { assertTrue(RejectCode.HostFailed.retryable, "the host's own failure is retryable") },
             { assertTrue(seam.challengesTo(bob).isEmpty(), "no challenge went out") },
+            { assertEquals(setOf(eve), room.roster.value.map { it.id }.toSet(), "the room still admits") },
+        )
+        room.leave()
+    }
+
+    /**
+     * A host that cannot check a proof — its provider fails on verify — refuses the joiner with a
+     * retryable `HostFailed`, never `BadProof`: the joiner's proof was never judged. The room keeps
+     * running, and admits the next honest proof once verify works again.
+     */
+    @Test
+    fun proofCheckFailureIsARetryableRejectNotACrash() = runTest {
+        var failVerify = true
+        var verifyCalls = 0
+        val scheme = FakeKeyScheme(Random(0)) { op ->
+            if (op is FakeKeyOperation.Verify) {
+                verifyCalls++
+                if (failVerify) throw IllegalStateException("provider down")
+            }
+        }
+        val (seam, room) = hostRoom(fakeKeyStore(0, scheme))
+        say(seam, bob, hello("Bob", bobKey.id, nonce = 1))
+        say(seam, bob, proof(seam.challengesTo(bob).single(), joiner = bobKey))
+        val refused = seam.rejectsTo(bob)
+        val callsWhileFailing = verifyCalls
+
+        failVerify = false
+        say(seam, eve, hello("Eve", eveKey.id, nonce = 2))
+        say(seam, eve, proof(seam.challengesTo(eve).single(), joiner = eveKey))
+
+        assertAll(
+            { assertEquals(1, callsWhileFailing, "rig: the host tried to verify Bob's proof once") },
+            { assertEquals(listOf(RejectCode.HostFailed), refused.map { it.code }, "the joiner hears the host failed") },
+            { assertTrue(refused.singleOrNull()?.code?.retryable == true, "and may try again") },
+            { assertTrue(room.roster.value.none { it.id == bob }, "an unchecked proof admits nobody") },
             { assertEquals(setOf(eve), room.roster.value.map { it.id }.toSet(), "the room still admits") },
         )
         room.leave()
