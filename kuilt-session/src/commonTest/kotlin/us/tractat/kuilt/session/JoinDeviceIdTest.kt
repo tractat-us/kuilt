@@ -9,8 +9,10 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.election.ElectionOutcome
+import us.tractat.kuilt.session.election.SeamElectionLobby
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertIs
@@ -75,10 +77,18 @@ class JoinDeviceIdTest {
     fun lobbyJoinerSendsItsDeviceId() =
         runTest {
             val loom = InMemoryLoom()
-            // Two devices, two factories, two lobbies over one mesh.
+            // Two devices, two factories, two lobbies over one mesh. `electLobby` weaves `New` on every
+            // peer, which a flat InMemoryLoom refuses twice, so the second peer weaves `Existing`.
+            fun lobby(seam: Seam, device: Int) = SeamElectionLobby(
+                seam = seam,
+                factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(device)),
+                scope = backgroundScope,
+                clock = clock,
+                roomKey = null,
+            )
             val lobbies = listOf(
-                SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(5)).electLobby(Pattern("lobby")),
-                SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(6)).electLobby(Pattern("lobby")),
+                lobby(loom.weave(Rendezvous.New(Pattern("lobby"))), device = 5),
+                lobby(loom.weave(Rendezvous.Existing(InMemoryTag("lobby"))), device = 6),
             )
             val elected = lobbies[0].host.first { lobbies[0].peers.value.size == 2 }
             lobbies[1].host.first { lobbies[1].peers.value.size == 2 }

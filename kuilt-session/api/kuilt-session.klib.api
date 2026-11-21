@@ -132,9 +132,9 @@ abstract interface us.tractat.kuilt.session.election/ElectionLobby { // us.tract
     abstract val state // us.tractat.kuilt.session.election/ElectionLobby.state|{}state[0]
         abstract fun <get-state>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.core/SeamState> // us.tractat.kuilt.session.election/ElectionLobby.state.<get-state>|<get-state>(){}[0]
 
-    abstract suspend fun awaitRoom(kotlin/String? = ...): us.tractat.kuilt.session.election/ElectionOutcome // us.tractat.kuilt.session.election/ElectionLobby.awaitRoom|awaitRoom(kotlin.String?){}[0]
+    abstract suspend fun awaitRoom(kotlin/String? = ..., kotlin/String? = ...): us.tractat.kuilt.session.election/ElectionOutcome // us.tractat.kuilt.session.election/ElectionLobby.awaitRoom|awaitRoom(kotlin.String?;kotlin.String?){}[0]
     abstract suspend fun leave() // us.tractat.kuilt.session.election/ElectionLobby.leave|leave(){}[0]
-    abstract suspend fun start(kotlin/String? = ...): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.election/ElectionLobby.start|start(kotlin.String?){}[0]
+    abstract suspend fun start(kotlin/String? = ..., kotlin/String? = ...): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.election/ElectionLobby.start|start(kotlin.String?;kotlin.String?){}[0]
 }
 
 abstract interface us.tractat.kuilt.session.partition/JoinerReconnectController { // us.tractat.kuilt.session.partition/JoinerReconnectController|null[0]
