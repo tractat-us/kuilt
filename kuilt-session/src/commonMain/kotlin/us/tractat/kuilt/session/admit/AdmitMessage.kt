@@ -264,12 +264,23 @@ public sealed interface AdmitMessage {
      * joiner's roster (#1557). Defaulted so it is wire-safe: a frame from an older build that
      * never sends the field decodes as a clean leave, which is what that build meant.
      *
+     * [supersededBy] — set when the departed member's held seat was taken over by the same device
+     * under a new peer id (v6, #3159): the [us.tractat.kuilt.core.PeerId] value of the member that
+     * took it. A member evicts with [us.tractat.kuilt.session.LeaveReason.Superseded] naming it, and
+     * the roster [Welcome] for that member follows on the same lane. The host also sends this
+     * Farewell **directly** to the superseded member, which then ends its room and never says Hello
+     * again. `null` on every other Farewell.
+     *
      * Wire-compatible: an older build that doesn't know this message drops it as
      * malformed and degrades to its own heartbeat-window eviction (the prior behavior).
      */
     @Serializable
     @SerialName("farewell")
-    public data class Farewell(val peerId: String, val expired: Boolean = false) : AdmitMessage
+    public data class Farewell(
+        val peerId: String,
+        val expired: Boolean = false,
+        val supersededBy: String? = null,
+    ) : AdmitMessage
 
     /**
      * Sent by the host to every other member when a member's link drops and its seat is

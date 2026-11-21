@@ -44,6 +44,15 @@ package us.tractat.kuilt.session.admit
  * same peer id under a different key is refused [RejectCode.KeyConflict] while that seat's member
  * is connected. A v4 joiner reads neither, so the gate refuses it.
  *
+ * ## Version 6 — a known key under a new peer id supersedes its old seat (#3213)
+ *
+ * Version 6 lets a proven key under a new peer id take over that key's **partitioned** seat: the old
+ * member leaves with [us.tractat.kuilt.session.LeaveReason.Superseded], and every other member is
+ * sent a [AdmitMessage.Farewell] whose `supersededBy` names the new id, ahead of its roster Welcome.
+ * The superseded member is sent the same Farewell and ends its room rather than saying Hello again.
+ * A v5 member would read that Farewell as a clean leave and, if superseded, reconnect, so the gate
+ * refuses it.
+ *
  * Every later change to what a joiner must send to be admitted bumps this line again.
  *
  * ## The limit of this gate, stated plainly
@@ -54,13 +63,13 @@ package us.tractat.kuilt.session.admit
  */
 public object ProtocolVersion {
     /** The protocol version this build stamps into every [AdmitMessage.Hello] it sends. */
-    public const val CURRENT: Int = 5
+    public const val CURRENT: Int = 6
 
     /** Oldest declared version this build will admit. */
-    public const val MIN_SUPPORTED: Int = 5
+    public const val MIN_SUPPORTED: Int = 6
 
     /** Newest declared version this build will admit. */
-    public const val MAX_SUPPORTED: Int = 5
+    public const val MAX_SUPPORTED: Int = 6
 
     /**
      * Whether a joiner's declared [version] is one this host can admit.
