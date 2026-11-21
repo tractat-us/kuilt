@@ -352,8 +352,10 @@ public interface Room {
      * [MembershipEvent.HostLost]. A later call on that terminal room returns
      * [ResumeResult.WindowClosed] without asking the host. A rebuilt room needs no token: its
      * `Hello` proves the device key its held seat was admitted under, and a host still holding that
-     * seat under the same peer id restores it (#3212). Calling this afterwards finds the window
-     * already spent on that restore, and is refused.
+     * seat under the same peer id restores it (#3212). Whether calling this afterwards can still
+     * succeed depends on how the seat came back. A seat restored through its open window spent that
+     * window, so the call is refused. A seat that was still connected, or whose window had not opened
+     * yet, came back without spending one, so the window is left as it was and may still resume.
      *
      * Returns a [ResumeResult.JoinerOutcome], never the whole [ResumeResult] hierarchy: the host's
      * own verdicts ([ResumeResult.WindowNotYetOpen], [ResumeResult.TokenInvalid]) do not travel as
