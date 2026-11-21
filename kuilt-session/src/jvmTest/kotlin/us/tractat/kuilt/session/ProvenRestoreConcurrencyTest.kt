@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
@@ -123,7 +124,7 @@ class ProvenRestoreConcurrencyTest {
                         val introsBefore = rig.hostIntrosTo(bob)
                         rig.prove(bob, TEST_DEVICE_A, TEST_KEY_A)
                         stage.at("round $round: awaiting the readmission") { rig.snapshot() }
-                        rig.events.first { events -> events.any { it is MembershipEvent.Joined && it.member.id == bob } }
+                        rig.awaitEdge()
                         rig.awaitIntros(bob, introsBefore + 1)
                         rig.quiesce(stage, round)
 
@@ -156,7 +157,7 @@ class ProvenRestoreConcurrencyTest {
                         "proven-restore expiry: completed=$completed expiryFirst=$expiryFirst proofFirst=$proofFirst " +
                             "expiryBetweenProofSections=$expiryBetweenProofSections notSeated=$notSeated " +
                             "noDetector=$noDetector lastEventNotJoined=$lastEventNotJoined " +
-                            "carolLastNotWelcome=$carolLastNotWelcome failures=$failures",
+                            "carolLastNotWelcome=$carolLastNotWelcome retries=${rig.retries.get()} failures=$failures",
                     )
                     assertAll(
                         { assertEquals(EXPIRY_ROUNDS, completed, "every round ran") },
@@ -210,9 +211,7 @@ class ProvenRestoreConcurrencyTest {
                             delay(jitter.nextLong(0, HEAL_PROOF_DELAY_MS))
                         }
                         stage.at("round $round: awaiting the restore or readmission") { rig.snapshot() }
-                        val edge = rig.events.first { events ->
-                            events.any { (it is MembershipEvent.Resumed && it.peerId == bob) || (it is MembershipEvent.Joined && it.member.id == bob) }
-                        }.first { (it is MembershipEvent.Resumed && it.peerId == bob) || (it is MembershipEvent.Joined && it.member.id == bob) }
+                        val edge = rig.awaitEdge()
                         rig.awaitIntros(bob, introsBefore + 1)
                         // A restore needs the heal, and a release tells the controller; either way
                         // one onPeerRecovered closes the round's window, and it is the last thing
@@ -245,7 +244,7 @@ class ProvenRestoreConcurrencyTest {
                     println(
                         "proven-restore heal: completed=$completed healFirst=$healFirst releaseFirst=$releaseFirst " +
                             "disallowedEdges=$disallowedEdges unpausedThenFarewell=$unpausedThenFarewell " +
-                            "notSeated=$notSeated failures=$failures",
+                            "notSeated=$notSeated retries=${rig.retries.get()} failures=$failures",
                     )
                     assertAll(
                         { assertEquals(HEAL_ROUNDS, completed, "every round ran") },
@@ -300,7 +299,7 @@ class ProvenRestoreConcurrencyTest {
                         val challenge = rig.hello(bob)
                         rig.inbound.send(Swatch(AdmitMessage.encode(handProof(challenge, host, TEST_DEVICE_A)), sender = bob))
                         stage.at("round $round: awaiting the restore or readmission") { rig.snapshot() }
-                        val edge = rig.events.first { events -> events.any { it.isEdgeOf(bob) } }.first { it.isEdgeOf(bob) }
+                        val edge = rig.awaitEdge()
                         rig.awaitIntros(bob, introsBefore + 1)
                         rig.slowPingNanos = 0
                         stage.at("round $round: awaiting the heal's window close") { rig.snapshot() }
@@ -338,7 +337,7 @@ class ProvenRestoreConcurrencyTest {
                     println(
                         "proven-restore loss: completed=$completed healFirst=$healFirst releaseFirst=$releaseFirst " +
                             "lossFirst=$lossFirst disallowedEdges=$disallowedEdges notSeated=$notSeated " +
-                            "noDetector=$noDetector carolLastNotWelcome=$carolLastNotWelcome failures=$failures",
+                            "noDetector=$noDetector carolLastNotWelcome=$carolLastNotWelcome retries=${rig.retries.get()} failures=$failures",
                     )
                     assertAll(
                         { assertEquals(LOSS_ROUNDS, completed, "every round ran") },
@@ -394,7 +393,7 @@ class ProvenRestoreConcurrencyTest {
 
     private class Rig(
         dispatcher: CoroutineDispatcher,
-        interval: Duration,
+        private val interval: Duration,
         device: RoomDevice,
         /** How long a detector waits on a partitioned peer before its `PeerLost`. */
         detectorWindow: Duration = 100_000.hours,
@@ -481,6 +480,24 @@ class ProvenRestoreConcurrencyTest {
             return checkNotNull(challenges[peer]).receive()
         }
 
+        /** Rig retries: a drop the detector could not see yet, or an exchange the room never answered. */
+        val retries = AtomicInteger(0)
+
+        /**
+         * Bob's `Resumed` or `Joined` this round. An exchange that draws nothing is sent again: the
+         * room forgets the open challenge of a sender that leaves the fabric, and its watcher of the
+         * fabric can act on bob's drop after he is back and has said Hello. A second exchange makes
+         * the first stale, so it seats nobody. A rig retry, counted.
+         */
+        suspend fun awaitEdge(): MembershipEvent {
+            while (true) {
+                val seen = withTimeoutOrNull(STALL_GRACE) { events.first { events -> events.any { it.isEdgeOf(bob) } } }
+                if (seen != null) return seen.first { it.isEdgeOf(bob) }
+                retries.incrementAndGet()
+                prove(bob, TEST_DEVICE_A, TEST_KEY_A)
+            }
+        }
+
         /** Hello, then the Proof answering its challenge; [beforeProof] runs once the challenge is in. */
         suspend fun prove(peer: PeerId, device: DeviceKey, key: DidKey, beforeProof: suspend () -> Unit = {}) {
             inbound.send(Swatch(AdmitMessage.encode(currentHello(peer.value, sessionId = peer.value, key = key)), sender = peer))
@@ -500,7 +517,15 @@ class ProvenRestoreConcurrencyTest {
             val previous = controller.episode.value
             peers.update { it - bob }
             stage.at("round $round: bob partitions") { snapshot() }
-            events.first { events -> events.any { it is MembershipEvent.Partitioned && it.peerId == bob } }
+            while (withTimeoutOrNull(STALL_GRACE) { events.first { events -> events.any { it.isPartitionOf(bob) } } } == null) {
+                // A detector notices a peer leave only once it has seen the peer listed, and a new one
+                // looks first when it starts: dropped before then, bob is never partitioned. List him
+                // again until the detector has looked, then drop him again. A rig retry, counted.
+                retries.incrementAndGet()
+                peers.update { it + bob }
+                delay(interval + 50.milliseconds)
+                peers.update { it - bob }
+            }
             // The room reports the partition to the controller after it emits Partitioned.
             val episode = controller.episode.first { it != previous }
             val deadline = Instant.fromEpochMilliseconds(controller.deadlineFor(episode))
@@ -584,6 +609,11 @@ class ProvenRestoreConcurrencyTest {
         val PING = HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray()
 
         fun ByteArray.isPing(): Boolean = size >= PING.size && PING.indices.all { this[it] == PING[it] }
+
+        /** How long a round waits on the room before it treats the wait as a rig miss and retries. */
+        val STALL_GRACE = 3.seconds
+
+        fun MembershipEvent.isPartitionOf(peer: PeerId): Boolean = this is MembershipEvent.Partitioned && peerId == peer
 
         fun MembershipEvent.isEdgeOf(peer: PeerId): Boolean =
             (this is MembershipEvent.Resumed && peerId == peer) || (this is MembershipEvent.Joined && member.id == peer)
