@@ -887,10 +887,13 @@ internal class SeamRoom(
      * path needs a partition before it can reach the controller, so the leftover can never swallow
      * that path's own event.
      *
-     * A set by peer id is enough against the Proof path because only one Proof exchange asks about a
-     * seat at a time ([windowClaims]): two exchanges asking about one seat, the second one refused
-     * because the first spent the window, would have the refusal delete the first one's entry, and
-     * the echo of the first `Success` would then restore a member who has left (#3213).
+     * A set by peer id is enough among Proof exchanges because only one of them asks about a seat at
+     * a time ([windowClaims]): two exchanges asking about one seat, the second one refused because
+     * the first spent the window, would have the refusal delete the first one's entry, and the echo
+     * of the first `Success` would then restore a member who has left (#3213). The old `Resume` path
+     * is the one asker that takes no claim: [handleResume] asks the controller about a seat a Proof
+     * exchange may be asking about at the same time, so that race is still open. It is tracked by
+     * #3612 and ends when Task 1.8 deletes `Resume`.
      */
     private val proofResumes = mutableSetOf<PeerId>()
 
@@ -1899,6 +1902,10 @@ internal class SeamRoom(
                 SeatOutcome.Stale -> return logStaleAdmission(joinerPeerId)
                 is SeatOutcome.AwaitWindow -> {
                     logger.debug { "room.admit.await-window peer=${joinerPeerId.value} seat=${seating.seat.value}" }
+                    // This exchange has moved on from the seat its answer was about, and released its
+                    // claim on that seat, so another exchange may end the seat while this one waits.
+                    // An answer about it must never be acted on after that.
+                    if (asked?.peerId != seating.seat) asked = null
                     seating.released.await()
                 }
                 is SeatOutcome.SpentWindowSettled -> {
@@ -1907,6 +1914,8 @@ internal class SeamRoom(
                     asked = null
                 }
                 is SeatOutcome.AskWindow -> {
+                    // As for a wait: an answer about a seat this exchange has moved on from is dropped.
+                    if (asked?.peerId != seating.peerId) asked = null
                     val answer = askWindow(seating.peerId, keyed.key)
                     if (answer == WindowAnswer.Failed) {
                         if (pendingChallenges.retire(joinerPeerId, generation)) {
@@ -2136,9 +2145,14 @@ internal class SeamRoom(
      * - the seat is still held, partitioned, in the episode the answer was about: it is released
      *   ([releaseHeldSeat]), with its expired `Farewell` enqueued to the other members in this
      *   section. Nobody can restore it now: the next ask, same id or new, is refused.
-     * - the seat is gone, without a takeover (its detector's `PeerLost` evicted it, which tells no one
-     *   because an expiry normally does, and this window will never expire): its expired `Farewell` is
-     *   enqueued here, as [ExpiryVerdict.AlreadyGone] does, so a star bystander does not keep it.
+     * - the seat is gone: its expired `Farewell` is enqueued here, as [ExpiryVerdict.AlreadyGone]
+     *   does, so a star bystander does not keep it. The departure this is written for is its
+     *   detector's `PeerLost`, which tells no one because an expiry normally does, and this window will
+     *   never expire. Others have announced themselves already — a [SeatDecision.ReleaseAndAdmit] by a
+     *   claimant under another key, or a newer episode's expiry — and then the `Farewell` is a repeat,
+     *   which a bystander drops. A takeover by another exchange can only follow a newer episode's ask,
+     *   and an exchange that moves on to ask about or wait for another seat forgets its answer first
+     *   ([seatProvenJoiner]), so a `Superseded` departure is never followed by an expired one.
      * - the seat healed, or was partitioned again in a newer episode: null. A healed seat is a member
      *   who is here, and a newer episode has a window of its own whose expiry fans out.
      *
