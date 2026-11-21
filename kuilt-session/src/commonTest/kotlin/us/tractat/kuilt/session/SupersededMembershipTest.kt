@@ -343,7 +343,7 @@ class SupersededMembershipTest {
         assertAll(
             { assertEquals(listOf(t2), hold.calls.map { it.peerId }, "the most recently connected seat is the one restored") },
             { assertEquals(superseded(t2, by = t3), edges.firstOrNull { it is MembershipEvent.Left }, edges.render()) },
-            { assertIs<Liveness.Partitioned>(host.roster.value.single { it.id == t1 }.liveness, "tab 1's seat is still held") },
+            { assertIs<Liveness.Partitioned>(host.roster.value.firstOrNull { it.id == t1 }?.liveness, "tab 1's seat is still held") },
             { assertEquals(setOf(t1, t3), host.roster.value.map { it.id }.toSet()) },
         )
         tab3.leave()
