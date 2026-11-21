@@ -5,6 +5,7 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -39,10 +40,6 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
-
-// DRAFT (#3159, Tasks 1.5–1.7): uncompiled. Written against the 1.4 branch at 65257d458 and the plan's
-// signatures for symbols that do not exist yet (ProvenResume, the new tryResume). See
-// DRAFT-NOTES-tests.md at the repo root of branch draft/3159-tests-1.5-1.7.
 
 /**
  * The shared rig of the key → seat tests (#3159, Tasks 1.5 and 1.6): a host whose joiners are driven
@@ -88,6 +85,8 @@ internal fun TestScope.processScope(): CoroutineScope =
  */
 internal class ObservedHold(
     private val verdict: ((ProvenResume) -> ResumeResult.HostVerdict)? = null,
+    /** When set, every `tryResume` suspends here before it answers: the room is mid-ask until it completes. */
+    private val gate: CompletableDeferred<Unit>? = null,
 ) {
     var real: DefaultJoinerReconnectController? = null
     val calls = mutableListOf<ProvenResume>()
@@ -104,6 +103,7 @@ internal class ObservedHold(
         object : JoinerReconnectController by controller {
             override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict {
                 calls += resume
+                gate?.await()
                 return (verdict?.invoke(resume) ?: controller.tryResume(resume, at)).also { verdicts += it }
             }
         }

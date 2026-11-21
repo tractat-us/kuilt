@@ -5,6 +5,7 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
@@ -25,10 +26,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-
-// DRAFT (#3159, Task 1.5): uncompiled. Assumes ProvenResume, JoinerReconnectController.tryResume(
-// ProvenResume, Long), Welcome.returnKind and ReturnKind from the plan's Task 1.5. See
-// DRAFT-NOTES-tests.md on branch draft/3159-tests-1.5-1.7.
 
 /**
  * A joiner that proves the key a held seat was admitted under gets that seat back (#3159, Task 1.5).
@@ -349,7 +346,7 @@ class ProvenRestoreTest {
      * treated as gone and the key is decided again without it: ordinary admission, as a new member.
      *
      * Only the `Ordinary` arm is here. The `Returning` arm (a valid grant) needs the host to verify a
-     * presented grant, which lands in Task 2.6; see DRAFT-NOTES-tests.md.
+     * presented grant, which lands in Task 2.6 with the per-key revocation check.
      */
     @Test
     fun windowExpiredDecidesAgainWithoutTheSeat() = runTest {
@@ -449,6 +446,42 @@ class ProvenRestoreTest {
             { assertTrue(RejectCode.HostFailed.retryable, "so the joiner tries again") },
             { assertTrue(edges.isEmpty(), "the seat is neither restored nor released: ${edges.render()}") },
             { assertIs<Liveness.Partitioned>(host.member(bob)?.liveness, "the seat is still held") },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * Bob says Goodbye while the host is still asking the controller about his seat. The decision is
+     * taken again once the controller answers, and by then Bob's challenge has been dropped: nobody is
+     * seated, so no ghost of Bob comes back after his Goodbye. Read only at the first decision, the
+     * seat is gone, the key would be decided again, and Bob admitted as a new member.
+     */
+    @Test
+    fun goodbyeWhileTheWindowIsAskedSeatsNobody() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val host = rawHost(
+            joiners = setOf(bob, carol),
+            hold = ObservedHold(verdict = { ResumeResult.WindowClosed }, gate = gate),
+        )
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+
+        host.admit(bob, bobKey, nonce = 3)
+        assertEquals(listOf(bob), host.hold.calls.map { it.peerId }, "rig: the host is mid-ask")
+        assertTrue(host.hold.verdicts.isEmpty(), "rig: and the controller has not answered")
+
+        host.say(bob, AdmitMessage.Goodbye)
+        val mark = host.events.mark()
+        gate.complete(Unit)
+        testScheduler.runCurrent()
+        val edges = host.events.edgesSince(mark)
+
+        assertAll(
+            { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.WindowClosed), host.hold.verdicts, "rig: the answer came after the Goodbye") },
+            { assertTrue(edges.isEmpty(), "nothing after the Goodbye's own Left: ${edges.render()}") },
+            { assertEquals(null, host.member(bob), "Bob stays gone") },
+            { assertTrue(host.rejectsTo(bob).isEmpty()) },
         )
         host.room.leave()
     }
