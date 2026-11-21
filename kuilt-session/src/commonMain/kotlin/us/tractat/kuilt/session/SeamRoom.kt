@@ -137,10 +137,18 @@ public typealias JoinerReconnectControllerFactory =
  * is remembered across restarts is the caller's choice, not a default. Pass a platform store to be
  * recognised when the app comes back, or `InMemoryDeviceKeyStore()` to be a new device every run
  * (tests, and apps that choose not to be remembered). Every room this factory makes shares it, since
- * they are all the same device. Its key travels in every `Hello` and on every [Member]; until the
- * key-proving exchange of #3159 lands, that key is a claim nobody checks. [host], [join] and [adopt]
- * each read the key from it once, before the room exists, and throw to their caller when the store
- * cannot produce one; a room never reads the store for its key (see [RoomDevice]).
+ * they are all the same device. Its key travels in every `Hello` and on every [Member]. A host
+ * admits a joiner only once the joiner has signed a proof under that key, so on a host every
+ * member's key is verified; on a joiner the host's own entry is verified (the host signed its
+ * challenge under that key) and every other member's key is host-asserted (#3211; see [Member]).
+ * [host], [join] and [adopt] each read the key from it once, before the room exists, and throw to
+ * their caller when the store cannot produce one; a room never reads the store for its key (see
+ * [RoomDevice]).
+ *
+ * A host signs its room id into every challenge, and a joiner signs its device id into every proof,
+ * so [host], [join] and [adopt] throw [IllegalArgumentException] for a `roomId` or `deviceId` no
+ * statement could carry — one holding an unpaired surrogate, or whose UTF-8 is longer than 65 535
+ * bytes — before they touch the loom. Left to the exchange, it would fail every attempt.
  *
  * [heartbeatConfig] controls partition-detection timing.
  *

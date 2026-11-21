@@ -92,8 +92,9 @@ yourself, proves it keeps its promises by passing `DeviceKeyStoreConformanceSuit
 
 ## What this protects against, and what it does not
 
-The room exchange these keys are for is not built yet. When it is, its promise is the design's,
-quoted here in its own words:
+The room exchange these keys are for is `:kuilt-session`'s admission: a host admits a joiner only
+once it has signed a proof of its key (#3211). Its promise is the design's, quoted here in its own
+words:
 
 > - **Protected:** a bystander in the room — who knows every peer id, the room id and every key —
 >   cannot resume as, return as, or lock out another member. A captured proof cannot be replayed.

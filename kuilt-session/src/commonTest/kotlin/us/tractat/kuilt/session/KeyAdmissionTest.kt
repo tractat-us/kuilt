@@ -429,6 +429,10 @@ class KeyAdmissionTest {
      * Bob's proof back. The challenge is honest — it names Bob, echoes his nonce and carries the host's
      * signature — so Bob answers it; but his proof names the fabric sender he heard it from, Mallory,
      * and the host refuses a proof naming any host but itself.
+     *
+     * The defence holds while Mallory cannot also present the host's peer id to Bob. A relay that
+     * can, on Bob's own link over an unauthenticated fabric, is the case the design leaves to channel
+     * binding.
      */
     @Test
     fun relayedChallengeAdmitsNobody() = runTest {
