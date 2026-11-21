@@ -16,10 +16,6 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
-// DRAFT (#3159, Task 1.6): uncompiled. Assumes LeaveReason.Superseded(by: PeerId) and
-// Farewell.supersededBy: String? from the plan's Task 1.6, plus everything 1.5 assumes. See
-// DRAFT-NOTES-tests.md on branch draft/3159-tests-1.5-1.7.
-
 /**
  * A known key under a new peer id (#3159, Task 1.6, as amended by Decided 30):
  * - restores that key's **partitioned** seat — the most recently connected, if there are several —
@@ -256,8 +252,9 @@ class SupersededMembershipTest {
             { assertTrue(hold.calls.isEmpty(), "a connected seat is never restored under another id") },
             { assertTrue(everyEvent.none { it is MembershipEvent.Left }, everyEvent.render()) },
             { assertEquals(listOf(t1, t2), hostLog.since(0).filterIsInstance<MembershipEvent.Joined>().map { it.member.id }) },
-            { assertEquals(1, board.sent(from = t1).count { it is AdmitMessage.Hello }, "tab 1 said Hello once") },
-            { assertEquals(1, board.sent(from = t2).count { it is AdmitMessage.Hello }, "tab 2 said Hello once") },
+            // To the host: a Hello is broadcast, and the switchboard logs one frame per recipient.
+            { assertEquals(1, board.sent(from = t1, to = KEY_SEAT_HOST).count { it is AdmitMessage.Hello }, "tab 1 said Hello once") },
+            { assertEquals(1, board.sent(from = t2, to = KEY_SEAT_HOST).count { it is AdmitMessage.Hello }, "tab 2 said Hello once") },
             { assertTrue(tab1.roster.value.any { it.id == t2 } && tab2.roster.value.any { it.id == t1 }, "each tab sees the other") },
         )
         tab2.leave()
