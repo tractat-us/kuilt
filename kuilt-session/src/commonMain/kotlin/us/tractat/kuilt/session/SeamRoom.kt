@@ -1853,7 +1853,6 @@ internal class SeamRoom(
                     return
                 }
                 is SeatOutcome.Restored -> {
-                    emitEvent(MembershipEvent.Resumed(joinerPeerId))
                     if (seating.endedPause) {
                         propagateUnpaused(joinerPeerId)
                         // The window this partition opened, or is about to open, is not needed any
@@ -2062,6 +2061,9 @@ internal class SeamRoom(
      */
     private fun restoreSeat(held: Member, owesBurst: Boolean): SeatOutcome {
         val member = checkNotNull(updateMemberLiveness(held.id, Liveness.Connected)) { "the seat was read under this lock" }
+        // In the section that restored the seat, like [markRecovered]'s `Recovered`, so a heal the
+        // decision saw is announced before this restore and never after it.
+        emitEvent(MembershipEvent.Resumed(held.id))
         val burst = if (owesBurst) AdmissionBurst(member, admittedById.values.filter { it.id != held.id }, resumeSecrets[held.id]) else null
         return SeatOutcome.Restored(burst, endedPause = held.liveness is Liveness.Partitioned)
     }
@@ -3081,13 +3083,17 @@ internal class SeamRoom(
      * separate obligations; this is the first.
      */
     private fun markRecovered(peerId: PeerId, at: Instant) {
-        val (wasPartitioned, updated) = lock.withLock {
+        val wasPartitioned = lock.withLock {
             val current = admittedById[peerId] ?: return
             val wasPartitioned = current.liveness is Liveness.Partitioned
-            wasPartitioned to (updateMemberLiveness(peerId, Liveness.Connected) ?: return)
+            updateMemberLiveness(peerId, Liveness.Connected) ?: return
+            // Emitted in the section that healed the seat: a Proof restoring it next decides in a
+            // later section and emits its `Resumed` there, so the two are seen in the order they
+            // happened. Emitted after the lock, `Recovered` could follow that `Resumed`.
+            if (wasPartitioned) emitEvent(MembershipEvent.Recovered(peerId, at))
+            wasPartitioned
         }
         if (!wasPartitioned) return
-        emitEvent(MembershipEvent.Recovered(updated.id, at))
         if (_role.value == SessionRole.Host) propagateUnpaused(peerId)
         reconnectController?.onPeerRecovered(peerId, at.toEpochMilliseconds())
     }
