@@ -3,7 +3,6 @@ package us.tractat.kuilt.session.admit
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.session.admit.AdmitMessage.Hello
 import kotlin.time.Instant
 
 /**
@@ -40,13 +39,14 @@ internal class PendingChallenges(private val clock: () -> Instant) {
 
     /**
      * A challenge handed out by [take]. [generation] identifies this open of [sender]'s entry for
-     * [isCurrent]; [hello] and [hostNonce] are what the Proof is checked against.
+     * [isCurrent]; [keyed] — the Hello, with the key and nonce the gate found in it — and [hostNonce]
+     * are what the Proof is checked against.
      *
      * Not a data class: it carries a [ByteArray], whose `equals` is identity.
      */
     internal class Pending(
         val generation: Long,
-        val hello: Hello,
+        val keyed: KeyedHello,
         val hostNonce: ByteArray,
         val deadline: Instant,
     )
@@ -68,16 +68,18 @@ internal class PendingChallenges(private val clock: () -> Instant) {
     val retained: Int get() = lock.withLock { entries.size }
 
     /**
-     * Records a challenge sent to [sender] in answer to [hello], replacing any entry [sender] already
+     * Records a challenge sent to [sender] in answer to [keyed], replacing any entry [sender] already
      * had, and first sweeps every expired entry of every sender. The entry stops being takeable or
-     * current at [deadline]. [hostNonce] is copied.
+     * current at [deadline]. [hostNonce] is copied. Returns the new entry's generation, for a caller
+     * that must [retire] it without first taking it.
      */
-    fun open(sender: PeerId, hello: Hello, hostNonce: ByteArray, deadline: Instant) {
+    fun open(sender: PeerId, keyed: KeyedHello, hostNonce: ByteArray, deadline: Instant): Long {
         val now = clock()
-        lock.withLock {
+        return lock.withLock {
             entries.values.removeAll { it.pending.expiredAt(now) }
             val generation = ++nextGeneration
-            entries[sender] = Entry(Pending(generation, hello, hostNonce.copyOf(), deadline))
+            entries[sender] = Entry(Pending(generation, keyed, hostNonce.copyOf(), deadline))
+            generation
         }
     }
 

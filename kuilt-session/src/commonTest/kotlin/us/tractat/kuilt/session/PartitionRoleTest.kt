@@ -21,6 +21,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -76,9 +77,8 @@ class PartitionRoleTest {
     @Test
     fun `join factory method assigns Joiner role`() = runTest {
         val loom = InMemoryLoom()
-        val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), fastConfig)
-        factory.host(Pattern("Alice"))
-        val joinerRoom = factory.join(InMemoryTag("Bob"))
+        SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), fastConfig).host(Pattern("Alice"))
+        val joinerRoom = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), fastConfig).join(InMemoryTag("Bob"))
         assertEquals(SessionRole.Joiner, joinerRoom.role.value)
         joinerRoom.leave()
     }
@@ -103,6 +103,7 @@ class PartitionRoleTest {
         val hostRoom = SeamRoom(
             seam = hostSeam,
             role = SessionRole.Host,
+            roomId = RoomId("test-room"),
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
@@ -167,6 +168,7 @@ class PartitionRoleTest {
         val hostRoom = SeamRoom(
             seam = faultyHostSeam,
             role = SessionRole.Host,
+            roomId = RoomId("test-room"),
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
@@ -232,6 +234,7 @@ class PartitionRoleTest {
         val hostRoom = SeamRoom(
             seam = faultyHostSeam,
             role = SessionRole.Host,
+            roomId = RoomId("test-room"),
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
@@ -309,6 +312,7 @@ class PartitionRoleTest {
         val hostRoom = SeamRoom(
             seam = faultyHostSeam,
             role = SessionRole.Host,
+            roomId = RoomId("test-room"),
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,

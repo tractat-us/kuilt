@@ -203,12 +203,13 @@ class StarTopologyPresenceFanoutTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-            val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), hostConfig)
+            // One factory per device: the host and both joiners each have their own key.
+            fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), hostConfig)
 
-            val hostRoom = factory.host(Pattern("Host"))
+            val hostRoom = device(0).host(Pattern("Host"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-            val droppedRoom = factory.adopt(droppedLink, SessionRole.Joiner)
-            val bystander = factory.join(InMemoryTag("Bystander"))
+            val droppedRoom = device(1).adopt(droppedLink, SessionRole.Joiner)
+            val bystander = device(2).join(InMemoryTag("Bystander"))
 
             hostRoom.roster.first { it.size == 2 }
             droppedRoom.roster.first { it.size == 2 }
@@ -548,13 +549,14 @@ class StarTopologyPresenceFanoutTest {
             hostConfig,
             reconnectControllerFactory = hostReconnectController?.let { build -> { _, _, _ -> build() } },
         )
-        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(2), joinerConfig)
+        // The two joiners are two devices: one factory, and one key, each.
+        fun joinerDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), joinerConfig)
 
         val hostRoom = hostFactory.host(Pattern("Host"))
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-        val droppedRoom = joinerFactory.adopt(droppedLink, SessionRole.Joiner)
+        val droppedRoom = joinerDevice(2).adopt(droppedLink, SessionRole.Joiner)
         val bystanderWire = AdmitWireTap(loom.join(InMemoryTag("Bystander")))
-        val bystanderRoom = joinerFactory.adopt(bystanderWire, SessionRole.Joiner)
+        val bystanderRoom = joinerDevice(3).adopt(bystanderWire, SessionRole.Joiner)
 
         hostRoom.roster.first { it.size == 2 }
         droppedRoom.roster.first { it.size == 2 }

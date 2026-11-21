@@ -266,15 +266,16 @@ private suspend fun TestScope.refusalHarness(
     val hostLink = base.weave(Rendezvous.New(Pattern("refusal")))
     val joinerPath = FaultySeam(base.weave(Rendezvous.Existing(InMemoryTag("refusal"))), backgroundScope)
     val joinerLink = FlakyLifecycleSeam(joinerPath, backgroundScope)
-    val factory = SeamRoomFactory(
+    // One factory per device: the host and the joiner each have their own key.
+    fun device(index: Int) = SeamRoomFactory(
         loom = base,
         scope = backgroundScope,
         clock = clock,
-        deviceKeyStore = fakeKeyStore(0),
+        deviceKeyStore = fakeKeyStore(index),
         heartbeatConfig = config,
     )
-    val hostRoom = factory.adopt(hostLink, SessionRole.Host, memberName = "Host")
-    val joinerRoom = factory.adopt(
+    val hostRoom = device(0).adopt(hostLink, SessionRole.Host, memberName = "Host")
+    val joinerRoom = device(1).adopt(
         joinerLink,
         SessionRole.Joiner,
         memberName = "Joiner",

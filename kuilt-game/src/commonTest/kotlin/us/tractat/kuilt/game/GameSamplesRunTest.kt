@@ -1,6 +1,9 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.game
 
 import kotlinx.coroutines.test.TestResult
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import kotlin.test.Test
 
 /**
@@ -61,5 +64,9 @@ class GameSamplesRunTest {
     fun gameRoomsHolds(): TestResult = sampleGameRooms()
 
     @Test
-    fun gameOverRoomHolds(): TestResult = sampleGameOverRoom()
+    fun gameOverRoomHolds(): TestResult {
+        // One fake device per peer: no WebCrypto wait on wasmJs (see the sample's KDoc).
+        var next = 0
+        return sampleGameOverRoom { fakeKeyStore(next++) }
+    }
 }

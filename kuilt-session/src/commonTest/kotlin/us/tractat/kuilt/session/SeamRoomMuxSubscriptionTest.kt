@@ -31,17 +31,27 @@ class SeamRoomMuxSubscriptionTest {
         val host = PeerId("host")
         val joiner = PeerId("joiner")
         // The buffered FakeSeam used by SeamRoomDetectorTeardownTest, with the host-intro
-        // Welcome shape from JoinerWelcomeGateTest. Only Hello triggers a reply.
+        // Welcome shape from JoinerWelcomeGateTest. A Hello is answered at once with the host's
+        // challenge — since v4 the immediate reply (#3211) — and the joiner's proof with the intro.
         val buffered = FakeSeam(selfId = joiner, initialPeers = setOf(joiner, host))
         var hellos = 0
-        var drainedWelcomes = 0
+        var proofs = 0
+        var drained = 0
         val base = object : Seam by buffered {
-            override val incoming = buffered.incoming.onEach { drainedWelcomes++ }
+            override val incoming = buffered.incoming.onEach { drained++ }
             override suspend fun broadcast(payload: ByteArray) {
                 val headerSize = 1 + (payload[0].toInt() and 0xff)
-                val message = payload.copyOfRange(headerSize, payload.size)
-                if (AdmitMessage.decode(message) is AdmitMessage.Hello) {
+                val message = AdmitMessage.decode(payload.copyOfRange(headerSize, payload.size))
+                if (message is AdmitMessage.Hello) {
                     hellos++
+                    val challenge = AdmitMessage.encode(handChallenge(message, joiner, host, TEST_DEVICE_B))
+                    buffered.deliver(host, payload.copyOfRange(0, headerSize) + challenge)
+                }
+            }
+            override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+                val headerSize = 1 + (payload[0].toInt() and 0xff)
+                if (AdmitMessage.decode(payload.copyOfRange(headerSize, payload.size)) is AdmitMessage.Proof) {
+                    proofs++
                     val welcome = AdmitMessage.encode(
                         AdmitMessage.Welcome(
                             assignedPeerId = host.value,
@@ -76,10 +86,13 @@ class SeamRoomMuxSubscriptionTest {
             room.start()
             runCurrent() // Hello and its buffered reply precede the mux's first scheduler turn.
             muxScheduler.runCurrent()
+            runCurrent() // the joiner answers the challenge, and the intro is buffered for the mux
+            muxScheduler.runCurrent()
             runCurrent()
             assertAll(
                 { assertEquals(1, hellos, "the host received Hello") },
-                { assertEquals(1, drainedWelcomes, "the mux drained the immediate Welcome") },
+                { assertEquals(1, proofs, "the joiner answered the immediate challenge") },
+                { assertEquals(2, drained, "the mux drained the challenge and the intro") },
                 { assertEquals(host, room.hostPeer(), "the joiner must identify its host") },
                 { assertEquals(setOf(host), room.roster.value.map { it.id }.toSet(), "the host must be admitted") },
             )

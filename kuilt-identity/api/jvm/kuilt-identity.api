@@ -242,3 +242,7 @@ public final class us/tractat/kuilt/identity/RevocationList$Companion {
 	public static synthetic fun open-nDmdsz8$default (Lus/tractat/kuilt/identity/RevocationList$Companion;Lus/tractat/kuilt/store/DurableStore;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
+public final class us/tractat/kuilt/identity/SignableTextKt {
+	public static final fun requireSignableText (Ljava/lang/String;Ljava/lang/String;)V
+}
+

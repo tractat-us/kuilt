@@ -37,11 +37,7 @@ internal object Layout {
      */
     fun encode(tag: String, version: Int, fields: List<ByteArray>): ByteArray {
         val header = header(tag, version)
-        fields.forEachIndexed { index, field ->
-            require(field.size <= MAX_FIELD_SIZE) {
-                "field $index is ${field.size} bytes; a u16 length prefix carries at most $MAX_FIELD_SIZE"
-            }
-        }
+        fields.forEachIndexed { index, field -> requireFieldSize(field.size) { "field $index" } }
         val out = ByteArray(header.size + fields.sumOf { U16_SIZE + it.size })
         header.copyInto(out)
         var at = header.size
@@ -51,6 +47,18 @@ internal object Layout {
             at += U16_SIZE + field.size
         }
         return out
+    }
+
+    /**
+     * Throws unless a field of [size] bytes fits one `u16` length prefix. [what] names the field in
+     * the message.
+     *
+     * @throws IllegalArgumentException when [size] is more than [MAX_FIELD_SIZE].
+     */
+    inline fun requireFieldSize(size: Int, what: () -> String) {
+        require(size <= MAX_FIELD_SIZE) {
+            "${what()} is $size bytes; a u16 length prefix carries at most $MAX_FIELD_SIZE"
+        }
     }
 
     /**

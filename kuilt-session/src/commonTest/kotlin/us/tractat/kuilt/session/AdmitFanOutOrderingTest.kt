@@ -595,7 +595,8 @@ class AdmitFanOutOrderingTest {
         val loom = InMemoryLoom()
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), hostConfig)
-        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), joinerConfig)
+        // Each joiner is its own device: one factory, and one key, each.
+        fun joinerDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), joinerConfig)
 
         var doomedId: PeerId? = null
         val hostSeam = TimeoutMintingSeam(loom.host(Pattern("Host")), mintLimit) { doomedId }
@@ -604,15 +605,15 @@ class AdmitFanOutOrderingTest {
         // `Room.roster` excludes self, so a fully-formed four-peer session reads 3 everywhere. Joins
         // are awaited one at a time so `admittedById`'s insertion order — and therefore the fan-out's
         // recipient order — is the order asserted on above, not whichever Hello happened to land first.
-        val doomedRoom = joinerFactory.join(InMemoryTag("Doomed"))
+        val doomedRoom = joinerDevice(1).join(InMemoryTag("Doomed"))
         doomedId = doomedRoom.selfId
         hostRoom.roster.first { it.size == 1 }
 
-        val healthyRoom = joinerFactory.join(InMemoryTag("Healthy"))
+        val healthyRoom = joinerDevice(4).join(InMemoryTag("Healthy"))
         hostRoom.roster.first { it.size == 2 }
 
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-        val droppedRoom = joinerFactory.adopt(droppedLink, SessionRole.Joiner)
+        val droppedRoom = joinerDevice(5).adopt(droppedLink, SessionRole.Joiner)
         hostRoom.roster.first { it.size == 3 }
         healthyRoom.roster.first { it.size == 3 }
         droppedRoom.roster.first { it.size == 3 }
@@ -658,13 +659,14 @@ class AdmitFanOutOrderingTest {
             reconnectWindow?.let { hostConfig.copy(reconnectWindow = it) } ?: hostConfig,
             reconnectControllerFactory = hostReconnectController?.let { build -> { _, _, _ -> build() } },
         )
-        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(3), joinerConfig)
+        // Each joiner is its own device: one factory, and one key, each.
+        fun joinerDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), joinerConfig)
 
         val hostSeam = StallingSeam(loom.host(Pattern("Host")), stall)
         val hostRoom = hostFactory.adopt(hostSeam, SessionRole.Host)
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-        val droppedRoom = joinerFactory.adopt(droppedLink, SessionRole.Joiner)
-        val bystanderRoom = joinerFactory.join(InMemoryTag("Bystander"))
+        val droppedRoom = joinerDevice(3).adopt(droppedLink, SessionRole.Joiner)
+        val bystanderRoom = joinerDevice(6).join(InMemoryTag("Bystander"))
 
         hostRoom.roster.first { it.size == 2 }
         droppedRoom.roster.first { it.size == 2 }

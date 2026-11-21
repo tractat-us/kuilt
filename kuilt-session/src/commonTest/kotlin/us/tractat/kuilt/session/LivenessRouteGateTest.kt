@@ -163,12 +163,13 @@ class LivenessRouteGateTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-            val slowFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), slowConfig)
+            // One factory per device, each with its own key; the host and the dropped joiner share a config.
+            fun slowDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), slowConfig)
             val fastFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), fastConfig)
 
-            val hostRoom = slowFactory.host(Pattern("Mesh"))
+            val hostRoom = slowDevice(0).host(Pattern("Mesh"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-            val droppedRoom = slowFactory.adopt(droppedLink, SessionRole.Joiner)
+            val droppedRoom = slowDevice(2).adopt(droppedLink, SessionRole.Joiner)
             val bystander = fastFactory.join(InMemoryTag("Bystander"))
 
             hostRoom.roster.first { it.size == 2 }
