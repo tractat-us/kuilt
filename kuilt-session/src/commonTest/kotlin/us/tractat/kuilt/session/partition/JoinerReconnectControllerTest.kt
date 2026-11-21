@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session.partition
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -9,6 +11,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -32,9 +35,9 @@ class JoinerReconnectControllerTest {
     // Clock always returns 0; virtual time is advanced via testScheduler.
     private val fixedClock: () -> Long = { 0L }
 
-    // The controller never reads a token's secret (the room checks it first, #3165), so any will do.
-    private val secretA = ResumeSecret.generate()
-    private val secretB = ResumeSecret.generate()
+    // The controller never reads who proved what (the room checks it first, #3159, #3165), so any key will do.
+    private val keyA = fakeDidKey(1)
+    private val keyB = fakeDidKey(2)
 
     private fun controller(scope: kotlinx.coroutines.CoroutineScope) =
         DefaultJoinerReconnectController(
@@ -113,7 +116,7 @@ class JoinerReconnectControllerTest {
             ctrl.onPeerUnresponsive(peerA, at = 0L)
             testScheduler.advanceTimeBy(1) // flush WindowOpened
 
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 30_000L, secret = secretA)
+            val token = ProvenResume(peerId = peerA, roomId = sessionId, key = keyA)
             val result = ctrl.tryResume(token, at = 30_000L)
 
             testScheduler.advanceUntilIdle()
@@ -134,7 +137,7 @@ class JoinerReconnectControllerTest {
             ctrl.onPeerUnresponsive(peerA, at = 0L)
             testScheduler.advanceTimeBy(1)
 
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = secretA)
+            val token = ProvenResume(peerId = peerA, roomId = sessionId, key = keyA)
             ctrl.tryResume(token, at = 1L)
 
             val secondResult = ctrl.tryResume(token, at = 2L)
@@ -154,7 +157,7 @@ class JoinerReconnectControllerTest {
             testScheduler.advanceTimeBy(windowMs)
             testScheduler.runCurrent()
 
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = windowMs + 1L, secret = secretA)
+            val token = ProvenResume(peerId = peerA, roomId = sessionId, key = keyA)
             val result = ctrl.tryResume(token, at = windowMs + 1L)
             assertIs<ResumeResult.WindowClosed>(result)
         }
@@ -271,7 +274,7 @@ class JoinerReconnectControllerTest {
             ctrl.onPeerRecovered(peerA, at = 1L)
             testScheduler.advanceTimeBy(1)
 
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 2L, secret = secretA)
+            val token = ProvenResume(peerId = peerA, roomId = sessionId, key = keyA)
             assertEquals(
                 ResumeResult.Success,
                 ctrl.tryResume(token, at = 2L),
@@ -327,7 +330,7 @@ class JoinerReconnectControllerTest {
             ctrl.expire(peerA, at = 1_000L)
             testScheduler.advanceTimeBy(1)
 
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1_001L, secret = secretA)
+            val token = ProvenResume(peerId = peerA, roomId = sessionId, key = keyA)
             val result = ctrl.tryResume(token, at = 1_001L)
             assertIs<ResumeResult.WindowClosed>(result)
         }
@@ -341,7 +344,7 @@ class JoinerReconnectControllerTest {
             ctrl.onPeerUnresponsive(peerA, at = 0L)
             testScheduler.advanceTimeBy(1)
 
-            val token = ResumeToken(peerId = peerA, roomId = otherSession, issuedAt = 1L, secret = secretA)
+            val token = ProvenResume(peerId = peerA, roomId = otherSession, key = keyA)
             val result = ctrl.tryResume(token, at = 1L)
 
             assertIs<ResumeResult.TokenInvalid>(result)
@@ -356,11 +359,11 @@ class JoinerReconnectControllerTest {
             testScheduler.advanceTimeBy(1)
 
             // Wrong session — should bounce.
-            val badToken = ResumeToken(peerId = peerA, roomId = otherSession, issuedAt = 1L, secret = secretA)
+            val badToken = ProvenResume(peerId = peerA, roomId = otherSession, key = keyA)
             ctrl.tryResume(badToken, at = 1L)
 
             // Correct session — window must still be open.
-            val goodToken = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 2L, secret = secretA)
+            val goodToken = ProvenResume(peerId = peerA, roomId = sessionId, key = keyA)
             val result = ctrl.tryResume(goodToken, at = 2L)
             assertIs<ResumeResult.Success>(result)
         }
@@ -372,7 +375,7 @@ class JoinerReconnectControllerTest {
         runTest {
             val ctrl = controller(backgroundScope)
 
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 0L, secret = secretA)
+            val token = ProvenResume(peerId = peerA, roomId = sessionId, key = keyA)
             val result = ctrl.tryResume(token, at = 0L)
             assertIs<ResumeResult.WindowNotYetOpen>(result)
         }
@@ -388,7 +391,7 @@ class JoinerReconnectControllerTest {
     fun `a window that never opened is distinguishable from one that expired`() =
         runTest {
             val ctrl = controller(backgroundScope)
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 0L, secret = secretA)
+            val token = ProvenResume(peerId = peerA, roomId = sessionId, key = keyA)
 
             val neverOpened = ctrl.tryResume(token, at = 0L)
 
@@ -418,7 +421,7 @@ class JoinerReconnectControllerTest {
             ctrl.expire(peerA, at = 1_000L)
             testScheduler.advanceTimeBy(1)
 
-            val tokenB = ResumeToken(peerId = peerB, roomId = sessionId, issuedAt = 1_001L, secret = secretB)
+            val tokenB = ProvenResume(peerId = peerB, roomId = sessionId, key = keyB)
             val result = ctrl.tryResume(tokenB, at = 1_001L)
             assertIs<ResumeResult.Success>(result)
         }
