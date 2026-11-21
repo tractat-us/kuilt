@@ -817,7 +817,7 @@ internal class SeamRoom(
      * [JoinerReconnectController.onPeerUnresponsive] for each peer (#1781) — the identity of the
      * partition episode a [JoinerReconnectEvent.WindowOpened] must name to be applied. Guarded by
      * [lock] and written in the same critical section as the level itself; reaped with the member in
-     * [removeFromRoster].
+     * [detachMember].
      *
      * **Not "the episode of every partitioned member":** it is written only by [markPartitioned], so
      * on a joiner a member paused by an inbound [AdmitMessage.Paused] ([handlePaused]) is
@@ -874,7 +874,7 @@ internal class SeamRoom(
      * `Resumed`, and a `ResumeAck` for a flight the joiner never started. [handleReconnectResumed]
      * takes the entry and does nothing. A controller that answers `Success` without emitting the
      * event (a consumer hold policy breaking its contract) leaves an entry behind; the member's next
-     * partition ([markPartitioned]) or departure ([removeFromRoster]) clears it, and the old `Resume`
+     * partition ([markPartitioned]) or departure ([detachMember]) clears it, and the old `Resume`
      * path needs a partition before it can reach the controller, so the leftover can never swallow
      * that path's own event.
      */
@@ -887,7 +887,7 @@ internal class SeamRoom(
      * The invariant: on a host with a [reconnectController], `resumeSecrets.keys` equals
      * `admittedById.keys` whenever [lock] is free. [admitNewMember] mints an entry in the critical
      * section that admits the member (and none on a closed room, which admits nobody),
-     * [removeFromRoster] drops it in the one that removes it, [leave] clears it with the roster, and
+     * [detachMember] drops it in the one that removes it, [leave] clears it with the roster, and
      * nothing else writes it. Two consequences the resume path leans on:
      *
      * - **Stable while the member stays.** A same-`PeerId` re-admission (a fresh transport, a fresh
@@ -919,7 +919,7 @@ internal class SeamRoom(
     /**
      * Admitted roster as a [StateFlow] of [PeerId]s, including self.
      *
-     * Updated with [_roster] under [lock] by [addToRoster], [removeFromRoster] and [leave].
+     * Updated with [_roster] under [lock] by [addToRoster], [detachMember] and [leave].
      * Used by [RoomChannelSeam.peers] to provide the admit-gated peer set to consumers such as
      * [us.tractat.kuilt.quilter.Quilter].
      */
@@ -1007,7 +1007,7 @@ internal class SeamRoom(
      * Empty throughout on a room built with `memberInboxCapacity = 0`, which holds nothing and whose
      * [incomingFrom] refuses rather than hands back an empty stream.
      *
-     * An entry is created in [addToRoster] and removed in [removeFromRoster], each in the critical section
+     * An entry is created in [addToRoster] and removed in [detachMember], each in the critical section
      * that changes [admittedById]. Routing is gated on [isAdmittedPeer], so no frame from a member can be
      * routed before its inbox exists; that pairing is the whole "held from admission" guarantee. A removed
      * inbox is [MemberInbox.close]d last: after [lock] is released, because closing can resume its
@@ -1449,9 +1449,9 @@ internal class SeamRoom(
      *   joiner has no controller at all, so it never got a window (#1724).
      * - [JoinerReconnectEvent.Resumed] → [MembershipEvent.Resumed] (host events; liveness reset).
      * - [JoinerReconnectEvent.WindowExpired] → [handleWindowExpired], which decides *once* whether
-     *   this expiry is one to act on and then both propagates the authoritative
-     *   [AdmitMessage.Farewell] (#1557) and back-stops the local eviction (#1618 Track C). No extra
-     *   *local* event is emitted here: the [MembershipEvent.Left] comes out of [removeFromRoster],
+     *   this expiry is one to act on and, in the same section, back-stops the local eviction
+     *   (#1618 Track C) and enqueues the authoritative [AdmitMessage.Farewell] (#1557). No extra
+     *   *local* event is emitted here: the [MembershipEvent.Left] comes out of [detachMember],
      *   whether this arm or the [HeartbeatPartitionDetector]'s [PartitionEvent.PeerLost] gets there
      *   first.
      */
@@ -3500,9 +3500,9 @@ internal class SeamRoom(
      * [handleRelayFrame] resolves its recipients under one acquisition ([resolveRecipients]), drops
      * the lock, and [enqueueRelayForward] takes it again to get here — so on a multi-threaded scope an
      * eviction can land in the gap, and without this line `getOrPut` would mint a lane, and a writer,
-     * for a peer [removeFromRoster] has already reaped. Nothing would ever collect it: the eviction
+     * for a peer [detachMember] has already reaped. Nothing would ever collect it: the eviction
      * that would have called [discardLanes] has been and gone, and a later duplicate eviction returns
-     * early at `removed ?: return`. That is a leaked writer plus a 64-slot channel per departed peer
+     * early when it removes nothing. That is a leaked writer plus a 64-slot channel per departed peer
      * on a long-lived host, and — worse — a re-admit of the same [PeerId] would be handed the *stale*
      * lane, defeating exactly the fresh-lane property [discardLanes] exists to provide. This is not
      * reachable under a single-threaded test dispatcher (no suspension point separates the two
@@ -3911,7 +3911,7 @@ internal class SeamRoom(
 
     /**
      * Tear down both of [recipient]'s lanes — its queue and its writer — because it has left the
-     * roster. Callers must hold [lock]; the sole caller is [removeFromRoster], which is the sole
+     * roster. Callers must hold [lock]; the sole caller is [detachMember], which is the sole
      * place a peer is removed from [admittedById].
      *
      * **Cancelled, not closed, and that difference is load-bearing.** [leave] closes its lanes so each
@@ -4762,7 +4762,7 @@ internal class SeamRoom(
         lanesToDrain.forEach { it.close() }
         // A terminal room has ended every admission, so it lists nobody, and it says so BEFORE it
         // completes the incomingFrom readers: "reader completed, peer still listed" means a newer
-        // admission and nothing else, exactly as in [removeFromRoster], and a reader resumed by the
+        // admission and nothing else, exactly as in [detachMember], and a reader resumed by the
         // close below reads the roster at that instant (#2822). `closed` is already set, so
         // addToRoster cannot open another inbox or relist anyone behind this. No Left: nobody left.
         lock.withLock {
