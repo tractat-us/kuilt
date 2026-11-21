@@ -1478,9 +1478,10 @@ internal class SeamRoom(
      * The `Resume` frame and the detector's [PartitionEvent.PeerRecovered] race: whichever arrives
      * first restores [Liveness.Connected], and the loser finds nothing to do. [markRecovered] gates
      * its own [propagateUnpaused] on the same transition, so exactly one of those two sends it. A
-     * third path does not race them: a same-`PeerId` `Hello` proving the seat's key restores the seat
-     * through [seatProvenJoiner] (#3212), which sends its own `Unpaused` when the restore ends a pause
-     * and swallows the controller's echo of it ([proofResumes]).
+     * third path ends a pause too: a same-`PeerId` `Hello` proving the seat's key restores the seat
+     * through [seatProvenJoiner] (#3212). Its restore is the same transition, taken under the same
+     * lock, so the three send one `Unpaused` between them, and this call swallows the controller's
+     * echo of that restore ([proofResumes]).
      *
      * State mutation under lock; suspend send outside lock.
      */
