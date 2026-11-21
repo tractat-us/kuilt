@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Swatch
@@ -398,6 +399,42 @@ class HeartbeatPartitionDetectorTest {
             val event = assertIs<PartitionEvent.PeerUnresponsive>(events.single())
             assertEquals(PartitionEvent.Reason.Timeout, event.reason)
 
+            detector.stop()
+        }
+
+    /**
+     * [HeartbeatPartitionDetector.lastHeard] is the last frame from the peer, not the last time the
+     * detector looked: null before start, the start instant until a frame arrives, then that frame's
+     * instant, and it stays there while the peer is silent.
+     */
+    @Test
+    fun `lastHeard is the instant of the latest frame from the peer`() =
+        runTest {
+            val mesh = buildMesh(backgroundScope)
+            var nowMs = 1_000L
+            val clock = { Instant.fromEpochMilliseconds(nowMs) }
+            val detector = HeartbeatPartitionDetector(mesh.hostLink, mesh.joinerId, config, clock)
+            val beforeStart = detector.lastHeard
+
+            detector.start(backgroundScope)
+            val atStart = detector.lastHeard
+            nowMs = 4_000L
+            mesh.joinerLink.sendTo(mesh.hostId, byteArrayOf(42))
+            advanceTimeBy(1)
+            val afterFrame = detector.lastHeard
+            nowMs = 9_000L
+            advanceTimeBy(config.interval.inWholeMilliseconds)
+            val afterSilence = detector.lastHeard
+            detector.observedPeer(PeerId("somebody-else"))
+            val afterOtherPeer = detector.lastHeard
+
+            assertAll(
+                { assertEquals(null, beforeStart) },
+                { assertEquals(Instant.fromEpochMilliseconds(1_000), atStart) },
+                { assertEquals(Instant.fromEpochMilliseconds(4_000), afterFrame, "the frame was heard") },
+                { assertEquals(Instant.fromEpochMilliseconds(4_000), afterSilence, "silence moves nothing") },
+                { assertEquals(Instant.fromEpochMilliseconds(4_000), afterOtherPeer) },
+            )
             detector.stop()
         }
 }
