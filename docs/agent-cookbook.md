@@ -7,7 +7,9 @@ compile-checked snippet.
 
 The `kuilt-primitives` skill is the compact entry point: kuilt almost certainly already
 ships the networking, session, shared-state, telemetry or scheduling thing you are about
-to write. Symptoms sharing a section share a skill row; this index splits them out.
+to write. Its `SKILL.md` routes the few things everyone hand-rolls, and names one
+`reference/<family>.md` per family for the rest. Symptoms sharing a section share a skill
+row; this index splits them out.
 
 The skill's fetch ladder reads only the file a route names, never the whole cookbook.
 Its first rung reads `origin/main` from a side-by-side kuilt checkout because that

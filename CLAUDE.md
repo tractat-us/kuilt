@@ -49,28 +49,35 @@ on disk) rather than treating it as an established convention.
 
 ### The `kuilt-primitives` skill is part of the public surface
 
-`.claude/skills/kuilt-primitives/SKILL.md` is how a coding agent working in a *consumer* repo
-discovers what this library already provides. It is **source of truth**: consumers vendor a
-byte-identical copy and refresh it on a daily sync job, so whatever is here propagates outward
-unreviewed. The cookbook is its long form — the skill intercepts, the cookbook explains — and the
-cookbook is now an index (`docs/agent-cookbook.md`) over seven family files
-(`docs/agent-cookbook/<family>.md`), so a route names one family file, not the whole thing.
+`.claude/skills/kuilt-primitives/` is how a coding agent working in a *consumer* repo discovers
+what this library already provides. It is **source of truth**: consumers vendor a byte-identical
+copy of the whole directory and refresh it on a daily sync job, so whatever is here propagates
+outward unreviewed. It is a router and its reference files (#3601): `SKILL.md` carries the
+`description`, the few routes everyone hand-rolls, and a family table naming
+`reference/<family>.md`, which holds that family's rows. The cookbook is the long form — the skill
+intercepts, the cookbook explains — and the cookbook is an index (`docs/agent-cookbook.md`) over
+seven family files (`docs/agent-cookbook/<family>.md`), so a route names one family file, not the
+whole thing. The seven families are the same seven everywhere: `.claude/rules/`, the cookbook, and
+`reference/`. `verifySkillReferences` holds `reference/` to `.claude/rules/` in both directions.
 
 kuilt is where this pattern started and two sibling libraries (`fgn`, `hanab-kt`) copy it, so treat
 the rules below as the reference version rather than a local convention.
 
-- **Adding a public primitive means updating the skill in the SAME PR** — a route in the skill's
-  index table, the trigger phrases in `description` that should reach it, and a symptom→primitive
+- **Adding a public primitive means updating the skill in the SAME PR** — a row in its family's
+  `reference/<family>.md` (and in the router's headline table only if it is one of the few every
+  consumer hand-rolls), the trigger phrases in `description` that should reach it, and a symptom→primitive
   entry in the family file the route names, `docs/agent-cookbook/<family>.md`, quoting a compiled
   snippet (`<!-- verbatim from … -->`), with its row in the `docs/agent-cookbook.md` index
   alongside. A primitive nobody is routed to gets reinvented downstream. Same obligation for a
   fabric, a `Room`/reconnect entry point, a CRDT, a liveness detector, a consensus/`GameSession`
   entry point, a dealing/gossip primitive — anything a consumer would otherwise hand-roll.
-- **But the `description` is a fixed budget, so adding a trigger means removing one.** The index
-  table in the body is free of *that* cap — a skill body is lazy. A compact index routes,
-  prose does not: the body is capped at **8,192 bytes (8 KiB)** of UTF-8 after the closing
-  frontmatter delimiter, enforced by `verifySkillBodyBudget` in `check` and in the
-  `doc-citations` CI job. Its measured size is recorded in
+- **But the `description` is a fixed budget, so adding a trigger means removing one.** The router
+  body and the reference files are free of *that* cap — both are lazy. A compact index routes,
+  prose does not: the router body is capped at **8,192 bytes (8 KiB)** of UTF-8 after the closing
+  frontmatter delimiter, and each reference file at **4,096 bytes (4 KiB)** whole, both enforced by
+  `verifySkillBodyBudget` in `check` and in the `doc-citations` CI job. A reference file is read
+  whole to find one route, so its cap is the point to split a family into
+  `reference/<family>/<section>.md`, not a number to raise. The measured sizes are recorded in
   `build/verification/verify-skill-body-budget.ok`. The `description:` is **eager**,
   loaded on every turn of every session and every subagent in every repo that vendors this file,
   and Claude Code truncates it at `skillListingMaxDescChars`, **default 1,536 characters**. Past that a phrase
@@ -95,7 +102,7 @@ the rules below as the reference version rather than a local convention.
   wrong.
 
   Explanatory prose belongs in the cookbook. The body is outside the eager cap but capped at
-  **8,192 bytes (8 KiB)** by `verifySkillBodyBudget`; a trigger only earns its place by
+  **8,192 bytes (8 KiB)**, each reference file at 4 KiB, by `verifySkillBodyBudget`; a trigger only earns its place by
   displacing another. `verifySkillDescriptionBudget` (root build,
   in `check` and in the `doc-citations` CI job, since a SKILL.md edit is docs-only) enforces the cap,
   and also rejects the `: ` and ` #` that silently break the unquoted plain scalar and stop the skill
@@ -111,8 +118,10 @@ the rules below as the reference version rather than a local convention.
   opens a tracking issue when published `commonMain` moves and the skill doesn't; it deliberately
   does not fail a build, because a stale skill is not a reason to block someone else's merge. The
   same job makes the same comparison **per family** — each family's modules, read out of
-  `.claude/rules/<family>.md`'s `paths:`, against the newer of that file and
-  `docs/agent-cookbook/<family>.md`, under its own issue title. That arm exists because one touch of
+  `.claude/rules/<family>.md`'s `paths:`, against the newest of that file,
+  `docs/agent-cookbook/<family>.md` and the skill's `reference/<family>.md` (or
+  `reference/<family>/`), under its own issue title. A reference file never counts toward the
+  whole-library comparison, for the reason that follows. That arm exists because one touch of
   `SKILL.md` clears the whole-library comparison for all seven families at once, so a cookbook page
   nobody has opened in a year sits behind a green check.
 - **Renaming or removing a primitive means fixing the route, not leaving it dangling.** A route
@@ -125,6 +134,16 @@ the rules below as the reference version rather than a local convention.
   unquoted plain scalar, so a bare `: ` or ` #` inside it breaks the whole block and the skill stops
   loading. Prefer an em-dash. `ruby -ryaml -e 'YAML.safe_load(File.read(ARGV[0]).split(/^---$/)[1])'`
   settles it in a second.
+- **The directory is the unit, and every file in it must survive the consumer's sync.** A copy of
+  `SKILL.md` alone delivers a router pointing at files that are not there. The sync mirrors the
+  directory and refuses the *whole* skill on anything but regular, non-executable `.md` files whose
+  path components match `[A-Za-z0-9._-]` and do not start with `.` (and past 200 files, 1 MiB a
+  file, 4 MiB in all), so a script or a dotfile dropped in here freezes every consumer on its last
+  copy. A route-check script belongs under `.github/scripts/`. `verifySkillReferences` (in `check`
+  and the `doc-citations` job) refuses five things: a reference file the router never names
+  (ORPHAN), a name with no file (DANGLING), a `Jump to` anchor no cookbook heading carries (JUMP),
+  a reference file outside every `.claude/rules/<family>.md` family or a family with no reference
+  file (FAMILY), and anything the sync would refuse, a file containing a `\r` included (SYNC).
 - **Never hand-edit a vendored copy in a consumer repo.** It is a cache; fix it here and let the
   sync carry it down. The corollary is that this copy is the last line of defence — an auto-sync
   propagates corruption just as faithfully as content (#2541).
