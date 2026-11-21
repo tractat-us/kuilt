@@ -529,7 +529,7 @@ private const val RELAY_FORWARD_CAPACITY = 64
  * become silent no-ops. No auto-election is performed.
  *
  * **Thread safety**: all mutable membership state (`admittedById`, `closed`, `hostLost`,
- * `hostPeerId`, `incomingCollectJob`, `admissionFailed`, `admitDeadlineJob`, `detectorJobs`,
+ * `hostPeerId`, `incomingCollectJob`, `admissionFailed`, `admitDeadlineJob`, `detectors`,
  * `channelViews`, `admitLanes`, `relayLanes`, `episodeDetectedAtMs`) is guarded by an atomicfu
  * [reentrantLock]. The joiner-side resume state (`resumeToken`, `pendingResume`, `reconnecting`,
  * `reconnectJob`) lives in [JoinerResumeMachine], which **shares the same lock instance**
@@ -611,6 +611,15 @@ private class DetachedMember(private val inbox: MemberInbox?) {
         inbox?.close()
     }
 }
+
+/**
+ * One admitted peer's liveness [detector] and the [job] that owns its coroutines, held as one entry
+ * so that neither can be registered, or removed, without the other. The job identifies the
+ * membership a `PeerLost` is about; the detector is read for its
+ * [HeartbeatPartitionDetector.lastHeard], the key → seat table's last contact (#3213), so the room
+ * stamps no time of its own under its lock on every inbound frame.
+ */
+private class DetectorHandle(val job: Job, val detector: HeartbeatPartitionDetector)
 
 /**
  * What `SeamRoom.handleWindowExpired` decided about one [JoinerReconnectEvent.WindowExpired].
@@ -795,7 +804,7 @@ internal class SeamRoom(
     /**
      * Guards every mutation of the plain membership state:
      * `admittedById`, `_roster`, `_rosterPeers`, `closed`, `hostLost`, `hostPeerId`, `incomingCollectJob`,
-     * `detectorJobs`, `channelViews`, `admitLanes`, `relayLanes`, `episodeDetectedAtMs` — and, shared with
+     * `detectors`, `channelViews`, `admitLanes`, `relayLanes`, `episodeDetectedAtMs` — and, shared with
      * [JoinerResumeMachine] (which is handed this same instance), the joiner-side resume state.
      *
      * Multiple coroutines (`runMainLoop`, `runTornWatcher`, the resume machine's reconnect
@@ -1068,17 +1077,11 @@ internal class SeamRoom(
 
     private var loopJobs: List<Job> = emptyList()
 
-    // Per-admitted-peer detector collection jobs, keyed by PeerId.
-    private val detectorJobs = mutableMapOf<PeerId, Job>()
-
     /**
-     * The detector each [detectorJobs] entry runs, under the same key and kept in step with it by
-     * [startDetector] and [stopDetector]. Guarded by [lock]. Read only for
-     * [HeartbeatPartitionDetector.lastHeard]: the detector already sees every frame from its peer,
-     * so the key → seat table reads last contact here rather than stamping a time under [lock] on
-     * every inbound frame (#3213).
+     * Each admitted peer's liveness detector and the job that runs it, keyed by [PeerId]. Guarded by
+     * [lock]; written only by [startDetector], [stopDetector] and [leave].
      */
-    private val detectors = mutableMapOf<PeerId, HeartbeatPartitionDetector>()
+    private val detectors = mutableMapOf<PeerId, DetectorHandle>()
 
     private var closed = false
     private var hostLost = false
@@ -1616,7 +1619,7 @@ internal class SeamRoom(
                 // sender mismatch; if this line never fires for X at all, NwSeam is not delivering X's
                 // heartbeats to the room.
                 val firstFromSender = lock.withLock {
-                    if (heartbeatSendersSeen.add(sender)) detectorJobs.containsKey(sender) else null
+                    if (heartbeatSendersSeen.add(sender)) detectors.containsKey(sender) else null
                 }
                 if (firstFromSender != null) {
                     val kind = when {
@@ -2169,7 +2172,7 @@ internal class SeamRoom(
         Seat(
             key = member.key,
             liveness = if (partitioned != null) SeatLiveness.Partitioned else SeatLiveness.Connected,
-            lastContact = detectors[id]?.lastHeard ?: partitioned?.since ?: Instant.DISTANT_PAST,
+            lastContact = detectors[id]?.detector?.lastHeard ?: partitioned?.since ?: Instant.DISTANT_PAST,
         )
     }
 
@@ -2782,7 +2785,7 @@ internal class SeamRoom(
      *
      * All of the detector's coroutines — its heartbeat loop, its inbound collector (which
      * subscribes to the never-completing [rawIncoming]), and our event collector — are owned
-     * by one child [Job] stored in [detectorJobs]. Cancelling that job via [stopDetector]
+     * by one child [Job], held with the detector in [detectors]. Cancelling that job via [stopDetector]
      * (or [leave]) tears the whole detector down; without this single owner the heartbeat and
      * inbound coroutines would outlive the evicted member (#1001).
      *
@@ -2829,7 +2832,7 @@ internal class SeamRoom(
      * Callers must hold [lock] when invoking this method.
      */
     private fun startDetector(member: Member) {
-        if (member.id in detectorJobs) return // steady-state re-evaluation — already monitored, silent
+        if (member.id in detectors) return // steady-state re-evaluation — already monitored, silent
         if (member.id !in seam.peers.value) {
             // #1618 route-gate (#1576) diagnostic: this member is admitted to the roster but the fabric
             // has NOT (yet) reported a route to it in seam.peers, so NO partition detector is started —
@@ -2866,8 +2869,7 @@ internal class SeamRoom(
                 handlePartitionEvent(event, detectorJob)
             }
         }
-        detectorJobs[member.id] = detectorJob
-        detectors[member.id] = detector
+        detectors[member.id] = DetectorHandle(detectorJob, detector)
         // #1618 suspect 1: the per-peer detector is now live. If this logs for every admitted mesh peer,
         // detector startup is NOT the break — attention moves to whether healthy pongs keep it alive
         // (suspect 2) and whether the drop fires PeerUnresponsive.
@@ -2884,8 +2886,7 @@ internal class SeamRoom(
      * collector — for [peerId]. Callers must hold [lock].
      */
     private fun stopDetector(peerId: PeerId) {
-        detectorJobs.remove(peerId)?.cancel()
-        detectors.remove(peerId)
+        detectors.remove(peerId)?.job?.cancel()
     }
 
     /**
@@ -2895,7 +2896,7 @@ internal class SeamRoom(
      * **silenced for the duration of a reconnect** (so it can't race an in-flight resume) and
      * **restarted on success** ([JoinerResumeMachine], #1037). No production caller reads this.
      */
-    internal fun hasDetector(peerId: PeerId): Boolean = lock.withLock { detectorJobs.containsKey(peerId) }
+    internal fun hasDetector(peerId: PeerId): Boolean = lock.withLock { detectors.containsKey(peerId) }
 
     /**
      * Test-visibility: is a [resume] attempt currently in flight (its reply slot installed)?
@@ -4208,7 +4209,7 @@ internal class SeamRoom(
                     stopDetector(peerId)
                     PeerLoss.HostLost
                 }
-                detectorJobs[peerId] !== detector -> PeerLoss.StaleDetector
+                detectors[peerId]?.job !== detector -> PeerLoss.StaleDetector
                 else -> {
                     stopDetector(peerId)
                     PeerLoss.Evicted(detachMember(peerId, LeaveReason.PartitionExpired))
@@ -4895,7 +4896,7 @@ internal class SeamRoom(
                     resumeMachine?.inFlightReconnectJob(),
                     admitDeadlineJob,
                 ),
-                detectorJobs.values.toList().also { detectorJobs.clear(); detectors.clear() },
+                detectors.values.map { it.job }.also { detectors.clear() },
             )
         }
         val (announce, jobsToCancel, detectorJobsToCancel) = plan
