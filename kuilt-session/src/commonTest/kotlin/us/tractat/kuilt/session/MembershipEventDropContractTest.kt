@@ -118,13 +118,15 @@ class MembershipEventDropContractTest {
     private suspend fun TestScope.drop(config: HeartbeatConfig): Drop {
         val loom = InMemoryLoom()
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
+        // Two devices, two key stores: one shared store would make the host and the joiner one device.
         val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), config)
+        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), config)
 
         val hostRoom = factory.host(Pattern("Table"))
         // Wrap the joiner's live seam so heartbeats can be dropped WITHOUT tearing it: state stays
         // Woven and peers intact, so both detectors fire Timeout, not TransportClosed.
         val joinerLink = FaultySeam(loom.join(InMemoryTag("Table")), backgroundScope)
-        val joinerRoom = factory.adopt(joinerLink, SessionRole.Joiner)
+        val joinerRoom = joinerFactory.adopt(joinerLink, SessionRole.Joiner)
 
         // Rosters exclude self, so one entry each: the host holds the joiner, the joiner the host.
         hostRoom.roster.first { it.size == 1 }
