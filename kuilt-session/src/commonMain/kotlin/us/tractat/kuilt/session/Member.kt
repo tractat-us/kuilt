@@ -14,7 +14,8 @@ import kotlin.time.Instant
  * [identity] is *self-asserted* by the peer in its `Hello`; [principal] is the
  * host's *verified* identity for the connection (when the fabric authenticates it —
  * see [PrincipalAttested]). It is `null` for unauthenticated connections and on the
- * joiner side (a joiner does not verify the host).
+ * joiner side: a joiner has no fabric attestation of the host's principal. That is about the
+ * principal only — the host's [key] is proved to a joiner, as below.
  *
  * [key] is the member's device key: one per device, from its
  * [DeviceKeyStore][us.tractat.kuilt.identity.DeviceKeyStore], the same across every room and peer
