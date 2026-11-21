@@ -856,6 +856,12 @@ public final class us/tractat/kuilt/session/admit/RejectCode$DefaultImpls {
 	public static fun getRetryable (Lus/tractat/kuilt/session/admit/RejectCode;)Z
 }
 
+public final class us/tractat/kuilt/session/admit/RejectCode$HostFailed : us/tractat/kuilt/session/admit/RejectCode {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$HostFailed;
+	public fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
+}
+
 public final class us/tractat/kuilt/session/admit/RejectCode$KeyConflict : us/tractat/kuilt/session/admit/RejectCode {
 	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$KeyConflict;
 	public fun getId ()Ljava/lang/String;

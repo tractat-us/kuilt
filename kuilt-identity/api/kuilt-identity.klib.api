@@ -257,5 +257,6 @@ final value class us.tractat.kuilt.identity/DidKey { // us.tractat.kuilt.identit
 }
 
 final fun (us.tractat.kuilt.identity/DeviceKeyStore.Companion).us.tractat.kuilt.identity/platform(kotlin/String): us.tractat.kuilt.identity/DeviceKeyStore // us.tractat.kuilt.identity/platform|platform@us.tractat.kuilt.identity.DeviceKeyStore.Companion(kotlin.String){}[0]
+final fun us.tractat.kuilt.identity/requireSignableText(kotlin/String, kotlin/String) // us.tractat.kuilt.identity/requireSignableText|requireSignableText(kotlin.String;kotlin.String){}[0]
 final suspend fun (us.tractat.kuilt.identity/DeviceKey).us.tractat.kuilt.identity/signApp(kotlin/String, kotlin/ByteArray): kotlin/ByteArray // us.tractat.kuilt.identity/signApp|signApp@us.tractat.kuilt.identity.DeviceKey(kotlin.String;kotlin.ByteArray){}[0]
 final suspend fun (us.tractat.kuilt.identity/DidKey).us.tractat.kuilt.identity/verifyApp(kotlin/String, kotlin/ByteArray, kotlin/ByteArray): kotlin/Boolean // us.tractat.kuilt.identity/verifyApp|verifyApp@us.tractat.kuilt.identity.DidKey(kotlin.String;kotlin.ByteArray;kotlin.ByteArray){}[0]
