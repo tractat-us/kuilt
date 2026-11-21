@@ -1637,7 +1637,16 @@ internal class SeamRoom(
             }
             is AdmitMessage.Proof -> {
                 if (_role.value == SessionRole.Host) {
-                    scope.launch { handleProof(sender, msg) }
+                    // Taken here, in frame order, and only checked on the launched coroutine: a proof
+                    // always answers the challenge that was current when it arrived. Taken inside the
+                    // launch, a proof delayed past its sender's Goodbye and next Hello would take
+                    // that newer challenge and, failing its nonce, refuse the joiner's honest answer.
+                    val pending = pendingChallenges.take(sender)
+                    if (pending == null) {
+                        logger.debug { "room.proof.dropped peer=${sender.value}: no open challenge" }
+                    } else {
+                        scope.launch { handleProof(sender, msg, pending) }
+                    }
                 }
             }
             is AdmitMessage.Welcome -> {
@@ -1881,12 +1890,12 @@ internal class SeamRoom(
     private fun signedRoomId(): String = _roomId.value?.value.orEmpty()
 
     /**
-     * **Host only.** Check [sender]'s proof against the challenge pending for it, and admit on a valid
-     * one (#3211).
+     * **Host only.** Check [sender]'s proof against [pending], the challenge it answers, and admit on
+     * a valid one (#3211).
      *
      * - **Nothing pending** — never opened, expired, dropped, or already taken by a proof whose check
-     *   is in flight — drops the frame silently. A refusal here would be terminal for a joiner whose
-     *   first proof is about to admit it.
+     *   is in flight — never reaches here: the frame dispatch drops it silently. A refusal would be
+     *   terminal for a joiner whose first proof is about to admit it.
      * - **A proof that fails any check** is refused with [RejectCode.BadProof], unless a newer Hello
      *   from the same sender has replaced the challenge meanwhile, which a refusal of the old one must
      *   not kill.
@@ -1895,11 +1904,7 @@ internal class SeamRoom(
      * The proof is checked under the key the Hello named, in this room's own scheme, so a room on
      * P-256 checks with ECDSA whatever a joiner sends.
      */
-    private suspend fun handleProof(sender: PeerId, msg: AdmitMessage.Proof) {
-        val pending = pendingChallenges.take(sender) ?: run {
-            logger.debug { "room.proof.dropped peer=${sender.value}: no open challenge" }
-            return
-        }
+    private suspend fun handleProof(sender: PeerId, msg: AdmitMessage.Proof, pending: PendingChallenges.Pending) {
         // Only a Hello that passed the keyed gate opens a challenge, so this is never null.
         val keyed = pending.hello.keyed() ?: return
         val fault = try {
