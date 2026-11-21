@@ -402,6 +402,63 @@ class KeyAdmissionTest {
         room.leave()
     }
 
+    /**
+     * A proof right in every field but the joiner's peer id: Bob signs a proof naming Carol. The
+     * signature is Bob's and good, so only the host's joiner-peer check can refuse it, and the
+     * refusal's reason names that check.
+     */
+    @Test
+    fun proofNamingAnotherJoinerIsRejected() = runTest {
+        val (seam, room) = hostRoom()
+        say(seam, bob, hello("Bob", bobKey.id, nonce = 1))
+        val challenge = seam.challengesTo(bob).single()
+        say(seam, bob, proof(challenge, joiner = bobKey, joinerPeerId = "carol"))
+
+        assertAll(
+            { assertEquals(bob.value, challenge.joinerPeerId, "rig: the challenge names Bob") },
+            { assertEquals(listOf(RejectCode.BadProof), seam.rejectsTo(bob).map { it.code }, "another joiner's proof is refused") },
+            { assertTrue(seam.rejectsTo(bob).single().reason.contains("WrongJoinerPeer"), "by the joiner-peer check") },
+            { assertTrue(room.roster.value.isEmpty()) },
+        )
+        room.leave()
+    }
+
+    /**
+     * The relay attack, end to end. Mallory self-asserts Bob's id at the real host and poses as a host
+     * to Bob under her own id. She forwards Bob's Hello to the host, the host's challenge to Bob, and
+     * Bob's proof back. The challenge is honest — it names Bob, echoes his nonce and carries the host's
+     * signature — so Bob answers it; but his proof names the fabric sender he heard it from, Mallory,
+     * and the host refuses a proof naming any host but itself.
+     */
+    @Test
+    fun relayedChallengeAdmitsNobody() = runTest {
+        val mallory = PeerId("mallory")
+        // The host sees Bob — really Mallory under Bob's id. Bob sees Mallory.
+        val (hostSeam, host) = hostRoom(joiners = setOf(bob))
+        val bobSeam = FakeSeam(selfId = bob, initialPeers = setOf(bob, mallory))
+        val joiner = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock(), fakeKeyStore(1), admitTimeout = ADMIT_TIMEOUT)
+            .adopt(bobSeam, SessionRole.Joiner, memberName = "Bob")
+        runCurrent()
+
+        val bobsHello = bobSeam.broadcasts.mapNotNull { AdmitMessage.decode(it) }.filterIsInstance<AdmitMessage.Hello>().single()
+        say(hostSeam, bob, bobsHello)
+        val challenge = hostSeam.sentTo(bob).filterIsInstance<AdmitMessage.Challenge>().single()
+        say(bobSeam, mallory, challenge)
+        val relayedProof = bobSeam.sentTo(mallory).filterIsInstance<AdmitMessage.Proof>().single()
+        say(hostSeam, bob, relayedProof)
+
+        val signed = assertNotNull(AdmissionProof.decode(relayedProof.statement))
+        assertAll(
+            { assertEquals(hostId.value, assertNotNull(Challenge.decode(challenge.statement)).hostPeerId, "rig: the host's challenge names itself") },
+            { assertEquals(mallory.value, signed.hostPeerId, "rig: Bob answered, naming the sender he heard it from") },
+            { assertEquals(listOf(RejectCode.BadProof), hostSeam.rejectsTo(bob).map { it.code }, "the relayed proof is refused") },
+            { assertTrue(hostSeam.rejectsTo(bob).single().reason.contains("WrongHostPeer"), "by the host-peer check") },
+            { assertTrue(host.roster.value.isEmpty(), "Mallory is not admitted on Bob's key") },
+        )
+        joiner.leave()
+        host.leave()
+    }
+
     /** The joiner's own device id is signed into the proof; a proof claiming another is refused. */
     @Test
     fun proofSigningAnotherDeviceIdIsRejected() = runTest {
@@ -461,8 +518,11 @@ class KeyAdmissionTest {
     // ── Joiner side ──────────────────────────────────────────────────────────
 
     /** A joiner room over a [FakeSeam] whose only remote is [hostId]; returns its Hello too. */
-    private suspend fun TestScope.joinerRoom(deviceId: String? = null): Triple<FakeSeam, Room, AdmitMessage.Hello> {
-        val seam = FakeSeam(selfId = bob, initialPeers = setOf(bob, hostId))
+    private suspend fun TestScope.joinerRoom(
+        deviceId: String? = null,
+        peers: Set<PeerId> = setOf(hostId),
+    ): Triple<FakeSeam, Room, AdmitMessage.Hello> {
+        val seam = FakeSeam(selfId = bob, initialPeers = setOf(bob) + peers)
         val room = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock(), fakeKeyStore(1), admitTimeout = ADMIT_TIMEOUT)
             .adopt(seam, SessionRole.Joiner, memberName = "Bob", deviceId = deviceId)
         runCurrent()
@@ -513,6 +573,49 @@ class KeyAdmissionTest {
             { assertTrue(!stale.contentEquals(hello.joinerNonce), "rig: the stale nonce is not the Hello's") },
             { assertEquals(0, answeredBadOnes, "neither the stale nor the tampered challenge is answered") },
             { assertEquals(1, seam.proofsTo(hostId).size, "rig: an honest challenge is answered") },
+        )
+        room.leave()
+    }
+
+    /**
+     * A challenge from [eve] that says it is the host's: signed by a real key, naming Bob and echoing
+     * his nonce, but carrying `hostPeerId = host`. Bob's proof names Eve — the sender he heard it
+     * from — never the id the challenge claims, so it is no use to Eve at the real host.
+     */
+    @Test
+    fun joinerProofNamesTheChallengesSenderNotItsClaim() = runTest {
+        val (seam, room, hello) = joinerRoom(peers = setOf(hostId, eve))
+        say(seam, eve, challengeFor(hello, fakeDeviceKey(204)))
+
+        val claimed = assertNotNull(Challenge.decode(challengeFor(hello, fakeDeviceKey(204)).statement)).hostPeerId
+        val answered = seam.proofsTo(eve).single()
+        assertAll(
+            { assertEquals(hostId.value, claimed, "rig: the challenge claims to be the host's") },
+            { assertTrue(seam.proofsTo(hostId).isEmpty(), "rig: the proof went back to Eve only") },
+            { assertEquals(eve.value, answered.hostPeerId, "the proof names the fabric sender") },
+        )
+        room.leave()
+    }
+
+    /** A challenge naming another joiner is not Bob's to answer, however good its signature. */
+    @Test
+    fun joinerIgnoresAChallengeNamingAnotherJoiner() = runTest {
+        val (seam, room, hello) = joinerRoom()
+        val forCarol = AdmitMessage.Challenge(
+            Challenge.sign(
+                fakeDeviceKey(204), ROOM.value, hostId.value, "carol",
+                assertNotNull(hello.joinerNonce), ByteArray(Challenge.NONCE_SIZE) { 7 },
+            ).wire,
+        )
+        say(seam, hostId, forCarol)
+        val answeredCarols = seam.proofsTo(hostId).size
+
+        // Control: the same challenge naming Bob is answered.
+        say(seam, hostId, challengeFor(hello, fakeDeviceKey(204)))
+
+        assertAll(
+            { assertEquals(0, answeredCarols, "a challenge naming Carol is ignored") },
+            { assertEquals(1, seam.proofsTo(hostId).size, "rig: the same challenge naming Bob is answered") },
         )
         room.leave()
     }
