@@ -400,7 +400,8 @@ class ProvenRestoreConcurrencyTest {
     ) {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val peers = MutableStateFlow(setOf(host, bob, carol))
-        val inbound = Channel<Swatch>(Channel.UNLIMITED)
+        // Bounded, as every Swatch delivery channel is (forbidUnboundedSwatchDelivery): a round sends a few frames.
+        val inbound = Channel<Swatch>(capacity = 64)
         private val challenges = mapOf(
             bob to Channel<AdmitMessage.Challenge>(Channel.UNLIMITED),
             carol to Channel<AdmitMessage.Challenge>(Channel.UNLIMITED),
