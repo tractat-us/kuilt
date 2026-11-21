@@ -185,15 +185,18 @@ class KeyAdmissionTest {
     @Test
     fun proofForAnotherHostIsRejected() = runTest {
         val (seam, room) = hostRoom()
+        // Each proof is right in every field but one: Bob's names another host's key, Eve's another
+        // host's peer id. One field each, so each check is the only one that can refuse it.
         say(seam, bob, hello("Bob", bobKey.id, nonce = 1))
-        val challenge = seam.challengesTo(bob).single()
-
-        // Signed by Bob, over this challenge's nonce, but naming another host's key and peer id.
-        say(seam, bob, proof(challenge, joiner = bobKey, hostKey = fakeDidKey(202), hostPeerId = "other-host"))
+        say(seam, bob, proof(seam.challengesTo(bob).single(), joiner = bobKey, hostKey = fakeDidKey(202)))
+        say(seam, eve, hello("Eve", eveKey.id, nonce = 2))
+        say(seam, eve, proof(seam.challengesTo(eve).single(), joiner = eveKey, hostPeerId = "other-host"))
 
         assertAll(
             { assertEquals(1, seam.challengesTo(bob).size, "rig: the host challenged Bob once") },
-            { assertEquals(listOf(RejectCode.BadProof), seam.rejectsTo(bob).map { it.code }) },
+            { assertEquals(1, seam.challengesTo(eve).size, "rig: the host challenged Eve once") },
+            { assertEquals(listOf(RejectCode.BadProof), seam.rejectsTo(bob).map { it.code }, "another host's key") },
+            { assertEquals(listOf(RejectCode.BadProof), seam.rejectsTo(eve).map { it.code }, "another host's peer id") },
             { assertTrue(room.roster.value.isEmpty()) },
         )
         room.leave()
