@@ -111,8 +111,9 @@ class KeyAdmissionTest {
         hostPeerId: String = hostId.value,
         joinerPeerId: String = challenge.joinerPeerId,
         deviceId: String? = null,
+        roomId: String = challenge.roomId,
     ): AdmitMessage.Proof = AdmitMessage.Proof(
-        AdmissionProof.sign(joiner, challenge.roomId, hostKey, hostPeerId, joinerPeerId, deviceId, challenge.hostNonce).wire,
+        AdmissionProof.sign(joiner, roomId, hostKey, hostPeerId, joinerPeerId, deviceId, challenge.hostNonce).wire,
     )
 
     @Test
@@ -197,6 +198,27 @@ class KeyAdmissionTest {
             { assertEquals(1, seam.challengesTo(eve).size, "rig: the host challenged Eve once") },
             { assertEquals(listOf(RejectCode.BadProof), seam.rejectsTo(bob).map { it.code }, "another host's key") },
             { assertEquals(listOf(RejectCode.BadProof), seam.rejectsTo(eve).map { it.code }, "another host's peer id") },
+            { assertTrue(room.roster.value.isEmpty()) },
+        )
+        room.leave()
+    }
+
+    /**
+     * A proof right in every field but the room: the joiner names another room than the one this host
+     * serves. The room id is what stops a proof made for one room admitting its device to another
+     * room of the same host, which shares the host's key and peer id.
+     */
+    @Test
+    fun proofForAnotherRoomIsRejected() = runTest {
+        val (seam, room) = hostRoom()
+        say(seam, bob, hello("Bob", bobKey.id, nonce = 1))
+        val challenge = seam.challengesTo(bob).single()
+        say(seam, bob, proof(challenge, joiner = bobKey, roomId = "another-room"))
+
+        assertAll(
+            { assertEquals(ROOM.value, challenge.roomId, "rig: the challenge names this host's room") },
+            { assertEquals(1, seam.challengesTo(bob).size, "rig: the host challenged Bob once") },
+            { assertEquals(listOf(RejectCode.BadProof), seam.rejectsTo(bob).map { it.code }, "another room's proof is refused") },
             { assertTrue(room.roster.value.isEmpty()) },
         )
         room.leave()
