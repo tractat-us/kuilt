@@ -2,6 +2,7 @@ package us.tractat.kuilt.session
 
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
+import us.tractat.kuilt.identity.KeyScheme
 
 /**
  * This device as a [SeamRoom] holds it: its key store, and the key already read from that store.
@@ -14,14 +15,18 @@ import us.tractat.kuilt.identity.DeviceKeyStore
  * any read (a Keychain item is unavailable while the phone is locked), so the one read happens where a
  * failure reaches the caller of `host`/`join`/`adopt`, and the room holds a value.
  *
+ * [scheme] is the store's [DeviceKeyStore.keyScheme], read once here with the key: everything the
+ * room signs and checks uses it, so one room never mixes two schemes (#3211).
+ *
  * [store] is kept for what a room reads from it later: grants.
  */
 internal class RoomDevice private constructor(
     val store: DeviceKeyStore,
     val key: DeviceKey,
+    val scheme: KeyScheme,
 ) {
     internal companion object {
-        /** Reads [store]'s key; a store that cannot produce it throws here, to the caller. */
-        suspend fun of(store: DeviceKeyStore): RoomDevice = RoomDevice(store, store.deviceKey())
+        /** Reads [store]'s key and scheme; a store that cannot produce its key throws here, to the caller. */
+        suspend fun of(store: DeviceKeyStore): RoomDevice = RoomDevice(store, store.deviceKey(), store.keyScheme)
     }
 }

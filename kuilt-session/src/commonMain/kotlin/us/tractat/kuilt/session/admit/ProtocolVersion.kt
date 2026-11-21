@@ -30,6 +30,13 @@ package us.tractat.kuilt.session.admit
  * older peer. A Hello that declares v3 but omits the key or the nonce is refused with the same
  * [RejectCode.ProtocolMismatch], by the same host-side gate.
  *
+ * ## Version 4 — the key must be proved (#3211)
+ *
+ * Version 4 sends the Challenge and Proof frames that version 3 only defined: a host admits a joiner
+ * only once it has answered the host's signed challenge with a proof signed by the key its Hello
+ * named. A v3 joiner sends no proof, so a v3 joiner admitted by a v4 host would wait out its deadline
+ * instead of hearing why; the gate refuses it with [RejectCode.ProtocolMismatch] instead.
+ *
  * Every later change to what a joiner must send to be admitted bumps this line again.
  *
  * ## The limit of this gate, stated plainly
@@ -40,13 +47,13 @@ package us.tractat.kuilt.session.admit
  */
 public object ProtocolVersion {
     /** The protocol version this build stamps into every [AdmitMessage.Hello] it sends. */
-    public const val CURRENT: Int = 3
+    public const val CURRENT: Int = 4
 
     /** Oldest declared version this build will admit. */
-    public const val MIN_SUPPORTED: Int = 3
+    public const val MIN_SUPPORTED: Int = 4
 
     /** Newest declared version this build will admit. */
-    public const val MAX_SUPPORTED: Int = 3
+    public const val MAX_SUPPORTED: Int = 4
 
     /**
      * Whether a joiner's declared [version] is one this host can admit.

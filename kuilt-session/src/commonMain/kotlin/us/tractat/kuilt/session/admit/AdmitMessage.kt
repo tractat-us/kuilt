@@ -34,9 +34,14 @@ import us.tractat.kuilt.session.partition.ResumeSecret
  * The host-side runs this passively for incoming [Hello]s. The joiner
  * sends [Hello] immediately upon transport connection and waits for [Welcome] or [Reject].
  *
- * Since protocol v3 (#3210) every [Hello] and [Welcome] names a member's device key, and the wire
- * has the [Challenge] and [Proof] frames of the key-proving exchange. Nothing sends those two yet,
- * and admission does not depend on the key.
+ * Since protocol v3 (#3210) every [Hello] and [Welcome] names a member's device key. Since v4
+ * (#3211) the host admits only a joiner that proves it holds that key:
+ * ```
+ * Joiner → Host   : Hello(identity, key, joinerNonce)
+ * Host   → Joiner : Challenge(signed by the host's key, echoing joinerNonce)
+ * Joiner → Host   : Proof(signed by the joiner's key, over the challenge's hostNonce)
+ * Host   → Joiner : Welcome(…)   or   Reject(BadProof)
+ * ```
  */
 @Serializable
 @OptIn(ExperimentalSerializationApi::class)
@@ -62,7 +67,7 @@ public sealed interface AdmitMessage {
      *   as `null` and is admitted as legacy (kotlinx omits the defaulted null, so a version-less
      *   `Hello` is byte-identical to the pre-#1569 wire form).
      * [key] — the joiner's device key, from its [us.tractat.kuilt.identity.DeviceKeyStore] (v3, #3210).
-     *   In this version it is the joiner's claim: nothing yet checks that the joiner holds the key.
+     *   The joiner proves it holds the key by answering the host's [Challenge] with a [Proof] (v4, #3211).
      * [joinerNonce] — [JOINER_NONCE_SIZE] fresh random bytes, drawn for every Hello (v3, #3210). The
      *   host's signed Challenge will echo it, which is what makes each answer single-use. Its width is
      *   checked here, in the constructor, so a wrong-width nonce is refused on every decode path and a
@@ -306,8 +311,7 @@ public sealed interface AdmitMessage {
 
     /**
      * Sent by the host to a joiner whose [Hello] it received: a signed challenge the joiner answers
-     * with a [Proof] (v3, #3210). **Nothing sends this frame yet**; the exchange that does is the next
-     * step of #3159.
+     * with a [Proof] (v3, #3210; sent since v4, #3211).
      *
      * [statement] is the wire form of a signed `us.tractat.kuilt.identity.Challenge` — its layout
      * followed by the host's signature — carried opaque here. The session layer never re-encodes it:
@@ -324,7 +328,7 @@ public sealed interface AdmitMessage {
     }
 
     /**
-     * Sent by a joiner to answer a [Challenge] (v3, #3210). **Nothing sends this frame yet.**
+     * Sent by a joiner to answer a [Challenge] (v3, #3210; sent since v4, #3211).
      *
      * [statement] is the wire form of a signed `us.tractat.kuilt.identity.AdmissionProof`, carried
      * opaque like [Challenge.statement]. [grants] are the wire forms of the grants this device holds
