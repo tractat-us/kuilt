@@ -231,7 +231,7 @@ public fun classifyRejectCodeSample(reason: FailureReason.Refused): Boolean =
 /**
  * Hold a dropped peer's seat open for a grace window instead of evicting it immediately —
  * the server/host side of the rejoin flow. [JoinerReconnectController] already owns the timer,
- * the single-use token check, and the eviction; don't keep your own `pendingSeats` map.
+ * the answer to a proven return, and the eviction; don't keep your own `pendingSeats` map.
  */
 public suspend fun holdTheSeatOpenSample(
     controller: JoinerReconnectController,
