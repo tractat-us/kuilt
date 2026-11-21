@@ -677,6 +677,12 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 
 ### Task 1.5: Same id, same key restores the held seat, and a different key is refused [after 1.2, 1.4]
 
+> **Amended 2026-11-21 (controller, after 1.5's spec-conformance review; provisional until Iain rules on #3159 reading item 4).**
+> - The per-key revocation check and the `Returning` arm of `windowExpiredDecidesAgainWithoutTheSeat` **move to 2.4 and 2.6**. The room has no `RevocationList` until `HostAdmission` (2.4) and no host-side grant verification until 2.6, so Amendment A § 1.5 asked for a check whose input lands three tasks later. 1.5 hardcodes `holdsValidGrant = false` with a `// 2.6:` marker at each site. The 2.4 and 2.6 briefs carry the obligation, and Decided 14 still holds from 2.4 on.
+> - **A throwing hold policy** gives a retryable `Reject(HostFailed)` and the seat is kept. A throw is not a refusal, so Decided 23 does not apply. 2.4's policy-throw handling copies this.
+> - **The stale-window guard is the episode (`episodeDetectedAtMs`) plus the liveness guard plus `onPeerRecovered`,** standing in for the reading's "seat generation". That covers expiry *events*. It does not cover a stale `tryResume` **verdict**, which 1.5's fix round must handle on its own.
+
+
 > **Amended — read Amendment A § 1.5 first; it overrides this task where they differ.**
 
 **Files:**
