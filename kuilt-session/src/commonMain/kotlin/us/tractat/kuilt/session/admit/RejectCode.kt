@@ -85,6 +85,18 @@ public interface RejectCode {
         override val retryable: Boolean = false
     }
 
+    /**
+     * The host could not do its own half of the key-proving exchange (#3211): signing its challenge,
+     * or checking the joiner's proof, failed on the host's platform. Retryable: the fault is the
+     * host's, and nothing about the joiner's credentials was judged.
+     *
+     * Distinct from [Unspecified], which means a `Reject` carrying no code at all, so an app can tell
+     * a host's passing failure from a peer that predates typed codes.
+     */
+    public object HostFailed : RejectCode {
+        override val id: String = "host-failed"
+    }
+
     /** The token failed structural validation (wrong room). Terminal. */
     public object ResumeTokenInvalid : RejectCode {
         override val id: String = "resume-token-invalid"
@@ -119,6 +131,7 @@ public interface RejectCode {
             ResumeTokenInvalid.id -> ResumeTokenInvalid
             BadProof.id -> BadProof
             KeyConflict.id -> KeyConflict
+            HostFailed.id -> HostFailed
             else -> Unknown(id)
         }
     }
