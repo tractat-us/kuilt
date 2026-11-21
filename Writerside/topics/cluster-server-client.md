@@ -171,11 +171,11 @@ one: retry a lower one after that and the call succeeds, but the command is drop
 ## Failover (round-robin)
 
 When the client's link to its entry server tears, it round-robins to the next
-endpoint from the `ClusterEndpoints` list. Cross-server resume always degrades
-to fresh-join: each server's reconnect-window registry is in-memory and
-per-room-instance, so a `ResumeToken` from server-A is unknown to server-B.
-`ClusterClient` treats this as a fall-back-to-fresh-join signal — reconnect is
-correct and costs a re-snapshot on the learner's log, never wrong state.
+endpoint from the `ClusterEndpoints` list. The next server is a different host,
+with its own key and its own rooms. It holds no seat for the client and honours
+no pass the first server gave it, so the client is let in as anyone new is.
+`ClusterClient` expects that and joins fresh. Reconnecting is correct and costs
+a re-snapshot of the learner's log, never wrong state.
 
 ## Current limitations
 
@@ -184,7 +184,7 @@ correct and costs a re-snapshot on the learner's log, never wrong state.
 | M=1 voter, real sockets | Proven (`ServerClusterE2ETest`) |
 | M=3 voter mesh | Proven under simulation (#541); real-socket M>1 E2E is #545 |
 | Failover / entry-server change | Unit-tested and sim-proven; production `clusterClient(loom,…)` path pending #544 |
-| Cross-server resume | Always degrades to fresh-join (see #532) |
+| Cross-server return | Always a fresh join, since each server has its own key and rooms (see #532) |
 
 Use `clusterClientWithNode()` with a caller-managed `RaftNode` +
 `SeamRaftTransport` for the relay-room production path until #544 lands.

@@ -18,13 +18,14 @@ module.
 | `kuilt-bolt` | A history archive kept beside a live replica (`Bolt`, `BoltDecorator`): a server keeps a year of edits while the phone that fed it keeps an hour |
 | `kuilt-store` | Put some bytes somewhere they will still be after a restart (`DurableStore`): the write comes back only once the data is safe, with a crash-safe implementation for each platform |
 | `kuilt-seal` | Lock some bytes so only one recipient can open them (`SealedBox`): seal to a public key, open with the private key, with every seal different from the last |
+| `kuilt-identity` | One key per device, kept on that device (`DeviceKeyStore`), and the signed passes (`Grant`) a host hands out so a device that drops can come back |
 | `kuilt-gossip` | Partial-mesh overlay (`GossipSeam`): gossip with ~k neighbours so large sessions scale O(k), not O(N) |
 | `kuilt-deal` | Cryptographically fair card dealing (`DealSession`) + dealer-less fair-random (`FairRandom`) |
 | `kuilt-game` | Turn-based game facade: `gameHost`/`gameJoin`/`gameNode` → `GameSession`, `TurnSequencer`, `SpeculativeSequencer` |
 | `kuilt-raft` | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer |
 | `kuilt-cluster` | Server-cluster overlay: `ServerCluster` (voter mesh + relay accept loop) + `ClusterClient` (propose + observe) |
 | `kuilt-liveness` | Peer-liveness detection: `HeartbeatPartitionDetector` emits `PartitionEvent` (Unresponsive/Recovered/Lost) |
-| `kuilt-session` | Membership-aware `Room`: admit/identify handshake, roster, reconnect tokens |
+| `kuilt-session` | Membership-aware `Room`: admit/identify handshake, roster, and a device that drops comes back to its own seat |
 | `kuilt-heddle` | Fair shares of one pooled resource, with nobody in charge: each group gets the slice it was promised, an idle group lends its share to a busy one, and it keeps working through a network split — see [Fair Share](heddle.md) and [Scheduling](scheduling.md) |
 | `kuilt-heddle-core` | The same fair share in one program, with no network (`LocalHeddle`): lease a slot, charge its real cost, preview and explain the next picks, and survive a restart — see [Scheduling](scheduling.md) |
 | `kuilt-heddle-coroutines` | Wait your turn for a slot (`FairSharePool.withSlot`): a caller waits until its group's fair share comes round, then runs, and is charged the time the job took, even if it failed. A caller that gives up just as its turn comes never leaves a slot lost |
