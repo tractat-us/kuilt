@@ -611,9 +611,23 @@ private sealed interface RefineVerdict {
  * single acquisition of the lock is what makes them one decision; acting on it outside the lock is
  * what keeps the suspend-free critical section the file's thread-safety note promises.
  */
+/**
+ * A membership `SeamRoom.detachMember` removed, whose inbox is closed once the caller has released the
+ * room lock: closing can resume a collector inline, which may call back into the room. A re-admission
+ * owns a different inbox. Closed after the departure is published.
+ */
+private class DetachedMember(private val inbox: MemberInbox?) {
+    fun close() {
+        inbox?.close()
+    }
+}
+
 private sealed interface ExpiryVerdict {
-    /** The window really did run out for the episode this room holds. Fan out, and evict. */
-    data object Expired : ExpiryVerdict
+    /**
+     * The window really did run out for the episode this room holds, and the seat was [evicted] in
+     * the section that decided so. Fan out.
+     */
+    class Expired(val evicted: DetachedMember) : ExpiryVerdict
 
     /**
      * The member is gone already — normally because the detector's [PartitionEvent.PeerLost] won
@@ -831,6 +845,21 @@ internal class SeamRoom(
      * is not partitioned before it consults this map — and the next episode overwrites it.
      */
     private val episodeDetectedAtMs = mutableMapOf<PeerId, Long>()
+
+    /**
+     * **Host only.** For each partitioned member, the partition episode whose
+     * [JoinerReconnectEvent.WindowOpened] this room has seen from its controller: the episode the
+     * controller is known to be holding a window for. Written by [refineWindow] when an announcement
+     * names the current episode, reaped with the member, guarded by [lock].
+     *
+     * A Proof's restore reads it ([settleRestore]). Until the controller has announced the current
+     * episode's window it may still hold the previous one, spent or expired — the default controller
+     * opens a window on a launched coroutine after the partition — and a refusal read from that state
+     * is about an episode that is over. The controller's own state cannot be fixed instead: forgetting
+     * a spent or expired window would make it answer `WindowNotYetOpen` where a resume must hear
+     * `WindowClosed` (#1572).
+     */
+    private val windowOpenedEpisodeMs = mutableMapOf<PeerId, Long>()
 
     /**
      * **Host only.** Members whose seat a Proof restored through [JoinerReconnectController.tryResume]
@@ -2666,7 +2695,7 @@ internal class SeamRoom(
                         "detector-collector.received PeerLost peer=${member.id.value} role=${_role.value} at=${event.at}"
                     }
                 }
-                handlePartitionEvent(event)
+                handlePartitionEvent(event, detectorJob)
             }
         }
         detectorJobs[member.id] = detectorJob
@@ -2727,11 +2756,11 @@ internal class SeamRoom(
      */
     internal fun lastResumeRefusal(): ResumeRefusal? = resumeMachine?.lastRefusal()
 
-    private suspend fun handlePartitionEvent(event: PartitionEvent) {
+    private suspend fun handlePartitionEvent(event: PartitionEvent, detector: Job) {
         when (event) {
             is PartitionEvent.PeerUnresponsive -> handleUnresponsive(event)
             is PartitionEvent.PeerRecovered -> markRecovered(event.peerId, event.at)
-            is PartitionEvent.PeerLost -> handlePeerLost(event.peerId, event.at)
+            is PartitionEvent.PeerLost -> handlePeerLost(event.peerId, event.at, detector)
         }
     }
 
@@ -2983,6 +3012,9 @@ internal class SeamRoom(
                 WindowEpisode.Unidentified -> null
             }
             if (stale != null) return@withLock stale
+            // The controller now holds this episode's window, whatever its deadline: a refusal it
+            // gives from here on is about this partition (see [windowOpenedEpisodeMs]).
+            if (episode is WindowEpisode.Detected) windowOpenedEpisodeMs[peerId] = episode.atMs
             if (current.windowExpiresAt == expiresAt) return@withLock RefineVerdict.Unchanged
             updateMemberLiveness(peerId, current.copy(windowExpiresAt = expiresAt))
                 ?: return@withLock RefineVerdict.NotPartitioned
@@ -3985,26 +4017,67 @@ internal class SeamRoom(
         emitEvent(MembershipEvent.Recovered(updated.id, clock()))
     }
 
-    private suspend fun handlePeerLost(peerId: PeerId, at: Instant) {
+    /**
+     * [detector], the job of the detector that reported the loss, names the membership the loss is
+     * about. A member's detector is stopped when the member is removed ([detachMember]), so a loss
+     * from a detector no longer registered for [peerId] is about a membership that is over — and
+     * evicting by peer id would remove a newer member admitted under the same id. The check and the
+     * eviction share one critical section.
+     */
+    private suspend fun handlePeerLost(peerId: PeerId, at: Instant, detector: Job) {
         logger.info { "handlePeerLost peer=${peerId.value} role=${_role.value} at=$at" }
-        val isHostPeer = lock.withLock {
-            stopDetector(peerId)
-            _role.value == SessionRole.Joiner && peerId == hostPeerId
+        val loss = lock.withLock {
+            when {
+                _role.value == SessionRole.Joiner && peerId == hostPeerId -> {
+                    stopDetector(peerId)
+                    PeerLoss.HostLost
+                }
+                detectorJobs[peerId] !== detector -> PeerLoss.StaleDetector
+                else -> {
+                    stopDetector(peerId)
+                    PeerLoss.Evicted(detachMember(peerId, LeaveReason.PartitionExpired))
+                }
+            }
         }
-        if (isHostPeer) {
-            logger.info { "handlePeerLost.markHostLost peer=${peerId.value}" }
-            markHostLost(at, FailureReason.WindowExpired)
-        } else {
-            logger.info { "handlePeerLost.evict peer=${peerId.value} reason=PartitionExpired" }
-            removeFromRoster(peerId, LeaveReason.PartitionExpired)
+        when (loss) {
+            PeerLoss.HostLost -> {
+                logger.info { "handlePeerLost.markHostLost peer=${peerId.value}" }
+                markHostLost(at, FailureReason.WindowExpired)
+            }
+            PeerLoss.StaleDetector ->
+                logger.debug { "handlePeerLost.stale-detector peer=${peerId.value}: its membership has ended" }
+            is PeerLoss.Evicted -> {
+                logger.info { "handlePeerLost.evict peer=${peerId.value} reason=PartitionExpired" }
+                loss.detached?.close()
+            }
         }
+    }
+
+    /** What [handlePeerLost] decided under [lock]. */
+    private sealed interface PeerLoss {
+        data object HostLost : PeerLoss
+
+        data object StaleDetector : PeerLoss
+
+        /** [detached] is null when the member was gone already and only its detector was left. */
+        class Evicted(val detached: DetachedMember?) : PeerLoss
     }
 
     /**
      * A reconnect window expired. Decide **once**, under one acquisition of [lock], whether this
-     * expiry is one to act on — and only then do the two things acting on it means: fan out the
-     * authoritative [AdmitMessage.Farewell] (#1557) and back-stop the local eviction (#1618
-     * Track C).
+     * expiry is one to act on, and evict in that same section (#1618 Track C) — then fan out the
+     * authoritative [AdmitMessage.Farewell] (#1557) outside it.
+     *
+     * **Why the eviction is not a later step (#3212).** It was: the decision, then the `Farewell`,
+     * then [removeFromRoster] by peer id, in sections of their own. A Proof that releases the seat
+     * and admits a new member under the same id can land between the decision and the removal — with
+     * the default controller it lines up exactly, since the Proof's ask is refused once the window
+     * has closed — and the removal then evicted the *new* member, after its Welcome, leaking its
+     * detector. Evicted where it was decided, the expiry removes the membership it read, and a Proof
+     * landing after finds no seat and admits afresh. Only an eviction fans out, or an absence. What
+     * this does not order is the `Farewell`'s enqueue, made after the lock is released, against a
+     * roster Welcome that another thread enqueues for a member it admits in that instant: the lanes
+     * keep enqueue order, and nothing orders enqueues made from two coroutines.
      *
      * **Why one decision and not two (#2556).** These were two statements, and only the second was
      * guarded — on *"is this peer partitioned right now?"*. The fan-out ran first and unguarded, so
@@ -4014,7 +4087,7 @@ internal class SeamRoom(
      * admit fan-out. Two guards would have been the same bug one level down — the fan-out reading
      * the level, then the eviction re-reading it, with the recovery free to land between them. The
      * decision has to be atomic with respect to the state it is about, so it is taken here and the
-     * actions follow it outside the lock.
+     * fan-out follows it outside the lock.
      *
      * **Why liveness alone is not the guard.** [ExpiryVerdict.StaleEpisode] is the other half. The
      * partition guard rejects an expiry for a member that is not partitioned *now*, which covers
@@ -4033,8 +4106,8 @@ internal class SeamRoom(
      * whole guarantee a race — a star topology's bystander would evict, or not, depending on
      * coroutine order. There is nothing left to evict, so only the fan-out runs.
      *
-     * Idempotent throughout: [removeFromRoster] guards a duplicate [MembershipEvent.Left], so a
-     * late `PeerLost` after this arm emits nothing. Host-only, since [reconnectController] is null
+     * Idempotent throughout: [detachMember] guards a duplicate [MembershipEvent.Left], so a late
+     * `PeerLost` after this arm emits nothing. Host-only, since [reconnectController] is null
      * on a joiner — it never pre-empts a joiner's terminal `HostLost` path.
      */
     private fun handleWindowExpired(event: JoinerReconnectEvent.WindowExpired) {
@@ -4050,16 +4123,20 @@ internal class SeamRoom(
             // `removeFromRoster` reaps the two together — so the log line below is how a reader
             // would find out that stopped being true.
             if (held != event.detectedAt) return@withLock ExpiryVerdict.StaleEpisode(held, event.detectedAt)
-            stopDetector(peerId)
-            ExpiryVerdict.Expired
+            // Evicted in the section that decided to, so the eviction is of the membership just read.
+            // Acted on in a later section, a Proof could release that seat and admit a new member
+            // under the same id in between, and this would then evict the new one.
+            ExpiryVerdict.Expired(
+                checkNotNull(detachMember(peerId, LeaveReason.PartitionExpired)) { "the seat was read under this lock" },
+            )
         }
         when (verdict) {
-            ExpiryVerdict.Expired -> {
+            is ExpiryVerdict.Expired -> {
                 logger.info {
                     "windowExpired.evict peer=${peerId.value} reason=PartitionExpired episode=${event.detectedAt}"
                 }
+                verdict.evicted.close()
                 propagateFarewell(peerId, expired = true)
-                removeFromRoster(peerId, LeaveReason.PartitionExpired)
             }
             ExpiryVerdict.AlreadyGone -> {
                 logger.info { "windowExpired.farewellOnly peer=${peerId.value} episode=${event.detectedAt}" }
@@ -4161,7 +4238,22 @@ internal class SeamRoom(
         }
     }
 
+    /**
+     * Remove [peerId]'s membership, if it has one. For a caller whose decision to remove was taken
+     * in an earlier critical section, and so may remove a newer membership under the same id: a
+     * caller deciding on one membership in particular uses [detachMember] under its deciding lock.
+     */
     private fun removeFromRoster(peerId: PeerId, reason: LeaveReason) {
+        lock.withLock { detachMember(peerId, reason) }?.close()
+    }
+
+    /**
+     * **Under [lock].** Remove [peerId]'s membership and stop its detector, in the caller's critical
+     * section, so the removal acts on the membership the caller's decision read and not on one
+     * admitted after it under the same id. Null when [peerId] holds none: no duplicate `Left`.
+     * The caller closes the returned inbox once it has released [lock].
+     */
+    private fun detachMember(peerId: PeerId, reason: LeaveReason): DetachedMember? {
         // The fan-out lanes are torn down in the SAME critical section that removes the member. That
         // reaps every lane minted while the peer WAS a member; what stops a new one appearing after
         // is the membership re-check in [admitLaneFor]/[relayLaneFor], not this line — the relay path
@@ -4169,29 +4261,28 @@ internal class SeamRoom(
         // the two and a check keyed only on `closed` would mint a lane for a peer already gone. The
         // two together give the invariant `lanes.keys ⊆ admittedById.keys` at every point the lock is
         // not held. If no admission is removed, no lane is discarded. See [discardLanes].
-        val endedInbox = lock.withLock {
-            if (admittedById.remove(peerId) == null) return // already removed, avoid duplicate Left events
-            discardLanes(peerId)
-            // Reaped with the member so a long-lived room does not accumulate an entry per peer
-            // that ever left. refineWindow's Partitioned gate rejects an announcement for a gone member.
-            episodeDetectedAtMs.remove(peerId)
-            proofResumes.remove(peerId)
-            // Pruned with the member, keeping `resumeSecrets.keys == admittedById.keys` (#3165).
-            resumeSecrets.remove(peerId)
-            // A later admission gets a fresh inbox; close this admission's inbox outside the lock.
-            val inbox = memberInboxes.remove(peerId)
-            // Keep removal in the same critical section as admission and liveness updates. Otherwise
-            // a Hello can re-admit this peer after the map removal, and these late publications erase
-            // the new admission from both roster views while the frame gate still accepts it.
-            _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
-            _rosterPeers.update { current -> current - peerId }
-            emitEvent(MembershipEvent.Left(peerId, reason))
-            inbox
-        }
-        // Close after publishing the departure, outside the lock: closing can resume a collector
-        // inline, which may call back into this room. A re-admission owns a different inbox.
-        endedInbox?.close()
+        if (admittedById.remove(peerId) == null) return null
+        // A member's detector goes with it, so none outlives the membership it watches.
+        stopDetector(peerId)
+        discardLanes(peerId)
+        // Reaped with the member so a long-lived room does not accumulate an entry per peer
+        // that ever left. refineWindow's Partitioned gate rejects an announcement for a gone member.
+        episodeDetectedAtMs.remove(peerId)
+        windowOpenedEpisodeMs.remove(peerId)
+        proofResumes.remove(peerId)
+        // Pruned with the member, keeping `resumeSecrets.keys == admittedById.keys` (#3165).
+        resumeSecrets.remove(peerId)
+        // A later admission gets a fresh inbox; close this admission's inbox outside the lock.
+        val inbox = memberInboxes.remove(peerId)
+        // Keep removal in the same critical section as admission and liveness updates. Otherwise
+        // a Hello can re-admit this peer after the map removal, and these late publications erase
+        // the new admission from both roster views while the frame gate still accepts it.
+        _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
+        _rosterPeers.update { current -> current - peerId }
+        emitEvent(MembershipEvent.Left(peerId, reason))
+        return DetachedMember(inbox)
     }
+
 
     private fun isAdmittedPeer(peerId: PeerId): Boolean = lock.withLock { admittedById.containsKey(peerId) }
 
@@ -4644,6 +4735,7 @@ internal class SeamRoom(
         lock.withLock {
             admittedById.clear()
             episodeDetectedAtMs.clear()
+            windowOpenedEpisodeMs.clear()
             // With the members it belongs to, keeping `resumeSecrets.keys == admittedById.keys`.
             resumeSecrets.clear()
             _roster.value = emptySet()
