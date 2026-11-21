@@ -41,6 +41,8 @@ In kuilt, read it directly; consumers take the first working rung:
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
 3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 
+`<path>` may also be `.claude/skills/kuilt-primitives/reference/<family>.md` on `main`, for a copy that lacks it.
+
 **Editing this skill:** description ≤ 1,536 chars, this body ≤ 8 KiB, each `reference/` file ≤ 4 KiB.
 A new route is a row in its family's file; past 4 KiB, split it into `reference/<family>/<section>.md`.
 Name every reference file here. Move prose to `docs/agent-cookbook*`, never drop a route.
