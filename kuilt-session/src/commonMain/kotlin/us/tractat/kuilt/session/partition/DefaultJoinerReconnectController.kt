@@ -21,8 +21,8 @@ import us.tractat.kuilt.core.PeerId
  * Per-peer windows are independent: one peer's window expiring does not affect
  * another peer's window.
  *
- * @param roomId The Room this controller guards. Tokens for a different
- *   Room are rejected as [ResumeResult.TokenInvalid].
+ * @param roomId The Room this controller guards. A [ProvenResume] for a different
+ *   Room is rejected as [ResumeResult.TokenInvalid]; a room never builds one.
  * @param reconnectWindowMs Duration of the reconnect window in millis. Defaults to
  *   [DEFAULT_RECONNECT_WINDOW_MS] (60 s).
  * @param clock Injected clock returning epoch-millis. Must never be wired to
@@ -54,15 +54,17 @@ public class DefaultJoinerReconnectController(
     }
 
     override suspend fun tryResume(
-        token: ResumeToken,
+        resume: ProvenResume,
         at: Long,
     ): ResumeResult.HostVerdict {
-        if (token.roomId != roomId) {
+        // Unreachable through a room, which builds every ProvenResume from its own id; kept for a
+        // controller driven directly (see JoinerReconnectController.tryResume).
+        if (resume.roomId != roomId) {
             return ResumeResult.TokenInvalid("session-mismatch")
         }
         val result: ResumeResult.HostVerdict =
             mutex.withLock {
-                val state = windows[token.peerId]
+                val state = windows[resume.peerId]
                 when {
                     // No window has been opened for this peer at all — the fast-reconnect race
                     // (transient), NOT a closed window. The distinction is the whole point of
@@ -78,7 +80,7 @@ public class DefaultJoinerReconnectController(
                 }
             }
         if (result == ResumeResult.Success) {
-            _events.emit(JoinerReconnectEvent.Resumed(peerId = token.peerId, at = at))
+            _events.emit(JoinerReconnectEvent.Resumed(peerId = resume.peerId, at = at))
         }
         return result
     }

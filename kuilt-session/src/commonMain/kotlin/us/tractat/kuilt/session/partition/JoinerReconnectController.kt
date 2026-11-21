@@ -9,7 +9,7 @@ import us.tractat.kuilt.session.admit.RejectCode
  *
  * When a joiner's transport link drops, the leader calls [onPeerUnresponsive]
  * to open a timed reconnect window (default 60 s). Within that window
- * the joiner can present a [ResumeToken] via [tryResume] to reattach. Once the
+ * a joiner that proves it holds the seat is restored through [tryResume]. Once the
  * window expires the peer is evicted and a late reconnect is treated as a fresh
  * join.
  *
@@ -59,25 +59,28 @@ public interface JoinerReconnectController {
     )
 
     /**
-     * Attempts to resume the peer identified by [token].
+     * Attempts to restore the held seat [resume] names.
      *
      * Validation order:
-     * 1. Session match — [ResumeToken.roomId] must equal the controller's Room.
-     * 2. Window open — the reconnect window for [token.peerId] must still be active at [at].
-     * 3. Token not yet consumed — a token may only be used once per window.
+     * 1. Session match — [ProvenResume.roomId] must equal the controller's Room.
+     * 2. Window open — the reconnect window for [ProvenResume.peerId] must still be active at [at].
+     * 3. Window not yet spent — a window restores at most once.
      *
-     * **The [ResumeToken.secret] is not this controller's concern.** The room checks every token
-     * before calling here and answers the rest itself (#3165): a token reaches [tryResume] only when
-     * it names this room, names a **current member**, and carries that member's secret. An
-     * implementation — a consumer's own hold policy included — is protected from forged resumes
-     * without knowing a secret exists, even one that checks none of steps 1–3 for a departed peer,
-     * and must not try to check the secret itself.
+     * **Who the joiner is, is not this controller's concern.** A [ProvenResume] has an `internal`
+     * constructor and the room builds one only after its own check (#3159, #3165): the joiner proved
+     * the device key the seat was admitted under, or presented that member's resume secret, and the
+     * seat is a **current member's**. An implementation — a consumer's own hold policy included — is
+     * protected from forged resumes without checking anything about the joiner, even one that checks
+     * none of steps 1–3. Step 1 cannot fail through a room, which builds every [ProvenResume] from its
+     * own id; it stays for a controller driven some other way.
      *
-     * On success, emits [JoinerReconnectEvent.Resumed] and closes the window so
-     * a second [tryResume] with the same token returns [ResumeResult.WindowClosed].
+     * On success, emits [JoinerReconnectEvent.Resumed] and closes the window so a second [tryResume]
+     * for the same seat returns [ResumeResult.WindowClosed]. The room treats
+     * [ResumeResult.WindowNotYetOpen] as a seat still held and restores it anyway, and any other
+     * refusal as a seat that is gone.
      */
     public suspend fun tryResume(
-        token: ResumeToken,
+        resume: ProvenResume,
         at: Long,
     ): ResumeResult.HostVerdict
 
@@ -87,7 +90,7 @@ public interface JoinerReconnectController {
      *
      * The counterpart of [onPeerUnresponsive] on the lane that has no token in it. A peer whose
      * link merely blipped is restored by the liveness detector alone: it never presents a
-     * [ResumeToken], so [tryResume] — the only other thing that closes a window — is never reached,
+     * proof of its seat, so [tryResume] — the only other thing that closes a window — is never reached,
      * and before this method existed the window a blip opened stayed armed for its full duration
      * behind a peer that was already back (#2556). What that stale timer then does is not
      * cosmetic: its [JoinerReconnectEvent.WindowExpired] is what a room fans out as an
