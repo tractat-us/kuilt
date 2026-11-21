@@ -77,7 +77,10 @@ public interface JoinerReconnectController {
      * On success, emits [JoinerReconnectEvent.Resumed] and closes the window so a second [tryResume]
      * for the same seat returns [ResumeResult.WindowClosed]. The room treats
      * [ResumeResult.WindowNotYetOpen] as a seat still held and restores it anyway, and any other
-     * refusal as a seat that is gone.
+     * refusal as a seat that is gone — but only once it has seen the [JoinerReconnectEvent.WindowOpened]
+     * this controller emits for the partition in question. Before that the refusal may be about an
+     * earlier partition's window, so the room reads it as not yet open. A controller that never
+     * announces its windows therefore never has a refusal acted on.
      */
     public suspend fun tryResume(
         resume: ProvenResume,
