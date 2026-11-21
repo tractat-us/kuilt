@@ -842,6 +842,9 @@ reinventing them. One step — copy the skill folder into your repo:
     cp -r <kuilt>/.claude/skills/kuilt-primitives .claude/skills/
 
 (When kuilt is checked out side-by-side via `includeBuild("../kuilt")`, `<kuilt>` is
-`../kuilt`.) The skill routes to the `docs/agent-cookbook.md` index and its family files
-(`docs/agent-cookbook/<family>.md`), a symptom→primitive lookup for reconnect, replicated
-state, liveness, consensus, and dedup.
+`../kuilt`.) Copy the whole folder, not just `SKILL.md`: the skill is a short router, and
+the routes for each family live beside it in `reference/<family>.md`. A sync job that
+keeps your copy fresh should mirror the folder the same way. Those routes lead to the
+`docs/agent-cookbook.md` index and its family files (`docs/agent-cookbook/<family>.md`),
+a symptom→primitive lookup for reconnect, replicated state, liveness, consensus, and
+dedup.
