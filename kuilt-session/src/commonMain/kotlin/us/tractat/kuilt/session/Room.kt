@@ -354,8 +354,8 @@ public interface Room {
      * `Hello` proves the device key its held seat was admitted under, and a host still holding that
      * seat under the same peer id restores it (#3212). Whether calling this afterwards can still
      * succeed depends on how the seat came back. A seat restored through its open window spent that
-     * window, so the call is refused. A seat that was still connected, or whose window had not opened
-     * yet, came back without spending one, so the window is left as it was and may still resume.
+     * window, so the call is refused. A seat that came back without spending a window has nothing to
+     * resume; a later drop opens a new window, which a resume can use.
      *
      * Returns a [ResumeResult.JoinerOutcome], never the whole [ResumeResult] hierarchy: the host's
      * own verdicts ([ResumeResult.WindowNotYetOpen], [ResumeResult.TokenInvalid]) do not travel as
