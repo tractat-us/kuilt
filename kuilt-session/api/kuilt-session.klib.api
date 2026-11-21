@@ -95,6 +95,11 @@ abstract interface us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kui
         final fun fromId(kotlin/String?): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session.admit/RejectCode.Companion.fromId|fromId(kotlin.String?){}[0]
     }
 
+    final object HostFailed : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.HostFailed|null[0]
+        final val id // us.tractat.kuilt.session.admit/RejectCode.HostFailed.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.HostFailed.id.<get-id>|<get-id>(){}[0]
+    }
+
     final object KeyConflict : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.KeyConflict|null[0]
         final val id // us.tractat.kuilt.session.admit/RejectCode.KeyConflict.id|{}id[0]
             final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.KeyConflict.id.<get-id>|<get-id>(){}[0]
