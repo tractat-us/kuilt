@@ -52,8 +52,9 @@ internal val TEST_DEVICE_B: DeviceKey = fakeDeviceKey(101)
  * the nonce is refused before any other gate runs, so a raw Hello built without them tests that
  * refusal and nothing else.
  *
- * [key] defaults to [TEST_KEY_A]. Nothing reads keys at admission yet, but a test admitting two of
- * these as two devices passes [TEST_KEY_B] to the second.
+ * [key] defaults to [TEST_KEY_A]; a test admitting two of these as two devices passes [TEST_KEY_B] to
+ * the second. Since v4 (#3211) a Hello alone admits nobody: send it with [helloAndProve], which also
+ * answers the host's challenge with [TEST_DEVICE_A] (or [TEST_DEVICE_B]).
  */
 internal fun currentHello(
     displayName: String,
