@@ -82,14 +82,14 @@ public interface ElectionLobby {
      * HOST-ONLY. Close the lobby and begin the session: run the freeze/ack round, then adopt.
      * Throws [NotElectedHostException] if this peer is not currently `host`.
      */
-    public suspend fun start(memberName: String? = null): Room
+    public suspend fun start(memberName: String? = null, deviceId: String? = null): Room
 
     /**
      * Await the session. On a MEMBER: suspend until the host's freeze arrives, ack it, adopt.
      * (The host obtains its Room from [start] instead.) Returns a sealed [ElectionOutcome] —
      * `Adopted(room)`, `Torn(reason)`, or `BecameHost` (#1483; see below).
      */
-    public suspend fun awaitRoom(memberName: String? = null): ElectionOutcome
+    public suspend fun awaitRoom(memberName: String? = null, deviceId: String? = null): ElectionOutcome
 
     /** Leave the lobby, closing the underlying seam (only if no Room has adopted it). Idempotent. */
     public suspend fun leave()
