@@ -1,8 +1,9 @@
 name: skill-staleness
 
 # Producer-side freshness check for the agent-facing docs: the always-loaded
-# `.claude/skills/kuilt-primitives/SKILL.md`, and each family's pair of
-# `docs/agent-cookbook/<family>.md` + `.claude/rules/<family>.md` (#2769).
+# `.claude/skills/kuilt-primitives/SKILL.md`, and each family's
+# `docs/agent-cookbook/<family>.md` + `.claude/rules/<family>.md` + the skill's
+# `reference/<family>.md` or `reference/<family>/` (#2769, #3601).
 #
 # WHY THIS EXISTS
 #   The skill is how a coding agent in a CONSUMER repo discovers what kuilt already
@@ -77,10 +78,13 @@ name: skill-staleness
 #   itself up by, so a shared title would have one arm closing the other's issue
 #   and re-opening it on the next run, forever.
 #
-#   The newer of the family's two files counts. `docs/agent-cookbook/<family>.md`
-#   is where a route's compiled snippet lands and `.claude/rules/<family>.md` is
-#   where its convention does, and touching either is an honest record that
-#   somebody looked at what moved.
+#   The newest of the family's files counts. `docs/agent-cookbook/<family>.md`
+#   is where a route's compiled snippet lands, `.claude/rules/<family>.md` is
+#   where its convention does, and the skill's `reference/<family>.md` (or its
+#   `reference/<family>/` sections) is where its route row does. Touching any of
+#   them is an honest record that somebody looked at what moved. The reference
+#   files count only here, never in the skill arm's SKILL.md timestamp, where one
+#   family's row would clear all seven.
 #
 # WHY THE FAMILY → MODULES MAP IS READ, NOT LISTED
 #   Same reason the module list above is derived: it is already written down, in
@@ -221,11 +225,11 @@ jobs:
           **This is a proxy, not a verdict.** The job cannot tell a new *primitive* from an internal refactor, so the answer may legitimately be \"nothing to route\" — in which case a one-line touch of the skill is the honest way to record that someone looked.
 
           What to check:
-          1. Did any of those modules gain a **public** primitive a consumer would otherwise hand-roll? If so it needs a STOP-list route and the \`description\` trigger phrases that reach it — and that \`description\` is a FIXED budget, so adding a trigger there means removing one (#2662) — plus a section in that module's family page, \`docs/agent-cookbook/<family>.md\`, with a row pointing at it from the \`docs/agent-cookbook.md\` index.
+          1. Did any of those modules gain a **public** primitive a consumer would otherwise hand-roll? If so it needs a route row in its family's \`.claude/skills/kuilt-primitives/reference/<family>.md\` and the \`description\` trigger phrases that reach it — and that \`description\` is a FIXED budget, so adding a trigger there means removing one (#2662) — plus a section in that module's family page, \`docs/agent-cookbook/<family>.md\`, with a row pointing at it from the \`docs/agent-cookbook.md\` index.
           2. Did any **routed** symbol get renamed, made \`internal\`, or removed? A route naming the wrong symbol is worse than no route — it is confident, and the agent trusts it over its own reading.
           3. Does the frontmatter still parse? The \`description\` is one long unquoted YAML scalar, so a bare \`: \` inside it breaks the block and the skill stops loading (#2541).
 
-          Consumers vendor this file and refresh it on a daily sync, so whatever is here propagates outward unreviewed.
+          Consumers vendor this skill directory and refresh it on a daily sync, so whatever is here propagates outward unreviewed.
 
           - Run: ${RUN_URL}"
 
@@ -450,7 +454,7 @@ jobs:
                 | grep -v '^$' | cut -d/ -f1 | sort -u | sed 's/^/- `:/;s/$/`/'
             )
 
-            BODY="\`$FAMILY\`'s published \`src/commonMain\` last moved **${DAYS} days** after the newer of \`$COOK\` and \`$RULE\`. The budget is ${MAX_DAYS} days (see CLAUDE.md, \"The \`kuilt-primitives\` skill is part of the public surface\").
+            BODY="\`$FAMILY\`'s published \`src/commonMain\` last moved **${DAYS} days** after the newest of \`$COOK\`, \`$RULE\` and \`$REF\` (or \`$REF_DIR/\`). The budget is ${MAX_DAYS} days (see CLAUDE.md, \"The \`kuilt-primitives\` skill is part of the public surface\").
 
             Modules in this family whose published source moved since its docs did:
 
@@ -459,7 +463,7 @@ jobs:
             **This is a proxy, not a verdict.** The job cannot tell a new *primitive* from an internal refactor, so the answer may legitimately be \"nothing to route\" — in which case a one-line touch of \`$COOK\` is the honest way to record that someone looked.
 
             What to check:
-            1. Did any of those modules gain a **public** primitive a consumer would otherwise hand-roll? If so it needs a section in \`$COOK\` quoting a compiled snippet, and a row pointing at it from the \`docs/agent-cookbook.md\` index. If an agent should be routed to it before it opens any file, it also needs a STOP-list route in \`.claude/skills/kuilt-primitives/SKILL.md\` — whose \`description\` is a FIXED budget, so adding a trigger there means removing one (#2662).
+            1. Did any of those modules gain a **public** primitive a consumer would otherwise hand-roll? If so it needs a section in \`$COOK\` quoting a compiled snippet, and a row pointing at it from the \`docs/agent-cookbook.md\` index. If an agent should be routed to it before it opens any file, it also needs a route row in \`$REF\`, and the trigger phrases that reach it in \`$SKILL_DIR/SKILL.md\`'s \`description\` — a FIXED budget, so adding a trigger there means removing one (#2662).
             2. Did any **routed** symbol get renamed, made \`internal\`, or removed? A route naming the wrong symbol is worse than no route — it is confident, and the agent trusts it over its own reading.
             3. Did a convention move? \`$RULE\` is loaded only for a session editing the paths it claims, so a rule about a module that has since changed family is loaded for nobody, and nothing says so.
 
