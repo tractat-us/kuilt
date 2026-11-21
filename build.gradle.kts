@@ -8332,7 +8332,7 @@ val verifySeamHarnessCoverage by tasks.registering {
  * The ceiling was never per message. Kotlin's Karma reporter wrote a whole run as one stdout line,
  * so it was per **run**, and `:kuilt-session` hit it at 26 of 543 results just by growing (#3605).
  * The `kuilt.kmp-library` convention plugin now ends each message with a newline and makes every
- * `wasmJsBrowserTest` fail when Gradle records fewer results than Karma reported
+ * Karma test task fail when the results Gradle recorded differ from those Karma reported
  * (`GenerateKarmaLineReporter`, `VerifyKarmaResultCount`). That per-task check reds locally with no
  * stand-down, so this task is now the second line on wasm. It is still the only line for a target
  * that drops a class some other way, and for every non-wasm pairing.

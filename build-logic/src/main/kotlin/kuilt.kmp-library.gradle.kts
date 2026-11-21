@@ -187,7 +187,7 @@ val generateKarmaOrphanGuard = tasks.register<GenerateKarmaOrphanGuard>("generat
 // Third file in the same directory: Kotlin's Karma reporter writes a whole run as ONE stdout line,
 // and KGP drops everything past 1 MB of it while the task exits 0 (#3605). The generated reporter
 // ends each message with a newline and counts what it reported; VerifyKarmaResultCount below
-// fails the task when Gradle recorded fewer. See GenerateKarmaLineReporter.
+// fails every Karma task whose recorded count differs. See GenerateKarmaLineReporter.
 val generateKarmaLineReporter = tasks.register<GenerateKarmaLineReporter>("generateKarmaLineReporter") {
     group = "build setup"
     description = "Writes the wasmJs Karma line reporter into build/karma-config.d/."
