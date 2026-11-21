@@ -602,16 +602,6 @@ private sealed interface RefineVerdict {
 }
 
 /**
- * What `SeamRoom.handleWindowExpired` decided about one [JoinerReconnectEvent.WindowExpired].
- *
- * The sibling of [RefineVerdict], and it exists for a stronger reason than that one does: the two
- * things an expiry drives — an authoritative `Farewell` to every other member, and the local
- * eviction — used to be two statements with one guard between them, so a recovery landing in the
- * gap evicted a healthy member everywhere but the host (#2556). Reaching a single verdict under a
- * single acquisition of the lock is what makes them one decision; acting on it outside the lock is
- * what keeps the suspend-free critical section the file's thread-safety note promises.
- */
-/**
  * A membership `SeamRoom.detachMember` removed, whose inbox is closed once the caller has released the
  * room lock: closing can resume a collector inline, which may call back into the room. A re-admission
  * owns a different inbox. Closed after the departure is published.
@@ -622,6 +612,17 @@ private class DetachedMember(private val inbox: MemberInbox?) {
     }
 }
 
+/**
+ * What `SeamRoom.handleWindowExpired` decided about one [JoinerReconnectEvent.WindowExpired].
+ *
+ * The sibling of [RefineVerdict], and it exists for a stronger reason than that one does: the two
+ * things an expiry drives — an authoritative `Farewell` to every other member, and the local
+ * eviction — used to be two statements with one guard between them, so a recovery landing in the
+ * gap evicted a healthy member everywhere but the host (#2556). Reaching a single verdict under a
+ * single acquisition of the lock is what makes them one decision. The section that decides also
+ * evicts and enqueues the `Farewell` on every other member's lane, neither of which suspends; only
+ * the inbox close and the log line follow it.
+ */
 private sealed interface ExpiryVerdict {
     /**
      * The window really did run out for the episode this room holds, and the seat was [evicted] in
@@ -637,10 +638,12 @@ private sealed interface ExpiryVerdict {
     data object AlreadyGone : ExpiryVerdict
 
     /**
-     * The member is [Liveness.Connected] — it came back inside its window and the expiry is stale.
-     * The #2556 case: neither the fan-out nor the eviction may run.
+     * The member is [Liveness.Connected], so the expiry is stale and neither the fan-out nor the
+     * eviction may run. Either the membership the window was opened for came back inside it (#2556),
+     * or, when [readmitted], that membership is over and a newer one holds the id: a Proof released
+     * the seat and seated its joiner afresh before the expiry was handled (#3212).
      */
-    data object Recovered : ExpiryVerdict
+    data class Recovered(val readmitted: Boolean) : ExpiryVerdict
 
     /**
      * The expiry named partition episode [announced] while this room holds [held] (null when it
@@ -4067,8 +4070,8 @@ internal class SeamRoom(
 
     /**
      * A reconnect window expired. Decide **once**, under one acquisition of [lock], whether this
-     * expiry is one to act on, and evict in that same section (#1618 Track C) — then fan out the
-     * authoritative [AdmitMessage.Farewell] (#1557) outside it.
+     * expiry is one to act on, and in that same section evict (#1618 Track C) and enqueue the
+     * authoritative [AdmitMessage.Farewell] (#1557) on every other member's lane.
      *
      * **Why the eviction is not a later step (#3212).** It was: the decision, then the `Farewell`,
      * then [removeFromRoster] by peer id, in sections of their own. A Proof that releases the seat
@@ -4076,10 +4079,17 @@ internal class SeamRoom(
      * the default controller it lines up exactly, since the Proof's ask is refused once the window
      * has closed — and the removal then evicted the *new* member, after its Welcome, leaking its
      * detector. Evicted where it was decided, the expiry removes the membership it read, and a Proof
-     * landing after finds no seat and admits afresh. Only an eviction fans out, or an absence. What
-     * this does not order is the `Farewell`'s enqueue, made after the lock is released, against a
-     * roster Welcome that another thread enqueues for a member it admits in that instant: the lanes
-     * keep enqueue order, and nothing orders enqueues made from two coroutines.
+     * landing after finds no seat and admits afresh. Only an eviction fans out, or an absence.
+     *
+     * **Why the `Farewell` is enqueued in the section too (#3212).** A lane keeps enqueue order, and
+     * nothing orders enqueues made from two coroutines after each has released the lock. Enqueued
+     * after this section, the `Farewell` could follow the roster `Welcome` a Proof on another thread
+     * enqueues for the member it admits next, and a bystander told `Welcome`, then `Farewell`, drops
+     * the new member for good (the #2556 split). The same holds for [ExpiryVerdict.AlreadyGone] when
+     * this section falls between a Proof's release and its admission. Enqueued here, the `Farewell`
+     * precedes every frame a later section enqueues. [fanOutToOtherMembers] takes [lock] again, which
+     * is reentrant, and only calls `trySend` on unlimited channels, so nothing suspends under it.
+     * `ProvenRestoreConcurrencyTest` pins the order on real threads.
      *
      * **Why one decision and not two (#2556).** These were two statements, and only the second was
      * guarded — on *"is this peer partitioned right now?"*. The fan-out ran first and unguarded, so
@@ -4088,8 +4098,8 @@ internal class SeamRoom(
      * [handleFarewell] stops the departed peer's detector and there is no re-admit path behind an
      * admit fan-out. Two guards would have been the same bug one level down — the fan-out reading
      * the level, then the eviction re-reading it, with the recovery free to land between them. The
-     * decision has to be atomic with respect to the state it is about, so it is taken here and the
-     * fan-out follows it outside the lock.
+     * decision has to be atomic with respect to the state it is about, so it is taken here, and
+     * everything it drives but the inbox close is done in the same section.
      *
      * **Why liveness alone is not the guard.** [ExpiryVerdict.StaleEpisode] is the other half. The
      * partition guard rejects an expiry for a member that is not partitioned *now*, which covers
@@ -4115,22 +4125,31 @@ internal class SeamRoom(
     private fun handleWindowExpired(event: JoinerReconnectEvent.WindowExpired) {
         val peerId = event.peerId
         val verdict = lock.withLock {
-            val current = admittedById[peerId] ?: return@withLock ExpiryVerdict.AlreadyGone
-            if (current.liveness !is Liveness.Partitioned) return@withLock ExpiryVerdict.Recovered
+            val current = admittedById[peerId]
+            if (current == null) {
+                // In this section, like the eviction's: see the KDoc.
+                propagateFarewell(peerId, expired = true)
+                return@withLock ExpiryVerdict.AlreadyGone
+            }
+            if (current.liveness !is Liveness.Partitioned) {
+                // Absent from [episodeDetectedAtMs]: [detachMember] reaped this id's entry, so the
+                // member here is a newer admission, connected since it was seated.
+                return@withLock ExpiryVerdict.Recovered(readmitted = peerId !in episodeDetectedAtMs)
+            }
             val held = episodeDetectedAtMs[peerId]
             // A null `held` is stale too, for [refineWindow]'s reason: an expiry naming an episode
             // this room recorded no detection for is as unusable as one naming a superseded
             // episode. Unreachable on a host today — `markPartitioned` is the only writer of
             // `Liveness.Partitioned` here and it writes the map in the same critical section, and
-            // `removeFromRoster` reaps the two together — so the log line below is how a reader
+            // `detachMember` reaps the two together — so the log line below is how a reader
             // would find out that stopped being true.
             if (held != event.detectedAt) return@withLock ExpiryVerdict.StaleEpisode(held, event.detectedAt)
             // Evicted in the section that decided to, so the eviction is of the membership just read.
             // Acted on in a later section, a Proof could release that seat and admit a new member
             // under the same id in between, and this would then evict the new one.
-            ExpiryVerdict.Expired(
-                checkNotNull(detachMember(peerId, LeaveReason.PartitionExpired)) { "the seat was read under this lock" },
-            )
+            val evicted = checkNotNull(detachMember(peerId, LeaveReason.PartitionExpired)) { "the seat was read under this lock" }
+            propagateFarewell(peerId, expired = true)
+            ExpiryVerdict.Expired(evicted)
         }
         when (verdict) {
             is ExpiryVerdict.Expired -> {
@@ -4138,23 +4157,31 @@ internal class SeamRoom(
                     "windowExpired.evict peer=${peerId.value} reason=PartitionExpired episode=${event.detectedAt}"
                 }
                 verdict.evicted.close()
-                propagateFarewell(peerId, expired = true)
             }
-            ExpiryVerdict.AlreadyGone -> {
+            ExpiryVerdict.AlreadyGone ->
                 logger.info { "windowExpired.farewellOnly peer=${peerId.value} episode=${event.detectedAt}" }
-                propagateFarewell(peerId, expired = true)
-            }
-            ExpiryVerdict.Recovered ->
-                // `info`, unlike [refineWindow]'s sibling drop: this one suppressed an
-                // **irreversible** action against a healthy member, and with the shipped
-                // [DefaultJoinerReconnectController] it should now be unreachable — `markRecovered`
-                // disarms the timer through [JoinerReconnectController.onPeerRecovered]. Reaching
-                // it names a hold policy (#1614) that does not honour that call, which is a
-                // contract breach nothing can check at compile time and which this line is the
-                // only way to see.
-                logger.info {
-                    "windowExpired.suppressed peer=${peerId.value} reason=recovered " +
-                        "episode=${event.detectedAt} at=${event.at}"
+            is ExpiryVerdict.Recovered ->
+                if (verdict.readmitted) {
+                    // `debug`: the expected end of a race the default controller runs. A Proof whose
+                    // ask was refused because this window had just closed released the seat and
+                    // admitted its joiner afresh before this expiry was handled, so the expiry is
+                    // about a membership that is over.
+                    logger.debug {
+                        "windowExpired.suppressed peer=${peerId.value} reason=readmitted " +
+                            "episode=${event.detectedAt} at=${event.at}"
+                    }
+                } else {
+                    // `info`, unlike [refineWindow]'s sibling drop: this one suppressed an
+                    // **irreversible** action against a healthy member whose membership is the one
+                    // the window was opened for. With the shipped [DefaultJoinerReconnectController]
+                    // it should be unreachable — `markRecovered` disarms the timer through
+                    // [JoinerReconnectController.onPeerRecovered]. Reaching it names a hold policy
+                    // (#1614) that does not honour that call, which is a contract breach nothing can
+                    // check at compile time and which this line is the only way to see.
+                    logger.info {
+                        "windowExpired.suppressed peer=${peerId.value} reason=recovered " +
+                            "episode=${event.detectedAt} at=${event.at}"
+                    }
                 }
             is ExpiryVerdict.StaleEpisode ->
                 // `debug`, matching `room.window.stale-episode`: a genuine late expiry racing a
