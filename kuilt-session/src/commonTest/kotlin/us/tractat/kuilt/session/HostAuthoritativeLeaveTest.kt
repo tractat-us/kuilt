@@ -43,11 +43,12 @@ class HostAuthoritativeLeaveTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-            val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), fastConfig)
+            // One factory per device: each room is its own device, with its own key.
+            fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
 
-            val hostRoom = factory.host(Pattern("Host"))
-            val joiner1Room = factory.join(InMemoryTag("Joiner1"))
-            val joiner2Room = factory.join(InMemoryTag("Joiner2"))
+            val hostRoom = device(0).host(Pattern("Host"))
+            val joiner1Room = device(1).join(InMemoryTag("Joiner1"))
+            val joiner2Room = device(2).join(InMemoryTag("Joiner2"))
 
             hostRoom.roster.first { it.size == 2 }
             joiner1Room.roster.first { it.size == 2 }
@@ -90,12 +91,13 @@ class HostAuthoritativeLeaveTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-            val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), fastConfig)
+            // One factory per device: each room is its own device, with its own key.
+            fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
 
-            val hostRoom = factory.host(Pattern("Host"))
-            val joiner1Room = factory.join(InMemoryTag("Joiner1"))
+            val hostRoom = device(0).host(Pattern("Host"))
+            val joiner1Room = device(1).join(InMemoryTag("Joiner1"))
             val joiner2Seam = loom.join(InMemoryTag("Joiner2"))
-            val joiner2Room = factory.adopt(joiner2Seam, SessionRole.Joiner)
+            val joiner2Room = device(2).adopt(joiner2Seam, SessionRole.Joiner)
 
             hostRoom.roster.first { it.size == 2 }
             joiner1Room.roster.first { it.size == 2 }

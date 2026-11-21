@@ -337,14 +337,15 @@ class LocalFabricTest {
     fun ourOwnRadioDyingTagsBothPartitionedAndHostLostAsSelfAttributed() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
-            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(0), dropConfig)
-            factory.host(Pattern("Table"))
+            // One factory per device: every room here is its own device, with its own key.
+            fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(index), dropConfig)
+            device(0).host(Pattern("Table"))
 
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
             val radio = FaultySeam(loom.join(InMemoryTag("Table")), backgroundScope)
-            val joiner = factory.adopt(CapabilitySeam(radio, capability), SessionRole.Joiner)
+            val joiner = device(1).adopt(CapabilitySeam(radio, capability), SessionRole.Joiner)
             joiner.roster.first { it.size == 1 }
 
             val seen = mutableListOf<MembershipEvent>()
@@ -388,17 +389,18 @@ class LocalFabricTest {
     fun aPeerDroppingWhileOurOwnFabricIsUpIsNotSelfAttributed() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
-            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(1), dropConfig)
+            // One factory per device: every room here is its own device, with its own key.
+            fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(index), dropConfig)
 
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
-            val host = factory.adopt(
+            val host = device(0).adopt(
                 CapabilitySeam(loom.host(Pattern("Table")), capability),
                 SessionRole.Host,
             )
             val joinerLink = FaultySeam(loom.join(InMemoryTag("Table")), backgroundScope)
-            factory.adopt(joinerLink, SessionRole.Joiner)
+            device(1).adopt(joinerLink, SessionRole.Joiner)
             host.roster.first { it.size == 1 }
 
             val seen = mutableListOf<MembershipEvent>()
@@ -436,20 +438,21 @@ class LocalFabricTest {
             // Detection an order of magnitude beyond this test's advancement budget: no detector can
             // fire on its own, so the only Partitioned is the one the Paused frame drives, at the
             // instant we choose.
-            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(2), inertConfig)
+            // One factory per device: every room here is its own device, with its own key.
+            fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(index), inertConfig)
 
             // Adopting the host's seam keeps a handle on it, so the authoritative Paused can be sent
             // by hand rather than waiting for a detector inside an advanceTimeBy.
             val hostLink = loom.host(Pattern("Table"))
-            factory.adopt(hostLink, SessionRole.Host)
+            device(0).adopt(hostLink, SessionRole.Host)
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
-            val self = factory.adopt(
+            val self = device(1).adopt(
                 CapabilitySeam(loom.join(InMemoryTag("Table")), capability),
                 SessionRole.Joiner,
             )
-            val other = factory.join(InMemoryTag("Table"))
+            val other = device(2).join(InMemoryTag("Table"))
             self.roster.first { it.size == 2 }
 
             val seen = mutableListOf<MembershipEvent>()
@@ -483,11 +486,12 @@ class LocalFabricTest {
     fun aFabricWithNoPathObserverTagsTheEventsUnknown() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
-            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(3), dropConfig)
-            factory.host(Pattern("Table"))
+            // One factory per device: every room here is its own device, with its own key.
+            fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(index), dropConfig)
+            device(0).host(Pattern("Table"))
 
             val radio = FaultySeam(loom.join(InMemoryTag("Table")), backgroundScope)
-            val joiner = factory.adopt(radio, SessionRole.Joiner)
+            val joiner = device(1).adopt(radio, SessionRole.Joiner)
             joiner.roster.first { it.size == 1 }
 
             val seen = mutableListOf<MembershipEvent>()
