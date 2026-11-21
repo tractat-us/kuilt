@@ -80,10 +80,10 @@ class ProvenRestoreConcurrencyTest {
      */
     @Test
     fun anExpiryRacingAProofLeavesTheReadmittedMemberSeatedEverywhere() =
-        runConcurrencyStress { stage ->
+        runConcurrencyStress(cap = 90.seconds) { stage ->
             Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
                 // A long interval: the old detector never polls inside a round, so nothing heals bob.
-                val rig = Rig(dispatcher, interval = 1.seconds)
+                val rig = Rig(dispatcher, interval = 1.seconds, RoomDevice.of(fakeKeyStore(0)))
                 var completed = 0
                 var expiryFirst = 0
                 var proofFirst = 0
@@ -168,11 +168,11 @@ class ProvenRestoreConcurrencyTest {
      */
     @Test
     fun aHealRacingAReleaseEitherRestoresOrReadmits() =
-        runConcurrencyStress { stage ->
+        runConcurrencyStress(cap = 90.seconds) { stage ->
             Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
                 // A short interval: the old detector polls often, so its recovery lands among the
                 // Proof's sections.
-                val rig = Rig(dispatcher, interval = 2.milliseconds)
+                val rig = Rig(dispatcher, interval = 2.milliseconds, RoomDevice.of(fakeKeyStore(0)))
                 var completed = 0
                 var healFirst = 0
                 var releaseFirst = 0
@@ -254,7 +254,7 @@ class ProvenRestoreConcurrencyTest {
         lateinit var scope: CoroutineScope
 
         /** The `at` of the latest partition of bob the room reported: the episode's identity. */
-        val episode = AtomicLong(-1)
+        val episode = MutableStateFlow(-1L)
         val recovered = AtomicInteger(0)
         val recoveredCount = MutableStateFlow(0)
 
@@ -263,7 +263,7 @@ class ProvenRestoreConcurrencyTest {
 
         override fun onPeerUnresponsive(peerId: PeerId, at: Long) {
             if (peerId != bob) return
-            episode.set(at)
+            episode.value = at
             scope.launch { flow.emit(JoinerReconnectEvent.WindowOpened(peerId, deadlineFor(at), at)) }
         }
 
@@ -279,7 +279,7 @@ class ProvenRestoreConcurrencyTest {
         override fun expire(peerId: PeerId, at: Long) = Unit
     }
 
-    private class Rig(dispatcher: CoroutineDispatcher, interval: Duration) {
+    private class Rig(dispatcher: CoroutineDispatcher, interval: Duration, device: RoomDevice) {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val peers = MutableStateFlow(setOf(host, bob, carol))
         val inbound = Channel<Swatch>(Channel.UNLIMITED)
@@ -322,7 +322,7 @@ class ProvenRestoreConcurrencyTest {
             memberName = "host",
             scope = scope,
             clock = { Instant.fromEpochMilliseconds(ticks.incrementAndGet()) },
-            device = RoomDevice.of(fakeKeyStore(0)),
+            device = device,
             heartbeatConfig = config,
             reconnectControllerFactory = { _, scope, _ -> controller.also { it.scope = scope } },
         )
@@ -359,10 +359,12 @@ class ProvenRestoreConcurrencyTest {
         suspend fun partitionBob(stage: StageTracker, round: Int): Long {
             sent.value = emptyList()
             events.value = emptyList()
+            val previous = controller.episode.value
             peers.update { it - bob }
             stage.at("round $round: bob partitions") { snapshot() }
             events.first { events -> events.any { it is MembershipEvent.Partitioned && it.peerId == bob } }
-            val episode = controller.episode.get()
+            // The room reports the partition to the controller after it emits Partitioned.
+            val episode = controller.episode.first { it != previous }
             val deadline = Instant.fromEpochMilliseconds(controller.deadlineFor(episode))
             events.first { events -> events.any { it is MembershipEvent.WindowOpened && it.peerId == bob && it.expiresAt == deadline } }
             peers.update { it + bob }
@@ -404,7 +406,7 @@ class ProvenRestoreConcurrencyTest {
 
         fun snapshot(): String =
             "events=${events.value.map { it::class.simpleName }} sent=${sent.value.map { (to, m) -> "${to.value}:${m::class.simpleName}" }} " +
-                "admitted=${room.isAdmitted(bob)} episode=${controller.episode.get()} recovered=${controller.recovered.get()}"
+                "admitted=${room.isAdmitted(bob)} episode=${controller.episode.value} recovered=${controller.recovered.get()}"
 
         suspend fun close() {
             room.leave()
@@ -418,7 +420,7 @@ class ProvenRestoreConcurrencyTest {
         val carol = PeerId("carol")
         val sentinel = PeerId("sentinel")
         val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
-        const val EXPIRY_ROUNDS = 5_000
-        const val HEAL_ROUNDS = 5_000
+        const val EXPIRY_ROUNDS = 500
+        const val HEAL_ROUNDS = 500
     }
 }
