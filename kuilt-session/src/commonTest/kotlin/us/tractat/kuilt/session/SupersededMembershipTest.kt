@@ -420,4 +420,46 @@ class SupersededMembershipTest {
             { assertEquals(setOf(second, carol), raw.room.roster.value.map { it.id }.toSet()) },
         )
     }
+
+    /**
+     * Decided 30's tie-break reads when each seat was last **heard from**, not when its silence was
+     * noticed. Tab 2 is heard from after tab 1, but its transport then closes, which is noticed at
+     * once, while tab 1's quiet link is noticed only a timeout later. So the noticing order is the
+     * reverse of the hearing order, and a new id on the key must take tab 2's seat.
+     */
+    @Test
+    fun tieBreakIsLastContactNotWhenTheSilenceWasNoticed() = runTest {
+        val t1 = PeerId("tab-1")
+        val t2 = PeerId("tab-2")
+        val t3 = PeerId("tab-3")
+        val hold = ObservedHold()
+        val raw = rawHost(setOf(t1, t2, t3), hold)
+        val shared = fakeDeviceKey(1)
+        raw.admit(t1, shared, nonce = 1)
+        raw.admit(t2, shared, nonce = 2)
+        raw.advanceKeeping(setOf(t1, t2), KEY_SEAT_HEARTBEAT.interval * 3)
+        val heardT1 = testScheduler.currentTime - KEY_SEAT_HEARTBEAT.interval.inWholeMilliseconds
+        testScheduler.advanceTimeBy(50.milliseconds)
+        raw.ping(t2)
+        testScheduler.runCurrent()
+        val heardT2 = testScheduler.currentTime
+        testScheduler.advanceTimeBy(10.milliseconds)
+        raw.seam.removePeer(t2)
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(PARTITION_DETECTED)
+        testScheduler.runCurrent()
+        val noticed1 = assertIs<Liveness.Partitioned>(raw.member(t1)?.liveness, "rig: tab 1 held").since.toEpochMilliseconds()
+        val noticed2 = assertIs<Liveness.Partitioned>(raw.member(t2)?.liveness, "rig: tab 2 held").since.toEpochMilliseconds()
+        assertTrue(heardT1 < heardT2 && noticed2 < noticed1, "rig: heard 1=$heardT1 2=$heardT2, noticed 1=$noticed1 2=$noticed2")
+
+        val mark = raw.events.mark()
+        raw.admit(t3, shared, nonce = 3)
+        val edges = raw.events.edgesSince(mark)
+
+        assertAll(
+            { assertEquals(listOf(t2), hold.calls.map { it.peerId }, "the seat heard from last is the one taken over") },
+            { assertEquals(superseded(t2, by = t3), edges.firstOrNull { it is MembershipEvent.Left }, edges.render()) },
+            { assertIs<Liveness.Partitioned>(raw.member(t1)?.liveness, "tab 1's seat is still held") },
+        )
+    }
 }
