@@ -8329,6 +8329,14 @@ val verifySeamHarnessCoverage by tasks.registering {
  * (#2183) fails the task with a misleading "did not discover any tests"; this is the quiet form, and
  * only the quiet form needs a guard.
  *
+ * The ceiling was never per message. Kotlin's Karma reporter wrote a whole run as one stdout line,
+ * so it was per **run**, and `:kuilt-session` hit it at 26 of 543 results just by growing (#3605).
+ * The `kuilt.kmp-library` convention plugin now ends each message with a newline and makes every
+ * `wasmJsBrowserTest` fail when Gradle records fewer results than Karma reported
+ * (`GenerateKarmaLineReporter`, `VerifyKarmaResultCount`). That per-task check reds locally with no
+ * stand-down, so this task is now the second line on wasm. It is still the only line for a target
+ * that drops a class some other way, and for every non-wasm pairing.
+ *
  * ## Why the expected set comes from the XML rather than from the sources
  *
  * The obvious design — scan `src/commonTest` for `class …Test` and require each one everywhere —
@@ -8467,10 +8475,10 @@ val verifyTestResultParity by tasks.registering {
             error(
                 failures.joinToString("\n\n") + "\n\nA target that drops a class's results and still " +
                     "exits 0 is the silent form of #2183's message-size ceiling (#2185): the suite " +
-                    "reads green everywhere while one target's verdict has been thrown away. The " +
-                    "usual cause is log volume — one test emitting more than the harness will carry " +
-                    "in a single service message. Cut what the code under test logs, or split the " +
-                    "class. If a class is deliberately absent from one target, it does not belong " +
+                    "reads green everywhere while one target's verdict has been thrown away. On " +
+                    "wasm, the per-task result count (VerifyKarmaResultCount, #3605) should have " +
+                    "failed wasmJsBrowserTest first; if it did not, find out why before anything " +
+                    "else. If a class is deliberately absent from one target, it does not belong " +
                     "in src/commonTest.",
             )
         }
