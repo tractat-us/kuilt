@@ -291,6 +291,7 @@ class ProvenRestoreConcurrencyTest {
                         rig.partitionBob(stage, round)
                         val recoveredBefore = rig.controller.recovered.get()
                         val introsBefore = rig.hostIntrosTo(bob)
+                        rig.slowPingNanos = jitter.nextLong(0, LOSS_SLOW_PING_NANOS)
                         val wait = jitter.nextLong(0, LOSS_PROOF_DELAY_NANOS)
                         delay(wait / 1_000_000)
                         spin(wait % 1_000_000)
@@ -300,6 +301,7 @@ class ProvenRestoreConcurrencyTest {
                         stage.at("round $round: awaiting the restore or readmission") { rig.snapshot() }
                         val edge = rig.events.first { events -> events.any { it.isEdgeOf(bob) } }.first { it.isEdgeOf(bob) }
                         rig.awaitIntros(bob, introsBefore + 1)
+                        rig.slowPingNanos = 0
                         stage.at("round $round: awaiting the heal's window close") { rig.snapshot() }
                         // A restore needs the heal, whose last step closes the window; a release
                         // closes it before the Proof decides again, so before the Joined.
@@ -413,6 +415,14 @@ class ProvenRestoreConcurrencyTest {
         private val config = HeartbeatConfig(interval = interval, timeout = 100_000.hours, reconnectWindow = detectorWindow)
         val controller = Controller(config.reconnectWindow.inWholeMilliseconds)
 
+        /**
+         * How long a heartbeat ping to bob holds the detector's thread. A detector pings after it looks
+         * for a frame and before it gives up, so a slow ping widens the gap between the look and the
+         * `PeerLost`, which is where a Proof's release has to land to race the loss.
+         */
+        @Volatile
+        var slowPingNanos: Long = 0
+
         /** An expiry emitted from its own coroutine this round, which [quiesce] waits out before its sentinels. */
         @Volatile
         var pendingExpiry: Job? = null
@@ -425,6 +435,7 @@ class ProvenRestoreConcurrencyTest {
             override val incoming = inbound.receiveAsFlow()
             override suspend fun broadcast(payload: ByteArray) = Unit
             override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+                if (peer == bob && payload.isPing()) spin(slowPingNanos)
                 val message = AdmitMessage.decode(payload) ?: return
                 if (message is AdmitMessage.Challenge) {
                     challenges[peer]?.send(message)
@@ -563,6 +574,13 @@ class ProvenRestoreConcurrencyTest {
 
         /** Up to a little past the old detector's loss, which lands one interval after the drop. */
         const val LOSS_PROOF_DELAY_NANOS = 3_000_000L
+
+        /** About as long as a Hello takes to become a release, so the two overlap in some rounds. */
+        const val LOSS_SLOW_PING_NANOS = 800_000L
+
+        val PING = HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray()
+
+        fun ByteArray.isPing(): Boolean = size >= PING.size && PING.indices.all { this[it] == PING[it] }
 
         fun MembershipEvent.isEdgeOf(peer: PeerId): Boolean =
             (this is MembershipEvent.Resumed && peerId == peer) || (this is MembershipEvent.Joined && member.id == peer)
