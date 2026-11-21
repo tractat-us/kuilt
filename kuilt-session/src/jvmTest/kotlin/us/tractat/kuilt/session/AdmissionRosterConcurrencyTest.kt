@@ -11,6 +11,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
@@ -30,8 +31,8 @@ import kotlin.test.assertTrue
 import kotlin.time.Instant
 
 /**
- * Exercises the real Hello/Goodbye handlers on two threads, without production hooks or sleeps.
- * Each round awaits both handlers before comparing levels; a disagreement is persistent, not a
+ * Exercises the real Proof/Goodbye handlers on two threads, without production hooks or sleeps.
+ * Each round awaits the departure, after which no admission can land, before comparing levels; a disagreement is persistent, not a
  * read across an unfinished transition. This JVM stress probe samples interleavings rather than
  * forcing one, and does not establish a failure rate on Native or Wasm.
  *
@@ -48,9 +49,9 @@ class AdmissionRosterConcurrencyTest {
                 val scope = CoroutineScope(SupervisorJob() + dispatcher)
                 val host = PeerId("host")
                 val peer = PeerId("peer")
-                // At most one Hello/Goodbye pair is queued before awaiting both receipts.
+                // At most one Proof/Goodbye pair is queued before awaiting the departure.
                 val inbound = Channel<Swatch>(capacity = 2)
-                val admissions = Channel<Unit>(capacity = 1)
+                val challenges = Channel<AdmitMessage.Challenge>(capacity = 1)
                 val departures = Channel<Unit>(capacity = 1)
                 val seam = object : Seam {
                     override val selfId = host
@@ -60,12 +61,9 @@ class AdmissionRosterConcurrencyTest {
                     override val incoming = inbound.receiveAsFlow()
                     override suspend fun broadcast(payload: ByteArray) = Unit
                     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-                        // The final host introduction occurs once per Hello. A re-admission also
-                        // bootstraps the old peer entry, so its own Welcome is not a unique receipt.
+                        // Since v4 a Hello is answered with a challenge, and only a proof admits (#3211).
                         val message = AdmitMessage.decode(payload)
-                        if (message is AdmitMessage.Welcome && message.assignedPeerId == host.value) {
-                            admissions.send(Unit)
-                        }
+                        if (message is AdmitMessage.Challenge) challenges.send(message)
                     }
                     override suspend fun close(reason: CloseReason) = Unit
                 }
@@ -85,6 +83,7 @@ class AdmissionRosterConcurrencyTest {
                     AdmitMessage.encode(currentHello(displayName = "peer", sessionId = "peer")), sender = peer,
                 )
                 val goodbye = Swatch(AdmitMessage.encode(AdmitMessage.Goodbye), sender = peer)
+                suspend fun proof() = Swatch(AdmitMessage.encode(handProof(challenges.receive(), host)), sender = peer)
                 var rosterDisagreements = 0
                 var channelDisagreements = 0
                 var completed = 0
@@ -97,15 +96,19 @@ class AdmissionRosterConcurrencyTest {
                         }
                         // Establish the departure's precondition, even when the preceding round removed it.
                         inbound.send(hello)
+                        inbound.send(proof())
                         stage.at("round $round: precondition admission", snapshot)
-                        admissions.receive()
+                        room.roster.first { roster -> roster.any { it.id == peer } }
                         assertTrue(room.isAdmitted(peer), "precondition: Goodbye has an admitted peer")
-                        // Hello launches an admission child; Goodbye runs on the inbound collector.
-                        // Both receipts precede inspection, so reads cannot straddle an unfinished mutation.
+                        // The proof launches an admission child; Goodbye runs on the inbound collector.
+                        // The Goodbye always removes the member the precondition admitted, so exactly
+                        // one Left follows. After it nothing can change: a re-admission that had not
+                        // retired its challenge by then finds it dropped, and one that had was removed
+                        // by this Goodbye. So the departure receipt precedes inspection, and reads
+                        // cannot straddle an unfinished mutation.
                         inbound.send(hello)
+                        inbound.send(proof())
                         inbound.send(goodbye)
-                        stage.at("round $round: racing admission", snapshot)
-                        admissions.receive()
                         stage.at("round $round: racing departure", snapshot)
                         departures.receive()
                         val admitted = room.isAdmitted(peer)
