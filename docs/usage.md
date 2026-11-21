@@ -147,8 +147,10 @@ window, using its `room.resumeToken` (non-null once admitted). The loom must hea
 the same seam instance with the same `selfId`; `MuxClientLoom` and `NwLoom` provide this.
 `room.resume(token)` is for manual control once that seam is usable again.
 A loom that returns a new seam leaves the old room torn and reconnect ends in
-`HostLost`; a later resume on that room returns `WindowClosed`. Rebuilding the room
-admits it fresh. See the [resume recipe](agent-cookbook/session.md#rejoin--reconnect)
+`HostLost`; a later resume on that room returns `WindowClosed`. A rebuilt room needs
+no token: its `Hello` proves the device key, and a host still holding the seat under
+the same peer id restores it. Under a new peer id it is admitted fresh. See the
+[resume recipe](agent-cookbook/session.md#rejoin--reconnect)
 and the [cold-start rejoin gap (#1593)](https://github.com/tractat-us/kuilt/issues/1593).
 
 `SeamRoomFactory` takes an injectable `clock: () -> Instant` and a
