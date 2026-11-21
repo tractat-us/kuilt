@@ -417,7 +417,7 @@ class KeyAdmissionTest {
         assertAll(
             { assertEquals(bob.value, challenge.joinerPeerId, "rig: the challenge names Bob") },
             { assertEquals(listOf(RejectCode.BadProof), seam.rejectsTo(bob).map { it.code }, "another joiner's proof is refused") },
-            { assertTrue(seam.rejectsTo(bob).single().reason.contains("WrongJoinerPeer"), "by the joiner-peer check") },
+            { assertTrue(seam.rejectsTo(bob).singleOrNull()?.reason.orEmpty().contains("WrongJoinerPeer"), "by the joiner-peer check") },
             { assertTrue(room.roster.value.isEmpty()) },
         )
         room.leave()
@@ -452,7 +452,7 @@ class KeyAdmissionTest {
             { assertEquals(hostId.value, assertNotNull(Challenge.decode(challenge.statement)).hostPeerId, "rig: the host's challenge names itself") },
             { assertEquals(mallory.value, signed.hostPeerId, "rig: Bob answered, naming the sender he heard it from") },
             { assertEquals(listOf(RejectCode.BadProof), hostSeam.rejectsTo(bob).map { it.code }, "the relayed proof is refused") },
-            { assertTrue(hostSeam.rejectsTo(bob).single().reason.contains("WrongHostPeer"), "by the host-peer check") },
+            { assertTrue(hostSeam.rejectsTo(bob).singleOrNull()?.reason.orEmpty().contains("WrongHostPeer"), "by the host-peer check") },
             { assertTrue(host.roster.value.isEmpty(), "Mallory is not admitted on Bob's key") },
         )
         joiner.leave()
