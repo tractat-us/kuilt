@@ -2,11 +2,14 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.test.fakeDeviceKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.ReturnKind
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.test.FlakyLifecycleSeam
 import us.tractat.kuilt.test.assertAll
@@ -64,7 +67,8 @@ class SupersededMembershipTest {
         val hostMark = hostLog.mark()
         val carolMark = carolLog.mark()
         val toCarol = board.delivered(from = KEY_SEAT_HOST, to = carol).size
-        val rebuilt = boardRoom(board, second, bobStore, SessionRole.Joiner, name = "Bob")
+        // Renamed, so the identity the new seat inherits can be told from the one its Hello carries.
+        val rebuilt = boardRoom(board, second, bobStore, SessionRole.Joiner, name = "Bob, rebuilt")
         testScheduler.runCurrent()
         val bobsKey = bobStore.deviceKey().id
 
@@ -104,6 +108,13 @@ class SupersededMembershipTest {
             { assertTrue(board.sent(from = KEY_SEAT_HOST).none { it is AdmitMessage.ResumeAck }, "no stray ResumeAck") },
             { assertEquals(setOf(second, carol), host.roster.value.map { it.id }.toSet()) },
             { assertEquals(bobsKey, host.roster.value.single { it.id == second }.key, "the new seat inherits the key") },
+            {
+                assertEquals(
+                    "Bob",
+                    host.roster.value.single { it.id == second }.identity.displayName,
+                    "the new seat inherits the old seat's identity, not its Hello's",
+                )
+            },
             { assertEquals(setOf(KEY_SEAT_HOST, carol), rebuilt.roster.value.map { it.id }.toSet()) },
         )
         rebuilt.leave()
@@ -339,5 +350,74 @@ class SupersededMembershipTest {
         tab1.leave()
         tab2.leave()
         host.leave()
+    }
+
+    /**
+     * Decided 23 for a seat under another id: the hold policy refuses the old seat's window after it
+     * opened, so the seat is gone. It is released as an expiry, and the key is decided again without
+     * it: nothing else holds it, so the new id is an ordinary new member with its own Hello's
+     * identity, and nobody is told anything was superseded.
+     */
+    @Test
+    fun refusedWindowReleasesTheOldSeatAndAdmitsTheNewIdAfresh() = runTest {
+        val hold = ObservedHold(verdict = { ResumeResult.WindowClosed })
+        val raw = rawHost(setOf(first, second, carol), hold)
+        val bob = fakeDeviceKey(1)
+        raw.admit(first, bob, nonce = 1)
+        raw.admit(carol, fakeDeviceKey(2), nonce = 2)
+        raw.partition(first, alive = setOf(carol))
+
+        val mark = raw.events.mark()
+        val toCarol = raw.sentTo(carol).size
+        raw.admit(second, bob, nonce = 3)
+        val edges = raw.events.edgesSince(mark)
+        val heard = raw.sentTo(carol).drop(toCarol)
+
+        assertAll(
+            { assertEquals(listOf(first), hold.calls.map { it.peerId }, "rig: the old seat's window was asked") },
+            { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.WindowClosed), hold.verdicts) },
+            { assertEquals(MembershipEvent.Left(first, LeaveReason.PartitionExpired), edges.getOrNull(0), edges.render()) },
+            { assertEquals(second, (edges.getOrNull(1) as? MembershipEvent.Joined)?.member?.id, edges.render()) },
+            { assertEquals(2, edges.size, edges.render()) },
+            { assertEquals("bob-2", raw.member(second)?.identity?.displayName, "a fresh member carries its own Hello's identity") },
+            { assertEquals(listOf(AdmitMessage.Farewell(first.value, expired = true)), heard.farewellsFor(first)) },
+            { assertTrue(raw.sentTo(first).none { it is AdmitMessage.Farewell }, "nobody was superseded, so nobody is told so") },
+            { assertEquals(null, raw.sentTo(second).welcomesFor(second).single().returnKind, "an ordinary admission") },
+        )
+    }
+
+    /**
+     * The controller has not opened the old seat's window yet when the new id's proof is decided, so
+     * it answers `WindowNotYetOpen`. The seat is still held, so it is taken over, as a same-id restore
+     * treats the same answer. When the window does open, late, its expiry finds nothing to evict.
+     */
+    @Test
+    fun windowNotYetOpenStillTakesTheSeatOver() = runTest {
+        val hold = ObservedHold()
+        val raw = rawHost(setOf(first, second, carol), hold)
+        val bob = fakeDeviceKey(1)
+        raw.admit(first, bob, nonce = 1)
+        raw.admit(carol, fakeDeviceKey(2), nonce = 2)
+        val lag = CompletableDeferred<Unit>()
+        hold.lagOpening = lag
+        raw.partition(first, alive = setOf(carol))
+
+        val mark = raw.events.mark()
+        raw.admit(second, bob, nonce = 3)
+        val edges = raw.events.edgesSince(mark)
+        lag.complete(Unit)
+        raw.advanceKeeping(setOf(second, carol), KEY_SEAT_HEARTBEAT.reconnectWindow * 2)
+        val later = raw.events.edgesSince(mark)
+
+        assertAll(
+            { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.WindowNotYetOpen), hold.verdicts, "rig: no window yet") },
+            { assertEquals(1, hold.opened.size, "rig: the window did open, late") },
+            { assertEquals(listOf(superseded(first, by = second)), edges.filterIsInstance<MembershipEvent.Left>(), edges.render()) },
+            { assertEquals(second, (edges.getOrNull(1) as? MembershipEvent.Joined)?.member?.id, edges.render()) },
+            { assertEquals("bob-1", raw.member(second)?.identity?.displayName, "the old seat's identity") },
+            { assertEquals(ReturnKind.Restored, raw.sentTo(second).welcomesFor(second).single().returnKind) },
+            { assertEquals(edges, later, "the late window evicts nobody: ${later.render()}") },
+            { assertEquals(setOf(second, carol), raw.room.roster.value.map { it.id }.toSet()) },
+        )
     }
 }
