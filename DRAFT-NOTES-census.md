@@ -881,8 +881,9 @@ test checking only `retryable` passes either way. Assert `code == AdmissionPolic
 
 **P6. Review Focus 3 says the stale Proof is "refused"; the mechanism drops it.** `admitPeer`'s
 `retire(…)` returning false logs `room.admit.stale` and returns (`SeamRoom.kt:1759-1762`), and 2.4's
-Behaviour says "discarded". A `Reject` here is wrong twice. Every proof-path code is non-retryable,
-so the joiner would end its admission. And it would race the newer challenge's Welcome. The draft
+Behaviour says "discarded". A `Reject` here is wrong twice. A joiner ends its admission on a `Reject`
+(`BadProof` and `KeyConflict` are non-retryable; even the retryable `proof-check-failed`/`Unspecified`
+surfaces as `AdmissionFailed`). And it would race the newer challenge's Welcome. The draft
 test asserts no Reject; fix the Review Focus wording.
 
 **P7. The plan does not say whether the host bounds `policy.decide`.** The spec says the policy "must
