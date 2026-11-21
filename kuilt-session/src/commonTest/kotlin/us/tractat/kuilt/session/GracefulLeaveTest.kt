@@ -13,6 +13,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -55,6 +56,7 @@ class GracefulLeaveTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -69,6 +71,7 @@ class GracefulLeaveTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }

@@ -22,6 +22,7 @@ import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.raft.ClientSessionTable
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
@@ -105,8 +106,8 @@ class ClusterClientMultiClientHardeningE2ETest {
                 selfPeerId = PeerId(clientBetaId.value),
             )
 
-            val hostA = KtorRoomHost(application, pathA, serverPeerIdA, roomPattern)
-            val hostB = KtorRoomHost(application, pathB, serverPeerIdB, roomPattern)
+            val hostA = KtorRoomHost(application, pathA, serverPeerIdA, roomPattern, InMemoryDeviceKeyStore())
+            val hostB = KtorRoomHost(application, pathB, serverPeerIdB, roomPattern, InMemoryDeviceKeyStore())
 
             // Collect all non-config committed entries from voterC for the dedup audit.
             // Three phases of commands are expected: alpha pre-transfer, beta pre-transfer,
@@ -158,6 +159,7 @@ class ClusterClientMultiClientHardeningE2ETest {
                     clientNodeId = clientAlphaId,
                     clusterConfig = clientConfig,
                     raftConfig = raftCfg,
+                    deviceKeyStore = InMemoryDeviceKeyStore(),
                     clock = { Clock.System.now() },
                 )
                 val clientBeta: ClusterClient = betaScope.clusterClient(
@@ -166,6 +168,7 @@ class ClusterClientMultiClientHardeningE2ETest {
                     clientNodeId = clientBetaId,
                     clusterConfig = clientConfig,
                     raftConfig = raftCfg,
+                    deviceKeyStore = InMemoryDeviceKeyStore(),
                     clock = { Clock.System.now() },
                 )
 

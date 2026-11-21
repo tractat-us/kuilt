@@ -10,6 +10,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -44,7 +45,7 @@ class RoomChannelStateAfterLeaveControlTest {
                 var clockMs = 0L
                 val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
                 val factory = StuckOpenRoomFactory(
-                    SeamRoomFactory(loom = InMemoryLoom(), scope = scope, clock = clock, heartbeatConfig = fastHeartbeatConfig),
+                    SeamRoomFactory(loom = InMemoryLoom(), scope = scope, clock = clock, deviceKeyStore = InMemoryDeviceKeyStore(), heartbeatConfig = fastHeartbeatConfig),
                 )
                 return RoomHarness(
                     hostFactory = factory,
@@ -73,8 +74,8 @@ class RoomChannelStateAfterLeaveControlTest {
         override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
             StuckOpenRoom(delegate.host(pattern, memberName, roomId))
 
-        override suspend fun join(tag: Tag, memberName: String?): Room =
-            StuckOpenRoom(delegate.join(tag, memberName))
+        override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room =
+            StuckOpenRoom(delegate.join(tag, memberName, deviceId))
     }
 
     private class StuckOpenRoom(private val delegate: Room) : Room by delegate {

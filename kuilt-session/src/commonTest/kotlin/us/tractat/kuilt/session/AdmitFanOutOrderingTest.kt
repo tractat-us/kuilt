@@ -24,6 +24,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.partition.JoinerReconnectController
@@ -593,8 +594,8 @@ class AdmitFanOutOrderingTest {
     private suspend fun TestScope.starWithDoomedBystander(mintLimit: Int = Int.MAX_VALUE): DoomedStar {
         val loom = InMemoryLoom()
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, hostConfig)
-        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, joinerConfig)
+        val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), hostConfig)
+        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), joinerConfig)
 
         var doomedId: PeerId? = null
         val hostSeam = TimeoutMintingSeam(loom.host(Pattern("Host")), mintLimit) { doomedId }
@@ -653,10 +654,11 @@ class AdmitFanOutOrderingTest {
             loom,
             backgroundScope,
             clock,
+            InMemoryDeviceKeyStore(),
             reconnectWindow?.let { hostConfig.copy(reconnectWindow = it) } ?: hostConfig,
             reconnectControllerFactory = hostReconnectController?.let { build -> { _, _, _ -> build() } },
         )
-        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, joinerConfig)
+        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), joinerConfig)
 
         val hostSeam = StallingSeam(loom.host(Pattern("Host")), stall)
         val hostRoom = hostFactory.adopt(hostSeam, SessionRole.Host)

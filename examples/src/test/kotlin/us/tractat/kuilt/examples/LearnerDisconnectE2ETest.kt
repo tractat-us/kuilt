@@ -18,6 +18,7 @@ import us.tractat.kuilt.cluster.clusterClient
 import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
@@ -75,7 +76,7 @@ class LearnerDisconnectE2ETest {
      * on `main` before #3127 the learner is never removed, however long the wait.
      */
     private fun disconnectTest(goAway: suspend (CoroutineScope, ClusterClient) -> Unit) = testApplication {
-        val host = KtorRoomHost(application, path, serverPeerId, roomPattern)
+        val host = KtorRoomHost(application, path, serverPeerId, roomPattern, InMemoryDeviceKeyStore())
         coroutineScope {
             val serverScope = CoroutineScope(coroutineContext + Job())
             val cluster = serverScope.serverCluster(
@@ -111,6 +112,7 @@ class LearnerDisconnectE2ETest {
         clientNodeId = leavingId,
         clusterConfig = ClusterConfig(voters = voters.toSet(), learners = setOf(leavingId)),
         raftConfig = raftCfg,
+        deviceKeyStore = InMemoryDeviceKeyStore(),
         clock = { Clock.System.now() },
     )
 

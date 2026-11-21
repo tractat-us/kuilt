@@ -55,9 +55,11 @@ class FakeKeyVirtualTimeTest {
         val signedAndChecked = challenge.isSignedByHost(store.keyScheme)
 
         val loom = InMemoryLoom()
-        val factory = { SeamRoomFactory(loom, backgroundScope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }) }
-        val host = factory().host(Pattern("Alice"))
-        val joiner = factory().join(InMemoryTag("Bob"))
+        val factory = { device: Int ->
+            SeamRoomFactory(loom, backgroundScope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = fakeKeyStore(device))
+        }
+        val host = factory(1).host(Pattern("Alice"))
+        val joiner = factory(2).join(InMemoryTag("Bob"))
         host.roster.first { it.size == 1 }
         joiner.roster.first { it.isNotEmpty() }
 
@@ -79,9 +81,11 @@ class FakeKeyVirtualTimeTest {
     @Test
     fun keyWorkDoesNotAdvanceTheClock() = runTest {
         val loom = InMemoryLoom()
-        val factory = { SeamRoomFactory(loom, backgroundScope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }) }
-        val host = factory().host(Pattern("Alice"))
-        val joiner = factory().join(InMemoryTag("Bob"))
+        val factory = { device: Int ->
+            SeamRoomFactory(loom, backgroundScope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = fakeKeyStore(device))
+        }
+        val host = factory(1).host(Pattern("Alice"))
+        val joiner = factory(2).join(InMemoryTag("Bob"))
         host.roster.first { it.size == 1 }
         val admittedAt = testScheduler.currentTime
         var timerFired = false

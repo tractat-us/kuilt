@@ -2,6 +2,7 @@ package us.tractat.kuilt.nw
 
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.session.LoomRoomHost
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomHost
@@ -25,8 +26,11 @@ import us.tractat.kuilt.session.RoomHost
  * [Room] — this class adds no transport-specific demux. It is pure-commonMain
  * Kotlin over [Loom]/[Room] with no native-code path; the Network.framework
  * binding lives entirely behind [NwLoom]'s [NwApi].
+ *
+ * [deviceKeyStore] holds this device's key; see [LoomRoomHost].
  */
 public class NwRoomHost(
     loom: Loom,
     sessionConfig: Pattern,
-) : RoomHost by LoomRoomHost(loom, sessionConfig)
+    deviceKeyStore: DeviceKeyStore,
+) : RoomHost by LoomRoomHost(loom, sessionConfig, deviceKeyStore)

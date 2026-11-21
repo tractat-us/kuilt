@@ -166,7 +166,8 @@ reconnect behavior), add `kuilt-session`.
 `SeamRoomFactory` wraps any `Loom` and produces `Room`s with an admit/identify handshake, a roster of admitted members, reconnect tokens, and partition detection:
 
 ```kotlin
-val factory: RoomFactory = SeamRoomFactory(loom, scope)
+// The store holds this device's key. Every room the factory makes shares it.
+val factory: RoomFactory = SeamRoomFactory.systemClock(loom, scope, deviceKeyStore)
 val room: Room = factory.host(Pattern(sessionName = "alice", maxPeers = 4))
 
 scope.launch { room.roster.collect { members -> render(members) } }

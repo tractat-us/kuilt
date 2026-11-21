@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -64,10 +65,10 @@ class NwFactoryJoinHostDropLoopbackTest {
             val ceiling = 60.seconds
             try {
                 val hostFactory = SeamRoomFactory(
-                    NwLoom(hostApi, serviceType = serviceType, random = Random(0)), scope, clock, heartbeat,
+                    NwLoom(hostApi, serviceType = serviceType, random = Random(0)), scope, clock, InMemoryDeviceKeyStore(), heartbeat,
                 )
                 val joinerFactory = SeamRoomFactory(
-                    NwLoom(joinerApi, serviceType = serviceType, random = Random(1)), scope, clock, heartbeat,
+                    NwLoom(joinerApi, serviceType = serviceType, random = Random(1)), scope, clock, InMemoryDeviceKeyStore(), heartbeat,
                 )
                 val (host, joiner) = coroutineScope {
                     val h = async { hostFactory.host(Pattern("host")) }
