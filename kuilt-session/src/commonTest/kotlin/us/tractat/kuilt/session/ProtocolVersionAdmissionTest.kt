@@ -111,7 +111,7 @@ class ProtocolVersionAdmissionTest {
             // Positive control: the same host admits a joiner that DOES declare the current version,
             // so the roster assertion below is attributable to the gate and not to an inert host.
             val currentSeam = loom.join(InMemoryTag("Carol"))
-            currentSeam.broadcast(AdmitMessage.encode(currentHello("Carol")))
+            currentSeam.helloAndProve(currentHello("Carol"))
             val admitted = host.roster.first { it.size == 1 }
 
             assertAll(
@@ -180,7 +180,7 @@ class ProtocolVersionAdmissionTest {
             val noncelessReject = withTimeoutOrNull(5.seconds) { firstReject(nonceless) }
 
             val complete = loom.join(InMemoryTag("Carol"))
-            complete.broadcast(AdmitMessage.encode(currentHello("Carol")))
+            complete.helloAndProve(currentHello("Carol"))
             val admitted = host.roster.first { it.isNotEmpty() }
             delay(100)
 
