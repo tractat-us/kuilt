@@ -194,20 +194,6 @@ val generateKarmaLineReporter = tasks.register<GenerateKarmaLineReporter>("gener
     outputFile.set(layout.buildDirectory.file("karma-config.d/line-reporter.js"))
 }
 
-afterEvaluate {
-    val wasmBrowserTest = tasks.findByName("wasmJsBrowserTest") as? KotlinJsTest ?: return@afterEvaluate
-    val karma = wasmBrowserTest.testFramework as? KotlinKarma ?: return@afterEvaluate
-    val configDir = layout.buildDirectory.dir("karma-config.d").get().asFile
-    karma.useConfigDirectory(configDir)
-    wasmBrowserTest.dependsOn(generateKarmaTimeouts, generateKarmaOrphanGuard, generateKarmaLineReporter)
-    // Karma runs in its npm project directory, which is where the reporter writes its count.
-    val countFile = karma.workingDir.get().asFile.resolve(GenerateKarmaLineReporter.COUNT_FILE_NAME)
-    wasmBrowserTest.doFirst(ResetKarmaResultCount(countFile))
-    wasmBrowserTest.doLast(
-        VerifyKarmaResultCount(countFile, wasmBrowserTest.reports.junitXml.outputLocation.get().asFile),
-    )
-}
-
 // Serialize wasmJsBrowserTest across the whole build. `registerIfAbsent` makes
 // the shared service idempotent across modules — every module registers, but
 // Gradle keeps one instance, so its `maxParallelUsages = 1` becomes a build-wide
@@ -221,6 +207,30 @@ val browserTestSerializer =
 
 tasks.matching { it.name == "wasmJsBrowserTest" }.configureEach {
     usesService(browserTestSerializer)
+}
+
+afterEvaluate {
+    // The default browser run reads the three generated files from karma-config.d. A module's
+    // extra Karma run (:kuilt-identity's WebKit run) points at a config directory of its own, and
+    // copies the generated files into it.
+    (tasks.findByName("wasmJsBrowserTest") as? KotlinJsTest)?.let { wasmBrowserTest ->
+        val karma = wasmBrowserTest.testFramework as? KotlinKarma ?: return@let
+        karma.useConfigDirectory(layout.buildDirectory.dir("karma-config.d").get().asFile)
+        wasmBrowserTest.dependsOn(generateKarmaTimeouts, generateKarmaOrphanGuard, generateKarmaLineReporter)
+    }
+    // The result count, for EVERY Karma task rather than one by name: a run whose reporter is
+    // wrapped but whose count nobody checks is the silent drop #3605 exists to end. A Karma task
+    // whose config directory lacks line-reporter.js leaves no count file, so the verify reds it.
+    tasks.withType<KotlinJsTest>().configureEach {
+        val karma = testFramework as? KotlinKarma ?: return@configureEach
+        // Two Karma tasks of one module share its npm project directory, the Karma working
+        // directory, so they share this count file. The build-wide mutex is held for a task's whole
+        // execution, reset and verify included, so neither can read the other's count.
+        usesService(browserTestSerializer)
+        val countFile = karma.workingDir.get().asFile.resolve(GenerateKarmaLineReporter.COUNT_FILE_NAME)
+        doFirst(ResetKarmaResultCount(countFile))
+        doLast(VerifyKarmaResultCount(countFile, reports.junitXml.outputLocation.get().asFile))
+    }
 }
 
 // ABI gate off macOS (#2684). A cinterop on ANY compilation of a native target, test included,

@@ -16,9 +16,15 @@ plugins {
 // names.
 val runWebkitTests = providers.gradleProperty("identity.webkit.tests").orNull == "true"
 
-// The convention plugin's timeout and orphan-guard files, plus the one that swaps the browser.
+// The convention plugin's timeout, orphan-guard and line-reporter files, plus the one that swaps
+// the browser. Without the line reporter this run writes no result count, and the plugin's count
+// check, which covers every Karma task, fails it (#3605).
 val assembleKarmaWebkitConfig = tasks.register<Sync>("assembleKarmaWebkitConfig") {
-    from(tasks.named("generateKarmaTimeouts"), tasks.named("generateKarmaOrphanGuard"))
+    from(
+        tasks.named("generateKarmaTimeouts"),
+        tasks.named("generateKarmaOrphanGuard"),
+        tasks.named("generateKarmaLineReporter"),
+    )
     from(layout.projectDirectory.dir("karma-webkit.d"))
     into(layout.buildDirectory.dir("karma-webkit.d"))
 }
