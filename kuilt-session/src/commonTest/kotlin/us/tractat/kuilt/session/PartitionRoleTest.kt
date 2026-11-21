@@ -21,6 +21,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -103,6 +104,7 @@ class PartitionRoleTest {
         val hostRoom = SeamRoom(
             seam = hostSeam,
             role = SessionRole.Host,
+            roomId = RoomId("test-room"),
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
@@ -167,6 +169,7 @@ class PartitionRoleTest {
         val hostRoom = SeamRoom(
             seam = faultyHostSeam,
             role = SessionRole.Host,
+            roomId = RoomId("test-room"),
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
@@ -232,6 +235,7 @@ class PartitionRoleTest {
         val hostRoom = SeamRoom(
             seam = faultyHostSeam,
             role = SessionRole.Host,
+            roomId = RoomId("test-room"),
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
@@ -309,6 +313,7 @@ class PartitionRoleTest {
         val hostRoom = SeamRoom(
             seam = faultyHostSeam,
             role = SessionRole.Host,
+            roomId = RoomId("test-room"),
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,

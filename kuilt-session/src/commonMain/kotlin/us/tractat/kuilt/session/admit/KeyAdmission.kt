@@ -9,6 +9,8 @@ import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.IdentityInternalApi
 import us.tractat.kuilt.identity.KeyScheme
+import us.tractat.kuilt.identity.requireSignableText
+import us.tractat.kuilt.session.partition.RoomId
 
 /**
  * The two checks of the key-proving exchange (#3211), kept out of `SeamRoom` so the room grows only
@@ -29,6 +31,23 @@ import us.tractat.kuilt.identity.KeyScheme
  * a throw.
  */
 internal object KeyAdmission {
+
+    /**
+     * Refuses a [roomId] or [deviceId] the exchange could never sign, for an entry point to call
+     * before it builds a room: a host signs its room id into every challenge, and a joiner signs its
+     * device id into every proof. A value with an unpaired surrogate, or whose UTF-8 is longer than a
+     * layout field, would otherwise fail inside the exchange — as a retryable refusal the joiner can
+     * never get past, or as a join that times out — where the caller that passed it cannot see why.
+     *
+     * The rule is the statements' own ([requireSignableText]), so it cannot drift from what `sign`
+     * accepts.
+     *
+     * @throws IllegalArgumentException when either value cannot be signed.
+     */
+    fun requireSignable(roomId: RoomId? = null, deviceId: String? = null) {
+        if (roomId != null) requireSignableText(roomId.value, "roomId")
+        if (deviceId != null) requireSignableText(deviceId, "deviceId")
+    }
 
     /**
      * The wire form of the challenge [host] signs for [joiner]'s Hello, which sent [joinerNonce]:

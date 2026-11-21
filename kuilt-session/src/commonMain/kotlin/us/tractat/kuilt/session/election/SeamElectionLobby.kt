@@ -44,6 +44,7 @@ import us.tractat.kuilt.session.PerPeerSeam
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.KeyAdmission
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -174,6 +175,9 @@ internal class SeamElectionLobby(
     }
 
     override suspend fun start(memberName: String?, deviceId: String?): Room {
+        // Before the election, so a device id no proof could sign is refused here, not after the
+        // freeze round, and never takes part (#3211).
+        KeyAdmission.requireSignable(deviceId = deviceId)
         // Host collapse (the transport-tear watcher in guardElection handles a fabric that latches Torn;
         // startElection itself handles the membership-drain case where the seam stays Woven).
         answersPings.value = true
@@ -293,6 +297,7 @@ internal class SeamElectionLobby(
         }
 
     override suspend fun awaitRoom(memberName: String?, deviceId: String?): ElectionOutcome {
+        KeyAdmission.requireSignable(deviceId = deviceId)
         answersPings.value = true
         return try {
             guardElection(

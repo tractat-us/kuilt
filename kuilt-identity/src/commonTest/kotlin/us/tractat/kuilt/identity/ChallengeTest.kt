@@ -194,6 +194,46 @@ class ChallengeTest {
         )
     }
 
+    /**
+     * [requireSignableText] refuses exactly the strings signing refuses, so an entry point that checks
+     * with it early can never accept a value the exchange later fails on, nor refuse one it would sign.
+     * The values sit on both sides of each half of the rule: a surrogate, and a UTF-8 length at and
+     * one past the field limit, reached once with one-byte and once with a three-byte character.
+     */
+    @Test
+    fun requireSignableTextRefusesExactlyWhatSigningRefuses() = runTest {
+        val host = FixedDeviceKey(GENERATOR_KEY, PLACEHOLDER_SIGNATURE)
+        val limit = Layout.MAX_FIELD_SIZE
+        val values = listOf(
+            "r\uD800", "部屋🎲",
+            "x".repeat(limit), "x".repeat(limit + 1),
+            "x".repeat(limit - 3) + "部", "x".repeat(limit - 2) + "部",
+        )
+        val verdicts = values.map { value ->
+            val signs = try {
+                Challenge.sign(host, value, HOST_PEER, JOINER_PEER, JOINER_NONCE, HOST_NONCE)
+                true
+            } catch (_: IllegalArgumentException) {
+                false
+            }
+            val checks = try {
+                requireSignableText(value, "roomId")
+                true
+            } catch (_: IllegalArgumentException) {
+                false
+            }
+            Triple(value.length, signs, checks)
+        }
+        assertAll(
+            { assertEquals(listOf(false, true, true, false, true, false), verdicts.map { it.second }, "rig: signing refuses each other one") },
+            { assertEquals(verdicts.map { it.second }, verdicts.map { it.third }, "the check agrees with signing on every value") },
+            {
+                val e = assertFailsWith<IllegalArgumentException> { requireSignableText("r\uD800", "roomId") }
+                assertTrue(e.message.orEmpty().startsWith("roomId cannot be signed"), "the refusal names the value: ${e.message}")
+            },
+        )
+    }
+
     @Test
     fun aStatementIsItsWireBytes() = runTest {
         val host = FixedDeviceKey(GENERATOR_KEY, PLACEHOLDER_SIGNATURE)

@@ -28,6 +28,7 @@ import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.composite.CompositeLoom
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -157,6 +158,7 @@ class RoomLifecycleFlapTest {
         val hostRoom = SeamRoom(
             seam = faultyHostSeam,
             role = SessionRole.Host,
+            roomId = RoomId("test-room"),
             memberName = "host",
             scope = backgroundScope,
             clock = clock,
@@ -262,6 +264,7 @@ class RoomLifecycleFlapTest {
         val hostRoom = SeamRoom(
             seam = hostSeam,
             role = SessionRole.Host,
+            roomId = RoomId("test-room"),
             memberName = "host",
             scope = backgroundScope,
             clock = clock,

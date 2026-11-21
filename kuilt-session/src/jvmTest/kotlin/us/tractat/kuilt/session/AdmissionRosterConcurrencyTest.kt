@@ -25,6 +25,7 @@ import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.runConcurrencyStress
+import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -70,6 +71,7 @@ class AdmissionRosterConcurrencyTest {
                 val room = SeamRoom(
                     seam = seam,
                     role = SessionRole.Host,
+                    roomId = RoomId("test-room"),
                     memberName = "host",
                     scope = scope,
                     clock = { Instant.fromEpochMilliseconds(0) },

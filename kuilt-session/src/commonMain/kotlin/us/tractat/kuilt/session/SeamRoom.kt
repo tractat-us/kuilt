@@ -197,6 +197,7 @@ public class SeamRoomFactory(
     }
 
     override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room {
+        KeyAdmission.requireSignable(roomId = roomId)
         val device = RoomDevice.of(deviceKeyStore)
         val seam = loom.host(pattern)
         val resolvedRoomId = roomId ?: mintRoomId(seam)
@@ -223,6 +224,7 @@ public class SeamRoomFactory(
     }
 
     override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room {
+        KeyAdmission.requireSignable(deviceId = deviceId)
         val device = RoomDevice.of(deviceKeyStore)
         val seam = loom.join(tag)
         return SeamRoom(
@@ -285,7 +287,10 @@ public class SeamRoomFactory(
      *
      * @throws IllegalArgumentException if [roomId] is non-null and [role] is [SessionRole.Joiner].
      *   A joiner cannot choose the room's identity, and silently overriding the caller's value with
-     *   a different one would fork its durable records with no signal.
+     *   a different one would fork its durable records with no signal. Also when [roomId] or
+     *   [deviceId] cannot be signed into the key-proving exchange: it holds an unpaired surrogate, or
+     *   its UTF-8 is longer than 65 535 bytes. That is checked whatever the [role], before the seam
+     *   is touched.
      */
     public suspend fun adopt(
         seam: Seam,
@@ -306,6 +311,7 @@ public class SeamRoomFactory(
         require(roomId == null || role == SessionRole.Host) {
             "roomId applies to a host adopt; a joiner learns it from the host's Welcome"
         }
+        KeyAdmission.requireSignable(roomId = roomId, deviceId = deviceId)
         val device = RoomDevice.of(deviceKeyStore)
         val resolvedRoomId = if (role == SessionRole.Host) roomId ?: mintRoomId(seam) else null
         return SeamRoom(
@@ -663,8 +669,9 @@ internal class SeamRoom(
      * Deliberately a plain constructor parameter, not a property: the property of this name is the
      * [Room.roomId] level, which a joiner *moves* on admission. This seeds it.
      *
-     * Defaults to null so existing tests that construct [SeamRoom] directly still compile.
-     * [SeamRoomFactory] always passes the host-generated id explicitly.
+     * Required for a host — construction throws without one — because a host signs it into every
+     * challenge it sends (#3211). Defaults to null for a joiner. [SeamRoomFactory] always passes the
+     * host's minted-or-supplied id.
      */
     roomId: RoomId? = null,
     /**
@@ -750,7 +757,9 @@ internal class SeamRoom(
      * for a joiner. Distinct from [roomId], which a joiner moves on admission; this one never
      * moves, so it is what the host-only [reconnectController] is built from.
      */
-    private val constructedRoomId: RoomId? = _roomId.value
+    private val constructedRoomId: RoomId? = _roomId.value.also { id ->
+        require(id != null || role != SessionRole.Host) { "a host room needs a roomId: it signs it into every challenge" }
+    }
 
     /**
      * Guards every mutation of the plain membership state:
@@ -1883,11 +1892,10 @@ internal class SeamRoom(
     }
 
     /**
-     * The room id a host's challenge names and its proofs must sign: [roomId]'s value. Every host
-     * entry point (`host`, a host `adopt`) gives a host one; a host built directly without one — which
-     * only a test does — signs the empty string, on both sides alike, rather than refusing everyone.
+     * The room id a host's challenge names and its proofs must sign: the id it was constructed with,
+     * which construction refuses to leave null for a host. **Host only.**
      */
-    private fun signedRoomId(): String = _roomId.value?.value.orEmpty()
+    private fun signedRoomId(): String = checkNotNull(constructedRoomId) { "only a host signs a room id" }.value
 
     /**
      * **Host only.** Check [sender]'s proof against [pending], the challenge it answers, and admit on

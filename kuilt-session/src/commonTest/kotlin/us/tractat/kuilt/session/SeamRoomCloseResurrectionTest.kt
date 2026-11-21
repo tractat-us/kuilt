@@ -24,6 +24,7 @@ import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -86,6 +87,7 @@ class SeamRoomCloseResurrectionTest {
                 SeamRoom(
                     seam = fakeSeam,
                     role = SessionRole.Host,
+                    roomId = RoomId("test-room"),
                     memberName = "host",
                     scope = backgroundScope,
                     clock = { Instant.fromEpochMilliseconds(0L) },
