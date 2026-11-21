@@ -133,7 +133,10 @@ public class NwUnreachableException(message: String) : Exception(message)
  * above, and a repeat of the same one can be answered with a seam about to close.
  *
  * A second room built over the same tag while the first is live cannot be told from a re-weave, so it gets the
- * same seam. Two looms over one [NwApi] cannot be seen from here at all: the second seam's collection fails, and
+ * same seam, and its collector is refused there ([NwSingleCollector], #3073). The refusal is an
+ * [IllegalStateException] in that room's coroutine, so it reaches the scope the room was built with: on
+ * Kotlin/Native, a scope with no handler aborts the process. Two looms over one [NwApi] cannot be seen from here
+ * at all: the second seam's collection fails, and
  * that seam tears itself ([CloseReason.Error]) and fails its [weave]. Its close then stops the listener and the
  * browser on that binding, which are the first seam's. Only a consumer-authored [NwApi] can reach this, since
  * this module's own factories build one binding per loom.

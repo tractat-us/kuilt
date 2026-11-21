@@ -501,7 +501,7 @@ internal class NwSeam(
     override val capability: StateFlow<TransportCapability> = _capability.asStateFlow()
 
     private val spool = Spool<Swatch>(policy)
-    override val incoming: Flow<Swatch> = spool.incoming
+    override val incoming: Flow<Swatch> = NwSingleCollector().guard(spool.incoming)
 
     /**
      * Bounded per-seam staging channel decoupling the single demux/receive loop from delivery
