@@ -24,6 +24,7 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.RejectCode
+import us.tractat.kuilt.session.partition.ProvenResume
 import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
@@ -72,8 +73,8 @@ class ForgedResumeTest {
             )
             real = controller
             object : JoinerReconnectController by controller {
-                override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
-                    controller.tryResume(token, at).also { verdicts += it }
+                override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict =
+                    controller.tryResume(resume, at).also { verdicts += it }
             }
         }
     }
@@ -335,8 +336,8 @@ class ForgedResumeTest {
                 )
                 real = controller
                 object : JoinerReconnectController by controller {
-                    override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
-                        controller.tryResume(token.copy(roomId = roomId), at).also { verdicts += it }
+                    override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict =
+                        controller.tryResume(ProvenResume(resume.peerId, roomId, resume.key), at).also { verdicts += it }
                 }
             }
             val host = SeamRoomFactory(
