@@ -77,9 +77,8 @@ class PartitionRoleTest {
     @Test
     fun `join factory method assigns Joiner role`() = runTest {
         val loom = InMemoryLoom()
-        val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), fastConfig)
-        factory.host(Pattern("Alice"))
-        val joinerRoom = factory.join(InMemoryTag("Bob"))
+        SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), fastConfig).host(Pattern("Alice"))
+        val joinerRoom = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), fastConfig).join(InMemoryTag("Bob"))
         assertEquals(SessionRole.Joiner, joinerRoom.role.value)
         joinerRoom.leave()
     }

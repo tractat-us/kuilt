@@ -273,19 +273,20 @@ class MeshRoomRecoveryTest {
                     scope = scope,
                 )
             }
-            val factory = SeamRoomFactory(
+            // One factory per device: the host and both joiners each have their own key.
+            fun device(index: Int) = SeamRoomFactory(
                 loom,
                 backgroundScope,
                 clock,
-                fakeKeyStore(1),
+                fakeKeyStore(index),
                 longDetectorWindow,
                 reconnectControllerFactory = controllerFactory,
             )
 
-            val host = factory.host(Pattern("Host"))
+            val host = device(0).host(Pattern("Host"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-            val droppedRoom = factory.adopt(droppedLink, SessionRole.Joiner)
-            val survivor = factory.join(InMemoryTag("Survivor"))
+            val droppedRoom = device(1).adopt(droppedLink, SessionRole.Joiner)
+            val survivor = device(2).join(InMemoryTag("Survivor"))
             host.roster.first { it.size == 2 }
             droppedRoom.roster.first { it.size == 2 }
             survivor.roster.first { it.size == 2 }

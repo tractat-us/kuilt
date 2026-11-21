@@ -322,12 +322,13 @@ class WindowEpisodeIdentityTest {
                 fastConfig,
                 reconnectControllerFactory = { _, _, _ -> policy },
             )
-            val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(3), fastConfig)
+            // The two joiners are two devices: one factory, and one key, each.
+            fun joinerDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
 
             val host = hostFactory.host(Pattern("Host"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-            val droppedRoom = joinerFactory.adopt(droppedLink, SessionRole.Joiner)
-            val bystander = joinerFactory.join(InMemoryTag("Bystander"))
+            val droppedRoom = joinerDevice(3).adopt(droppedLink, SessionRole.Joiner)
+            val bystander = joinerDevice(13).join(InMemoryTag("Bystander"))
             host.roster.first { it.size == 2 }
             bystander.roster.first { it.size == 2 }
             val dropped = droppedRoom.selfId
@@ -495,12 +496,13 @@ class WindowEpisodeIdentityTest {
                 fastConfig,
                 reconnectControllerFactory = { _, _, _ -> policy },
             )
-            val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(5), fastConfig)
+            // The two joiners are two devices: one factory, and one key, each.
+            fun joinerDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
 
             val host = hostFactory.host(Pattern("Host"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-            val droppedRoom = joinerFactory.adopt(droppedLink, SessionRole.Joiner)
-            val bystander = joinerFactory.join(InMemoryTag("Bystander"))
+            val droppedRoom = joinerDevice(5).adopt(droppedLink, SessionRole.Joiner)
+            val bystander = joinerDevice(15).join(InMemoryTag("Bystander"))
             host.roster.first { it.size == 2 }
             bystander.roster.first { it.size == 2 }
             val dropped = droppedRoom.selfId

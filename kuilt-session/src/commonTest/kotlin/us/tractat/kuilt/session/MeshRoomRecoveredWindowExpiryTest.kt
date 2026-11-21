@@ -92,12 +92,13 @@ class MeshRoomRecoveredWindowExpiryTest {
     private suspend fun TestScope.mesh(): Mesh {
         val loom = InMemoryLoom()
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), config)
+        // One factory per device: the host and both joiners each have their own key.
+        fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), config)
 
-        val host = factory.host(Pattern("Host"))
+        val host = device(0).host(Pattern("Host"))
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-        val dropped = factory.adopt(droppedLink, SessionRole.Joiner)
-        val survivor = factory.join(InMemoryTag("Survivor"))
+        val dropped = device(1).adopt(droppedLink, SessionRole.Joiner)
+        val survivor = device(2).join(InMemoryTag("Survivor"))
 
         // Two, not three: [Room.roster] excludes the reading peer itself.
         host.roster.first { it.size == 2 }
@@ -352,19 +353,20 @@ class MeshRoomRecoveredWindowExpiryTest {
                     scope = scope,
                 )
             }
-            val factory = SeamRoomFactory(
+            // One factory per device: the host and both joiners each have their own key.
+            fun device(index: Int) = SeamRoomFactory(
                 loom,
                 backgroundScope,
                 clock,
-                fakeKeyStore(1),
+                fakeKeyStore(index),
                 longDetectorWindow,
                 reconnectControllerFactory = controllerFactory,
             )
 
-            val host = factory.host(Pattern("Host"))
+            val host = device(0).host(Pattern("Host"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-            val dropped = factory.adopt(droppedLink, SessionRole.Joiner)
-            val survivor = factory.join(InMemoryTag("Survivor"))
+            val dropped = device(1).adopt(droppedLink, SessionRole.Joiner)
+            val survivor = device(2).join(InMemoryTag("Survivor"))
             host.roster.first { it.size == 2 }
             dropped.roster.first { it.size == 2 }
             survivor.roster.first { it.size == 2 }

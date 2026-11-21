@@ -69,9 +69,10 @@ class RoomLifecycleFlapTest {
     @Test
     fun `room delivers again after the host seam flaps Woven Weaving Woven`() = runTest {
         val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
-        val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), fastConfig)
-        val hostRoom = factory.host(Pattern("host"))
-        val joinerRoom = factory.join(InMemoryTag("joiner"))
+        // One factory per device: the host and the joiner each have their own key.
+        fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
+        val hostRoom = device(0).host(Pattern("host"))
+        val joinerRoom = device(1).join(InMemoryTag("joiner"))
 
         // Both rooms reach a non-empty roster (admit handshake completed).
         hostRoom.roster.first { it.isNotEmpty() }
@@ -95,9 +96,10 @@ class RoomLifecycleFlapTest {
     @Test
     fun `joiner sees HostLost immediately when the host seam tears`() = runTest {
         val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
-        val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), fastConfig)
-        val hostRoom = factory.host(Pattern("host"))
-        val joinerRoom = factory.join(InMemoryTag("joiner"))
+        // One factory per device: the host and the joiner each have their own key.
+        fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
+        val hostRoom = device(0).host(Pattern("host"))
+        val joinerRoom = device(1).join(InMemoryTag("joiner"))
         hostRoom.roster.first { it.isNotEmpty() }
 
         val hostLostDeferred = async {
@@ -123,9 +125,10 @@ class RoomLifecycleFlapTest {
     @Test
     fun `host sees Left for admitted joiners when host seam tears`() = runTest {
         val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
-        val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(2), fastConfig)
-        val hostRoom = factory.host(Pattern("host"))
-        factory.join(InMemoryTag("joiner"))
+        // One factory per device: the host and the joiner each have their own key.
+        fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
+        val hostRoom = device(0).host(Pattern("host"))
+        device(1).join(InMemoryTag("joiner"))
         hostRoom.roster.first { it.isNotEmpty() }
 
         val leftDeferred = async {
@@ -212,9 +215,10 @@ class RoomLifecycleFlapTest {
     @Test
     fun `joiner receives HostLost but no Left event when host seam tears`() = runTest {
         val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
-        val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(3), fastConfig)
-        val hostRoom = factory.host(Pattern("host"))
-        val joinerRoom = factory.join(InMemoryTag("joiner"))
+        // One factory per device: the host and the joiner each have their own key.
+        fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
+        val hostRoom = device(0).host(Pattern("host"))
+        val joinerRoom = device(1).join(InMemoryTag("joiner"))
         hostRoom.roster.first { it.isNotEmpty() }
 
         // Subscribe to HostLost and collect all events BEFORE tear so nothing is missed.

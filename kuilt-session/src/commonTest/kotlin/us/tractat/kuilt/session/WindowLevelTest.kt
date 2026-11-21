@@ -790,13 +790,14 @@ class WindowLevelTest {
 
     private suspend fun TestScope.hostFaultedPair(): HostFaultedPair {
         val loom = InMemoryLoom()
-        val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(0), fastConfig)
+        // One factory per device: the host and the joiner each have their own key.
+        fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(index), fastConfig)
         // Fault the HOST's link so its own detector times out on the joiner. `adopt` with
         // SessionRole.Host still mints a RoomId, so the reconnect controller exists — the
         // characterization test above depends on that.
         val faultedLink = FaultySeam(loom.host(Pattern("Host")), backgroundScope)
-        val hostRoom = factory.adopt(faultedLink, SessionRole.Host)
-        val joinerRoom = factory.join(InMemoryTag("Joiner"))
+        val hostRoom = device(0).adopt(faultedLink, SessionRole.Host)
+        val joinerRoom = device(1).join(InMemoryTag("Joiner"))
         hostRoom.roster.first { it.size == 1 }
         joinerRoom.roster.first { it.size == 1 }
         return HostFaultedPair(hostRoom, faultedLink, joinerRoom.selfId)
@@ -807,10 +808,10 @@ class WindowLevelTest {
 
     private suspend fun TestScope.joinerFaultedPair(): JoinerFaultedPair {
         val loom = InMemoryLoom()
-        val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(1), fastConfig)
-        val hostRoom = factory.host(Pattern("Host"))
+        fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(index), fastConfig)
+        val hostRoom = device(0).host(Pattern("Host"))
         val faultedLink = FaultySeam(loom.join(InMemoryTag("Joiner")), backgroundScope)
-        val joinerRoom = factory.adopt(faultedLink, SessionRole.Joiner)
+        val joinerRoom = device(1).adopt(faultedLink, SessionRole.Joiner)
         hostRoom.roster.first { it.size == 1 }
         joinerRoom.roster.first { it.size == 1 }
         return JoinerFaultedPair(joinerRoom, faultedLink, hostRoom.selfId)
@@ -939,12 +940,13 @@ class WindowLevelTest {
         val loom = InMemoryLoom()
         val clock = virtualClock()
         val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(2), hostConfig)
-        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(3), joinerConfig)
+        // The two joiners are two devices: one factory, and one key, each.
+        fun joinerDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), joinerConfig)
 
         val hostRoom = hostFactory.host(Pattern("Host"))
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-        val droppedRoom = joinerFactory.adopt(droppedLink, SessionRole.Joiner)
-        val bystander = joinerFactory.join(InMemoryTag("Bystander"))
+        val droppedRoom = joinerDevice(3).adopt(droppedLink, SessionRole.Joiner)
+        val bystander = joinerDevice(4).join(InMemoryTag("Bystander"))
 
         hostRoom.roster.first { it.size == 2 }
         droppedRoom.roster.first { it.size == 2 }
