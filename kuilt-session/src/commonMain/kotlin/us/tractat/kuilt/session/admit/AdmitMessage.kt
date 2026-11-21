@@ -150,8 +150,9 @@ public sealed interface AdmitMessage {
      *   [Hello.key]: a v2 host, the only sender of a keyless Welcome, refuses a v3 Hello before it
      *   admits anyone, so a v3 joiner never receives one.
      * [returnKind] — set only on the direct Welcome, to the member it names, when the host restored
-     *   a seat it was holding rather than admitting a new member (v5, #3212). `null` is an ordinary
-     *   admission. The roster copy, the bootstrap Welcomes and the host intro never carry it.
+     *   a seat it was holding rather than admitting a new member (v5, #3212), under the same peer id
+     *   or, taking over a partitioned seat of the same key, under a new one (v6, #3213). `null` is an
+     *   ordinary admission. The roster copy, the bootstrap Welcomes and the host intro never carry it.
      */
     @Serializable
     @SerialName("welcome")
@@ -264,12 +265,23 @@ public sealed interface AdmitMessage {
      * joiner's roster (#1557). Defaulted so it is wire-safe: a frame from an older build that
      * never sends the field decodes as a clean leave, which is what that build meant.
      *
+     * [supersededBy] — set when the departed member's held seat was taken over by the same device
+     * under a new peer id (v6, #3159): the [us.tractat.kuilt.core.PeerId] value of the member that
+     * took it. A member evicts with [us.tractat.kuilt.session.LeaveReason.Superseded] naming it, and
+     * the roster [Welcome] for that member follows on the same lane. The host also sends this
+     * Farewell **directly** to the superseded member, which then ends its room and never says Hello
+     * again. `null` on every other Farewell.
+     *
      * Wire-compatible: an older build that doesn't know this message drops it as
      * malformed and degrades to its own heartbeat-window eviction (the prior behavior).
      */
     @Serializable
     @SerialName("farewell")
-    public data class Farewell(val peerId: String, val expired: Boolean = false) : AdmitMessage
+    public data class Farewell(
+        val peerId: String,
+        val expired: Boolean = false,
+        val supersededBy: String? = null,
+    ) : AdmitMessage
 
     /**
      * Sent by the host to every other member when a member's link drops and its seat is
@@ -418,8 +430,10 @@ public sealed interface AdmitMessage {
 @Serializable
 public enum class ReturnKind {
     /**
-     * The host was still holding this member's seat, and the joiner proved the key that seat was
-     * admitted under: the same membership is back, and nobody else was told anything new.
+     * The host was still holding a seat under the key this joiner proved: the same membership is
+     * back. Under the same peer id nobody else is told anything new. Under a new one (v6, #3213) the
+     * joiner took over a partitioned seat of its device, keeping that seat's identity, and every
+     * other member was told the old id left, superseded, before it heard the new id join.
      */
     @SerialName("restored")
     Restored,

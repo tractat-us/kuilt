@@ -57,10 +57,25 @@ public class HeartbeatPartitionDetector(
     private val eventChannel = Channel<PartitionEvent>(capacity = Channel.UNLIMITED)
     override val events: Flow<PartitionEvent> = eventChannel.receiveAsFlow()
 
-    // Monotonically-advancing epoch-ms of the last inbound activity from the peer.
-    // Accessed from multiple coroutines; the coroutine memory model provides visibility
-    // across suspension points without requiring @Volatile (which is JVM-only).
-    private var lastSeenEpochMs: Long = Long.MIN_VALUE
+    // Epoch-ms of the last inbound activity from the peer, or of [start]; `Long.MIN_VALUE` before
+    // that. Written by the inbound collector and by [observedPeer], on whatever thread the caller's
+    // fabric delivers on, and read by the heartbeat loop and by [lastHeard]'s callers on theirs. An
+    // atomic, not a plain `var`: a plain field promises a reader on another thread nothing. A
+    // write per inbound frame, and no lock.
+    private val lastSeenEpochMs = atomic(Long.MIN_VALUE)
+
+    /**
+     * When the monitored peer was last heard from: the instant of the latest inbound frame of any
+     * kind, ping, pong or application, or of [start] if nothing has arrived since. `null` before
+     * [start].
+     *
+     * A detector already watches every frame from its peer, so this is the cheapest record of last
+     * contact there is. A room reads it to tell which of several silent seats was heard from most
+     * recently, and the order differs from the order in which their silences were noticed: a closed
+     * transport is noticed at once, a quiet one only after [HeartbeatConfig.timeout].
+     */
+    public val lastHeard: Instant?
+        get() = lastSeenEpochMs.value.takeIf { it != Long.MIN_VALUE }?.let(Instant::fromEpochMilliseconds)
 
     // Count of inbound observations from the peer. This — not [lastSeenEpochMs] — is what
     // [awaitRecoveryOrLoss] tests for evidence of life (#1966), because the question there is
@@ -88,7 +103,7 @@ public class HeartbeatPartitionDetector(
     private var everObservedInbound: Boolean = false
 
     override fun start(scope: CoroutineScope) {
-        lastSeenEpochMs = clock().toEpochMilliseconds()
+        lastSeenEpochMs.value = clock().toEpochMilliseconds()
         logger.info {
             "heartbeat.start peer=${peerId.value} interval=${config.interval} " +
                 "timeout=${config.timeout} window=${config.reconnectWindow}"
@@ -105,7 +120,7 @@ public class HeartbeatPartitionDetector(
 
     override fun observedPeer(peerId: PeerId) {
         if (peerId == this.peerId) {
-            lastSeenEpochMs = clock().toEpochMilliseconds()
+            lastSeenEpochMs.value = clock().toEpochMilliseconds()
             inboundCount.incrementAndGet()
         }
     }
@@ -169,7 +184,7 @@ public class HeartbeatPartitionDetector(
 
             sendPing()
 
-            val silenceMs = clock().toEpochMilliseconds() - lastSeenEpochMs
+            val silenceMs = clock().toEpochMilliseconds() - lastSeenEpochMs.value
             if (silenceMs >= config.timeout.inWholeMilliseconds) {
                 if (!handleUnresponsive(PartitionEvent.Reason.Timeout)) return
             }
@@ -191,7 +206,7 @@ public class HeartbeatPartitionDetector(
         // inbound frame was when the detector gave up — distinguishing a genuine `timeout`-length silence
         // (pongs stopped) from a `TransportClosed`/`Backpressure` edge that fired with lastSeen still fresh.
         val inboundAtUnresponsive = inboundCount.value
-        val silenceMs = clock().toEpochMilliseconds() - lastSeenEpochMs
+        val silenceMs = clock().toEpochMilliseconds() - lastSeenEpochMs.value
         logger.info {
             "heartbeat.unresponsive peer=${peerId.value} reason=$reason silenceMs=$silenceMs " +
                 "timeoutMs=${config.timeout.inWholeMilliseconds} inboundCount=$inboundAtUnresponsive → PeerUnresponsive"
@@ -243,7 +258,7 @@ public class HeartbeatPartitionDetector(
             elapsed += pollMs
 
             val nowMs = clock().toEpochMilliseconds()
-            val silenceMs = nowMs - lastSeenEpochMs
+            val silenceMs = nowMs - lastSeenEpochMs.value
             val inboundNow = inboundCount.value
             val heardSinceUnresponsive = inboundNow > inboundAtUnresponsive
             val clockDeltaMs = nowMs - prevClockMs
@@ -268,7 +283,7 @@ public class HeartbeatPartitionDetector(
 
         logger.info {
             "awaitRecoveryOrLoss.emit PeerLost peer=${peerId.value} elapsedMs=$elapsed windowMs=$windowMs " +
-                "silenceMs=${clock().toEpochMilliseconds() - lastSeenEpochMs}"
+                "silenceMs=${clock().toEpochMilliseconds() - lastSeenEpochMs.value}"
         }
         emitIfOpen(PartitionEvent.PeerLost(peerId, clock()))
         closeChannel()

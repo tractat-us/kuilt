@@ -150,6 +150,8 @@ final class us.tractat.kuilt.liveness/HeartbeatPartitionDetector : us.tractat.ku
 
     final val events // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.events|{}events[0]
         final fun <get-events>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.liveness/PartitionEvent> // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.events.<get-events>|<get-events>(){}[0]
+    final val lastHeard // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.lastHeard|{}lastHeard[0]
+        final fun <get-lastHeard>(): kotlin.time/Instant? // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.lastHeard.<get-lastHeard>|<get-lastHeard>(){}[0]
 
     final fun observedPeer(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.observedPeer|observedPeer(us.tractat.kuilt.core.PeerId){}[0]
     final fun onBackpressure(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.onBackpressure|onBackpressure(us.tractat.kuilt.core.PeerId){}[0]
