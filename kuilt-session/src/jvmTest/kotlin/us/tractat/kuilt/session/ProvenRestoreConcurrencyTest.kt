@@ -1,0 +1,424 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
+package us.tractat.kuilt.session
+
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.identity.DeviceKey
+import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.partition.JoinerReconnectController
+import us.tractat.kuilt.session.partition.JoinerReconnectEvent
+import us.tractat.kuilt.session.partition.ProvenResume
+import us.tractat.kuilt.session.partition.ResumeResult
+import us.tractat.kuilt.session.partition.RoomId
+import us.tractat.kuilt.test.StageTracker
+import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.runConcurrencyStress
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
+
+/**
+ * The races a proven resume (#3212) runs on real threads, where a single-threaded test cannot put
+ * them: both sides decide and act without suspending, so on one thread each side's sections run
+ * back to back and the interleavings below never happen.
+ *
+ * Bob holds a seat and carol is a bystander. Each round partitions bob by dropping him from the
+ * fabric's peers, waits for the controller's window to be seen, then has bob prove his key again
+ * while a second thread does the thing the arm races against. A round quiesces before it is read:
+ * the joiner's whole burst sent, the reconnect loop past a sentinel, and carol's lane drained past a
+ * sentinel `Farewell`. So every count is of a settled state, not of a read across a transition.
+ *
+ * The clock is a counter, so every partition episode has its own identity; the heartbeat timeout is
+ * far beyond anything the counter reaches, so only a fabric drop partitions and only a frame heals.
+ *
+ * A `*ConcurrencyTest`, so it is excluded from the normal `jvmTest` and runs only under
+ * `-Pconcurrency.stress.tests=true` in the non-blocking `concurrency-probes` CI job (see
+ * `kuilt-session/build.gradle.kts`). It samples interleavings rather than forcing one, so each arm
+ * counts both orders and requires each to have happened: a run that only ever saw one order has
+ * tested nothing about the race.
+ */
+class ProvenRestoreConcurrencyTest {
+    /**
+     * The window expires while the host asks about bob's seat, which is how the default controller
+     * meets a Proof: the ask is refused because the window has just closed. The expiry evicts on the
+     * reconnect loop's thread while the Proof decides on another.
+     *
+     * Either order must leave a readmitted bob seated and watched, and carol must hear about bob's
+     * departure before his arrival. A `Farewell` that lands after the `Welcome` makes carol drop the
+     * new bob for good, with nothing to re-admit him (#2556's split).
+     */
+    @Test
+    fun anExpiryRacingAProofLeavesTheReadmittedMemberSeatedEverywhere() =
+        runConcurrencyStress { stage ->
+            Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
+                // A long interval: the old detector never polls inside a round, so nothing heals bob.
+                val rig = Rig(dispatcher, interval = 1.seconds)
+                var completed = 0
+                var expiryFirst = 0
+                var proofFirst = 0
+                var expiryBetweenProofSections = 0
+                var notSeated = 0
+                var noDetector = 0
+                var lastEventNotJoined = 0
+                var carolLastNotWelcome = 0
+                val failures = mutableListOf<String>()
+                try {
+                    rig.start(stage)
+                    for (round in 0 until EXPIRY_ROUNDS) {
+                        val episode = rig.partitionBob(stage, round)
+                        val recoveredBefore = rig.controller.recovered.get()
+                        rig.controller.onAsk = { _, at ->
+                            // Returns once the reconnect loop has taken the expiry: from here the
+                            // loop's thread evicts while this one goes on to decide.
+                            rig.controller.flow.emit(JoinerReconnectEvent.WindowExpired(bob, at, episode))
+                            ResumeResult.WindowClosed
+                        }
+                        val introsBefore = rig.hostIntrosTo(bob)
+                        rig.prove(bob, TEST_DEVICE_A, TEST_KEY_A)
+                        stage.at("round $round: awaiting the readmission") { rig.snapshot() }
+                        rig.events.first { events -> events.any { it is MembershipEvent.Joined && it.member.id == bob } }
+                        rig.awaitIntros(bob, introsBefore + 1)
+                        rig.quiesce(stage, round)
+
+                        val released = rig.controller.recovered.get() > recoveredBefore
+                        val toCarol = rig.framesToCarolNaming(bob)
+                        val farewells = toCarol.count { it is AdmitMessage.Farewell }
+                        when {
+                            !released -> expiryFirst++
+                            farewells >= 2 -> expiryBetweenProofSections++
+                            else -> proofFirst++
+                        }
+                        val edges = rig.edgesOf(bob)
+                        val seated = rig.room.isAdmitted(bob)
+                        val watched = rig.room.hasDetector(bob)
+                        val lastIsJoined = edges.lastOrNull() == "Joined"
+                        val carolLastIsWelcome = toCarol.lastOrNull() is AdmitMessage.Welcome
+                        if (!seated) notSeated++
+                        if (!watched) noDetector++
+                        if (!lastIsJoined) lastEventNotJoined++
+                        if (!carolLastIsWelcome) carolLastNotWelcome++
+                        if (!(seated && watched && lastIsJoined && carolLastIsWelcome) && failures.size < 5) {
+                            failures += "round $round released=$released edges=$edges toCarol=${toCarol.map { it::class.simpleName }} " +
+                                "seated=$seated watched=$watched"
+                        }
+                        completed++
+                        // Without a seated bob the next round has nothing to partition.
+                        if (!seated) break
+                    }
+                    println(
+                        "proven-restore expiry: completed=$completed expiryFirst=$expiryFirst proofFirst=$proofFirst " +
+                            "expiryBetweenProofSections=$expiryBetweenProofSections notSeated=$notSeated " +
+                            "noDetector=$noDetector lastEventNotJoined=$lastEventNotJoined " +
+                            "carolLastNotWelcome=$carolLastNotWelcome failures=$failures",
+                    )
+                    assertAll(
+                        { assertEquals(EXPIRY_ROUNDS, completed, "every round ran") },
+                        { assertEquals(0, notSeated, "the readmitted bob is seated: $failures") },
+                        { assertEquals(0, noDetector, "the readmitted bob is watched by a detector: $failures") },
+                        { assertEquals(0, lastEventNotJoined, "bob's last membership edge is Joined: $failures") },
+                        { assertEquals(0, carolLastNotWelcome, "carol's last frame naming bob is his Welcome: $failures") },
+                        { assertTrue(expiryFirst > 0, "the expiry's section ran first in some round") },
+                        { assertTrue(proofFirst + expiryBetweenProofSections > 0, "the Proof's release ran first in some round") },
+                    )
+                } finally {
+                    rig.close()
+                }
+            }
+        }
+
+    /**
+     * Bob's old link heals while the host is asking about his seat, and the hold policy refuses. A
+     * pong from bob lands on another thread, so the old detector's recovery races the Proof's release.
+     *
+     * Either the heal wins, and the seat is restored (`Recovered`, then `Resumed`), or the release
+     * wins, and bob leaves and is admitted afresh (`Left`, then `Joined`). Never both: a heal that is
+     * then released evicts a member who is here, and carol, told `Unpaused` and then `Farewell`,
+     * drops him.
+     */
+    @Test
+    fun aHealRacingAReleaseEitherRestoresOrReadmits() =
+        runConcurrencyStress { stage ->
+            Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
+                // A short interval: the old detector polls often, so its recovery lands among the
+                // Proof's sections.
+                val rig = Rig(dispatcher, interval = 2.milliseconds)
+                var completed = 0
+                var healFirst = 0
+                var releaseFirst = 0
+                var disallowedEdges = 0
+                var unpausedThenFarewell = 0
+                var notSeated = 0
+                val failures = mutableListOf<String>()
+                try {
+                    rig.start(stage)
+                    rig.controller.onAsk = { _, _ -> ResumeResult.WindowClosed }
+                    for (round in 0 until HEAL_ROUNDS) {
+                        rig.partitionBob(stage, round)
+                        val recoveredBefore = rig.controller.recovered.get()
+                        val introsBefore = rig.hostIntrosTo(bob)
+                        rig.prove(bob, TEST_DEVICE_A, TEST_KEY_A) {
+                            rig.scope.launch { rig.inbound.send(Swatch(PONG, sender = bob)) }
+                        }
+                        stage.at("round $round: awaiting the restore or readmission") { rig.snapshot() }
+                        val edge = rig.events.first { events ->
+                            events.any { (it is MembershipEvent.Resumed && it.peerId == bob) || (it is MembershipEvent.Joined && it.member.id == bob) }
+                        }.first { (it is MembershipEvent.Resumed && it.peerId == bob) || (it is MembershipEvent.Joined && it.member.id == bob) }
+                        rig.awaitIntros(bob, introsBefore + 1)
+                        // A restore needs the heal, and a release tells the controller; either way
+                        // one onPeerRecovered closes the round's window, and it is the last thing
+                        // the heal (or the release) does before the room is settled.
+                        stage.at("round $round: awaiting the window's close") { rig.snapshot() }
+                        if (edge is MembershipEvent.Resumed) {
+                            rig.events.first { events -> events.any { it is MembershipEvent.Recovered && it.peerId == bob } }
+                        }
+                        rig.controller.recoveredCount.first { it > recoveredBefore }
+                        rig.quiesce(stage, round)
+
+                        val edges = rig.edgesOf(bob)
+                        val toCarol = rig.framesToCarolNaming(bob).map { it::class.simpleName }
+                        when (edges) {
+                            listOf("Recovered", "Resumed") -> healFirst++
+                            listOf("Left", "Joined") -> releaseFirst++
+                            else -> disallowedEdges++
+                        }
+                        val unpaused = toCarol.indexOf("Unpaused")
+                        if (unpaused >= 0 && toCarol.drop(unpaused + 1).contains("Farewell")) unpausedThenFarewell++
+                        val seated = rig.room.isAdmitted(bob)
+                        if (!seated) notSeated++
+                        val good = edges == listOf("Recovered", "Resumed") || edges == listOf("Left", "Joined")
+                        if (!(good && seated) && failures.size < 5) {
+                            failures += "round $round edges=$edges toCarol=$toCarol seated=$seated"
+                        }
+                        completed++
+                        if (!seated) break
+                    }
+                    println(
+                        "proven-restore heal: completed=$completed healFirst=$healFirst releaseFirst=$releaseFirst " +
+                            "disallowedEdges=$disallowedEdges unpausedThenFarewell=$unpausedThenFarewell " +
+                            "notSeated=$notSeated failures=$failures",
+                    )
+                    assertAll(
+                        { assertEquals(HEAL_ROUNDS, completed, "every round ran") },
+                        { assertEquals(0, disallowedEdges, "each round restores or readmits, never both: $failures") },
+                        { assertEquals(0, unpausedThenFarewell, "carol is never told Unpaused, then Farewell: $failures") },
+                        { assertEquals(0, notSeated, "bob is seated after every round: $failures") },
+                        { assertTrue(healFirst > 0, "the heal ran first in some round") },
+                        { assertTrue(releaseFirst > 0, "the release ran first in some round") },
+                    )
+                } finally {
+                    rig.close()
+                }
+            }
+        }
+
+    /**
+     * The window controller this probe drives the room with. A partition is announced at once, with
+     * a deadline that differs from the room's own estimate, so the room records the episode's
+     * `WindowOpened` and a refusal is acted on. [flow] has no buffer: an emit returns only once the
+     * reconnect loop has taken the event, and so only once it has finished with the event before.
+     */
+    private class Controller(private val windowMs: Long) : JoinerReconnectController {
+        val flow = MutableSharedFlow<JoinerReconnectEvent>()
+        override val events: SharedFlow<JoinerReconnectEvent> = flow.asSharedFlow()
+        lateinit var scope: CoroutineScope
+
+        /** The `at` of the latest partition of bob the room reported: the episode's identity. */
+        val episode = AtomicLong(-1)
+        val recovered = AtomicInteger(0)
+        val recoveredCount = MutableStateFlow(0)
+
+        @Volatile
+        var onAsk: suspend (ProvenResume, Long) -> ResumeResult.HostVerdict = { _, _ -> ResumeResult.WindowClosed }
+
+        override fun onPeerUnresponsive(peerId: PeerId, at: Long) {
+            if (peerId != bob) return
+            episode.set(at)
+            scope.launch { flow.emit(JoinerReconnectEvent.WindowOpened(peerId, deadlineFor(at), at)) }
+        }
+
+        fun deadlineFor(at: Long): Long = at + windowMs + 1
+
+        override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict = onAsk(resume, at)
+
+        override fun onPeerRecovered(peerId: PeerId, at: Long) {
+            if (peerId != bob) return
+            recoveredCount.value = recovered.incrementAndGet()
+        }
+
+        override fun expire(peerId: PeerId, at: Long) = Unit
+    }
+
+    private class Rig(dispatcher: CoroutineDispatcher, interval: Duration) {
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        val peers = MutableStateFlow(setOf(host, bob, carol))
+        val inbound = Channel<Swatch>(Channel.UNLIMITED)
+        private val challenges = mapOf(
+            bob to Channel<AdmitMessage.Challenge>(Channel.UNLIMITED),
+            carol to Channel<AdmitMessage.Challenge>(Channel.UNLIMITED),
+        )
+
+        /** Every admit frame the host sent, in send order, since the round began. */
+        val sent = MutableStateFlow<List<Pair<PeerId, AdmitMessage>>>(emptyList())
+
+        /** Every membership event the host emitted since the round began. */
+        val events = MutableStateFlow<List<MembershipEvent>>(emptyList())
+
+        private val config = HeartbeatConfig(interval = interval, timeout = 100_000.hours, reconnectWindow = 100_000.hours)
+        val controller = Controller(config.reconnectWindow.inWholeMilliseconds)
+        private val ticks = AtomicLong(1_000_000)
+
+        private val seam = object : Seam {
+            override val selfId = host
+            override val peers = this@Rig.peers
+            override val state = MutableStateFlow<SeamState>(SeamState.Woven)
+            override val incoming = inbound.receiveAsFlow()
+            override suspend fun broadcast(payload: ByteArray) = Unit
+            override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+                val message = AdmitMessage.decode(payload) ?: return
+                if (message is AdmitMessage.Challenge) {
+                    challenges[peer]?.send(message)
+                } else {
+                    sent.update { it + (peer to message) }
+                }
+            }
+            override suspend fun close(reason: CloseReason) = Unit
+        }
+
+        val room = SeamRoom(
+            seam = seam,
+            role = SessionRole.Host,
+            roomId = RoomId("test-room"),
+            memberName = "host",
+            scope = scope,
+            clock = { Instant.fromEpochMilliseconds(ticks.incrementAndGet()) },
+            device = RoomDevice.of(fakeKeyStore(0)),
+            heartbeatConfig = config,
+            reconnectControllerFactory = { _, scope, _ -> controller.also { it.scope = scope } },
+        )
+
+        suspend fun start(stage: StageTracker) {
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                room.events.collect { event -> events.update { it + event } }
+            }
+            room.start()
+            stage.at("setup: the reconnect loop subscribes") { snapshot() }
+            controller.flow.subscriptionCount.first { it > 0 }
+            for ((peer, device, key) in listOf(Triple(bob, TEST_DEVICE_A, TEST_KEY_A), Triple(carol, TEST_DEVICE_B, TEST_KEY_B))) {
+                val intros = hostIntrosTo(peer)
+                prove(peer, device, key)
+                stage.at("setup: ${peer.value} is admitted") { snapshot() }
+                events.first { events -> events.any { it is MembershipEvent.Joined && it.member.id == peer } }
+                awaitIntros(peer, intros + 1)
+            }
+        }
+
+        /** Hello, then the Proof answering its challenge; [beforeProof] runs once the challenge is in. */
+        suspend fun prove(peer: PeerId, device: DeviceKey, key: DidKey, beforeProof: () -> Unit = {}) {
+            inbound.send(Swatch(AdmitMessage.encode(currentHello(peer.value, sessionId = peer.value, key = key)), sender = peer))
+            val challenge = checkNotNull(challenges[peer]).receive()
+            beforeProof()
+            inbound.send(Swatch(AdmitMessage.encode(handProof(challenge, host, device)), sender = peer))
+        }
+
+        /**
+         * Start a round: forget the last one's frames and events, drop bob from the fabric, wait until
+         * the host holds his seat partitioned under the controller's window, and put him back. Returns
+         * the episode.
+         */
+        suspend fun partitionBob(stage: StageTracker, round: Int): Long {
+            sent.value = emptyList()
+            events.value = emptyList()
+            peers.update { it - bob }
+            stage.at("round $round: bob partitions") { snapshot() }
+            events.first { events -> events.any { it is MembershipEvent.Partitioned && it.peerId == bob } }
+            val episode = controller.episode.get()
+            val deadline = Instant.fromEpochMilliseconds(controller.deadlineFor(episode))
+            events.first { events -> events.any { it is MembershipEvent.WindowOpened && it.peerId == bob && it.expiresAt == deadline } }
+            peers.update { it + bob }
+            return episode
+        }
+
+        fun hostIntrosTo(peer: PeerId): Int =
+            sent.value.count { (to, message) -> to == peer && message is AdmitMessage.Welcome && message.assignedPeerId == host.value }
+
+        /** The host intro is the last frame of a burst, so this is the Proof's coroutine finishing. */
+        suspend fun awaitIntros(peer: PeerId, count: Int) {
+            sent.first { frames -> frames.count { (to, m) -> to == peer && m is AdmitMessage.Welcome && m.assignedPeerId == host.value } >= count }
+        }
+
+        /**
+         * The reconnect loop is past everything emitted before (an emit returns only once the loop has
+         * taken it, after finishing the one before), and carol's lane is drained past the sentinel
+         * `Farewell` the second sentinel fans out.
+         */
+        suspend fun quiesce(stage: StageTracker, round: Int) {
+            stage.at("round $round: quiescing") { snapshot() }
+            controller.flow.emit(JoinerReconnectEvent.Resumed(sentinel, 0))
+            controller.flow.emit(JoinerReconnectEvent.WindowExpired(sentinel, 0, 0))
+            sent.first { frames -> frames.any { (to, m) -> to == carol && m is AdmitMessage.Farewell && m.peerId == sentinel.value } }
+        }
+
+        fun framesToCarolNaming(peer: PeerId): List<AdmitMessage> =
+            sent.value.filter { (to, message) -> to == carol && message.names(peer) }.map { it.second }
+
+        fun edgesOf(peer: PeerId): List<String> = events.value.mapNotNull {
+            when {
+                it is MembershipEvent.Left && it.peerId == peer -> "Left"
+                it is MembershipEvent.Joined && it.member.id == peer -> "Joined"
+                it is MembershipEvent.Resumed && it.peerId == peer -> "Resumed"
+                it is MembershipEvent.Recovered && it.peerId == peer -> "Recovered"
+                else -> null
+            }
+        }
+
+        fun snapshot(): String =
+            "events=${events.value.map { it::class.simpleName }} sent=${sent.value.map { (to, m) -> "${to.value}:${m::class.simpleName}" }} " +
+                "admitted=${room.isAdmitted(bob)} episode=${controller.episode.get()} recovered=${controller.recovered.get()}"
+
+        suspend fun close() {
+            room.leave()
+            scope.cancel()
+        }
+    }
+
+    private companion object {
+        val host = PeerId("host")
+        val bob = PeerId("bob")
+        val carol = PeerId("carol")
+        val sentinel = PeerId("sentinel")
+        val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
+        const val EXPIRY_ROUNDS = 5_000
+        const val HEAL_ROUNDS = 5_000
+    }
+}
