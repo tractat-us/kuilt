@@ -148,7 +148,7 @@ import kotlin.time.Instant
  * |---|----------|------|-------|--------|
  * | M1 | `SeamRoom.resumeToken` returns `null` — a room opting out of resume entirely | real | RED: [resumeWithinWindowFiresResumed] and [aTokenMintedForAnotherRoomIsRefused] on the loud precondition, naming `role=Joiner … roster=1 member(s)` | [joinerLearnsHostRoomIdOnAdmission] RED — but [resumeWithinWindowFiresResumed] **green by absence** |
  * | M2 | [injectorOrDeclaredGap] drops its assertion — i.e. the pre-#2306 silent `?: return@runTest`, exactly | rig | RED: all four `blankTrackingUrl*` **as measured — the set is seven since #2501** | all green; the four gated obligations passed under a gap declaring nothing |
- * | M3 | delete the `token.roomId != roomId` guard in `DefaultJoinerReconnectController.tryResume` | real | RED: [aTokenMintedForAnotherRoomIsRefused], all 4 assertions — `got Success`, then a refusal for the genuine token | every pre-existing test of this suite **green** |
+ * | M3 | delete the `proof.roomId != roomId` check in `KeyAdmission.checkProof` — a proof for another room admits | real | **re-pointed (#3212):** RED in `:kuilt-session`'s `KeyAdmissionTest.proofForAnotherRoomIsRejected`, 1 of 23, 2 of its assertions. The controller's own guard, this row's old subject, reds nothing in this suite (40 of 40 green) — see below | every pre-existing test of this suite **green** |
  * | M4 | the host drops a foreign token silently instead of refusing it | synthetic | RED: [aTokenMintedForAnotherRoomIsRefused], 2 of 3 — `Got TimedOut` | all green |
  *
  * **M1 is the argument for [requireResumeToken].** The same fabric was *already* failing
@@ -162,10 +162,18 @@ import kotlin.time.Instant
  * answered at all. (Its third assertion also reds under M4, but as *blast radius*: the window
  * elapses during the resume timeout. Not an independent diagnosis, and not claimed as one.)
  *
- * **M3's claim is narrower than it looks, and the narrowing matters.** It also reds two tests in
- * `:kuilt-session`'s own `JoinerReconnectControllerTest`, so the defect is not invisible to the
- * tree — only to the *contract*. That is precisely the thing a second [RoomFactory] inherits
- * nothing of: an implementation's private suite is not a conformance obligation.
+ * **M3's claim is narrower than it looks, and the narrowing matters.** It used to delete the
+ * `token.roomId != roomId` guard in `DefaultJoinerReconnectController.tryResume`. That guard is now
+ * unreachable through a room: the room builds every `ProvenResume` from its own id, on a proof whose
+ * room id it has already checked, or on a `Resume` frame whose room id it has already checked
+ * (#3165). Measured on #3212: deleting it reds `:kuilt-session`'s own `JoinerReconnectControllerTest`
+ * (2 of 19) and nothing in this suite (40 of 40 green). The room-id property now rests on two room
+ * checks: the proof's, which `proofForAnotherRoomIsRejected` pins; and the `Resume` frame's, which
+ * reds only [resumeInvalidTokenHasExactCode] when deleted alone, because the controller's guard
+ * still refuses the token. [aTokenMintedForAnotherRoomIsRefused] reds, all 4 assertions, only when
+ * both `Resume`-path checks go. Either way the defect is visible to the tree but not to the
+ * *contract*, which is precisely what a second [RoomFactory] inherits nothing of: an
+ * implementation's private suite is not a conformance obligation.
  *
  * **One assertion has no red anywhere**, and that is correct:
  * `RoomConformanceGapDeclarationTest.aDeclaredGapSkipsEveryGatedObligationCleanly`. It does not
@@ -1484,12 +1492,14 @@ public abstract class RoomConformanceSuite {
      *
      * ### Mutation receipt
      *
-     * Deleting the `token.roomId != roomId` guard in
-     * [us.tractat.kuilt.session.partition.DefaultJoinerReconnectController.tryResume] makes the
-     * foreign token indistinguishable from the genuine one: it consumes the window, so the first
-     * resume returns [ResumeResult.Success] (reddening the refusal assertions) and the second
-     * returns a refusal (reddening the positive control). Measured: all three assertions red,
-     * every pre-existing test of this suite green.
+     * A room refuses a foreign token twice over: its own `session-mismatch` check on the `Resume`
+     * frame (#3165), then the window controller's room-id guard
+     * ([us.tractat.kuilt.session.partition.DefaultJoinerReconnectController.tryResume]). Deleting
+     * both makes the foreign token indistinguishable from the genuine one: it consumes the window, so
+     * the first resume returns [ResumeResult.Success] (reddening the refusal assertions) and the
+     * second returns a refusal (reddening the positive control). Measured on #3212: all 4 assertions
+     * red. Deleting either alone leaves this test green, because the other still refuses; the room's
+     * check alone reds [resumeInvalidTokenHasExactCode].
      *
      * Weakening the guard to answer `RejectCode.ResumeWindowNotYetOpen` (retryable) instead of removing it
      * keeps the first two assertions green and reds only the third — which is why the terminality
