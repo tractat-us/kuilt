@@ -444,8 +444,8 @@ class ProvenRestoreConcurrencyTest {
         val carol = PeerId("carol")
         val sentinel = PeerId("sentinel")
         val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
-        const val EXPIRY_ROUNDS = 6_000
-        const val HEAL_ROUNDS = 6_000
+        const val EXPIRY_ROUNDS = 10_000
+        const val HEAL_ROUNDS = 10_000
         const val MAX_SPIN_NANOS = 40_000L
         const val HEAL_PROOF_DELAY_MS = 4L
 
