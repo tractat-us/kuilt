@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.CoroutineScope
@@ -10,7 +12,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -42,14 +44,21 @@ class RoomChannelStateAfterLeaveControlTest {
                 referenceResumeHarness(scope, fastHeartbeatConfig)
 
             override fun newHarness(scope: CoroutineScope): RoomHarness {
+                val loom = InMemoryLoom()
                 var clockMs = 0L
                 val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
-                val factory = StuckOpenRoomFactory(
-                    SeamRoomFactory(loom = InMemoryLoom(), scope = scope, clock = clock, deviceKeyStore = InMemoryDeviceKeyStore(), heartbeatConfig = fastHeartbeatConfig),
+                fun factory(device: Int) = StuckOpenRoomFactory(
+                    SeamRoomFactory(
+                        loom = loom,
+                        scope = scope,
+                        clock = clock,
+                        deviceKeyStore = fakeKeyStore(device),
+                        heartbeatConfig = fastHeartbeatConfig,
+                    ),
                 )
                 return RoomHarness(
-                    hostFactory = factory,
-                    joinerFactory = factory,
+                    hostFactory = factory(device = 0),
+                    joinerFactory = factory(device = 1),
                     faults = FaultInjection.Unsupported("https://github.com/tractat-us/kuilt/issues/3129"),
                     clock = clock,
                     advanceClock = { ms -> clockMs += ms },

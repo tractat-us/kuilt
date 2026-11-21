@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CompletableDeferred
@@ -14,7 +16,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Instant
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 
 class RoomEventsReplayTest {
 
@@ -29,12 +31,12 @@ class RoomEventsReplayTest {
     @Test
     fun `a late events subscriber still receives a join emitted before it subscribed`() = runTest {
         val loom = InMemoryLoom()
-        val host = LoomRoomHost(loom, Pattern("server"), InMemoryDeviceKeyStore(), clock = zeroClock)
+        val host = LoomRoomHost(loom, Pattern("server"), fakeKeyStore(0), clock = zeroClock)
         val hostRoomReady = CompletableDeferred<Room>()
         val hostJob = backgroundScope.launch { host.start { room -> hostRoomReady.complete(room) } }
         val hostRoom = hostRoomReady.await()
 
-        val joiner = SeamRoomFactory(loom, backgroundScope, zeroClock, InMemoryDeviceKeyStore()).join(InMemoryTag("server"))
+        val joiner = SeamRoomFactory(loom, backgroundScope, zeroClock, fakeKeyStore(1)).join(InMemoryTag("server"))
 
         // Admit completes: the host emits Joined while NOTHING is collecting events yet.
         hostRoom.roster.first { it.size == 1 }

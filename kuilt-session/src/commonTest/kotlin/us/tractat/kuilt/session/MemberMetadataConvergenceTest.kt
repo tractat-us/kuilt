@@ -1,6 +1,7 @@
 @file:OptIn(
     kotlinx.coroutines.ExperimentalCoroutinesApi::class,
     kotlinx.serialization.ExperimentalSerializationApi::class,
+    us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class,
 )
 
 package us.tractat.kuilt.session
@@ -16,7 +17,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
@@ -65,8 +66,8 @@ class MemberMetadataConvergenceTest {
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, InMemoryDeviceKeyStore()).host(Pattern("Alice"))
-            val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock, InMemoryDeviceKeyStore()).join(InMemoryTag("Bob"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(0)).host(Pattern("Alice"))
+            val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(1)).join(InMemoryTag("Bob"))
 
             // Wait for the admit handshake on both sides before starting replication.
             hostRoom.roster.first { it.size == 1 }

@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session
 
@@ -22,7 +22,7 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.hubMesh
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
@@ -61,6 +61,9 @@ import kotlin.time.Instant
  * Timing (fast config): interval 100 ms, timeout 200 ms, reconnect window 500 ms.
  */
 class ConcurrentResumeHangTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
 
     private val fastConfig = HeartbeatConfig(
         interval = 100.milliseconds,
@@ -153,7 +156,7 @@ class ConcurrentResumeHangTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                device = RoomDevice.of(fakeKeyStore(nextDevice++)),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -181,7 +184,7 @@ class ConcurrentResumeHangTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                device = RoomDevice.of(fakeKeyStore(nextDevice++)),
                 heartbeatConfig = fastConfig,
                 roomId = null,
                 reweave = { muxClient.join(tag) },
@@ -234,7 +237,7 @@ class ConcurrentResumeHangTest {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private fun TestScope.makeSeamRoom(
+    private suspend fun TestScope.makeSeamRoom(
         seam: Seam,
         role: SessionRole,
         displayName: String,
@@ -247,7 +250,7 @@ class ConcurrentResumeHangTest {
             memberName = displayName,
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            device = RoomDevice.of(fakeKeyStore(nextDevice++)),
             heartbeatConfig = fastConfig,
             roomId = roomId,
         ).also { it.start() }

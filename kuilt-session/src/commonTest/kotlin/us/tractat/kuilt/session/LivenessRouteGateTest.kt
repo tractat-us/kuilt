@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session
 
@@ -12,7 +12,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -163,8 +163,8 @@ class LivenessRouteGateTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-            val slowFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), slowConfig)
-            val fastFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
+            val slowFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), slowConfig)
+            val fastFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), fastConfig)
 
             val hostRoom = slowFactory.host(Pattern("Mesh"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
@@ -229,7 +229,7 @@ class LivenessRouteGateTest {
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(0L))
 
-        val hostFactory = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
+        val hostFactory = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock, fakeKeyStore(2), fastConfig)
         val hostRoom = hostFactory.host(Pattern(ROOM))
 
         val aLoom = fabric.clientLoom(PeerId("joiner-a"), Random(1L))
@@ -238,9 +238,9 @@ class LivenessRouteGateTest {
         // assert what its `peers` set actually contains.
         val aSeam = aLoom.join(InMemoryTag(ROOM))
         val bSeam = bLoom.join(InMemoryTag(ROOM))
-        val aRoom = SeamRoomFactory(aLoom, backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
+        val aRoom = SeamRoomFactory(aLoom, backgroundScope, clock, fakeKeyStore(3), fastConfig)
             .adopt(aSeam, SessionRole.Joiner)
-        val bRoom = SeamRoomFactory(bLoom, backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
+        val bRoom = SeamRoomFactory(bLoom, backgroundScope, clock, fakeKeyStore(4), fastConfig)
             .adopt(bSeam, SessionRole.Joiner)
 
         hostRoom.roster.first { it.size == 2 }

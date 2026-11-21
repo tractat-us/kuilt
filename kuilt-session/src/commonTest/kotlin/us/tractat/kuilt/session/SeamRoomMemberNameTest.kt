@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.flow.first
@@ -5,7 +7,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -20,10 +22,10 @@ class SeamRoomMemberNameTest {
     fun `joiner appears under its own memberName not the session name`() = runTest {
         val loom = InMemoryLoom()
         val clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
-        val host = SeamRoomFactory(loom, backgroundScope, clock = clock, deviceKeyStore = InMemoryDeviceKeyStore())
+        val host = SeamRoomFactory(loom, backgroundScope, clock = clock, deviceKeyStore = fakeKeyStore(0))
             .host(Pattern(sessionName = "Alice's game"), memberName = "Alice")
         // Joiner discovers the session ("Alice's game") but names itself "Bob".
-        val joiner = SeamRoomFactory(loom, backgroundScope, clock = clock, deviceKeyStore = InMemoryDeviceKeyStore())
+        val joiner = SeamRoomFactory(loom, backgroundScope, clock = clock, deviceKeyStore = fakeKeyStore(1))
             .join(InMemoryTag("Alice's game"), memberName = "Bob")
 
         val hostRoster = host.roster.first { it.size == 1 }      // the admitted joiner

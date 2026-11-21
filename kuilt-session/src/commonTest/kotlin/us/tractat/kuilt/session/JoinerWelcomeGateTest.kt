@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CoroutineScope
@@ -7,7 +9,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -23,8 +25,12 @@ import kotlin.test.assertTrue
  * this is the cheap two-ended belt-and-suspenders on the receiving end.
  */
 class JoinerWelcomeGateTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
+
     private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
-        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = InMemoryDeviceKeyStore())
+        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = fakeKeyStore(nextDevice++))
 
     /**
      * After the joiner is admitted by its real host, a foreign peer broadcasting a host-intro
@@ -51,6 +57,7 @@ class JoinerWelcomeGateTest {
                         assignedPeerId = foreign.selfId.value,
                         displayName = "Foreign",
                         sessionId = foreign.selfId.value,
+                        key = TEST_KEY_B,
                     ),
                 ),
             )
