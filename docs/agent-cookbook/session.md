@@ -731,4 +731,70 @@ public suspend fun admissionPolicyTestSample(blocked: DidKey, stranger: DidKey):
 }
 ```
 
-So far this is the store (in memory, on the desktop JVM, on iOS, on macOS and on Android), the key, its name, the pass, its check, the revocations and the policy's types. The other platforms' stores, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
+**On the room.** Everything above is the parts. A room built by `SeamRoomFactory` puts them together, and the app hands it two things: this device's `DeviceKeyStore`, on every factory, and on a host a `HostAdmission`. The rest — the challenge, the proof, the seat, the pass, its renewal — happens in the admit handshake, and [Rejoin & reconnect](#rejoin--reconnect) says what each member sees.
+
+**Which member is this device:** `Member.key` (`us.tractat.kuilt.session`). Do not hand-roll a `deviceId → member` map or recognise a device by a name it gives. Every member carries its device's `DidKey`, the same across every room, peer id and restart that device has, so it is the one name to key "this is Ada's phone" on. Two things to know before you lean on it. **It is not unique:** two tabs of one browser share one key and hold two seats, so look up every seat with that key, never one. **It is only as good as who vouches for it:** on the host every member's key is verified, since the host admits no one until they sign with the key they named; on a joiner the host's own key is verified, since the host signed its challenge, and every other member's key is the host's word. **The key binds the handshake, not later frames.** On a `Mesh`, a link that later takes a member's peer id sends frames under that member's key, so do not treat the key as proof of who sent a frame. A `HostedOverlay` deployment should use a binding `LinkAdmission` until #2387 lands.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#seatsOfDeviceSample -->
+```kotlin
+public fun seatsOfDeviceSample(room: Room, device: DidKey): List<PeerId> =
+    // Usually one seat; none when the device is away, two for two tabs. Not a lookup by key alone.
+    room.roster.value.filter { it.key == device }.map { it.id }
+```
+
+**Hosting with passes:** `RoomFactory.host(pattern, …, admission = HostAdmission(policy, revocations))`, and the same `admission` on `LoomRoomHost` and `KtorRoomHost`. Only a host takes one; a joiner never decides who comes in. The room signs every pass with its own device key and checks presented passes against that key, so keep the **host's** key store on a platform store too. Two things decide what a host restart keeps:
+
+- **The host's key.** A host whose key is new after a restart honours none of its old passes: each is `UntrustedIssuer`, and every returning device goes to the policy. That is the safe direction.
+- **The room's id.** A `GrantReach.ThisRoom` pass names the room, so it works after a restart only when the room comes back under the same `roomId`; a minted id is new in every process. A friend's `AnyRoomOfIssuer` pass names only the host's key and survives either way.
+
+A pass is good only with the host that issued it. After a host change — a lobby that elected someone else, a cluster client that failed over to another server, each server with its own key — every returning device goes through the new host's policy. Passing trust from one host to the next is not built.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#hostARoomTheyCanReturnToSample -->
+```kotlin
+public suspend fun hostARoomTheyCanReturnToSample(
+    factory: RoomFactory,
+    pattern: Pattern,
+    admission: HostAdmission,
+    lobbyCode: String,
+): Room =
+    // A minted id is new in every process, and so is every room pass that names it.
+    factory.host(pattern, roomId = RoomId(lobbyCode), admission = admission)
+```
+
+**A pass in use.** The host hands each newcomer its pass in the welcome, and renews it every half of its term while the member stays connected, so "one hour" means one hour since last contact; a pass that never expires is never renewed. The device keeps the newest one per host and scope in its `DeviceKeyStore`, and shows it when it returns. A device back inside its pass is admitted without asking the policy, and every member's `Joined` carries `returning`, a `ReturningMark` whose `previousId` is its peer id last time — or `null` when the host has forgotten it, as after a restart. The renewed pass keeps the terms the device came back with, so a friend's never-expiring pass stays that way.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#returningInsideAPassSample -->
+```kotlin
+public suspend fun returningInsideAPassSample(room: Room) {
+    room.events.collect { event ->
+        if (event is MembershipEvent.Joined) {
+            when (val mark = event.returning) {
+                // A newcomer, or a device whose pass ran out or was revoked: the policy let it in.
+                null -> Unit // "Ada joined"
+                // previousId is its peer id last time, or null when the host has forgotten it (after a
+                // host restart, say). event.member.key names the device either way.
+                else -> Unit // "Ada is back"; move what you keyed on mark.previousId to event.member.id
+            }
+        }
+    }
+}
+```
+
+**Stopping a device coming back:** block it in the app's own set, then `revocations.revoke(key, notBefore = now + 1)` on the `RevocationList` the host's `HostAdmission` holds. Revoking voids the passes the device already holds and the seat held for it while it is away; the host also stops renewing its pass if it is in the room now. Blocking is what makes the policy say no when it then knocks as a newcomer. **Neither removes a device that is in the room now:** that is the app's own call, and kuilt offers no eviction for it yet.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#stopADeviceComingBackSample -->
+```kotlin
+public suspend fun stopADeviceComingBackSample(
+    blocked: MutableStateFlow<Set<DidKey>>,
+    revocations: RevocationList,
+    device: DidKey,
+    nowEpochMs: Long,
+) {
+    // Block first: the moment its passes are void it is a newcomer, and the policy must already say no.
+    blocked.update { it + device }
+    // One past the clock: a pass issued in this same millisecond would otherwise stay good.
+    revocations.revoke(device, notBefore = nowEpochMs + 1)
+}
+```
+
+**What a room does not protect against.** A bystander in the room — who knows every peer id, the room id and every key — cannot resume as, return as, or lock out another member, and a captured proof cannot be replayed. An active relay sitting on a device's own link over an unauthenticated fabric can: peer ids are self-chosen on WebSocket and star fabrics, so such a relay can forward a challenge and its answer. Closing that needs a fabric that binds the session to the link, such as `kuilt-nw`'s pre-shared-key session.
