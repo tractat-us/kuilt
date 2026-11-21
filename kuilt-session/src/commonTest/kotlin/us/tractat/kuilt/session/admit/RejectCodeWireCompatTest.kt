@@ -71,6 +71,19 @@ class RejectCodeWireCompatTest {
         assertTrue(RejectCode.Unknown("").retryable)
     }
 
+    /**
+     * The key-proof codes (#3211) cross the wire as themselves and stay terminal: decoded as
+     * [RejectCode.Unknown] they would be retryable, and a joiner refused for a bad proof would retry it.
+     */
+    @Test
+    fun `the key-proof codes round-trip as themselves and are terminal`() {
+        for (code in listOf(RejectCode.BadProof, RejectCode.KeyConflict)) {
+            val decoded = AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Reject(code.id, code))) as AdmitMessage.Reject
+            assertEquals(code, decoded.code)
+            assertFalse(decoded.code.retryable)
+        }
+    }
+
     private fun String.hexToBytes(): ByteArray =
         ByteArray(length / 2) { i -> substring(i * 2, i * 2 + 2).toInt(16).toByte() }
 }
