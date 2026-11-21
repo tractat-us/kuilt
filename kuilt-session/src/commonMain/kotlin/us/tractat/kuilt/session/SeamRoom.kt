@@ -1843,7 +1843,6 @@ internal class SeamRoom(
                 }
                 is SeatOutcome.Released -> {
                     seating.detached.close()
-                    propagateFarewell(seating.peerId, expired = true)
                     // Its window is disarmed, since its expiry has nothing left to evict.
                     reconnectController?.onPeerRecovered(seating.peerId, clock().toEpochMilliseconds())
                     released = seating.peerId
@@ -1935,8 +1934,8 @@ internal class SeamRoom(
         class AskWindow(val episode: Long) : SeatOutcome
 
         /**
-         * [peerId]'s held seat was released in the deciding critical section: close its inbox, tell the
-         * other members, then decide again.
+         * [peerId]'s held seat was released, and the other members' `Farewell` enqueued, in the deciding
+         * critical section: close its inbox, then decide again.
          */
         class Released(val peerId: PeerId, val detached: DetachedMember) : SeatOutcome
 
@@ -2071,11 +2070,16 @@ internal class SeamRoom(
      * **Under [lock].** Release a held seat the key → seat table gave up on, in the critical section
      * that decided to, so the joiner's new membership is a `Joined` rather than a silent re-admission
      * of the same id: its `Left` carries [LeaveReason.PartitionExpired], since the hold ended without
-     * its member coming back. The caller then closes the inbox and fans an expired `Farewell` out to
-     * every other member before it tells them of the new member, on the same lanes (#1781).
+     * its member coming back. The expired `Farewell` to every other member is enqueued in this section
+     * too, so it precedes on each lane whatever a later section enqueues about the id, the new
+     * member's roster `Welcome` included (#1781). Enqueued after the lock, a second Proof's admission
+     * could slip its `Welcome` in first. The caller closes the inbox.
      */
-    private fun releaseHeldSeat(peerId: PeerId): DetachedMember =
-        checkNotNull(detachMember(peerId, LeaveReason.PartitionExpired)) { "the released seat was read under this lock" }
+    private fun releaseHeldSeat(peerId: PeerId): DetachedMember {
+        val detached = checkNotNull(detachMember(peerId, LeaveReason.PartitionExpired)) { "the released seat was read under this lock" }
+        propagateFarewell(peerId, expired = true)
+        return detached
+    }
 
     /**
      * **Under [lock].** Add a new member for [joinerPeerId], from [keyed]: the Hello its joiner sent,
