@@ -377,6 +377,75 @@ class ProvenRestoreTest {
     }
 
     /**
+     * The host has marked Bob's seat partitioned but its window controller has not opened the window
+     * yet — the default controller opens it on a launched coroutine, and a hold policy may lag too —
+     * so `tryResume` answers `WindowNotYetOpen`. That is a seat still held, not a seat gone: it is
+     * restored, not released (controller reading on #3159).
+     */
+    @Test
+    fun windowNotYetOpenAtProofTimeRestoresTheHeldSeat() = runTest {
+        val host = rawHost(
+            joiners = setOf(bob, carol),
+            hold = ObservedHold(verdict = { ResumeResult.WindowNotYetOpen }),
+        )
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+
+        val mark = host.events.mark()
+        val toBob = host.sentTo(bob).size
+        val toCarol = host.sentTo(carol).size
+        host.admit(bob, bobKey, nonce = 3)
+        val edges = host.events.edgesSince(mark)
+
+        assertAll(
+            { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.WindowNotYetOpen), host.hold.verdicts, "rig: the window was not open yet") },
+            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(bob)), edges, "restored, not released: ${edges.render()}") },
+            { assertEquals(listOf(ReturnKind.Restored), host.sentTo(bob).drop(toBob).welcomesFor(bob).map { it.returnKind }) },
+            { assertEquals(Liveness.Connected, host.member(bob)?.liveness) },
+            {
+                assertEquals(
+                    listOf<AdmitMessage>(AdmitMessage.Unpaused(bob.value)),
+                    host.sentTo(carol).drop(toCarol).filter { it.names(bob) },
+                    "a bystander hears the hold end, and nothing else",
+                )
+            },
+            { assertTrue(host.rejectsTo(bob).isEmpty()) },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * The hold policy is consumer code, and this one throws. The joiner is refused retryably, its
+     * seat stays held, and the host keeps running: on Kotlin/Native an exception escaping the admit
+     * coroutine would abort the process, and under `runTest` it fails the test.
+     */
+    @Test
+    fun aThrowingHoldPolicyRefusesRetryablyAndKeepsTheSeat() = runTest {
+        val host = rawHost(
+            joiners = setOf(bob, carol),
+            hold = ObservedHold(verdict = { error("the hold policy broke") }),
+        )
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+
+        val mark = host.events.mark()
+        host.admit(bob, bobKey, nonce = 3)
+        val edges = host.events.edgesSince(mark)
+
+        assertAll(
+            { assertEquals(listOf(bob), host.hold.calls.map { it.peerId }, "rig: the policy was asked") },
+            { assertTrue(host.hold.verdicts.isEmpty(), "rig: and threw instead of answering") },
+            { assertEquals(listOf(RejectCode.HostFailed), host.rejectsTo(bob).map { it.code }) },
+            { assertTrue(RejectCode.HostFailed.retryable, "so the joiner tries again") },
+            { assertTrue(edges.isEmpty(), "the seat is neither restored nor released: ${edges.render()}") },
+            { assertIs<Liveness.Partitioned>(host.member(bob)?.liveness, "the seat is still held") },
+        )
+        host.room.leave()
+    }
+
+    /**
      * The window expires **between** the Challenge and the Proof. Read at Challenge time, the seat
      * would still be held and the host would ask the controller to restore it; read at Proof time,
      * under the lock, there is no seat and the joiner is admitted as a new member.
