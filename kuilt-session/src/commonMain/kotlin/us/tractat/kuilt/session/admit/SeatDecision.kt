@@ -2,13 +2,19 @@ package us.tractat.kuilt.session.admit
 
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.identity.DidKey
+import kotlin.time.Instant
 
 /**
  * A seat the host is still holding for a joiner: a member that was admitted and has not left. [key]
  * is the device key that member proved when it was admitted. The peer id is not a field: seats are
  * held in a `Map<PeerId, Seat>`, which is what makes "one seat per id" a property of the type.
+ *
+ * [lastContact] is when the host last heard anything from the member. It breaks the tie when one key
+ * holds several partitioned seats: the one heard from most recently is the one a new id restores
+ * (Decided 30). It is not when the host noticed the silence — a closed transport is noticed at once
+ * and a quiet one only after the heartbeat timeout, so that order can disagree with this one.
  */
-internal data class Seat(val key: DidKey, val liveness: SeatLiveness)
+internal data class Seat(val key: DidKey, val liveness: SeatLiveness, val lastContact: Instant)
 
 /** Whether a held seat's member is reachable right now. */
 internal enum class SeatLiveness {
@@ -24,8 +30,11 @@ internal enum class SeatLiveness {
  * variant per outcome.
  */
 internal sealed interface SeatDecision {
+    /** The verdicts for a claimed id that holds no seat: what [decideSeat] answers from the key alone. */
+    sealed interface FreshId : SeatDecision
+
     /** The verdicts that admit the joiner as a new membership rather than restoring a held one. */
-    sealed interface NewMember : SeatDecision
+    sealed interface NewMember : FreshId
 
     /**
      * The claimed id holds a seat under the proven key, connected or partitioned: the same membership
@@ -34,28 +43,32 @@ internal sealed interface SeatDecision {
     data class Restore(val peerId: PeerId) : SeatDecision
 
     /**
-     * The claimed id holds no seat, but the proven key holds [previous], connected or partitioned: the
-     * same device came back under a fresh id, and the new id inherits that membership.
+     * The claimed id holds no seat, but the proven key holds the **partitioned** seat [previous]: the
+     * same device came back under a fresh id, and the new id inherits that membership. With several,
+     * [previous] is the one heard from most recently (Decided 30).
      */
-    data class RestoreUnderNewId(val previous: PeerId) : SeatDecision
+    data class RestoreUnderNewId(val previous: PeerId) : FreshId
 
     /**
-     * The claimed id holds a **partitioned** seat under a different key, and the proven key holds no
-     * seat: the old seat is released and the joiner is admitted as [admission]. This is how a device
-     * whose key store was cleared, and whose peer id is durable, gets back in with no prompt.
-     *
-     * [admission] is what [decideSeat] answers once the released seat is gone, so a valid grant makes
-     * the new member [Returning].
+     * The claimed id holds a **partitioned** seat under a different key: the old seat is released and
+     * the joiner's key is decided again as if that seat had never been held, which is [admission].
+     * This is how a device whose key store was cleared, and whose peer id is durable, gets back in
+     * with no prompt (Decided 18); the key it now holds may have seats of its own (Decided 30).
      */
-    data class ReleaseAndAdmit(val released: PeerId, val admission: NewMember) : SeatDecision
+    data class ReleaseAndAdmit(val released: PeerId, val admission: FreshId) : SeatDecision
+
+    /**
+     * The claimed id holds no seat, and every seat the proven key holds is connected: another tab of
+     * the same device. It is admitted to a seat of its own, and no seat is superseded (Decided 30).
+     */
+    data object AdditionalSeat : NewMember
 
     /** Neither the id nor the key holds a seat, and the joiner presented a valid grant. */
     data object Returning : NewMember
 
     /**
-     * Terminal refusal. Either the claimed id holds a **connected** seat under a different key — a
-     * different device claiming a present member's id — or the claimed id holds a seat under a
-     * different key while the proven key holds another seat, whatever either seat's liveness.
+     * Terminal refusal: the claimed id holds a **connected** seat under a different key — a different
+     * device claiming a present member's id (Decided 18).
      */
     data object KeyConflict : SeatDecision
 
@@ -72,23 +85,24 @@ internal sealed interface SeatDecision {
  * can land between the two. Whether the grant is valid is decided before this is called, so
  * [holdsValidGrant] is the verdict, not the grant.
  *
- * [held] holds **joiner seats only, never the host's own.** What happens when a joiner presents the
- * host's key, or claims the host's id, is not this function's question: the caller settles it before
- * calling. Put the host's seat in [held] and a joiner presenting the host's key under a fresh id
- * would be told to take over the host's membership.
+ * [held] holds **joiner seats only, never the host's own.** A joiner presenting the host's key is
+ * decided against the joiner seats that key holds like any other key, so the host's second tab gets
+ * a seat of its own, and gets that seat back on a later Hello (Decided 30). Put the host's seat in
+ * [held] and a joiner presenting the host's key under a fresh id would be told to take over the
+ * host's membership.
  *
  * The precedence, first match wins:
  * 1. the claimed id holds a seat under the proven key → [SeatDecision.Restore];
- * 2. the claimed id holds a seat under another key, and the proven key holds a seat too →
- *    [SeatDecision.KeyConflict]: releasing the id's seat would leave one key holding two, and
- *    restoring the key's seat would reward a joiner that lied about which seat it is;
- * 3. the claimed id holds a connected seat under another key → [SeatDecision.KeyConflict];
- * 4. the claimed id holds a partitioned seat under another key → [SeatDecision.ReleaseAndAdmit];
- * 5. the proven key holds a seat → [SeatDecision.RestoreUnderNewId];
+ * 2. the claimed id holds a connected seat under another key → [SeatDecision.KeyConflict];
+ * 3. the claimed id holds a partitioned seat under another key → [SeatDecision.ReleaseAndAdmit],
+ *    carrying the decision for the key without that seat (rules 4–7);
+ * 4. the proven key holds a partitioned seat → [SeatDecision.RestoreUnderNewId], naming the one
+ *    with the latest [Seat.lastContact];
+ * 5. the proven key holds only connected seats → [SeatDecision.AdditionalSeat];
  * 6. [holdsValidGrant] → [SeatDecision.Returning];
  * 7. otherwise → [SeatDecision.Ordinary].
  *
- * So a grant never overrides a held seat.
+ * So a grant never overrides a held seat, and a connected seat is never superseded by another id.
  *
  * **Falling through means deciding again.** When a restore cannot be carried out — the reconnect
  * window refuses it, or the device was revoked since it was admitted — the caller calls this again
@@ -97,13 +111,9 @@ internal sealed interface SeatDecision {
  * key. [SeatDecision.ReleaseAndAdmit] is that same re-decision, made here. Revocation is the
  * caller's to check; this function never sees it.
  *
- * **One seat per key is the admission site's to keep, not this function's.** Two seats under one key
- * is reachable: two tabs of one device can both be decided [SeatDecision.Ordinary] before either is
- * added. The admission site keeps it from happening by deciding again under the room lock just before
- * it adds the seat. If two do exist, this function still answers: [SeatDecision.Restore] when the
- * claimed id is one of them, and otherwise [SeatDecision.RestoreUnderNewId] naming the one with the
- * lowest peer id, so the answer does not depend on the map's iteration order. The other seat is left
- * as it is.
+ * **One key may hold many seats (Decided 30), so nothing here assumes one.** Ties on
+ * [Seat.lastContact] go to the lowest peer id, so the answer never depends on the map's iteration
+ * order.
  */
 internal fun decideSeat(
     claimedId: PeerId,
@@ -112,14 +122,28 @@ internal fun decideSeat(
     holdsValidGrant: Boolean,
 ): SeatDecision {
     val byId = held[claimedId]
-    val byKey = held.entries.filter { it.value.key == provenKey }.minByOrNull { it.key.value }?.key
-    val admission = if (holdsValidGrant) SeatDecision.Returning else SeatDecision.Ordinary
     return when {
-        byId != null && byId.key == provenKey -> SeatDecision.Restore(claimedId)
-        byId != null && byKey != null -> SeatDecision.KeyConflict
-        byId != null && byId.liveness == SeatLiveness.Connected -> SeatDecision.KeyConflict
-        byId != null -> SeatDecision.ReleaseAndAdmit(released = claimedId, admission = admission)
-        byKey != null -> SeatDecision.RestoreUnderNewId(previous = byKey)
-        else -> admission
+        byId == null -> decideFreshId(provenKey, held, holdsValidGrant)
+        byId.key == provenKey -> SeatDecision.Restore(claimedId)
+        byId.liveness == SeatLiveness.Connected -> SeatDecision.KeyConflict
+        else -> SeatDecision.ReleaseAndAdmit(
+            released = claimedId,
+            admission = decideFreshId(provenKey, held - claimedId, holdsValidGrant),
+        )
+    }
+}
+
+/** Rules 4–7 of [decideSeat]: the claimed id holds no seat in [held], so the key alone decides. */
+private fun decideFreshId(provenKey: DidKey, held: Map<PeerId, Seat>, holdsValidGrant: Boolean): SeatDecision.FreshId {
+    val keySeats = held.entries.filter { it.value.key == provenKey }
+    val mostRecent = keySeats
+        .filter { it.value.liveness == SeatLiveness.Partitioned }
+        .sortedWith(compareByDescending<Map.Entry<PeerId, Seat>> { it.value.lastContact }.thenBy { it.key.value })
+        .firstOrNull()
+    return when {
+        mostRecent != null -> SeatDecision.RestoreUnderNewId(previous = mostRecent.key)
+        keySeats.isNotEmpty() -> SeatDecision.AdditionalSeat
+        holdsValidGrant -> SeatDecision.Returning
+        else -> SeatDecision.Ordinary
     }
 }
