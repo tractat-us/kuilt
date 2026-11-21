@@ -512,6 +512,73 @@ class SupersededMembershipTest {
     }
 
     /**
+     * An exchange that moves on from the seat its `Success` was about forgets that answer. Bob's key
+     * holds two partitioned seats, and a new tab's window `Success` about the newer one is held while
+     * that seat heals. The tab's next pass finds the key's other seat partitioned, and a second new
+     * tab already asking about it, so it waits. Meanwhile the healed seat partitions again and a third
+     * tab takes it over. When the waiting tab decides again, the spent answer is about a seat that
+     * has moved on twice: acting on it would send Carol an expired `Farewell` for a seat she has
+     * already heard was superseded.
+     */
+    @Test
+    fun aWaitForAnotherSeatForgetsTheSpentAnswer() = runTest {
+        val waiter = PeerId("bob-3")
+        val asker = PeerId("bob-4")
+        val taker = PeerId("bob-5")
+        val hold = ObservedHold()
+        val waiterAnswer = CompletableDeferred<Unit>()
+        val askerAnswer = CompletableDeferred<Unit>()
+        hold.holdCall[0] = waiterAnswer
+        hold.holdCall[1] = askerAnswer
+        val raw = rawHost(setOf(first, second, waiter, asker, taker, carol), hold)
+        val bob = fakeDeviceKey(1)
+        raw.admit(first, bob, nonce = 1)
+        raw.admit(second, bob, nonce = 2)
+        raw.admit(carol, fakeDeviceKey(2), nonce = 3)
+        // The second seat goes quiet first, so the first is the one heard from last.
+        raw.partition(second, alive = setOf(carol, first))
+        raw.partition(first, alive = setOf(carol))
+        val episodeAsked = assertIs<Liveness.Partitioned>(raw.member(first)?.liveness).since
+
+        val toCarol = raw.sentTo(carol).size
+        raw.admit(waiter, bob, nonce = 4)
+        raw.advanceKeeping(setOf(carol, first), KEY_SEAT_HEARTBEAT.interval * 2)
+        val healed = raw.member(first)?.liveness
+        raw.admit(asker, bob, nonce = 5)
+        waiterAnswer.complete(Unit)
+        testScheduler.runCurrent()
+        val askedWhileWaiting = hold.calls.map { it.peerId }
+        val waiterSeatedEarly = raw.sentTo(waiter).welcomesFor(waiter).size
+        raw.partition(first, alive = setOf(carol))
+        val episodeTaken = assertIs<Liveness.Partitioned>(raw.member(first)?.liveness).since
+        raw.admit(taker, bob, nonce = 6)
+        val heardBeforeWake = raw.sentTo(carol).drop(toCarol).farewellsFor(first)
+        askerAnswer.complete(Unit)
+        testScheduler.runCurrent()
+        val heard = raw.sentTo(carol).drop(toCarol)
+
+        assertAll(
+            { assertEquals(Liveness.Connected, healed, "rig: the first seat healed while its Success was held") },
+            { assertEquals(listOf(first, second), askedWhileWaiting, "rig: the waiter did not ask about the second seat") },
+            { assertEquals(0, waiterSeatedEarly, "rig: the waiter was waiting, not seated") },
+            { assertTrue(episodeTaken > episodeAsked, "rig: a new partition episode ($episodeTaken > $episodeAsked)") },
+            { assertEquals(listOf(first, second, first), hold.calls.map { it.peerId }, "rig: the asks") },
+            { assertEquals(List<ResumeResult.HostVerdict>(3) { ResumeResult.Success }, hold.verdicts, "rig: every window was spent") },
+            {
+                assertEquals(
+                    listOf(AdmitMessage.Farewell(first.value, supersededBy = taker.value)),
+                    heardBeforeWake,
+                    "rig: the takeover was announced before the waiter woke",
+                )
+            },
+            { assertEquals(listOf(AdmitMessage.Farewell(first.value, supersededBy = taker.value)), heard.farewellsFor(first)) },
+            { assertEquals(listOf(AdmitMessage.Farewell(second.value, supersededBy = asker.value)), heard.farewellsFor(second)) },
+            { assertEquals(null, raw.sentTo(waiter).welcomesFor(waiter).singleOrNull()?.returnKind, "the waiter gets an additional seat") },
+            { assertEquals(setOf(KEY_SEAT_HOST, carol, waiter, asker, taker), raw.rosterHeardBy(carol)) },
+        )
+    }
+
+    /**
      * The window answers `Success` for the old seat, and before the room acts on it the old seat's
      * own detector gives up on it: its `PeerLost` evicts the seat on the host and tells nobody, since
      * an expiry normally does that and this window, spent, will never expire. The pass that finds
