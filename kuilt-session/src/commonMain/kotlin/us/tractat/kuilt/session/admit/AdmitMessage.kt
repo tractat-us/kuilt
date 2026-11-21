@@ -149,6 +149,9 @@ public sealed interface AdmitMessage {
      *   host's own key. Every one is the host's assertion. **Required on the wire**, unlike
      *   [Hello.key]: a v2 host, the only sender of a keyless Welcome, refuses a v3 Hello before it
      *   admits anyone, so a v3 joiner never receives one.
+     * [returnKind] — set only on the direct Welcome, to the member it names, when the host restored
+     *   a seat it was holding rather than admitting a new member (v5, #3212). `null` is an ordinary
+     *   admission. The roster copy, the bootstrap Welcomes and the host intro never carry it.
      */
     @Serializable
     @SerialName("welcome")
@@ -160,6 +163,7 @@ public sealed interface AdmitMessage {
         val deviceId: String? = null,
         val roomId: String? = null,
         val resumeSecret: ResumeSecret? = null,
+        val returnKind: ReturnKind? = null,
     ) : AdmitMessage
 
     /**
@@ -406,4 +410,24 @@ public sealed interface AdmitMessage {
         /** Returns true if [bytes] looks like an admit frame (starts with [PREFIX_BYTE]). */
         public fun isAdmitFrame(bytes: ByteArray): Boolean = bytes.isNotEmpty() && bytes[0] == PREFIX_BYTE
     }
+}
+
+/**
+ * Why a direct [AdmitMessage.Welcome] let its member in, when it was not an ordinary admission (#3159).
+ */
+@Serializable
+public enum class ReturnKind {
+    /**
+     * The host was still holding this member's seat, and the joiner proved the key that seat was
+     * admitted under: the same membership is back, and nobody else was told anything new.
+     */
+    @SerialName("restored")
+    Restored,
+
+    /**
+     * The seat was gone, and the joiner was let back in without vetting on a grant the host issued
+     * it. Not sent yet: returning admission lands with grants.
+     */
+    @SerialName("returning")
+    Returning,
 }
