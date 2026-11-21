@@ -23,6 +23,7 @@ import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -650,6 +651,7 @@ class ProvenRestoreTest {
         assertNotNull(host.hold.real).expire(bob, testScheduler.currentTime)
         testScheduler.runCurrent()
         assertEquals(null, host.member(bob), "rig: the expiry took the seat during the ask")
+        assertFalse((host.room as SeamRoom).hasDetector(bob), "the evicted seat's detector went with it")
 
         gate.complete(Unit)
         testScheduler.runCurrent()
