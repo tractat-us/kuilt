@@ -291,6 +291,7 @@ class ProvenRestoreTest {
             { assertTrue(host.rejectsTo(bob).isEmpty(), "a partitioned seat is no conflict (Decided 18)") },
             { assertTrue(host.hold.calls.isEmpty(), "rig: a different key never reaches the controller") },
             { assertTrue(leftAt >= 0 && joinedAt > leftAt, "the old seat leaves, then the new one joins: ${edges.render()}") },
+            { assertEquals(LeaveReason.PartitionExpired, (edges.getOrNull(leftAt) as? MembershipEvent.Left)?.reason, "its hold ended unrestored") },
             { assertEquals(bobReinstalled.id, (edges.getOrNull(joinedAt) as? MembershipEvent.Joined)?.member?.key) },
             { assertTrue(edges.none { it is MembershipEvent.Resumed }) },
             {
@@ -323,6 +324,13 @@ class ProvenRestoreTest {
 
         assertAll(
             { assertTrue(host.rejectsTo(bob).isEmpty(), "no terminal conflict: ${host.rejectsTo(bob).map { it.code }}") },
+            {
+                assertEquals(
+                    listOf("Left(bob, ${LeaveReason.PartitionExpired})", "Joined(bob)"),
+                    edges.map { it.describe() },
+                    "Bob's seat is released, then a new one is admitted under his id — not re-keyed in place",
+                )
+            },
             { assertEquals(daveKey.id, host.member(bob)?.key, "Bob's id now holds a seat under Dave's key") },
             { assertEquals(daveKey.id, host.member(dave)?.key, "and Dave keeps his own") },
             { assertEquals(Liveness.Connected, host.member(dave)?.liveness) },
