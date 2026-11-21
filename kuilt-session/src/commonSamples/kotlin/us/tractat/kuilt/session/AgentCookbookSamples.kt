@@ -205,7 +205,9 @@ public suspend fun observePausedPeersSample(room: Room) {
             // this one (a more authoritative deadline arrived), so keep the latest, not the first.
             is MembershipEvent.WindowOpened -> Unit
             is MembershipEvent.Recovered -> Unit // it returned inside the window — un-grey it
-            is MembershipEvent.Left -> Unit // gone for good: Normal (clean) or PartitionExpired
+            // Gone for good: Normal (clean) or PartitionExpired. Superseded(by) is the same device back
+            // under a new peer id: move whatever you keep by peer id over to `by`, not delete it.
+            is MembershipEvent.Left -> Unit
             else -> Unit
         }
     }
