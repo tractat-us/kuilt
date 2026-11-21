@@ -4,6 +4,7 @@ package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.identity.test.fakeDeviceKey
@@ -418,6 +419,191 @@ class SupersededMembershipTest {
             { assertEquals(ReturnKind.Restored, raw.sentTo(second).welcomesFor(second).single().returnKind) },
             { assertEquals(edges, later, "the late window evicts nobody: ${later.render()}") },
             { assertEquals(setOf(second, carol), raw.room.roster.value.map { it.id }.toSet()) },
+        )
+    }
+
+    /**
+     * The window answers `Success` for the old seat, which spends it and stops its timer, and then
+     * the new id's challenge goes stale before the room acts on the answer: the new tab says Goodbye.
+     * Nobody can restore the seat now, and no expiry is left to end it, so it is released in the pass
+     * that finds the answer stale. Carol, a star bystander, hears the expired `Farewell` then, and is
+     * left with no ghost. A later Hello from the same tab is an ordinary admission.
+     */
+    @Test
+    fun aStaleSuccessReleasesTheOldSeatAndTellsTheBystanders() = runTest {
+        val hold = ObservedHold()
+        val raw = rawHost(setOf(first, second, carol), hold)
+        val bob = fakeDeviceKey(1)
+        raw.admit(first, bob, nonce = 1)
+        raw.admit(carol, fakeDeviceKey(2), nonce = 2)
+        raw.partition(first, alive = setOf(carol))
+        val answered = CompletableDeferred<Unit>()
+        hold.holdAnswer = answered
+
+        val mark = raw.events.mark()
+        val toCarol = raw.sentTo(carol).size
+        raw.admit(second, bob, nonce = 3)
+        val verdictsWhileHeld = hold.verdicts.toList()
+        raw.say(second, AdmitMessage.Goodbye)
+        hold.holdAnswer = null
+        answered.complete(Unit)
+        testScheduler.runCurrent()
+        val edges = raw.events.edgesSince(mark)
+        val heard = raw.sentTo(carol).drop(toCarol)
+        val welcomedSecond = raw.sentTo(second).welcomesFor(second).size
+
+        raw.admit(second, bob, nonce = 4)
+        val readmitted = raw.events.edgesSince(mark).drop(edges.size)
+
+        assertAll(
+            { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.Success), verdictsWhileHeld, "rig: the window was spent first") },
+            { assertEquals(listOf(MembershipEvent.Left(first, LeaveReason.PartitionExpired)), edges, edges.render()) },
+            { assertEquals(listOf(AdmitMessage.Farewell(first.value, expired = true)), heard.farewellsFor(first)) },
+            { assertTrue(first !in raw.rosterHeardBy(carol), "no ghost on the bystander: ${raw.rosterHeardBy(carol)}") },
+            { assertEquals(null, raw.member(first), "the host holds no seat for the old id") },
+            { assertEquals(0, welcomedSecond, "the stale exchange seated nobody") },
+            { assertTrue(raw.sentToAnyone().none { it is AdmitMessage.ResumeAck }, "no stray ResumeAck") },
+            { assertEquals(1, hold.calls.size, "the later Hello asks no window: the seat is gone") },
+            { assertEquals(second, (readmitted.singleOrNull() as? MembershipEvent.Joined)?.member?.id, readmitted.render()) },
+            { assertEquals(null, raw.sentTo(second).welcomesFor(second).lastOrNull()?.returnKind, "an ordinary admission") },
+        )
+    }
+
+    /**
+     * The window answers `Success` for the old seat, and before the room acts on it the old seat's
+     * own detector gives up on it: its `PeerLost` evicts the seat on the host and tells nobody, since
+     * an expiry normally does that and this window, spent, will never expire. The pass that finds
+     * the seat gone, with the window spent on it and no takeover, sends Carol the expired `Farewell`,
+     * ahead of the new member's `Welcome`.
+     */
+    @Test
+    fun aLossBetweenASuccessAndItsSeatingStillTellsTheBystanders() = runTest {
+        val hold = ObservedHold()
+        val raw = rawHost(setOf(first, second, carol), hold)
+        val bob = fakeDeviceKey(1)
+        raw.admit(first, bob, nonce = 1)
+        raw.admit(carol, fakeDeviceKey(2), nonce = 2)
+        raw.partition(first, alive = setOf(carol))
+        // Most of the detector's window, so its loss lands inside the new id's admit timeout.
+        raw.advanceKeeping(setOf(carol), KEY_SEAT_HEARTBEAT.reconnectWindow * 3 / 4)
+        assertIs<Liveness.Partitioned>(raw.member(first)?.liveness, "rig: the old seat is still held")
+        val answered = CompletableDeferred<Unit>()
+        hold.holdAnswer = answered
+
+        val mark = raw.events.mark()
+        val toCarol = raw.sentTo(carol).size
+        raw.admit(second, bob, nonce = 3)
+        raw.advanceKeeping(setOf(carol), KEY_SEAT_HEARTBEAT.reconnectWindow / 2)
+        val lostWhileHeld = raw.events.edgesSince(mark)
+        val heardWhileHeld = raw.sentTo(carol).drop(toCarol).farewellsFor(first)
+        hold.holdAnswer = null
+        answered.complete(Unit)
+        testScheduler.runCurrent()
+        val edges = raw.events.edgesSince(mark)
+        val heard = raw.sentTo(carol).drop(toCarol).filter { it.names(first) || it.names(second) }
+
+        assertAll(
+            { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.Success), hold.verdicts, "rig: the window was spent") },
+            { assertEquals(listOf(MembershipEvent.Left(first, LeaveReason.PartitionExpired)), lostWhileHeld, "rig: the loss evicted the old seat") },
+            { assertEquals(emptyList(), heardWhileHeld, "rig: the loss itself told the bystander nothing") },
+            { assertEquals(listOf(AdmitMessage.Farewell(first.value, expired = true)), heard.farewellsFor(first)) },
+            {
+                val farewell = heard.indexOfFirst { it is AdmitMessage.Farewell && it.peerId == first.value }
+                val welcome = heard.indexOfFirst { it is AdmitMessage.Welcome && it.assignedPeerId == second.value }
+                assertTrue(farewell >= 0 && welcome > farewell, "Farewell(old) before Welcome(new): $heard")
+            },
+            { assertEquals(setOf(KEY_SEAT_HOST, carol, second), raw.rosterHeardBy(carol), "the bystander's roster has no ghost") },
+            { assertEquals(second, (edges.lastOrNull() as? MembershipEvent.Joined)?.member?.id, edges.render()) },
+            { assertTrue(edges.none { it is MembershipEvent.Resumed }, edges.render()) },
+        )
+    }
+
+    /**
+     * Two tabs of one device come back under two new ids against its one partitioned seat, and both
+     * proofs are decided while the window is being asked about. Only one exchange asks: the other
+     * waits for that one to act on its answer and then decides again. So the first takes the seat
+     * over, the second finds the key's seat connected and gets one of its own (Decided 30), and no
+     * one sees a `Resumed`, an `Unpaused` or a `ResumeAck` for the seat that left.
+     */
+    @Test
+    fun twoNewIdsForOneSeatTakeItOverOnceAndSeatTheOtherBeside() = runTest {
+        val third = PeerId("bob-3")
+        val gate = CompletableDeferred<Unit>()
+        val hold = ObservedHold(gate = gate)
+        val raw = rawHost(setOf(first, second, third, carol), hold)
+        val bob = fakeDeviceKey(1)
+        raw.admit(first, bob, nonce = 1)
+        raw.admit(carol, fakeDeviceKey(2), nonce = 2)
+        raw.partition(first, alive = setOf(carol))
+
+        val mark = raw.events.mark()
+        val toCarol = raw.sentTo(carol).size
+        raw.admit(second, bob, nonce = 3)
+        raw.admit(third, bob, nonce = 4)
+        val welcomedThirdWhileAsking = raw.sentTo(third).welcomesFor(third).size
+        gate.complete(Unit)
+        testScheduler.runCurrent()
+        val events = raw.events.since(mark)
+        val edges = raw.events.edgesSince(mark)
+        val heard = raw.sentTo(carol).drop(toCarol)
+
+        assertAll(
+            { assertEquals(0, welcomedThirdWhileAsking, "rig: the second exchange was decided while the first asked") },
+            { assertEquals(listOf(first), hold.calls.map { it.peerId }, "one exchange asks about the seat") },
+            { assertEquals(listOf(superseded(first, by = second)), edges.filterIsInstance<MembershipEvent.Left>(), edges.render()) },
+            { assertEquals(listOf(second, third), edges.filterIsInstance<MembershipEvent.Joined>().map { it.member.id }, edges.render()) },
+            { assertTrue(events.none { it is MembershipEvent.Resumed || it is MembershipEvent.Recovered }, events.render()) },
+            { assertTrue(raw.sentToAnyone().none { it is AdmitMessage.ResumeAck }, "no stray ResumeAck") },
+            { assertTrue(raw.sentToAnyone().none { it is AdmitMessage.Unpaused }, "no stray Unpaused") },
+            { assertEquals(setOf(second, third, carol), raw.room.roster.value.map { it.id }.toSet()) },
+            { assertEquals(listOf(AdmitMessage.Farewell(first.value, supersededBy = second.value)), heard.farewellsFor(first)) },
+            { assertEquals(setOf(KEY_SEAT_HOST, carol, second, third), raw.rosterHeardBy(carol), "the bystander's roster has no ghost") },
+            { assertEquals(ReturnKind.Restored, raw.sentTo(second).welcomesFor(second).singleOrNull()?.returnKind, "the takeover") },
+            { assertEquals(null, raw.sentTo(third).welcomesFor(third).singleOrNull()?.returnKind, "an additional seat") },
+        )
+    }
+
+    /**
+     * The old seat heals while the window is being asked about: a pong from it lands, the host marks
+     * it recovered, and only then does the window answer `Success`. The seat is connected again, so
+     * it is not taken over (Decided 30): the new id gets a seat of its own beside it, and nobody is
+     * told the old one left.
+     */
+    @Test
+    fun aHealDuringTheAskKeepsTheOldSeatAndSeatsTheNewIdBeside() = runTest {
+        val hold = ObservedHold()
+        val raw = rawHost(setOf(first, second, carol), hold)
+        val bob = fakeDeviceKey(1)
+        raw.admit(first, bob, nonce = 1)
+        raw.admit(carol, fakeDeviceKey(2), nonce = 2)
+        raw.partition(first, alive = setOf(carol))
+        var healedBeforeAnswer = false
+        hold.beforeAnswer = {
+            raw.ping(first)
+            raw.room.roster.first { roster -> roster.any { it.id == first && it.liveness == Liveness.Connected } }
+            healedBeforeAnswer = true
+        }
+
+        val mark = raw.events.mark()
+        val toCarol = raw.sentTo(carol).size
+        raw.admit(second, bob, nonce = 3)
+        raw.advanceKeeping(setOf(carol), KEY_SEAT_HEARTBEAT.interval * 2)
+        val events = raw.events.since(mark)
+        val heard = raw.sentTo(carol).drop(toCarol)
+
+        assertAll(
+            { assertTrue(healedBeforeAnswer, "rig: the seat healed before the window answered") },
+            { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.Success), hold.verdicts, "rig: the window answered Success") },
+            { assertTrue(events.any { it is MembershipEvent.Recovered && it.peerId == first }, events.render()) },
+            { assertTrue(events.none { it is MembershipEvent.Left }, events.render()) },
+            { assertTrue(events.none { it is MembershipEvent.Resumed }, events.render()) },
+            { assertEquals(second, events.filterIsInstance<MembershipEvent.Joined>().singleOrNull()?.member?.id, events.render()) },
+            { assertEquals(Liveness.Connected, raw.member(first)?.liveness, "the old seat is kept") },
+            { assertEquals(setOf(first, second, carol), raw.room.roster.value.map { it.id }.toSet()) },
+            { assertEquals(emptyList(), heard.farewellsFor(first), "nobody is told the old seat left") },
+            { assertTrue(raw.sentToAnyone().none { it is AdmitMessage.Farewell && it.supersededBy != null }, "nobody was superseded") },
+            { assertEquals(null, raw.sentTo(second).welcomesFor(second).singleOrNull()?.returnKind, "an additional seat") },
+            { assertEquals("bob-2", raw.member(second)?.identity?.displayName, "with its own Hello's identity") },
         )
     }
 
