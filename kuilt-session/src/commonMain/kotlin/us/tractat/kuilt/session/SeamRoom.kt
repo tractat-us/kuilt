@@ -3772,9 +3772,11 @@ internal class SeamRoom(
      * [admitLanes] for why that separation is the fix and not an indirection.
      *
      * The roster snapshot and the lane resolution are taken under [lock] and the enqueues happen
-     * after it is released, so the pre-existing invariant that nothing suspend-capable sits inside a
-     * critical section is preserved (a [Channel.trySend] into an unbounded channel cannot suspend
-     * either way).
+     * after this function's own acquisition is released. A caller already holding [lock] keeps them
+     * inside its section — [handleWindowExpired] and [releaseHeldSeat] do, so their `Farewell` is
+     * ordered against every later section's enqueues. The lock is reentrant, and a
+     * [Channel.trySend] into an unbounded channel cannot suspend, so nothing suspend-capable sits
+     * inside a critical section either way.
      *
      * The frame is encoded **once** and the same [ByteArray] is shared by every lane, so keying by
      * recipient costs one small queue item per recipient rather than a copy of the frame.
