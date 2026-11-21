@@ -26,7 +26,7 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
@@ -453,12 +453,17 @@ internal fun sampleGameRooms() = runTest(StandardTestDispatcher(), timeout = TES
  * on top. A real app hands `gameOverRoom` a room adopted from an election lobby; this sample forms
  * one the plain host/join way. `gameOverRoom` takes ownership of the room — tear both down with
  * [RoomGameSession.close], never `room.leave()` directly.
+ *
+ * [newDevice] makes each peer's key store, one per device: a real app passes its platform store
+ * (`DeviceKeyStore.platform(appId, …)`). The test running this sample passes fake stores, since
+ * admission signs with the device key (#3211) and a real key on wasmJs is a WebCrypto promise, which
+ * a virtual-time test cannot wait on.
  */
 @Suppress("unused")
-internal fun sampleGameOverRoom() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+internal fun sampleGameOverRoom(newDevice: () -> DeviceKeyStore) = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
     val loom = InMemoryLoom()
     val clock = { Instant.fromEpochMilliseconds(0) }
-    fun factory() = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore())
+    fun factory() = SeamRoomFactory(loom, backgroundScope, clock, newDevice())
 
     // Two peers form one room; the host hands its room to gameOverRoom.
     val hostRoom = factory().host(Pattern("my-game"))
