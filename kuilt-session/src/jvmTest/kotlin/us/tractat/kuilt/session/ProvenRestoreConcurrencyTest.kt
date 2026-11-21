@@ -261,6 +261,98 @@ class ProvenRestoreConcurrencyTest {
         }
 
     /**
+     * Bob's old detector gives up on him — its `PeerLost` — while a Proof releases his seat and seats
+     * him afresh. The loss is about the membership that is over, so it must not evict the new one.
+     *
+     * The detector's window is one heartbeat interval, so its loss lands a few milliseconds after the
+     * drop. The challenge is drawn before the drop, so the Proof is the only frame from bob after it,
+     * sent at a random moment around the loss: before the detector looks (it heals), between its look
+     * and its loss, or after the loss. A loss already taken off the detector's channel when the
+     * release stops that detector is handled anyway, after the readmission: that is the interleaving
+     * which, with the detector check gone from `handlePeerLost`, evicts the new bob.
+     */
+    @Test
+    fun aStaleDetectorsLossRacingAReleaseLeavesTheReadmittedMemberSeated() =
+        runConcurrencyStress(cap = 90.seconds) { stage ->
+            Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
+                val rig = Rig(dispatcher, interval = LOSS_INTERVAL, RoomDevice.of(fakeKeyStore(0)), detectorWindow = LOSS_INTERVAL)
+                var completed = 0
+                var healFirst = 0
+                var releaseFirst = 0
+                var lossFirst = 0
+                var disallowedEdges = 0
+                var notSeated = 0
+                var noDetector = 0
+                var carolLastNotWelcome = 0
+                val failures = mutableListOf<String>()
+                try {
+                    rig.start(stage)
+                    rig.controller.onAsk = { _, _ -> ResumeResult.WindowClosed }
+                    for (round in 0 until LOSS_ROUNDS) {
+                        val challenge = rig.hello(bob)
+                        rig.partitionBob(stage, round)
+                        val recoveredBefore = rig.controller.recovered.get()
+                        val introsBefore = rig.hostIntrosTo(bob)
+                        val wait = jitter.nextLong(0, LOSS_PROOF_DELAY_NANOS)
+                        delay(wait / 1_000_000)
+                        spin(wait % 1_000_000)
+                        rig.inbound.send(Swatch(AdmitMessage.encode(handProof(challenge, host, TEST_DEVICE_A)), sender = bob))
+                        stage.at("round $round: awaiting the restore or readmission") { rig.snapshot() }
+                        val edge = rig.events.first { events -> events.any { it.isEdgeOf(bob) } }.first { it.isEdgeOf(bob) }
+                        rig.awaitIntros(bob, introsBefore + 1)
+                        stage.at("round $round: awaiting the heal's window close") { rig.snapshot() }
+                        // A restore needs the heal, whose last step closes the window; a release
+                        // closes it before the Proof decides again, so before the Joined.
+                        if (edge is MembershipEvent.Resumed) rig.controller.recoveredCount.first { it > recoveredBefore }
+                        rig.quiesce(stage, round)
+                        // A loss the old detector already handed over is handled on its own thread;
+                        // give it two of its intervals to land before the round is read.
+                        delay(LOSS_INTERVAL * 2)
+
+                        val released = rig.controller.recovered.get() > recoveredBefore
+                        val edges = rig.edgesOf(bob)
+                        val toCarol = rig.framesToCarolNaming(bob)
+                        when {
+                            edges == listOf("Recovered", "Resumed") -> healFirst++
+                            edges == listOf("Left", "Joined") && released -> releaseFirst++
+                            edges == listOf("Left", "Joined") -> lossFirst++
+                            else -> disallowedEdges++
+                        }
+                        val seated = rig.room.isAdmitted(bob)
+                        val watched = rig.room.hasDetector(bob)
+                        val carolLastIsWelcome = edge !is MembershipEvent.Joined || toCarol.lastOrNull() is AdmitMessage.Welcome
+                        if (!seated) notSeated++
+                        if (!watched) noDetector++
+                        if (!carolLastIsWelcome) carolLastNotWelcome++
+                        val good = edges == listOf("Recovered", "Resumed") || edges == listOf("Left", "Joined")
+                        if (!(good && seated && watched && carolLastIsWelcome) && failures.size < 5) {
+                            failures += "round $round released=$released edges=$edges " +
+                                "toCarol=${toCarol.map { it::class.simpleName }} seated=$seated watched=$watched"
+                        }
+                        completed++
+                        if (!seated) break
+                    }
+                    println(
+                        "proven-restore loss: completed=$completed healFirst=$healFirst releaseFirst=$releaseFirst " +
+                            "lossFirst=$lossFirst disallowedEdges=$disallowedEdges notSeated=$notSeated " +
+                            "noDetector=$noDetector carolLastNotWelcome=$carolLastNotWelcome failures=$failures",
+                    )
+                    assertAll(
+                        { assertEquals(LOSS_ROUNDS, completed, "every round ran") },
+                        { assertEquals(0, notSeated, "the readmitted bob is seated: $failures") },
+                        { assertEquals(0, noDetector, "and watched by a detector: $failures") },
+                        { assertEquals(0, disallowedEdges, "each round restores or readmits, once: $failures") },
+                        { assertEquals(0, carolLastNotWelcome, "carol's last frame naming a readmitted bob is his Welcome: $failures") },
+                        { assertTrue(releaseFirst > 0, "the release ran first in some round") },
+                        { assertTrue(lossFirst > 0, "the loss ran first in some round") },
+                    )
+                } finally {
+                    rig.close()
+                }
+            }
+        }
+
+    /**
      * The window controller this probe drives the room with. A partition is announced at once, with
      * a deadline that differs from the room's own estimate, so the room records the episode's
      * `WindowOpened` and a refusal is acted on. [flow] has no buffer: an emit returns only once the
@@ -297,7 +389,13 @@ class ProvenRestoreConcurrencyTest {
         override fun expire(peerId: PeerId, at: Long) = Unit
     }
 
-    private class Rig(dispatcher: CoroutineDispatcher, interval: Duration, device: RoomDevice) {
+    private class Rig(
+        dispatcher: CoroutineDispatcher,
+        interval: Duration,
+        device: RoomDevice,
+        /** How long a detector waits on a partitioned peer before its `PeerLost`. */
+        detectorWindow: Duration = 100_000.hours,
+    ) {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val peers = MutableStateFlow(setOf(host, bob, carol))
         val inbound = Channel<Swatch>(Channel.UNLIMITED)
@@ -312,7 +410,7 @@ class ProvenRestoreConcurrencyTest {
         /** Every membership event the host emitted since the round began. */
         val events = MutableStateFlow<List<MembershipEvent>>(emptyList())
 
-        private val config = HeartbeatConfig(interval = interval, timeout = 100_000.hours, reconnectWindow = 100_000.hours)
+        private val config = HeartbeatConfig(interval = interval, timeout = 100_000.hours, reconnectWindow = detectorWindow)
         val controller = Controller(config.reconnectWindow.inWholeMilliseconds)
 
         /** An expiry emitted from its own coroutine this round, which [quiesce] waits out before its sentinels. */
@@ -365,6 +463,12 @@ class ProvenRestoreConcurrencyTest {
             }
         }
 
+        /** A Hello from [peer] under bob's key, and the challenge it drew. */
+        suspend fun hello(peer: PeerId): AdmitMessage.Challenge {
+            inbound.send(Swatch(AdmitMessage.encode(currentHello(peer.value, sessionId = peer.value, key = TEST_KEY_A)), sender = peer))
+            return checkNotNull(challenges[peer]).receive()
+        }
+
         /** Hello, then the Proof answering its challenge; [beforeProof] runs once the challenge is in. */
         suspend fun prove(peer: PeerId, device: DeviceKey, key: DidKey, beforeProof: suspend () -> Unit = {}) {
             inbound.send(Swatch(AdmitMessage.encode(currentHello(peer.value, sessionId = peer.value, key = key)), sender = peer))
@@ -388,7 +492,13 @@ class ProvenRestoreConcurrencyTest {
             // The room reports the partition to the controller after it emits Partitioned.
             val episode = controller.episode.first { it != previous }
             val deadline = Instant.fromEpochMilliseconds(controller.deadlineFor(episode))
-            events.first { events -> events.any { it is MembershipEvent.WindowOpened && it.peerId == bob && it.expiresAt == deadline } }
+            // Or the seat is already lost, when the detector's own window is shorter than the round.
+            events.first { events ->
+                events.any {
+                    (it is MembershipEvent.WindowOpened && it.peerId == bob && it.expiresAt == deadline) ||
+                        (it is MembershipEvent.Left && it.peerId == bob)
+                }
+            }
             peers.update { it + bob }
             return episode
         }
@@ -448,6 +558,14 @@ class ProvenRestoreConcurrencyTest {
         const val HEAL_ROUNDS = 10_000
         const val MAX_SPIN_NANOS = 40_000L
         const val HEAL_PROOF_DELAY_MS = 4L
+        const val LOSS_ROUNDS = 5_000
+        val LOSS_INTERVAL = 2.milliseconds
+
+        /** Up to a little past the old detector's loss, which lands one interval after the drop. */
+        const val LOSS_PROOF_DELAY_NANOS = 3_000_000L
+
+        fun MembershipEvent.isEdgeOf(peer: PeerId): Boolean =
+            (this is MembershipEvent.Resumed && peerId == peer) || (this is MembershipEvent.Joined && member.id == peer)
 
         /** Seeded, so a run that reds can be read again; the interleavings still vary with the box. */
         val jitter = Random(3212)
