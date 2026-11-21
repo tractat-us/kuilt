@@ -8,6 +8,8 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
@@ -46,6 +48,7 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.random.Random
 import kotlin.time.Instant
 
 /**
@@ -98,10 +101,22 @@ class ProvenRestoreConcurrencyTest {
                     for (round in 0 until EXPIRY_ROUNDS) {
                         val episode = rig.partitionBob(stage, round)
                         val recoveredBefore = rig.controller.recovered.get()
+                        val spinNanos = jitter.nextLong(0, MAX_SPIN_NANOS)
                         rig.controller.onAsk = { _, at ->
-                            // Returns once the reconnect loop has taken the expiry: from here the
-                            // loop's thread evicts while this one goes on to decide.
-                            rig.controller.flow.emit(JoinerReconnectEvent.WindowExpired(bob, at, episode))
+                            val expiry = JoinerReconnectEvent.WindowExpired(bob, at, episode)
+                            when (round % 3) {
+                                // Returns once the reconnect loop has taken the expiry, so the loop's
+                                // thread is already evicting when this one goes on to decide: the
+                                // expiry's section tends to run first.
+                                0 -> rig.controller.flow.emit(expiry)
+                                // Emitted from another coroutine, so this one decides at once and the
+                                // loop has to be dispatched first: the Proof's sections tend to run
+                                // first. With a spin, anything in between.
+                                else -> {
+                                    rig.pendingExpiry = rig.scope.launch { rig.controller.flow.emit(expiry) }
+                                    if (round % 3 == 2) spin(spinNanos)
+                                }
+                            }
                             ResumeResult.WindowClosed
                         }
                         val introsBefore = rig.hostIntrosTo(bob)
@@ -189,6 +204,9 @@ class ProvenRestoreConcurrencyTest {
                         val introsBefore = rig.hostIntrosTo(bob)
                         rig.prove(bob, TEST_DEVICE_A, TEST_KEY_A) {
                             rig.scope.launch { rig.inbound.send(Swatch(PONG, sender = bob)) }
+                            // The old detector polls every interval; a Proof sent at a random phase
+                            // of it lands before the heal, after it, or among the heal's sections.
+                            delay(jitter.nextLong(0, HEAL_PROOF_DELAY_MS))
                         }
                         stage.at("round $round: awaiting the restore or readmission") { rig.snapshot() }
                         val edge = rig.events.first { events ->
@@ -296,6 +314,10 @@ class ProvenRestoreConcurrencyTest {
 
         private val config = HeartbeatConfig(interval = interval, timeout = 100_000.hours, reconnectWindow = 100_000.hours)
         val controller = Controller(config.reconnectWindow.inWholeMilliseconds)
+
+        /** An expiry emitted from its own coroutine this round, which [quiesce] waits out before its sentinels. */
+        @Volatile
+        var pendingExpiry: Job? = null
         private val ticks = AtomicLong(1_000_000)
 
         private val seam = object : Seam {
@@ -344,7 +366,7 @@ class ProvenRestoreConcurrencyTest {
         }
 
         /** Hello, then the Proof answering its challenge; [beforeProof] runs once the challenge is in. */
-        suspend fun prove(peer: PeerId, device: DeviceKey, key: DidKey, beforeProof: () -> Unit = {}) {
+        suspend fun prove(peer: PeerId, device: DeviceKey, key: DidKey, beforeProof: suspend () -> Unit = {}) {
             inbound.send(Swatch(AdmitMessage.encode(currentHello(peer.value, sessionId = peer.value, key = key)), sender = peer))
             val challenge = checkNotNull(challenges[peer]).receive()
             beforeProof()
@@ -386,6 +408,8 @@ class ProvenRestoreConcurrencyTest {
          */
         suspend fun quiesce(stage: StageTracker, round: Int) {
             stage.at("round $round: quiescing") { snapshot() }
+            pendingExpiry?.join()
+            pendingExpiry = null
             controller.flow.emit(JoinerReconnectEvent.Resumed(sentinel, 0))
             controller.flow.emit(JoinerReconnectEvent.WindowExpired(sentinel, 0, 0))
             sent.first { frames -> frames.any { (to, m) -> to == carol && m is AdmitMessage.Farewell && m.peerId == sentinel.value } }
@@ -420,7 +444,18 @@ class ProvenRestoreConcurrencyTest {
         val carol = PeerId("carol")
         val sentinel = PeerId("sentinel")
         val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
-        const val EXPIRY_ROUNDS = 500
-        const val HEAL_ROUNDS = 500
+        const val EXPIRY_ROUNDS = 6_000
+        const val HEAL_ROUNDS = 6_000
+        const val MAX_SPIN_NANOS = 40_000L
+        const val HEAL_PROOF_DELAY_MS = 4L
+
+        /** Seeded, so a run that reds can be read again; the interleavings still vary with the box. */
+        val jitter = Random(3212)
+
+        /** Hold this thread for [nanos], so the other one runs ahead. A few microseconds, on one core. */
+        fun spin(nanos: Long) {
+            val until = System.nanoTime() + nanos
+            while (System.nanoTime() < until) Thread.onSpinWait()
+        }
     }
 }
