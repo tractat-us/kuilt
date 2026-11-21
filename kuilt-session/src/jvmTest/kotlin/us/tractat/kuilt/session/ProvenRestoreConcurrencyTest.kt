@@ -47,6 +47,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.random.Random
 import kotlin.time.Instant
@@ -83,7 +84,7 @@ class ProvenRestoreConcurrencyTest {
      */
     @Test
     fun anExpiryRacingAProofLeavesTheReadmittedMemberSeatedEverywhere() =
-        runConcurrencyStress(cap = 90.seconds) { stage ->
+        runConcurrencyStress(cap = ARM_CAP) { stage ->
             Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
                 // A long interval: the old detector never polls inside a round, so nothing heals bob.
                 val rig = Rig(dispatcher, interval = 1.seconds, RoomDevice.of(fakeKeyStore(0)))
@@ -183,7 +184,7 @@ class ProvenRestoreConcurrencyTest {
      */
     @Test
     fun aHealRacingAReleaseEitherRestoresOrReadmits() =
-        runConcurrencyStress(cap = 90.seconds) { stage ->
+        runConcurrencyStress(cap = ARM_CAP) { stage ->
             Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
                 // A short interval: the old detector polls often, so its recovery lands among the
                 // Proof's sections.
@@ -272,7 +273,7 @@ class ProvenRestoreConcurrencyTest {
      */
     @Test
     fun aStaleDetectorsLossRacingAReleaseLeavesTheReadmittedMemberSeated() =
-        runConcurrencyStress(cap = 90.seconds) { stage ->
+        runConcurrencyStress(cap = ARM_CAP) { stage ->
             Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
                 val rig = Rig(dispatcher, interval = LOSS_INTERVAL, RoomDevice.of(fakeKeyStore(0)), detectorWindow = LOSS_INTERVAL)
                 var completed = 0
@@ -565,6 +566,8 @@ class ProvenRestoreConcurrencyTest {
         val carol = PeerId("carol")
         val sentinel = PeerId("sentinel")
         val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
+        /** Each arm takes under 40 s on a dev Mac; the cap is a wedge backstop with room for a slower runner. */
+        val ARM_CAP = 3.minutes
         const val EXPIRY_ROUNDS = 10_000
         const val HEAL_ROUNDS = 10_000
         const val MAX_SPIN_NANOS = 40_000L
