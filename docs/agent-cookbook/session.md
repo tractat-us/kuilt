@@ -780,7 +780,7 @@ public suspend fun returningInsideAPassSample(room: Room) {
 }
 ```
 
-**Stopping a device coming back:** block it in the app's own set, then `revocations.revoke(key, notBefore = now + 1)` on the `RevocationList` the host's `HostAdmission` holds. Revoking voids the passes the device already holds and the seat held for it while it is away; the host also stops renewing its pass if it is in the room now. Blocking is what makes the policy say no when it then knocks as a newcomer. **Neither removes a device that is in the room now:** that is the app's own call, and kuilt offers no eviction for it yet.
+**Stopping a device coming back:** block it in the app's own set, then `revocations.revoke(key, notBefore = now + 1)` on the `RevocationList` the host's `HostAdmission` holds. Revoking voids the passes the device already holds and the seat held for it while it is away; the host also stops renewing its pass if it is in the room now. Blocking is what makes the policy say no when it then knocks as a newcomer. **Neither removes a device that is in the room now:** that is the app's own call, and `Room` has no method that makes it.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#stopADeviceComingBackSample -->
 ```kotlin
