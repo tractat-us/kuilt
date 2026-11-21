@@ -66,6 +66,25 @@ public interface RejectCode {
         override val retryable: Boolean = false
     }
 
+    /**
+     * The joiner's proof of its device key failed (#3211): it was not signed by the key its `Hello`
+     * named, or it answered another challenge, room or host. Terminal: the same device answering the
+     * same way fails the same way.
+     */
+    public object BadProof : RejectCode {
+        override val id: String = "bad-proof"
+        override val retryable: Boolean = false
+    }
+
+    /**
+     * The joiner claimed the peer id of a connected member under a different device key (#3159).
+     * Terminal: another device is using that id.
+     */
+    public object KeyConflict : RejectCode {
+        override val id: String = "key-conflict"
+        override val retryable: Boolean = false
+    }
+
     /** The token failed structural validation (wrong room). Terminal. */
     public object ResumeTokenInvalid : RejectCode {
         override val id: String = "resume-token-invalid"
@@ -98,6 +117,8 @@ public interface RejectCode {
             ResumeWindowNotYetOpen.id -> ResumeWindowNotYetOpen
             ResumeWindowExpired.id -> ResumeWindowExpired
             ResumeTokenInvalid.id -> ResumeTokenInvalid
+            BadProof.id -> BadProof
+            KeyConflict.id -> KeyConflict
             else -> Unknown(id)
         }
     }
