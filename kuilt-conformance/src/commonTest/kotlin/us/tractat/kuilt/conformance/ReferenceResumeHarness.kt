@@ -23,6 +23,7 @@ import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectController
+import us.tractat.kuilt.session.partition.ProvenResume
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
@@ -110,8 +111,8 @@ internal fun referenceResumeHarness(
             )
             controller = real
             object : JoinerReconnectController by real {
-                override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
-                    real.tryResume(token, at).also { verdicts.add(it) }
+                override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict =
+                    real.tryResume(resume, at).also { verdicts.add(it) }
             }
         },
     )

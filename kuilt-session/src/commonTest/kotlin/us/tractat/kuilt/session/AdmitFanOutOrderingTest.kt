@@ -27,10 +27,10 @@ import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.partition.ProvenResume
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -498,7 +498,7 @@ class AdmitFanOutOrderingTest {
             )
         }
 
-        override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
+        override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict =
             ResumeResult.WindowNotYetOpen
 
         // Honest rather than a stub: this policy owns no timer and never emits a `WindowExpired`,

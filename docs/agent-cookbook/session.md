@@ -51,8 +51,9 @@ This requires a loom that heals the **same seam instance** the room already hold
 
 A loom that returns a new seam on each join leaves the old room's seam torn: reconnect ends in
 `HostLost`, and a later `resume` on that room returns `WindowClosed` without asking the host.
-Rebuilding the room sends `Hello` for fresh admission; it does not restore the held seat.
-Presenting a saved token when rebuilding is the separate
+Rebuilding the room needs no token. Its `Hello` proves the device key the held seat was admitted
+under, and a host still holding that seat under the same peer id restores it. A rebuilt room under a
+new peer id is still admitted fresh, beside the old seat. Presenting a saved token at join time is the separate
 [cold-start rejoin gap (#1593)](https://github.com/tractat-us/kuilt/issues/1593).
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#resumeAfterDropSample -->
@@ -238,13 +239,13 @@ public suspend fun reapNeverPairedRoomSample(
 ```
 
 **Intent:** hold a dropped peer's **seat** open for a grace window instead of evicting it — "keep the slot", "reserved", "reconnect window", "don't kick them yet".
-**Primitive:** `JoinerReconnectController` (`:kuilt-session`, `us.tractat.kuilt.session.partition`). It *is* the server-side seat-hold: `onPeerUnresponsive` opens the timed window, `onPeerRecovered` closes it when the peer comes back on its own, `tryResume` validates the returning peer's `ResumeToken` (right room, window still open, token not already used), and `events` reports `WindowOpened` / `Resumed` / `WindowExpired`. A `SeamRoom` host wires one for you — reach for this directly only when you own the host loop. Don't keep your own `pendingSeats` / `disconnectedAt` map.
+**Primitive:** `JoinerReconnectController` (`:kuilt-session`, `us.tractat.kuilt.session.partition`). It *is* the server-side seat-hold: `onPeerUnresponsive` opens the timed window, `onPeerRecovered` closes it when the peer comes back on its own, `tryResume` restores the seat for a returning peer the room has already proven, a `ProvenResume` (right room, window still open, not already spent), and `events` reports `WindowOpened` / `Resumed` / `WindowExpired`. A `SeamRoom` host wires one for you — reach for this directly only when you own the host loop. Don't keep your own `pendingSeats` / `disconnectedAt` map.
 
 > **If you implement this interface yourself, echo the detection instant.** Every `WindowOpened` and `WindowExpired` you emit must carry, as `detectedAt`, the exact `at` you were handed in `onPeerUnresponsive` for the drop that opened the window — unchanged, including on a later announcement that extends that same window. It names *which partition episode* the deadline is for, and the room drops any announcement whose episode is not the one it currently holds; a freshly-read clock would name *when you announced*, which is precisely the ambiguity it exists to remove, and every one of your refinements would be discarded (look for `room.window.stale-episode` at `debug`). Nothing checks this at compile time.
 
-> **You never see a forged resume.** The room checks every token before it calls `tryResume` and refuses the rest itself, so a token reaches your implementation only when it names this room, names a current member, and carries that member's `ResumeSecret` (#3165). Don't check the secret yourself.
+> **You never see a forged resume.** A `ProvenResume` has an `internal` constructor, and the room builds one only after its own check: the joiner proved the device key that seat was admitted under (#3159), or presented the member's `ResumeSecret` on the older `Resume` frame (#3165), and the seat is a current member's. Don't check either yourself. The room reads `WindowNotYetOpen` as a seat still held and restores it anyway, and any other refusal as a seat that is gone.
 
-> **And disarm on `onPeerRecovered`.** Most peers come back without ever presenting a token — a blip is restored by the liveness detector alone, so `tryResume` is never reached and `onPeerRecovered` is the only thing that tells you the seat is occupied again. A `WindowExpired` you emit afterwards is not cosmetic: the room fans it out as an authoritative `Farewell`, so a healthy member is evicted from every roster but the host's, with no re-admit path behind it. Close the window there; do not route it through `expire`, which *is* an expiry. The room refuses such an expiry anyway (`windowExpired.suppressed … reason=recovered` at `info` is the tell), but that is a backstop, not the contract.
+> **And disarm on `onPeerRecovered`.** Most peers come back without ever being restored — a blip is restored by the liveness detector alone, so `tryResume` is never reached and `onPeerRecovered` is the only thing that tells you the seat is occupied again. A `WindowExpired` you emit afterwards is not cosmetic: the room fans it out as an authoritative `Farewell`, so a healthy member is evicted from every roster but the host's, with no re-admit path behind it. Close the window there; do not route it through `expire`, which *is* an expiry. The room refuses such an expiry anyway (`windowExpired.suppressed … reason=recovered` at `info` is the tell), but that is a backstop, not the contract.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#holdTheSeatOpenSample -->
 ```kotlin
