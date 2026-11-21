@@ -26,6 +26,7 @@ import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -223,6 +224,7 @@ class LocalFabricTest {
             val room = SeamRoom(
                 seam = FakeSeam(PeerId("self")),
                 role = SessionRole.Host,
+                roomId = RoomId("test-room"),
                 memberName = "self",
                 scope = backgroundScope,
                 clock = { AT },
@@ -299,6 +301,7 @@ class LocalFabricTest {
             val room = SeamRoom(
                 seam = CapabilitySeam(FakeSeam(PeerId("self")), capability),
                 role = SessionRole.Host,
+                roomId = RoomId("test-room"),
                 memberName = "self",
                 scope = backgroundScope,
                 clock = { AT },
@@ -557,6 +560,7 @@ class LocalFabricTest {
         SeamRoom(
             seam = CapabilitySeam(FakeSeam(PeerId("self")), capability),
             role = role,
+            roomId = if (role == SessionRole.Host) RoomId("test-room") else null,
             memberName = "self",
             scope = backgroundScope,
             clock = { AT },
