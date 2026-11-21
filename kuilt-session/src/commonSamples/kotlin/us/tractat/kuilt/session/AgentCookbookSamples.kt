@@ -121,8 +121,9 @@ public suspend fun callerSuppliedRoomIdSample(
  * Manually resume the existing room after its loom heals the same seam with an unchanged selfId.
  * [us.tractat.kuilt.core.MuxClientLoom] provides this; [SeamRoomFactory] joiners attempt resume
  * automatically after a tear. A rebuilt room needs no token: its Hello proves the device key, and
- * a host still holding the seat under the same peer id restores it. Under a new peer id it is
- * admitted fresh. Presenting a saved token at join time is #1593.
+ * a host still holding the seat under the same peer id restores it. Under a new peer id it takes
+ * over a seat of its key whose member is partitioned, and that member leaves superseded; beside a
+ * connected seat it gets a seat of its own. Presenting a saved token at join time is #1593.
  *
  * The four arms below are the whole of [ResumeResult.JoinerOutcome] — the host's own verdicts are
  * a different half of the hierarchy and never reach a joiner as values, so a branch on one is a

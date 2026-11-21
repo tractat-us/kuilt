@@ -58,6 +58,7 @@ class RoomChannelStateAfterLeaveControlTest {
                 )
                 return RoomHarness(
                     hostFactory = factory(device = 0),
+                    // One device for every join: the one obligation run here admits a single joiner.
                     joinerFactory = factory(device = 1),
                     faults = FaultInjection.Unsupported("https://github.com/tractat-us/kuilt/issues/3129"),
                     clock = clock,

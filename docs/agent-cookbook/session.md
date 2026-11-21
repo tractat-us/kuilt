@@ -53,7 +53,10 @@ A loom that returns a new seam on each join leaves the old room's seam torn: rec
 `HostLost`, and a later `resume` on that room returns `WindowClosed` without asking the host.
 Rebuilding the room needs no token. Its `Hello` proves the device key the held seat was admitted
 under, and a host still holding that seat under the same peer id restores it. A rebuilt room under a
-new peer id is still admitted fresh, beside the old seat. Presenting a saved token at join time is the separate
+new peer id takes the old seat over while its member is partitioned: everyone sees
+`Left(old, LeaveReason.Superseded(by = new))` then `Joined(new)`, and the new member keeps the old one's
+identity. Beside a connected seat, such as a second browser tab, it gets a seat of its own, so one key
+may hold several seats. Presenting a saved token at join time is the separate
 [cold-start rejoin gap (#1593)](https://github.com/tractat-us/kuilt/issues/1593).
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#resumeAfterDropSample -->
