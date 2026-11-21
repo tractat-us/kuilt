@@ -230,9 +230,10 @@ class TransportCloseWindowTest {
             // under, and the host restores that seat through the window. No `resume` call — and one
             // made now finds the window already spent on this restore.
             joinerRoom2.roster.first { it.isNotEmpty() }
+            val resumed = hostResumed.await()
 
             assertAll(
-                { assertEquals(client, hostResumed.await().peerId) },
+                { assertEquals(client, resumed.peerId) },
                 { assertEquals(listOf(client), hostRoom.roster.value.map { it.id }, "one seat, restored") },
                 { assertEquals(Liveness.Connected, hostRoom.roster.value.single().liveness) },
                 { assertEquals(token.peerId, client, "rig: the first room held a token for this id") },
