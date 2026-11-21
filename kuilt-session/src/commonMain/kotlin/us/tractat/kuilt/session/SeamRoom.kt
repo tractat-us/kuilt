@@ -1071,8 +1071,20 @@ internal class SeamRoom(
     // Per-admitted-peer detector collection jobs, keyed by PeerId.
     private val detectorJobs = mutableMapOf<PeerId, Job>()
 
+    /**
+     * The detector each [detectorJobs] entry runs, under the same key and kept in step with it by
+     * [startDetector] and [stopDetector]. Guarded by [lock]. Read only for
+     * [HeartbeatPartitionDetector.lastHeard]: the detector already sees every frame from its peer,
+     * so the key → seat table reads last contact here rather than stamping a time under [lock] on
+     * every inbound frame (#3213).
+     */
+    private val detectors = mutableMapOf<PeerId, HeartbeatPartitionDetector>()
+
     private var closed = false
     private var hostLost = false
+
+    /** **Joiner only.** The member that took this room's seat over, once the host said so. Guarded by [lock]. */
+    private var supersededBy: PeerId? = null
 
     /**
      * **Joiner only.** The child job running the current [seam]-`incoming` collect.
@@ -1802,10 +1814,17 @@ internal class SeamRoom(
      *   opened yet, not that it closed: the seat is still held, and it is restored as a connected one
      *   would be. Any other verdict means the seat is gone: it is released, and the key is decided
      *   again without it (Decided 23).
+     * - [SeatDecision.RestoreUnderNewId]: the key's partitioned seat, under another id, is taken over
+     *   once the controller is asked about it ([settleRestoreUnderNewId], #3213). The old member
+     *   leaves with [LeaveReason.Superseded], the joiner joins with its identity and key, the other
+     *   members are sent `Farewell(old, supersededBy = new)` and then the new member's roster
+     *   Welcome, and the old member is sent the same `Farewell` directly (Decided 19), so a room
+     *   still running there ends instead of saying Hello again. A refusal releases the seat as above.
      * - [SeatDecision.KeyConflict]: a terminal `Reject`.
      * - [SeatDecision.ReleaseAndAdmit]: the partitioned seat is released, then the joiner is admitted
      *   as the re-decision says (Decided 18, 30).
-     * - every other verdict admits a new member ([admitNewMember]).
+     * - every other verdict admits a new member ([admitNewMember]): another tab of a device whose
+     *   seats are all connected gets a seat of its own (Decided 30).
      *
      * A restore emits [MembershipEvent.Resumed] and sends the joiner the Welcome burst with its direct
      * Welcome marked [ReturnKind.Restored]. It tells the other members nothing new, except the
@@ -1831,7 +1850,7 @@ internal class SeamRoom(
             when (val seating = settleSeat(joinerPeerId, keyed, generation, asked, released)) {
                 SeatOutcome.Stale -> return logStaleAdmission(joinerPeerId)
                 is SeatOutcome.AskWindow -> {
-                    val answer = askWindow(joinerPeerId, keyed.key)
+                    val answer = askWindow(seating.peerId, keyed.key)
                     if (answer == WindowAnswer.Failed) {
                         if (pendingChallenges.retire(joinerPeerId, generation)) {
                             val reject = AdmitMessage.Reject("host-failed: the host could not consult its reconnect window", RejectCode.HostFailed)
@@ -1839,7 +1858,7 @@ internal class SeamRoom(
                         }
                         return
                     }
-                    asked = AskedWindow(seating.episode, answer)
+                    asked = AskedWindow(seating.peerId, seating.episode, answer)
                 }
                 is SeatOutcome.Released -> {
                     seating.detached.close()
@@ -1857,7 +1876,7 @@ internal class SeamRoom(
                         propagateUnpaused(joinerPeerId)
                         // The window this partition opened, or is about to open, is not needed any
                         // more. A window `Success` spent needs nothing.
-                        if (asked?.answer != WindowAnswer.Restored) {
+                        if (!asked.spent(joinerPeerId)) {
                             reconnectController?.onPeerRecovered(joinerPeerId, clock().toEpochMilliseconds())
                         }
                     }
@@ -1866,6 +1885,22 @@ internal class SeamRoom(
                 }
                 is SeatOutcome.Admitted -> {
                     sendAdmissionBurst(seating.burst, returnKind = null, announce = true)
+                    return
+                }
+                is SeatOutcome.Superseded -> {
+                    seating.detached.close()
+                    // A window `Success` is spent; any other answer left it to open, or open already,
+                    // over a seat that is gone, and its expiry would only re-announce the departure.
+                    if (!asked.spent(seating.previous)) {
+                        reconnectController?.onPeerRecovered(seating.previous, clock().toEpochMilliseconds())
+                    }
+                    sendAdmissionBurst(seating.burst, ReturnKind.Restored, announce = true)
+                    // Decided 19: told directly, since the other members' fan-out excludes its subject.
+                    // Last, and best-effort: its link is the one that went quiet, and a send into it
+                    // must not hold the new member's Welcomes back.
+                    val farewell = AdmitMessage.Farewell(seating.previous.value, supersededBy = joinerPeerId.value)
+                    runCatchingCancellable { seam.sendTo(seating.previous, AdmitMessage.encode(farewell)) }
+                        .onFailure { logger.debug { "room.supersede.farewell-unsent peer=${seating.previous.value}: $it" } }
                     return
                 }
             }
@@ -1891,8 +1926,11 @@ internal class SeamRoom(
         Failed,
     }
 
-    /** The controller's [answer] about the seat's partition episode [episode]. */
-    private class AskedWindow(val episode: Long, val answer: WindowAnswer)
+    /** The controller's [answer] about [peerId]'s seat, in its partition episode [episode]. */
+    private class AskedWindow(val peerId: PeerId, val episode: Long, val answer: WindowAnswer)
+
+    /** Whether this answer spent [peerId]'s window: a `Success` about that seat. */
+    private fun AskedWindow?.spent(peerId: PeerId): Boolean = this?.peerId == peerId && answer == WindowAnswer.Restored
 
     /**
      * Ask the window controller to restore [peerId]'s partitioned seat for a joiner that proved [key].
@@ -1929,8 +1967,12 @@ internal class SeamRoom(
         /** The challenge is no longer current: seat nobody. */
         data object Stale : SeatOutcome
 
-        /** Ask the window controller about the claimed seat's partition [episode], then decide again. */
-        class AskWindow(val episode: Long) : SeatOutcome
+        /**
+         * Ask the window controller about [peerId]'s partitioned seat in its partition [episode], then
+         * decide again. [peerId] is the claimed id for a same-id restore, and the seat being taken
+         * over for a restore under a new id.
+         */
+        class AskWindow(val peerId: PeerId, val episode: Long) : SeatOutcome
 
         /**
          * [peerId]'s held seat was released, and the other members' `Farewell` enqueued, in the deciding
@@ -1948,6 +1990,13 @@ internal class SeamRoom(
 
         /** A new member was added. */
         class Admitted(val burst: AdmissionBurst) : SeatOutcome
+
+        /**
+         * [previous]'s partitioned seat was taken over by the joiner under its new id, in the deciding
+         * critical section: [previous] left, its `Farewell` was enqueued to the other members, and the
+         * joiner was added as [burst]'s member. Close [detached], send the burst, and tell [previous].
+         */
+        class Superseded(val previous: PeerId, val detached: DetachedMember, val burst: AdmissionBurst) : SeatOutcome
     }
 
     /**
@@ -1984,12 +2033,11 @@ internal class SeamRoom(
             } else {
                 SeatOutcome.Stale
             }
-            // RestoreUnderNewId is Task 1.6's. Until it lands, the new id is seated beside the old
-            // seat, as it was before the table was consulted, and the old seat is left as it is.
-            is SeatDecision.RestoreUnderNewId, SeatDecision.AdditionalSeat, SeatDecision.Returning, SeatDecision.Ordinary ->
+            is SeatDecision.RestoreUnderNewId -> settleRestoreUnderNewId(joinerPeerId, generation, current, decision.previous, asked)
+            SeatDecision.AdditionalSeat, SeatDecision.Returning, SeatDecision.Ordinary ->
                 if (retire(joinerPeerId, generation)) admitNewMember(joinerPeerId, keyed) else SeatOutcome.Stale
         }.also { outcome ->
-            if (released != null && outcome is SeatOutcome.Admitted) {
+            if (released != null && (outcome is SeatOutcome.Admitted || outcome is SeatOutcome.Superseded)) {
                 logger.info { "room.seat.released peer=${released.value} readmitted=${joinerPeerId.value}" }
             }
         }
@@ -2013,13 +2061,16 @@ internal class SeamRoom(
      *   controller opens a window on a launched coroutine after the partition, so a Proof can land in
      *   between. Read as "not open yet", it restores.
      */
-    private fun settleRestore(peerId: PeerId, generation: Long, current: Boolean, asked: AskedWindow?): SeatOutcome {
+    private fun settleRestore(peerId: PeerId, generation: Long, current: Boolean, askedAny: AskedWindow?): SeatOutcome {
         val held = checkNotNull(admittedById[peerId]) { "a Restore names a held seat" }
+        // An answer about another seat — one an earlier pass meant to take over under this id — says
+        // nothing about this one.
+        val asked = askedAny?.takeIf { it.peerId == peerId }
         if (asked?.answer == WindowAnswer.Restored) return restoreSeat(held, owesBurst = retire(peerId, generation))
         if (!current) return SeatOutcome.Stale
         if (held.liveness !is Liveness.Partitioned) return restoreSeat(held, owesBurst = retire(peerId, generation))
         val episode = checkNotNull(episodeDetectedAtMs[peerId]) { "a host records the episode of every seat it partitions" }
-        if (asked == null || asked.episode != episode) return SeatOutcome.AskWindow(episode)
+        if (asked == null || asked.episode != episode) return SeatOutcome.AskWindow(peerId, episode)
         return when (asked.answer) {
             WindowAnswer.Refused -> if (windowOpenedEpisodeMs[peerId] == episode) {
                 SeatOutcome.Released(peerId, releaseHeldSeat(peerId))
@@ -2033,22 +2084,92 @@ internal class SeamRoom(
         }
     }
 
+    /**
+     * **Under [lock].** [SeatDecision.RestoreUnderNewId]: the joiner's key holds the partitioned seat
+     * [previous], and the joiner claimed an id with no seat (#3213; Decided 19, 30).
+     *
+     * The controller is asked about [previous]'s current partition episode, as a same-id restore asks
+     * about its own (see [settleRestore], whose rules about a refusal and `WindowNotYetOpen` this
+     * follows). A `Success`, a `WindowNotYetOpen`, or a refusal before this room has seen the
+     * episode's `WindowOpened` takes the seat over ([supersedeSeat]); a refusal after it releases the
+     * seat, and the next pass decides again without it (Decided 23).
+     *
+     * Unlike a same-id restore, a `Success` for a challenge that is **no longer current** seats
+     * nobody. A same-id restore can bring its seat back and leave the newer exchange to find it
+     * connected, but here there is no seat under the claimed id to bring back, and the exchange may
+     * have ended in a `Goodbye`: taking the seat over then would admit a peer that has left. The
+     * window is spent all the same. If the sender says Hello again, its next ask is refused and the
+     * seat is released, so it comes back as a new member; if it does not, the seat's detector
+     * evicts it when its own window runs out.
+     */
+    private fun settleRestoreUnderNewId(
+        joinerPeerId: PeerId,
+        generation: Long,
+        current: Boolean,
+        previous: PeerId,
+        askedAny: AskedWindow?,
+    ): SeatOutcome {
+        if (!current) return SeatOutcome.Stale
+        val held = checkNotNull(admittedById[previous]) { "a RestoreUnderNewId names a held seat" }
+        check(held.liveness is Liveness.Partitioned) { "a RestoreUnderNewId names a partitioned seat" }
+        val episode = checkNotNull(episodeDetectedAtMs[previous]) { "a host records the episode of every seat it partitions" }
+        val asked = askedAny?.takeIf { it.peerId == previous && it.episode == episode } ?: return SeatOutcome.AskWindow(previous, episode)
+        return when (asked.answer) {
+            WindowAnswer.Restored, WindowAnswer.NotYetOpen -> supersedeSeat(joinerPeerId, generation, held)
+            WindowAnswer.Refused -> if (windowOpenedEpisodeMs[previous] == episode) {
+                SeatOutcome.Released(previous, releaseHeldSeat(previous))
+            } else {
+                logger.debug { "room.supersede.refusal-before-window peer=${previous.value} episode=$episode: read as not open yet" }
+                supersedeSeat(joinerPeerId, generation, held)
+            }
+            // A throw is settled by [seatProvenJoiner] before the seat is.
+            WindowAnswer.Failed -> error("window answer ${asked.answer} is settled before the seat is")
+        }
+    }
+
+    /**
+     * **Under [lock].** Take [held]'s partitioned seat over for [joinerPeerId], all in this critical
+     * section: [held] leaves with [LeaveReason.Superseded], the other members' `Farewell` naming the
+     * successor is enqueued, and the joiner is added with [held]'s identity and key. The joiner
+     * inherits the membership, so the identity is the one the seat was admitted with, not this
+     * Hello's, as [restoreSeat] keeps it for a same-id restore.
+     *
+     * The order is the one #1781 needs on every lane: the `Farewell` is enqueued here, before the
+     * roster `Welcome` [seatProvenJoiner] enqueues for the new member once this section ends, so no
+     * member hears `Welcome(new)` and then `Farewell(old)` for a membership that has moved, and every
+     * member's events read `Left(old, Superseded(new))`, then `Joined(new)`.
+     */
+    private fun supersedeSeat(joinerPeerId: PeerId, generation: Long, held: Member): SeatOutcome {
+        if (!retire(joinerPeerId, generation)) return SeatOutcome.Stale
+        val previous = held.id
+        val detached = checkNotNull(detachMember(previous, LeaveReason.Superseded(by = joinerPeerId))) {
+            "the superseded seat was read under this lock"
+        }
+        fanOutToOtherMembers(previous, AdmitMessage.Farewell(previous.value, supersededBy = joinerPeerId.value))
+        logger.info { "room.seat.superseded peer=${previous.value} by=${joinerPeerId.value}" }
+        val admitted = admitMember(joinerPeerId, held.identity, held.key)
+        return SeatOutcome.Superseded(previous, detached, admitted.burst)
+    }
+
     /** [PendingChallenges.retire], read as "this exchange still owes its joiner an answer". */
     private fun retire(joinerPeerId: PeerId, generation: Long): Boolean = pendingChallenges.retire(joinerPeerId, generation)
 
     /**
      * **Under [lock].** The seats the host holds for its joiners, as [decideSeat] reads them. The host's
      * own seat is never among them: [admittedById] holds other peers only.
+     *
+     * [Seat.lastContact] is the member's detector's [HeartbeatPartitionDetector.lastHeard], which
+     * breaks the tie between several partitioned seats of one key (Decided 30). A seat with no
+     * detector (the route gate, #1576, started none) falls back to when its partition was noticed,
+     * the nearest thing the room has, and a connected one to the distant past, since only
+     * partitioned seats are compared.
      */
-    private fun heldSeats(): Map<PeerId, Seat> = admittedById.mapValues { (_, member) ->
+    private fun heldSeats(): Map<PeerId, Seat> = admittedById.mapValues { (id, member) ->
+        val partitioned = member.liveness as? Liveness.Partitioned
         Seat(
             key = member.key,
-            liveness = if (member.liveness is Liveness.Partitioned) SeatLiveness.Partitioned else SeatLiveness.Connected,
-            // 1.6: record when each member was last heard from and pass it here. Until then every seat
-            // ties, so `decideSeat` falls to the lowest peer id; nothing in 1.5 acts on a
-            // `RestoreUnderNewId`. 1.6 adds the room-side test that a key holding two partitioned
-            // seats restores the one heard from most recently (Decided 30), not the lowest id.
-            lastContact = Instant.DISTANT_PAST,
+            liveness = if (partitioned != null) SeatLiveness.Partitioned else SeatLiveness.Connected,
+            lastContact = detectors[id]?.lastHeard ?: partitioned?.since ?: Instant.DISTANT_PAST,
         )
     }
 
@@ -2087,16 +2208,18 @@ internal class SeamRoom(
      * **Under [lock].** Add a new member for [joinerPeerId], from [keyed]: the Hello its joiner sent,
      * and the key it proved, which becomes [Member.key] and rides every Welcome that names the joiner.
      */
-    private fun admitNewMember(joinerPeerId: PeerId, keyed: KeyedHello): SeatOutcome {
+    private fun admitNewMember(joinerPeerId: PeerId, keyed: KeyedHello): SeatOutcome.Admitted {
         val hello = keyed.hello
+        val identity = MemberIdentity(displayName = hello.displayName, sessionId = hello.sessionId, deviceId = hello.deviceId)
+        return admitMember(joinerPeerId, identity, keyed.key)
+    }
+
+    /** **Under [lock].** Add [joinerPeerId] as a connected member with [identity] and [key]. */
+    private fun admitMember(joinerPeerId: PeerId, identity: MemberIdentity, key: DidKey): SeatOutcome.Admitted {
         val member = Member(
             id = joinerPeerId,
-            identity = MemberIdentity(
-                displayName = hello.displayName,
-                sessionId = hello.sessionId,
-                deviceId = hello.deviceId,
-            ),
-            key = keyed.key,
+            identity = identity,
+            key = key,
             liveness = Liveness.Connected,
             // Prefer the map-keyed roster (hub path: RoomHubSeam / Mesh keys a principal per peer),
             // falling back to the single-value marker (2-peer relay path: Seam.withPrincipal).
@@ -2560,18 +2683,52 @@ internal class SeamRoom(
      * evicts genuinely-vanished peers. A Farewell naming the host itself is also ignored:
      * host departure is transport-level ([runJoinerTornWatcher] / host-liveness detection),
      * never a roster eviction.
+     *
+     * A Farewell with [AdmitMessage.Farewell.supersededBy] says the same device took the departed
+     * member's seat over under a new id (#3213): the departed member leaves with
+     * [LeaveReason.Superseded], and the successor's roster Welcome follows on the same lane. One
+     * naming **this** room is the host telling it directly that it was superseded (Decided 19), and
+     * ends it ([endSuperseded]).
      */
     private fun handleFarewell(sender: PeerId, farewell: AdmitMessage.Farewell) {
         val departed = PeerId(farewell.peerId)
+        val successor = farewell.supersededBy?.let(::PeerId)
         lock.withLock {
             val host = hostPeerId
             if (host == null || sender != host || departed == host) return
-            stopDetector(departed)
+            if (departed != selfId) stopDetector(departed)
+        }
+        if (departed == selfId) {
+            // Detached, as [failAdmission] is: [leave] cancels the inbound collector this runs on.
+            if (successor != null) scope.launch { endSuperseded(successor) }
+            return
         }
         removeFromRoster(
             departed,
-            if (farewell.expired) LeaveReason.PartitionExpired else LeaveReason.Normal,
+            when {
+                successor != null -> LeaveReason.Superseded(by = successor)
+                farewell.expired -> LeaveReason.PartitionExpired
+                else -> LeaveReason.Normal
+            },
         )
+    }
+
+    /**
+     * **Joiner only.** The host gave this room's seat to [by], the same device under a new peer id,
+     * while this room's link to it was down (#3213; Decided 19). Emit `Left(self, Superseded(by))`
+     * and end the room, without a `Goodbye` and without ever saying Hello again: another process of
+     * this device holds the membership now, and a Hello from here would take it back and start the
+     * two of them taking it in turns (the plan's Review Focus 1). Once only; a room that is already
+     * ending does neither.
+     */
+    private suspend fun endSuperseded(by: PeerId) {
+        lock.withLock {
+            if (closed || supersededBy != null) return
+            supersededBy = by
+        }
+        logger.info { "room.superseded self=${selfId.value} by=${by.value}" }
+        emitEvent(MembershipEvent.Left(selfId, LeaveReason.Superseded(by)))
+        leave(LeaveReason.Superseded(by))
     }
 
     // ── Partition detection ───────────────────────────────────────────────────
@@ -2710,6 +2867,7 @@ internal class SeamRoom(
             }
         }
         detectorJobs[member.id] = detectorJob
+        detectors[member.id] = detector
         // #1618 suspect 1: the per-peer detector is now live. If this logs for every admitted mesh peer,
         // detector startup is NOT the break — attention moves to whether healthy pongs keep it alive
         // (suspect 2) and whether the drop fires PeerUnresponsive.
@@ -2727,6 +2885,7 @@ internal class SeamRoom(
      */
     private fun stopDetector(peerId: PeerId) {
         detectorJobs.remove(peerId)?.cancel()
+        detectors.remove(peerId)
     }
 
     /**
@@ -4736,7 +4895,7 @@ internal class SeamRoom(
                     resumeMachine?.inFlightReconnectJob(),
                     admitDeadlineJob,
                 ),
-                detectorJobs.values.toList().also { detectorJobs.clear() },
+                detectorJobs.values.toList().also { detectorJobs.clear(); detectors.clear() },
             )
         }
         val (announce, jobsToCancel, detectorJobsToCancel) = plan

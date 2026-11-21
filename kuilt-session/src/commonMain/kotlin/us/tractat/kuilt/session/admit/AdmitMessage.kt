@@ -150,8 +150,9 @@ public sealed interface AdmitMessage {
      *   [Hello.key]: a v2 host, the only sender of a keyless Welcome, refuses a v3 Hello before it
      *   admits anyone, so a v3 joiner never receives one.
      * [returnKind] — set only on the direct Welcome, to the member it names, when the host restored
-     *   a seat it was holding rather than admitting a new member (v5, #3212). `null` is an ordinary
-     *   admission. The roster copy, the bootstrap Welcomes and the host intro never carry it.
+     *   a seat it was holding rather than admitting a new member (v5, #3212), under the same peer id
+     *   or, taking over a partitioned seat of the same key, under a new one (v6, #3213). `null` is an
+     *   ordinary admission. The roster copy, the bootstrap Welcomes and the host intro never carry it.
      */
     @Serializable
     @SerialName("welcome")
@@ -429,8 +430,10 @@ public sealed interface AdmitMessage {
 @Serializable
 public enum class ReturnKind {
     /**
-     * The host was still holding this member's seat, and the joiner proved the key that seat was
-     * admitted under: the same membership is back, and nobody else was told anything new.
+     * The host was still holding a seat under the key this joiner proved: the same membership is
+     * back. Under the same peer id nobody else is told anything new. Under a new one (v6, #3213) the
+     * joiner took over a partitioned seat of its device, keeping that seat's identity, and every
+     * other member was told the old id left, superseded, before it heard the new id join.
      */
     @SerialName("restored")
     Restored,
