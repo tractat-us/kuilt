@@ -101,6 +101,9 @@ internal class ObservedHold(
      */
     var holdAnswer: CompletableDeferred<Unit>? = null
 
+    /** As [holdAnswer], for the `tryResume` call with this index (from 0) alone. */
+    val holdCall = mutableMapOf<Int, CompletableDeferred<Unit>>()
+
     /**
      * When set, a partition the room reports reaches the real controller only once this completes: a
      * controller that lags in opening the window. The default one lags too — it opens it on a launched
@@ -135,11 +138,13 @@ internal class ObservedHold(
             }
 
             override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict {
+                val index = calls.size
                 calls += resume
                 gate?.await()
                 beforeAnswer?.invoke(resume)
                 val answer = (verdict?.invoke(resume) ?: controller.tryResume(resume, at)).also { verdicts += it }
                 holdAnswer?.await()
+                holdCall[index]?.await()
                 return answer
             }
         }
