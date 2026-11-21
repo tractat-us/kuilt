@@ -1,14 +1,20 @@
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.FlushOutcome
+import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.util.ExponentialBackoff
+import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.session.admit.AdmissionDecision
@@ -29,6 +35,7 @@ import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 
 // Minimal, compile-checked snippets quoted verbatim by docs/agent-cookbook/session.md (most) and
 // docs/agent-cookbook/fabrics.md (chunkToTheRoomsBudgetSample).
