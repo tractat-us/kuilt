@@ -110,8 +110,10 @@ or mDNS fabrics in production:
 // loom = any Loom; scope owns the room's coroutines; the store holds this device's key.
 val factory: RoomFactory = SeamRoomFactory.systemClock(loom, scope, deviceKeyStore)
 
-// Host a room (this peer becomes the Host) or join one (becomes a Joiner).
-val room: Room = factory.host(Pattern(sessionName = "alice", maxPeers = 4))
+// Host a room (this peer becomes the Host) or join one (becomes a Joiner). Only a host decides who
+// comes in: open() lets everyone in, with a pass back for an hour after last contact.
+val admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())
+val room: Room = factory.host(Pattern(sessionName = "alice", maxPeers = 4), admission = admission)
 // val room = factory.join(someTag)   // on the joining peer
 
 // The roster holds admitted members only — never raw, unidentified peers.
@@ -133,7 +135,8 @@ room.leave()  // idempotent
 and every room the factory makes shares it, because they are all one device.
 `InMemoryDeviceKeyStore()` forgets the key when the process ends, so the app is
 a new device every run. That suits tests, and apps that choose not to be
-remembered. `join` also takes an optional `deviceId`, which the host records as
+remembered. `DeviceKeyStore.platform(appId, …)` keeps it, and is what lets a
+device come back. `join` also takes an optional `deviceId`, which the host records as
 the member's `MemberIdentity.deviceId`.
 
 **Host loss is terminal — there is no auto-election.** When a joiner's link to
@@ -141,15 +144,17 @@ the host drops permanently, the room emits `MembershipEvent.HostLost` and
 `broadcast`/`sendTo` become silent no-ops. The room does not promote a new host;
 the consumer decides what to do (tear down, start a new session, etc.).
 
-**Reconnect/resume.** Keep the existing room after a transport tear. A
-`SeamRoomFactory` joiner attempts resume automatically within the host's reconnect
-window, using its `room.resumeToken` (non-null once admitted). The loom must heal
-the same seam instance with the same `selfId`; `MuxClientLoom` and `NwLoom` provide this.
-`room.resume(token)` is for manual control once that seam is usable again.
-A loom that returns a new seam leaves the old room torn and reconnect ends in
-`HostLost`; a later resume on that room returns `WindowClosed`. Rebuilding the room
-admits it fresh. See the [resume recipe](agent-cookbook/session.md#rejoin--reconnect)
-and the [cold-start rejoin gap (#1593)](https://github.com/tractat-us/kuilt/issues/1593).
+**Coming back after a drop needs no code.** A joiner built by `SeamRoomFactory`
+returns to its own seat by itself. On a loom that heals the same seam with the
+same `selfId` (`MuxClientLoom`, `NwLoom`) the room says hello again on the healed
+link and proves the device's key. On a loom that hands back a new seam the room
+ends in `HostLost`; join again through the same factory, and the host recognises
+the key and hands back the seat it still holds. An app killed and reopened does
+the same, and its launch-time `join` is the whole of its rejoin code. A device
+whose seat has gone but whose pass has not (an hour since last contact, by
+default) is let back in without asking the host's policy. Don't drive
+`room.resumeToken` and `room.resume` yourself. See
+[Rejoin & reconnect](agent-cookbook/session.md#rejoin--reconnect).
 
 `SeamRoomFactory` takes an injectable `clock: () -> Instant` and a
 `HeartbeatConfig`; tests pass virtual time and tight intervals, production uses
