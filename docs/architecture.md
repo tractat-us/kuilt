@@ -704,12 +704,11 @@ the room roster — no explicit client identification step is needed.
 
 - **M=3 voter mesh is proven under simulation; M=1 is proven over real sockets
   (`ServerClusterE2ETest`).** Real-socket M>1 E2E is a follow-up (see #545).
-- **Cross-server resume degrades to fresh-join** (see #532). Each server's
-  reconnect window registry is in-memory and per-room-instance *and* each mints
-  its own `RoomId`, so a `ResumeToken` issued by server-A names a room server-B
-  does not serve: failover always produces a terminal `ResumeResult.Refused`
-  (`RejectCode.ResumeTokenInvalid`) and the client fresh-joins the new server.
-  This is correct and fast; it costs a re-snapshot on the client's Raft log.
+- **Cross-server return is a fresh join** (see #532). Each server is its own
+  host, with its own device key and its own rooms, so server-B holds no seat for
+  a client of server-A and honours none of server-A's passes (`UntrustedIssuer`):
+  the client is admitted as anyone new is. This is correct and fast; it costs a
+  re-snapshot on the client's Raft log.
 - **The `CoroutineScope.clusterClient()` production path** (relay-room, full
   reconnect wiring) requires a stable client identity derived from the `Loom`'s
   `Seam.selfId`. The current production entry point is `clusterClientWithNode()`
@@ -732,8 +731,8 @@ module over `:kuilt-core`, not part of the transport contract):
 - **Role assignment** (host vs. joiner) — not a `Loom`/`Seam` concern; `Room`
   carries it.
 - **Membership and the full join → active → leave → rejoin lifecycle**, the
-  admit/identify handshake, reconnect, resume tokens, and the host-loss terminal
-  state — all `kuilt-session` (see [usage.md](usage.md#the-membership-layer-kuilt-session)).
+  admit/identify handshake, a device's key-bound return to its seat, and the
+  host-loss terminal state — all `kuilt-session` (see [usage.md](usage.md#the-membership-layer-kuilt-session)).
 
 Genuinely out of scope for kuilt at every layer:
 
