@@ -42,6 +42,7 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
    TLS identity stay separate from the device key.
 6. **fireworks-compose's `deviceId` stays its own id (Iain).** The device key signs over it in the
    admission proof — that signature is the binding (tractat-us/fireworks-compose#3862).
+   *Note (2026-11-20, 1.4 review):* the binding is joiner-only. A host's own `deviceId` is never carried, since neither the Challenge layout nor the host intro has the field, so a host's `MemberIdentity.deviceId` is null on every joiner's roster. `ElectionLobby.start(deviceId)` takes the parameter for symmetry with `awaitRoom`, and its KDoc says it has no effect on the elected host.
 7. **New module `:kuilt-identity` (Iain).** `:kuilt-seal` stays sealed boxes only.
 8. **Friction is the anti-goal (Iain).** So:
    - *Joining asks the person nothing new* — no prompt, passphrase or account (my call).
