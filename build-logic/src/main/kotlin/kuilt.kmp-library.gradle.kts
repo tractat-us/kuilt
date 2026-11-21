@@ -184,12 +184,28 @@ val generateKarmaOrphanGuard = tasks.register<GenerateKarmaOrphanGuard>("generat
     outputFile.set(layout.buildDirectory.file("karma-config.d/orphan-guard.js"))
 }
 
+// Third file in the same directory: Kotlin's Karma reporter writes a whole run as ONE stdout line,
+// and KGP drops everything past 1 MB of it while the task exits 0 (#3605). The generated reporter
+// ends each message with a newline and counts what it reported; VerifyKarmaResultCount below
+// fails the task when Gradle recorded fewer. See GenerateKarmaLineReporter.
+val generateKarmaLineReporter = tasks.register<GenerateKarmaLineReporter>("generateKarmaLineReporter") {
+    group = "build setup"
+    description = "Writes the wasmJs Karma line reporter into build/karma-config.d/."
+    outputFile.set(layout.buildDirectory.file("karma-config.d/line-reporter.js"))
+}
+
 afterEvaluate {
     val wasmBrowserTest = tasks.findByName("wasmJsBrowserTest") as? KotlinJsTest ?: return@afterEvaluate
     val karma = wasmBrowserTest.testFramework as? KotlinKarma ?: return@afterEvaluate
     val configDir = layout.buildDirectory.dir("karma-config.d").get().asFile
     karma.useConfigDirectory(configDir)
-    wasmBrowserTest.dependsOn(generateKarmaTimeouts, generateKarmaOrphanGuard)
+    wasmBrowserTest.dependsOn(generateKarmaTimeouts, generateKarmaOrphanGuard, generateKarmaLineReporter)
+    // Karma runs in its npm project directory, which is where the reporter writes its count.
+    val countFile = karma.workingDir.get().asFile.resolve(GenerateKarmaLineReporter.COUNT_FILE_NAME)
+    wasmBrowserTest.doFirst(ResetKarmaResultCount(countFile))
+    wasmBrowserTest.doLast(
+        VerifyKarmaResultCount(countFile, wasmBrowserTest.reports.junitXml.outputLocation.get().asFile),
+    )
 }
 
 // Serialize wasmJsBrowserTest across the whole build. `registerIfAbsent` makes
