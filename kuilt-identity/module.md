@@ -7,7 +7,7 @@ a stranger. This module gives each device one key of its own, kept on that devic
 public name for it. When the device returns it proves it still holds the key, and the room can hand
 back its seat without asking anyone to do anything.
 
-## What is here so far
+## What is here
 
 The name. `DidKey` is the public name of one device's key, a string another device can store,
 compare, and check a signature against. Read one from outside with `DidKey.parse`, which checks
@@ -43,7 +43,9 @@ never revoked anyone, so `open` cannot tell and opens an empty list. A store tha
 damaged is different: `open` throws an `IllegalStateException` naming the store key, rather than
 quietly starting from nothing, and leaves the bytes where they are.
 
-The statements a room's admission exchange is made of arrive in the pieces that follow.
+The statements. A room's admission exchange is made of two more signed statements, the host's
+`Challenge` and the joiner's `AdmissionProof`. Only `:kuilt-session` needs them, so they sit behind
+the `@IdentityInternalApi` opt-in, with no stability promise.
 
 The store. A device is recognised only if it comes back with the same key, so the key has to
 outlive the app. `DeviceKeyStore` is where it lives: the first `deviceKey()` call makes it and every
@@ -79,10 +81,57 @@ is replaced with a warning, and a database that cannot answer right now throws a
 yourself, proves it keeps its promises by passing `DeviceKeyStoreConformanceSuite` from
 `:kuilt-conformance`.
 
+## How a room uses them
+
+The room exchange lives in `:kuilt-session`, and an app hands it this module's store and nothing
+else: a `DeviceKeyStore` on every room factory. When the host lets a device in, its welcome carries
+a `Grant` naming the device's key, and while the device stays connected the host sends a fresh one
+every half of the grant's life, so a one-hour pass means one hour since last contact. The device
+keeps the newest per host and scope in its store. When it comes back it proves it holds the key and
+shows its grants, and the host asks `GrantTrust` whether any of them is good here, now:
+
+<!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleGrantTrust -->
+```kotlin
+internal suspend fun sampleGrantTrust() {
+    val host = DeviceKey.generate() // the host's own key: the only issuer it trusts
+    val phone = DeviceKey.generate() // a device the host let in once
+    val revocations = RevocationList.inMemory()
+    val trust = GrantTrust(host.id, revocations)
+    val now = 1_700_000_000_000L // epoch ms, from your clock: the check never reads one
+
+    // The phone comes back with the pass the host gave it, having proved it holds `phone`'s key.
+    val pass = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = now, notAfter = now + 3_600_000)
+    check(trust.verify(pass, phone.id, "table-7", now + 60_000) == GrantVerdict.Valid)
+
+    // The first thing wrong is the answer: another room, another device, too late.
+    check(trust.verify(pass, phone.id, "table-8", now + 60_000) == GrantVerdict.WrongScope)
+    check(trust.verify(pass, host.id, "table-7", now + 60_000) == GrantVerdict.WrongSubject)
+    check(trust.verify(pass, phone.id, "table-7", now + 3_600_000) == GrantVerdict.Expired)
+
+    // The phone is lost: revoke it. A pass issued exactly at the cutoff stays good, so the cutoff is
+    // one past the clock, or one issued in this same millisecond would slip through.
+    val lostAt = now + 120_000
+    val sameMillisecond = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = lostAt, notAfter = lostAt + 3_600_000)
+    revocations.revoke(phone.id, notBefore = lostAt + 1)
+    check(trust.verify(pass, phone.id, "table-7", lostAt + 60_000) == GrantVerdict.Revoked)
+    check(trust.verify(sameMillisecond, phone.id, "table-7", lostAt + 60_000) == GrantVerdict.Revoked)
+
+    // A fresh pass, issued after the cutoff, works again.
+    val fresh = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = lostAt + 120_000, notAfter = lostAt + 3_720_000)
+    check(trust.verify(fresh, phone.id, "table-7", lostAt + 180_000) == GrantVerdict.Valid)
+}
+```
+
+A `Valid` grant lets the device straight back in, with no question asked of the app. Any other
+verdict, and the device is let in the way anyone new is. The host trusts only its own key, which is
+why two things outlive a host restart only if the app keeps them: the host's key, in its own
+platform store, without which every old grant is `UntrustedIssuer`; and, for a grant to one room,
+the room's id, since a room the host mints a new id for is a different room. A grant to any room
+of the host needs only the key.
+
 ## What this protects against, and what it does not
 
-The room exchange these keys are for is not built yet. When it is, its promise is the design's,
-quoted here in its own words:
+The room exchange's promise is the design's, quoted here in its own words:
 
 > - **Protected:** a bystander in the room — who knows every peer id, the room id and every key —
 >   cannot resume as, return as, or lock out another member. A captured proof cannot be replayed.
