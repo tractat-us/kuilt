@@ -470,6 +470,48 @@ class SupersededMembershipTest {
     }
 
     /**
+     * A `Success` the room no longer acts on ends its seat only in the episode it was about. Here the
+     * old seat heals and partitions again while the answer is held, so the controller holds a fresh
+     * window for it; then the new tab says Goodbye. The seat is left to that window: still held, and
+     * nobody is told it left.
+     */
+    @Test
+    fun aStaleSuccessLeavesASeatPartitionedAgainToItsNewWindow() = runTest {
+        val hold = ObservedHold()
+        val raw = rawHost(setOf(first, second, carol), hold)
+        val bob = fakeDeviceKey(1)
+        raw.admit(first, bob, nonce = 1)
+        raw.admit(carol, fakeDeviceKey(2), nonce = 2)
+        raw.partition(first, alive = setOf(carol))
+        val episodeAsked = assertIs<Liveness.Partitioned>(raw.member(first)?.liveness).since
+        val answered = CompletableDeferred<Unit>()
+        hold.holdAnswer = answered
+
+        val mark = raw.events.mark()
+        val toCarol = raw.sentTo(carol).size
+        raw.admit(second, bob, nonce = 3)
+        raw.advanceKeeping(setOf(carol, first), KEY_SEAT_HEARTBEAT.interval * 2)
+        assertEquals(Liveness.Connected, raw.member(first)?.liveness, "rig: the old seat healed while the answer was held")
+        raw.partition(first, alive = setOf(carol))
+        val episodeNow = assertIs<Liveness.Partitioned>(raw.member(first)?.liveness).since
+        raw.say(second, AdmitMessage.Goodbye)
+        hold.holdAnswer = null
+        answered.complete(Unit)
+        testScheduler.runCurrent()
+        val edges = raw.events.edgesSince(mark)
+
+        assertAll(
+            { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.Success), hold.verdicts, "rig: the window was spent") },
+            { assertTrue(episodeNow > episodeAsked, "rig: a new partition episode ($episodeNow > $episodeAsked)") },
+            { assertIs<Liveness.Partitioned>(raw.member(first)?.liveness, "the seat is still held, for its new window") },
+            { assertTrue(edges.none { it is MembershipEvent.Left }, edges.render()) },
+            { assertEquals(emptyList(), raw.sentTo(carol).drop(toCarol).farewellsFor(first), "nobody is told it left") },
+            { assertTrue(first in raw.rosterHeardBy(carol), "the bystander still holds it") },
+            { assertEquals(0, raw.sentTo(second).welcomesFor(second).size, "the stale exchange seated nobody") },
+        )
+    }
+
+    /**
      * The window answers `Success` for the old seat, and before the room acts on it the old seat's
      * own detector gives up on it: its `PeerLost` evicts the seat on the host and tells nobody, since
      * an expiry normally does that and this window, spent, will never expire. The pass that finds
