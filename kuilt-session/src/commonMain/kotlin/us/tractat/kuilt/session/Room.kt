@@ -350,9 +350,10 @@ public interface Room {
      *
      * If the loom returns a new seam instead of healing the existing one, reconnect ends in
      * [MembershipEvent.HostLost]. A later call on that terminal room returns
-     * [ResumeResult.WindowClosed] without asking the host. Rebuilding a room sends `Hello` for
-     * fresh admission, not a resume; presenting a saved token during rebuild is the
-     * [cold-start rejoin gap (#1593)](https://github.com/tractat-us/kuilt/issues/1593).
+     * [ResumeResult.WindowClosed] without asking the host. A rebuilt room needs no token: its
+     * `Hello` proves the device key its held seat was admitted under, and a host still holding that
+     * seat under the same peer id restores it (#3212). Calling this afterwards finds the window
+     * already spent on that restore, and is refused.
      *
      * Returns a [ResumeResult.JoinerOutcome], never the whole [ResumeResult] hierarchy: the host's
      * own verdicts ([ResumeResult.WindowNotYetOpen], [ResumeResult.TokenInvalid]) do not travel as
