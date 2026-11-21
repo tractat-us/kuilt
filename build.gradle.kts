@@ -7127,6 +7127,54 @@ val verifySkillDescriptionBudget by tasks.registering {
     }
 }
 
+/**
+ * One file in the skill directory as the consumer sync sees it; path relative to that directory.
+ * [text] is the content of a regular file and null otherwise; [carriageReturn] is whether any byte
+ * of it is `\r`, which the consumer sync refuses outright.
+ */
+data class SkillSyncEntry(
+    val path: String,
+    val regular: Boolean,
+    val executable: Boolean,
+    val bytes: Long,
+    val carriageReturn: Boolean = false,
+    val text: String? = null,
+)
+
+/**
+ * The one walk of the kuilt-primitives skill directory that both `verifySkillBodyBudget` and
+ * `verifySkillReferences` read (#3601), so the budget report, the reference set and the sync
+ * verdict are three views of a single list and cannot disagree about which files exist. It does
+ * not follow links, keeps every non-directory entry (a symlink comes back with `regular = false`),
+ * and skips only `.DS_Store`: Finder writes it locally and `.gitignore` keeps it out of git, so no
+ * consumer ever receives one. Everything else a consumer could receive is here, dotfiles included,
+ * which is why neither task can be fingerprinted by a `fileTree` and neither is cached.
+ */
+object SkillDirectory {
+    fun files(skillDir: java.io.File): List<SkillSyncEntry> {
+        val root = skillDir.toPath()
+        if (!java.nio.file.Files.isDirectory(root)) return emptyList()
+        return java.nio.file.Files.walk(root).use { stream ->
+            stream.toList()
+                .filter { !java.nio.file.Files.isDirectory(it, java.nio.file.LinkOption.NOFOLLOW_LINKS) }
+                .filter { it.fileName.toString() != ".DS_Store" }
+                .map { p ->
+                    val regular = java.nio.file.Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                    val content = if (regular) java.nio.file.Files.readAllBytes(p) else null
+                    SkillSyncEntry(
+                        path = root.relativize(p).toString().replace('\\', '/'),
+                        regular = regular,
+                        executable = regular && java.nio.file.Files.isExecutable(p),
+                        bytes = content?.size?.toLong() ?: 0L,
+                        carriageReturn = content?.contains('\r'.code.toByte()) ?: false,
+                        text = content?.toString(Charsets.UTF_8),
+                    )
+                }
+                .sortedBy { it.path }
+        }
+    }
+}
+
 // Cap the kuilt-primitives body at 8,192 bytes (8 KiB): a compact index routes, prose does not.
 // The body loads lazily, outside the eager description cap, but still needs a bound (#2793).
 // This is a text scan: SKILL.md is an artefact no compiler sees, so neither a type nor a
@@ -7150,17 +7198,16 @@ val verifySkillBodyBudget by tasks.registering {
         "reference/ file at 4,096 bytes (4 KiB)."
     val skillPath = ".claude/skills/kuilt-primitives/SKILL.md"
     val skillFile = rootDir.resolve(skillPath)
-    val refDir = rootDir.resolve(".claude/skills/kuilt-primitives/reference")
-    val repoRoot = rootDir
-    // Plural files keeps a missing path as an input without pre-empting our doLast diagnostic.
-    inputs.files(skillFile).withPropertyName("skillFile")
-        .withPathSensitivity(PathSensitivity.RELATIVE)
-    // A tree, so ADDING a reference file changes the fingerprint and cannot land on a cached green.
-    inputs.files(fileTree(refDir)).withPropertyName("referenceFiles")
-        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val skillDir = rootDir.resolve(".claude/skills/kuilt-primitives")
+    // Not cached and never up to date. Its walk is `SkillDirectory.files`, the same one
+    // `verifySkillReferences` makes, and a `fileTree` input could not fingerprint it: Gradle's
+    // default excludes (`._*`, `CVS/`, `*~`, `#*#`, …) are global and cannot be lifted for one
+    // tree, so a file they hide could change the verdict while the cache served the old one. An
+    // input that sees less than the walk is a cached green waiting to differ from a fresh run, and
+    // the walk costs milliseconds.
     val stamp = layout.buildDirectory.file("verification/verify-skill-body-budget.ok")
     outputs.file(stamp)
-    outputs.cacheIf { true }
+    outputs.upToDateWhen { false }
     doLast {
         val referenceCap = 4096
         // Positive control, run on every execution: a comparison that never fires would read as a
@@ -7169,10 +7216,9 @@ val verifySkillBodyBudget by tasks.registering {
         check(overReferenceCap(referenceCap + 1) && !overReferenceCap(referenceCap)) {
             "verifySkillBodyBudget's reference-file cap disagrees with its own positive control."
         }
-        val referenceReport = refDir.takeIf { it.isDirectory }
-            ?.walkTopDown()?.filter { it.isFile }?.sortedBy { it.invariantSeparatorsPath }
-            ?.map { it.relativeTo(repoRoot).invariantSeparatorsPath to it.readBytes().size }
-            ?.toList().orEmpty()
+        val referenceReport = SkillDirectory.files(skillDir)
+            .filter { it.regular && it.path.startsWith("reference/") }
+            .map { ".claude/skills/kuilt-primitives/${it.path}" to it.bytes.toInt() }
         val overReference = referenceReport.filter { (_, bytes) -> overReferenceCap(bytes) }
         if (overReference.isNotEmpty()) {
             error(
@@ -7228,35 +7274,34 @@ val verifySkillBodyBudget by tasks.registering {
 //      heading is gone. The route still names the right symbol, but the explanation it promises
 //      is a 404 — and renaming a cookbook heading is a docs-only edit nothing else would see.
 //
-// It also requires each reference file's family (`reference/<family>.md` or
-// `reference/<family>/…`) to have a `.claude/rules/<family>.md`, because that is the set
-// `skill-staleness.yml` walks: a reference file under any other name is a family no staleness
-// arm ever watches.
+// FAMILY, in both directions, against `.claude/rules/<family>.md`, which is the set
+// `skill-staleness.yml` walks. A reference file (`reference/<family>.md` or `reference/<family>/…`)
+// whose family has no rule file is a family no staleness arm ever watches; a rule-file family with
+// neither `reference/<family>.md` nor `reference/<family>/` is one the skill routes nothing for, so
+// every primitive in it is reinvented downstream.
 //
-// And it holds the whole skill directory to what a consumer's sync will mirror (#3601). The
+// And SYNC: it holds the whole skill directory to what a consumer's sync will mirror (#3601). The
 // automated consumer copies the directory, and refuses the WHOLE skill on any entry that is not a
 // regular, non-executable `.md` file whose every path component matches `[A-Za-z0-9._-]` and does
-// not start with `.`, or past 200 files, 1 MiB a file or 4 MiB in all. A refused sync leaves that
-// consumer on its last copy, silently, so a script or a dotfile dropped in here would freeze every
-// route downstream. `.DS_Store` is skipped: Finder writes it locally, `.gitignore` keeps it out of
-// git, so it never reaches a consumer. Not cached and never up to date, because Gradle's default
-// excludes hide exactly the dotfiles this looks for from an input fingerprint, and the walk costs
-// milliseconds.
+// not start with `.`, on any file containing a `\r` (a CRLF line ending), or past 200 files, 1 MiB a
+// file or 4 MiB in all. A refused sync leaves that consumer on its last copy, silently, so a script,
+// a dotfile or one CRLF file dropped in here would freeze every route downstream. The walk is
+// `SkillDirectory.files`, shared with the budget above, which skips `.DS_Store` and nothing else.
+// Not cached and never up to date, because Gradle's default excludes hide exactly the dotfiles this
+// looks for from an input fingerprint, and the walk costs milliseconds.
 //
 // Tier: a text scan, for the same reason as the budget above — these are markdown files no
 // compiler sees. It would retire with that one, if the router were generated from the reference
 // files. The slugger follows GitHub's: lowercase, drop everything but letters, digits, spaces,
 // `-` and `_`, then spaces to hyphens, with `-1`, `-2` on repeats.
-/** One file in the skill directory as the consumer sync sees it; path relative to that directory. */
-data class SkillSyncEntry(val path: String, val regular: Boolean, val executable: Boolean, val bytes: Long)
-
 val verifySkillReferences by tasks.registering {
     group = "verification"
-    description = "Fails on a kuilt-primitives reference/ file the router does not name, a reference " +
-        "path that does not exist, or a Jump-to anchor no cookbook heading carries (#3601)."
+    description = "Fails on a kuilt-primitives reference/ file the router does not name (ORPHAN), a " +
+        "named reference path that does not exist (DANGLING), a Jump-to anchor no cookbook heading " +
+        "carries (JUMP), a reference file outside every .claude/rules family or a family with no " +
+        "reference file (FAMILY), and any file the consumer sync would refuse (SYNC) (#3601)."
     val skillDir = rootDir.resolve(".claude/skills/kuilt-primitives")
     val skillFile = skillDir.resolve("SKILL.md")
-    val refDir = skillDir.resolve("reference")
     val cookbookDir = rootDir.resolve("docs/agent-cookbook")
     val rulesDir = rootDir.resolve(".claude/rules")
     val stamp = layout.buildDirectory.file("verification/verify-skill-references.ok")
@@ -7277,6 +7322,8 @@ val verifySkillReferences by tasks.registering {
                         "belongs under .github/scripts/, not in the skill."
                     e.executable -> out += "SYNC: `${e.path}` is executable; the sync takes mode 100644 only."
                     e.bytes > 1L shl 20 -> out += "SYNC: `${e.path}` is ${e.bytes} bytes, over 1 MiB."
+                    e.carriageReturn -> out += "SYNC: `${e.path}` contains a `\\r` (crlf); the sync refuses " +
+                        "any file with one. Convert it to LF line endings."
                 }
             }
             if (entries.size > 200) out += "SYNC: ${entries.size} files, over the sync's 200."
@@ -7292,6 +7339,15 @@ val verifySkillReferences by tasks.registering {
             "executable" to (listOf(SkillSyncEntry("reference/a.md", true, true, 1)) to "SYNC"),
             "symlink" to (listOf(SkillSyncEntry("reference/a.md", false, false, 1)) to "SYNC"),
             "too big" to (listOf(SkillSyncEntry("reference/a.md", true, false, (1L shl 20) + 1)) to "SYNC"),
+            "crlf" to (listOf(SkillSyncEntry("reference/a.md", true, false, 2, carriageReturn = true)) to "SYNC"),
+            // The two directory-wide caps, each at its limit (clear) and one past it (one failure).
+            "200 files" to (List(200) { SkillSyncEntry("reference/f$it.md", true, false, 1) } to null),
+            "201 files" to (List(201) { SkillSyncEntry("reference/f$it.md", true, false, 1) } to "SYNC"),
+            "4 MiB in all" to (List(4) { SkillSyncEntry("reference/f$it.md", true, false, 1L shl 20) } to null),
+            "over 4 MiB in all" to (
+                List(4) { SkillSyncEntry("reference/f$it.md", true, false, 1L shl 20) } +
+                    SkillSyncEntry("reference/g.md", true, false, 1) to "SYNC"
+                ),
         ).map { (name, case) -> name to (syncFailures(case.first) to case.second) }
 
         fun headingSlugs(lines: List<String>): Set<String> {
@@ -7337,13 +7393,20 @@ val verifySkillReferences by tasks.registering {
                 out += "ORPHAN: `$it` is never named in SKILL.md, so no agent is told to open it " +
                     "and every route in it is unreachable. Name it in the router's family table."
             }
+            fun familyOf(path: String) = path.removePrefix("reference/").substringBefore('/').removeSuffix(".md")
             refs.keys.sorted().forEach { path ->
-                val family = path.removePrefix("reference/").substringBefore('/').removeSuffix(".md")
+                val family = familyOf(path)
                 if (family !in families) {
                     out += "FAMILY: `$path` belongs to no family (no .claude/rules/$family.md), so " +
                         "skill-staleness.yml never watches it. Use reference/<family>.md or " +
                         "reference/<family>/<section>.md for one of: ${families.sorted().joinToString()}."
                 }
+            }
+            // The converse: a family the rules define, with no reference file at all.
+            (families - refs.keys.map(::familyOf).toSet()).sorted().forEach { family ->
+                out += "FAMILY: family `$family` (.claude/rules/$family.md) has neither " +
+                    "reference/$family.md nor reference/$family/, so the skill routes nothing for it. " +
+                    "Add the file and name it in the router's family table."
             }
             (listOf("SKILL.md" to router) + refs.toList()).forEach { (where, text) ->
                 jumpTo.findAll(text).forEach { m ->
@@ -7363,18 +7426,20 @@ val verifySkillReferences by tasks.registering {
         // Positive control, run on every execution: each arm must red on exactly its own shape,
         // and the healthy arm must stay clear. A scan that matched nothing would otherwise read as
         // a router with every link intact.
-        val goodRouter = "Read `reference/a.md`. Headline `x.md#rejoin--reconnect`."
-        val goodRefs = mapOf("reference/a.md" to "|row|`x.md#rejoin--reconnect`|")
+        // Family `a` is one file and family `b` is split by section, so both shapes count as covered.
+        val goodRouter = "Read `reference/a.md` or `reference/b/s.md`. Headline `x.md#rejoin--reconnect`."
+        val goodRefs = mapOf("reference/a.md" to "|row|`x.md#rejoin--reconnect`|", "reference/b/s.md" to "")
         val goodBook = mapOf("x.md" to headingSlugs(listOf("# Title", "## Rejoin & reconnect", "```", "## Fenced", "```")))
         val fam = setOf("a", "b")
         val controls = listOf(
             "healthy" to (failures(goodRouter, goodRefs, goodBook, fam) to null),
-            "dangling" to (failures("$goodRouter `reference/b.md`", goodRefs, goodBook, fam) to "DANGLING"),
-            "orphan" to (failures(goodRouter, goodRefs + ("reference/b/s.md" to ""), goodBook, fam) to "ORPHAN"),
-            "no family" to (failures("$goodRouter `reference/zz.md`", goodRefs + ("reference/zz.md" to ""), goodBook, fam) to "FAMILY"),
-            "missing anchor" to (failures(goodRouter, mapOf("reference/a.md" to "`x.md#gone`"), goodBook, fam) to "JUMP"),
-            "fenced heading" to (failures(goodRouter, mapOf("reference/a.md" to "`x.md#fenced`"), goodBook, fam) to "JUMP"),
-            "missing page" to (failures(goodRouter, mapOf("reference/a.md" to "`y.md#rejoin--reconnect`"), goodBook, fam) to "JUMP"),
+            "dangling" to (failures("$goodRouter `reference/a/t.md`", goodRefs, goodBook, fam) to "DANGLING"),
+            "orphan" to (failures(goodRouter, goodRefs + ("reference/b/u.md" to ""), goodBook, fam) to "ORPHAN"),
+            "no family" to (failures("$goodRouter `reference/zz.md`", goodRefs + ("reference/zz.md" to ""), goodBook, fam) to "FAMILY: `reference/"),
+            "family with no reference" to (failures(goodRouter, goodRefs, goodBook, fam + "c") to "FAMILY: family `c`"),
+            "missing anchor" to (failures(goodRouter, goodRefs + ("reference/a.md" to "`x.md#gone`"), goodBook, fam) to "JUMP"),
+            "fenced heading" to (failures(goodRouter, goodRefs + ("reference/a.md" to "`x.md#fenced`"), goodBook, fam) to "JUMP"),
+            "missing page" to (failures(goodRouter, goodRefs + ("reference/a.md" to "`y.md#rejoin--reconnect`"), goodBook, fam) to "JUMP"),
         ) + syncControls
         val controlMisses = controls.mapNotNull { (name, case) ->
             val (got, expected) = case
@@ -7390,28 +7455,14 @@ val verifySkillReferences by tasks.registering {
 
         if (!skillFile.isFile) error("${skillFile.name}: missing skill file.")
         val router = skillFile.readText()
-        val refs = refDir.takeIf { it.isDirectory }?.walkTopDown()?.filter { it.isFile }
-            ?.associate { "reference/" + it.relativeTo(refDir).invariantSeparatorsPath to it.readText() }
-            .orEmpty()
+        // One walk; the reference set and the sync entries are both views of it.
+        val entries = SkillDirectory.files(skillDir)
+        val refs = entries.filter { it.regular && it.path.startsWith("reference/") }
+            .associate { it.path to it.text.orEmpty() }
         val cookbook = cookbookDir.listFiles { f -> f.isFile && f.name.endsWith(".md") }.orEmpty()
             .associate { it.name to headingSlugs(it.readLines()) }
         val families = rulesDir.listFiles { f -> f.isFile && f.name.endsWith(".md") }.orEmpty()
             .map { it.name.removeSuffix(".md") }.toSet()
-        val entries = java.nio.file.Files.walk(skillDir.toPath()).use { stream ->
-            stream.toList()
-                .filter { !java.nio.file.Files.isDirectory(it, java.nio.file.LinkOption.NOFOLLOW_LINKS) }
-                .filter { it.fileName.toString() != ".DS_Store" }
-                .map { p ->
-                    val regular = java.nio.file.Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)
-                    SkillSyncEntry(
-                        path = skillDir.toPath().relativize(p).toString().replace('\\', '/'),
-                        regular = regular,
-                        executable = regular && java.nio.file.Files.isExecutable(p),
-                        bytes = if (regular) java.nio.file.Files.size(p) else 0L,
-                    )
-                }
-                .sortedBy { it.path }
-        }
         val found = syncFailures(entries) + failures(router, refs, cookbook, families)
         if (found.isNotEmpty()) {
             error(
