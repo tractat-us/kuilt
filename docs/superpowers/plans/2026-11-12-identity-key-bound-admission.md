@@ -252,6 +252,20 @@ Overrides the tasks below where they differ. Spec Decided 21 (confirmed) and Dec
   - Add `hostSecondTabIsAdmittedAsMember`.
 - **Every task:** never assume `Member.key` is unique in a roster.
 
+## Amendment C — rulings of 2026-11-21 (before Task 1.7 started)
+
+Iain's rulings on the open questions posted on #3159 on 2026-11-20/21. They override the tasks below where they differ.
+
+- **2.4: `AdmissionPolicy` vets an additional seat** (Decided 30). It is a new membership, so the default fails closed. 2.4's policy call counts change to match.
+- **1.7: a terminal `Reject` is terminal only from a verified challenger** (the peer whose Challenge the joiner answered), and ignored from anyone else. A retryable `Reject` from anyone, `HostFailed` included, only schedules a re-Hello. This rule covers both the impostor `KeyConflict` aimed at a reconnecting victim and a bystander's forged `Reject(BadProof)`.
+- **1.7: the self-Welcome closes a joiner's reconnect episode**, and the host restores liveness when it accepts the Proof. A fresh admission after `WindowClosed` counts as success, not `HostLost`. Task 1.7's "the flight reports `ResumeResult.WindowClosed`" predates Decided 31, which removes `Room.resume`. The worker reconciles the two under this ruling.
+- **Ratified, so no longer provisional:**
+  - Task 1.5's 2026-11-21 amendment: revocation and the `Returning` arm move to 2.4/2.6 (`bf12e0ffc`), and a refusal is acted on only after the episode's `WindowOpened` (`f9c8593e1`).
+  - **1.6:** a stale `Success` under a new id seats nobody, and the seat is released (`settleSpentWindow`, #3611).
+  - **1.6:** `NotYetOpen`, or a refusal that comes before the window opens, takes the seat over.
+- **Before the 0.7.7 tag (#3600):** the raw `DeviceKey.sign` goes behind `@IdentityInternalApi`, and a public `signApp(context, message)` signs under an `app/<context>` prefix and refuses a `kuilt/` context. This is its own task and PR.
+- **Release:** kuilt ships 0.7.7 with no compatibility window. fireworks-compose sequences its own app and server rollout, and its upgrade notice says so.
+
 ## Global Constraints
 
 - **Each task is one PR and one sub-issue of #3159.**
@@ -677,7 +691,7 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 
 ### Task 1.5: Same id, same key restores the held seat, and a different key is refused [after 1.2, 1.4]
 
-> **Amended 2026-11-21 (controller, after 1.5's spec-conformance review; provisional until Iain rules on #3159 reading item 4).**
+> **Amended 2026-11-21 (controller, after 1.5's spec-conformance review; ratified by Iain the same day, see Amendment C).**
 > - The per-key revocation check and the `Returning` arm of `windowExpiredDecidesAgainWithoutTheSeat` **move to 2.4 and 2.6**. The room has no `RevocationList` until `HostAdmission` (2.4) and no host-side grant verification until 2.6, so Amendment A § 1.5 asked for a check whose input lands three tasks later. 1.5 hardcodes `holdsValidGrant = false` with a `// 2.6:` marker at each site. The 2.4 and 2.6 briefs carry the obligation, and Decided 14 still holds from 2.4 on.
 > - **A throwing hold policy** gives a retryable `Reject(HostFailed)` and the seat is kept. A throw is not a refusal, so Decided 23 does not apply. 2.4's policy-throw handling copies this.
 > - **A refusal is acted on only after the current episode's `WindowOpened` has been seen** (`windowOpenedEpisodeMs`). So a controller that never announces its windows, which is outside the `onPeerUnresponsive` contract, never has a refusal acted on, and a proven key's seat is restored. This fails open towards the device that proved its key. It is defensible against Decided 23, but it is a new rule for Iain's ruling. A stronger, type-shaped form for a later task: carry the episode in `ProvenResume`.
