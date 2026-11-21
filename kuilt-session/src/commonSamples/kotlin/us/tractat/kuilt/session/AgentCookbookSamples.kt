@@ -102,9 +102,10 @@ public suspend fun perSessionIdSample(room: Room) {
  * game id — instead of letting the factory mint one, so every member reads back the value your
  * other systems already key on.
  *
- * Supplying an id does **not** make a host restart resumable: a restarted host has no roster and no
- * reconnect-window registry, so a `ResumeToken` it accepts on identity grounds still cannot
- * complete. Cold-start rejoin is #1593.
+ * A restarted host holds no seats, so a stable id restores none. What it keeps alive is a room pass
+ * ([us.tractat.kuilt.session.admit.GrantReach.ThisRoom]): the pass names the room by its id, so it
+ * still works after a restart only if the room comes back under the same id. See
+ * [hostARoomTheyCanReturnToSample].
  */
 public suspend fun callerSuppliedRoomIdSample(
     factory: RoomFactory,
@@ -146,6 +147,63 @@ public suspend fun resumeAfterDropSample(room: Room): Boolean {
     }
 }
 
+// DRAFT (#3159 Task 1.9): uncompiled. Each sample below must be called by a test before it lands,
+// or `verifySamplesAreRun` reds. Delete this line when compiled.
+
+/**
+ * Bring a device back into the room it dropped out of by doing nothing new: build the factory over
+ * this device's key store, and join the way the app always does. A healed link is re-proved by the
+ * room itself, and a join after an app kill is recognised by the device's key, so there is no token
+ * to save and no resume to call.
+ */
+public suspend fun returnIsAutomaticSample(
+    loom: Loom,
+    scope: CoroutineScope,
+    clock: () -> Instant,
+    keyStore: DeviceKeyStore,
+    tag: Tag,
+): Room {
+    // One store per device, opened once at launch and shared by every room: it IS the device. On a
+    // phone or a browser that is DeviceKeyStore.platform("my-app"); a fresh InMemoryDeviceKeyStore()
+    // every launch makes this a new device every launch, and nothing comes back.
+    val factory = SeamRoomFactory(loom = loom, scope = scope, clock = clock, deviceKeyStore = keyStore)
+    // The first join and the join after an app kill are the same call. While the host still holds
+    // this device's seat, it hands that seat back, whatever peer id the fabric gives us this time.
+    return factory.join(tag, memberName = "Ada")
+}
+
+/**
+ * Tell "the same device came back" from "someone new arrived", on any member. A held seat restored
+ * under the same peer id is [MembershipEvent.Resumed]. Under a new peer id the old membership leaves
+ * with [LeaveReason.Superseded], naming the new id, and the new id's [MembershipEvent.Joined] follows.
+ */
+public suspend fun whoCameBackSample(room: Room) {
+    room.events.collect { event ->
+        when (event) {
+            // Same seat, same peer id: nothing on anyone's screen needs to change.
+            is MembershipEvent.Resumed -> Unit
+            is MembershipEvent.Left -> when (val reason = event.reason) {
+                // Same device under a new peer id. Move whatever you keyed on event.peerId over to
+                // reason.by, and the Joined that follows is not a stranger.
+                is LeaveReason.Superseded -> Unit // "Ada is back"
+                // On this room's own id it means another process of this device took the seat: this
+                // room is over, and the device is already back. Do not rejoin from here.
+                else -> Unit // really gone
+            }
+            else -> Unit
+        }
+    }
+}
+
+/**
+ * Find this device's seats in a room by its key, the one name a device keeps across rooms, peer ids
+ * and restarts. Never assume one member per key: two tabs of one browser share a key and hold two
+ * seats.
+ */
+public fun seatsOfDeviceSample(room: Room, device: DidKey): List<PeerId> =
+    // Usually one seat; none when the device is away, two for two tabs. Not a lookup by key alone.
+    room.roster.value.filter { it.key == device }.map { it.id }
+
 /**
  * Decide whether a host's refusal is worth retrying. Branch on [RejectCode], not on the free-text
  * reason — and treat anything you don't recognise as retryable, because a peer that predates typed
@@ -153,14 +211,13 @@ public suspend fun resumeAfterDropSample(room: Room): Boolean {
  */
 public fun classifyRejectCodeSample(reason: FailureReason.Refused): Boolean =
     when (reason.code) {
-        // Terminal: the window closed, the credential can never validate here, or the two peers
-        // speak incompatible protocol versions (retrying a version you don't support is futile).
-        RejectCode.ResumeWindowExpired, RejectCode.ResumeTokenInvalid,
+        // Terminal: this device's proof was refused, another device holds this peer id's live seat,
+        // or the two peers speak incompatible protocol versions. Retrying changes none of them.
+        RejectCode.BadProof, RejectCode.KeyConflict,
         RejectCode.RoomMismatch, RejectCode.ProtocolMismatch,
         -> false
-        // Transient: the host hasn't opened the window yet (the fast-reconnect race).
-        RejectCode.ResumeWindowNotYetOpen -> true
-        // Anything else, including a code this build has never heard of.
+        // Anything else — the host's policy failing, a code an app's policy made up, a code this build
+        // has never heard of — says for itself whether a retry can help.
         else -> reason.code.retryable
     }
 
