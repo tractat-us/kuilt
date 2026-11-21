@@ -6,6 +6,8 @@ import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 import java.io.File
+import javax.xml.stream.XMLInputFactory
+import javax.xml.stream.XMLStreamConstants
 
 /**
  * Writes the Karma **line reporter** into each module's `karma.config.d` directory, so a wasm
@@ -45,10 +47,12 @@ import java.io.File
  *
  * ## It refuses to fail open
  *
- * If Kotlin renames the reporter or changes its export, the wrapper throws at Karma config time.
- * A wrapper that silently stops wrapping would bring back the one-line run with nothing to say so.
- * The count file is written only by the wrapper, so a missing file after a run also fails the
- * task. Either way, a disarmed guard shows up as a red build.
+ * If Kotlin renames the reporter, changes its export, or stops defining a hook the count is taken
+ * from, the wrapper throws at Karma config time. A wrapper that silently stops wrapping would bring
+ * back the one-line run with nothing to say so, and one that silently stops counting would report
+ * 0. The count file is written only by the wrapper, at the end of a run, so a missing file also
+ * fails the task. And the check demands an exact match, so a count of 0 against a non-empty report
+ * is red too. Either way, a disarmed guard shows up as a red build.
  */
 abstract class GenerateKarmaLineReporter : DefaultTask() {
 
@@ -109,6 +113,16 @@ abstract class GenerateKarmaLineReporter : DefaultTask() {
             |        };
             |        var reported = 0;
             |        var self = this;
+            |        // Karma's base reporter turns each spec_complete into one of these three calls. If
+            |        // Kotlin's reporter stops defining one (say it overrides onSpecComplete instead),
+            |        // wrapping it would count nothing, and a count of 0 must never pass for a healthy run.
+            |        ['specSuccess', 'specFailure', 'specSkipped', 'onRunComplete'].forEach(function (name) {
+            |            if (typeof self[name] !== 'function') {
+            |                throw new Error('kuilt line reporter (#3605): Kotlin\'s ' + original +
+            |                    ' no longer defines ' + name + ', so the result count would be wrong. ' +
+            |                    'Update GenerateKarmaLineReporter.');
+            |            }
+            |        });
             |        ['specSuccess', 'specFailure', 'specSkipped'].forEach(function (name) {
             |            var handler = self[name];
             |            self[name] = function () {
@@ -136,8 +150,14 @@ abstract class GenerateKarmaLineReporter : DefaultTask() {
 }
 
 /**
- * Removes the previous run's [GenerateKarmaLineReporter.COUNT_FILE_NAME] before a wasm browser
- * test starts, so [VerifyKarmaResultCount] can only ever read the count of the run it follows.
+ * Removes the previous run's [GenerateKarmaLineReporter.COUNT_FILE_NAME] before a Karma test task
+ * starts, so [VerifyKarmaResultCount] can only ever read the count of the run it follows.
+ *
+ * Two Karma tasks of one module share an npm package directory and so one count file
+ * (`:kuilt-identity`'s ChromeHeadless and WebKit runs). That is safe because every Karma task holds
+ * the build-wide `browserTestSerializer` lease (one usage at a time) for its whole execution, this
+ * action and the verify included, so reset, run and verify of one task never interleave with the
+ * other's.
  */
 class ResetKarmaResultCount(private val countFile: File) : Action<Task> {
     override fun execute(task: Task) {
@@ -146,12 +166,23 @@ class ResetKarmaResultCount(private val countFile: File) : Action<Task> {
 }
 
 /**
- * Fails a wasm browser test task when Gradle recorded fewer results than Karma reported (#3605).
+ * Fails a Karma browser test task when the results Gradle recorded differ from the results Karma
+ * reported (#3605).
  *
  * The expected number comes from the producer, the Karma reporter, and the actual number from the
- * consumer, the `<testcase>` rows in the task's own JUnit XML. A `--tests` filter narrows both
+ * consumer, the `<testcase>` elements in the task's own JUnit XML. A `--tests` filter narrows both
  * the same way, so this needs no stand-down, unlike the cross-target `verifyTestResultParity`.
- * It runs only when the task succeeded: a failing test already fails the task.
+ *
+ * The match is exact. A shortfall is a dropped result. A surplus means the count has stopped seeing
+ * what the reporter reports, and a check that let a surplus through would let a count of 0 through,
+ * which is what a reporter whose counted hooks never fire produces.
+ *
+ * **It also runs after a failed run.** A failing test, a Karma that never finished (a bundle
+ * error, a browser or Node crash) and the wrapper's own config-time throw all fail the task before
+ * this action is reached, unless the task ignores failures. `allTests`, which `build` runs, sets
+ * `ignoreFailures` and `ignoreRunFailures` on every child test task, so on CI this runs after all
+ * of them. A failing test still leaves a count, and a run that did not finish leaves none, so the
+ * missing-count message sends the reader to the run failure above it first.
  */
 class VerifyKarmaResultCount(
     private val countFile: File,
@@ -161,25 +192,56 @@ class VerifyKarmaResultCount(
         if (!countFile.isFile) {
             throw GradleException(
                 "${task.path}: Karma left no result count at $countFile. The kuilt line reporter " +
-                    "(GenerateKarmaLineReporter, #3605) did not run, so nothing guards this task " +
-                    "against Gradle silently dropping results. Check that karma.conf.js still " +
-                    "includes build/karma-config.d/line-reporter.js.",
+                    "(GenerateKarmaLineReporter, #3605) writes it when a Karma run completes. Either " +
+                    "Karma did not finish its run: look above in this task's log for the run failure " +
+                    "(a bundle error, a browser or Node crash, or a 'kuilt line reporter (#3605)' " +
+                    "error), which is the real cause. Or the line reporter is not loaded: check that " +
+                    "this task's karma.conf.js includes line-reporter.js. Until there is a count, " +
+                    "nothing guards this task against Gradle silently dropping results.",
             )
         }
         val reported = countFile.readText().trim().toInt()
-        val testcase = Regex("<testcase\\s")
         val recorded = junitXmlDir.walkTopDown()
             .filter { it.isFile && it.name.startsWith("TEST-") && it.extension == "xml" }
-            .sumOf { file -> testcase.findAll(file.readText()).count() }
-        if (recorded < reported) {
+            .sumOf(::countTestcases)
+        if (recorded != reported) {
+            val detail = if (recorded < reported) {
+                "The missing ${reported - recorded} were dropped between the browser and the test " +
+                    "report, and the task would otherwise have passed. The known cause is KGP's 1 MB " +
+                    "service-message limit (#3605, #2185): look in this task's log for 'too long " +
+                    "teamcity service message'."
+            } else {
+                "The ${recorded - reported} extra mean the count no longer sees every result: check " +
+                    "that Kotlin's Karma reporter still reports each spec through specSuccess, " +
+                    "specFailure and specSkipped, and update GenerateKarmaLineReporter."
+            }
             throw GradleException(
-                "${task.path}: Karma reported $reported result(s) but Gradle recorded only " +
-                    "$recorded. The missing ${reported - recorded} were dropped between the browser " +
-                    "and the test report, and the task would otherwise have passed. The known cause " +
-                    "is KGP's 1 MB service-message limit (#3605, #2185): look in this task's log for " +
-                    "'too long teamcity service message'.",
+                "${task.path}: Karma reported $reported result(s) but Gradle recorded $recorded. $detail",
             )
         }
         task.logger.info("${task.path}: Karma reported $reported result(s); Gradle recorded $recorded.")
+    }
+
+    /**
+     * The `<testcase>` elements in one JUnit XML file. A parser, not a pattern, so a test that
+     * prints `<testcase ` into its captured output, which Gradle writes as CDATA, cannot add to it.
+     */
+    private fun countTestcases(file: File): Int {
+        val factory = XMLInputFactory.newFactory().apply {
+            setProperty(XMLInputFactory.SUPPORT_DTD, false)
+            setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false)
+        }
+        return file.inputStream().use { input ->
+            val reader = factory.createXMLStreamReader(input)
+            try {
+                var count = 0
+                while (reader.hasNext()) {
+                    if (reader.next() == XMLStreamConstants.START_ELEMENT && reader.localName == "testcase") count++
+                }
+                count
+            } finally {
+                reader.close()
+            }
+        }
     }
 }
