@@ -1859,8 +1859,7 @@ internal class SeamRoom(
      */
     private suspend fun sendChallenge(sender: PeerId, keyed: KeyedHello, hostNonce: ByteArray, generation: Long) {
         val statement = try {
-            val roomId = checkNotNull(_roomId.value) { "a host has a room id from construction" }
-            KeyAdmission.signChallenge(device.key, roomId.value, selfId, sender, keyed.joinerNonce, hostNonce)
+            KeyAdmission.signChallenge(device.key, signedRoomId(), selfId, sender, keyed.joinerNonce, hostNonce)
         } catch (failure: Throwable) {
             currentCoroutineContext().ensureActive()
             logger.warn { "room.challenge.sign-failed peer=${sender.value}: $failure" }
@@ -1873,6 +1872,13 @@ internal class SeamRoom(
         runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(AdmitMessage.Challenge(statement))) }
             .onFailure { logger.debug { "room.challenge.send-failed peer=${sender.value}: $it" } }
     }
+
+    /**
+     * The room id a host's challenge names and its proofs must sign: [roomId]'s value. Every host
+     * entry point (`host`, a host `adopt`) gives a host one; a host built directly without one — which
+     * only a test does — signs the empty string, on both sides alike, rather than refusing everyone.
+     */
+    private fun signedRoomId(): String = _roomId.value?.value.orEmpty()
 
     /**
      * **Host only.** Check [sender]'s proof against the challenge pending for it, and admit on a valid
@@ -1897,12 +1903,11 @@ internal class SeamRoom(
         // Only a Hello that passed the keyed gate opens a challenge, so this is never null.
         val keyed = pending.hello.keyed() ?: return
         val fault = try {
-            val roomId = checkNotNull(_roomId.value) { "a host has a room id from construction" }
             KeyAdmission.checkProof(
                 statement = msg.statement,
                 pending = pending,
                 joinerKey = keyed.key,
-                roomId = roomId.value,
+                roomId = signedRoomId(),
                 hostKey = device.key.id,
                 hostPeerId = selfId,
                 sender = sender,
