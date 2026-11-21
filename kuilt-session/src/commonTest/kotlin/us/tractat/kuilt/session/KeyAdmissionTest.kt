@@ -71,9 +71,9 @@ class KeyAdmissionTest {
     /** A host room over a [FakeSeam] that already sees [joiners]. */
     private suspend fun TestScope.hostRoom(
         store: DeviceKeyStore = fakeKeyStore(0),
-        vararg joiners: PeerId = arrayOf(bob, eve),
+        joiners: Set<PeerId> = setOf(bob, eve),
     ): Pair<FakeSeam, Room> {
-        val seam = FakeSeam(selfId = hostId, initialPeers = setOf(hostId, *joiners))
+        val seam = FakeSeam(selfId = hostId, initialPeers = setOf(hostId) + joiners)
         val room = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock(), store, admitTimeout = ADMIT_TIMEOUT)
             .adopt(seam, SessionRole.Host, memberName = "Host", roomId = ROOM)
         runCurrent()
@@ -241,12 +241,13 @@ class KeyAdmissionTest {
 
         val hostOnJoiner = joiner.roster.first { it.isNotEmpty() }.single()
         host.roster.first { it.size == 1 }
+        val hostKey = hostStore.deviceKey().id
 
         assertAll(
             { assertEquals(1, proofsToCoJoiner.size, "rig: the joiner answered the co-joiner's challenge") },
             { assertEquals(2, joinerSeam.received<AdmitMessage.Challenge>(), "rig: the joiner received both challenges") },
             { assertEquals(host.selfId, hostOnJoiner.id, "the real host admitted the joiner") },
-            { assertEquals(hostStore.deviceKey().id, hostOnJoiner.key) },
+            { assertEquals(hostKey, hostOnJoiner.key) },
         )
         joiner.leave()
         host.leave()
@@ -423,9 +424,10 @@ class KeyAdmissionTest {
         val tab = SeamRoomFactory(loom, backgroundScope, clock(), shared).join(InMemoryTag("room"), memberName = "Tab")
 
         val tabOnHost = host.roster.first { it.size == 1 }.single()
+        val sharedKey = shared.deviceKey().id
         assertAll(
             { assertEquals(tab.selfId, tabOnHost.id) },
-            { assertEquals(shared.deviceKey().id, tabOnHost.key, "rig: the joiner presented the host's own key") },
+            { assertEquals(sharedKey, tabOnHost.key, "rig: the joiner presented the host's own key") },
         )
         tab.leave()
         host.leave()
@@ -458,12 +460,13 @@ class KeyAdmissionTest {
         say(seam, hostId, challengeFor(hello, hostKey))
 
         val answered = seam.proofsTo(hostId).single()
+        val signedByBob = answered.isSignedBy(fakeDidKey(1), FakeKeyScheme(Random(0)))
         assertAll(
             { assertEquals(hostId.value, answered.hostPeerId, "the proof names the challenge's fabric sender") },
             { assertEquals(hostKey.id, answered.hostKey) },
             { assertEquals(bob.value, answered.joinerPeerId) },
             { assertEquals("bob-phone", answered.deviceId, "the proof signs the app's device id") },
-            { assertTrue(answered.isSignedBy(fakeDidKey(1), FakeKeyScheme(Random(0))), "signed by the joiner's own key") },
+            { assertTrue(signedByBob, "signed by the joiner's own key") },
         )
         room.leave()
     }
