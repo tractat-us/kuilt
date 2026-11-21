@@ -527,6 +527,159 @@ class ProvenRestoreTest {
         host.room.leave()
     }
 
+    /**
+     * Bob's old link heals while the host is still asking about his seat, and the hold policy then
+     * refuses. The refusal was about a partition that is over: the seat is connected again, so it is
+     * restored as a connected seat would be, never released (Decided 18, 30). Acted on as decided
+     * before the heal, Bob would be evicted and admitted afresh.
+     */
+    @Test
+    fun aSeatThatHealsWhileTheWindowIsAskedIsRestoredNotReleased() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val host = rawHost(
+            joiners = setOf(bob, carol),
+            hold = ObservedHold(verdict = { ResumeResult.WindowClosed }, gate = gate),
+        )
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+
+        val mark = host.events.mark()
+        val toBob = host.sentTo(bob).size
+        val toCarol = host.sentTo(carol).size
+        host.admit(bob, bobKey, nonce = 3)
+        assertEquals(listOf(bob), host.hold.calls.map { it.peerId }, "rig: the host is mid-ask")
+        assertTrue(host.hold.verdicts.isEmpty(), "rig: and the controller has not answered")
+
+        host.advanceKeeping(alive = setOf(bob, carol), KEY_SEAT_HEARTBEAT.interval)
+        assertEquals(Liveness.Connected, host.member(bob)?.liveness, "rig: the seat healed during the ask")
+
+        gate.complete(Unit)
+        testScheduler.runCurrent()
+        val edges = host.events.edgesSince(mark)
+
+        assertAll(
+            { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.WindowClosed), host.hold.verdicts, "rig: the refusal came after the heal") },
+            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(bob)), edges, "restored, not released: ${edges.render()}") },
+            { assertEquals(listOf(ReturnKind.Restored), host.sentTo(bob).drop(toBob).welcomesFor(bob).map { it.returnKind }) },
+            {
+                assertTrue(
+                    host.sentTo(carol).drop(toCarol).none { it is AdmitMessage.Farewell || it is AdmitMessage.Welcome },
+                    "a bystander is told of no departure and no arrival",
+                )
+            },
+            { assertEquals(Liveness.Connected, host.member(bob)?.liveness) },
+            { assertTrue(host.rejectsTo(bob).isEmpty()) },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * Bob's seat was restored once, spending its first window, and is partitioned again. The window
+     * controller has not opened the second window yet, so it still holds the first, spent one and
+     * answers `WindowClosed`. That verdict is about the previous episode: until the room has seen
+     * this episode's `WindowOpened`, a refusal means "not open yet", and the seat is restored. Read as
+     * a refusal, Bob would be released and admitted afresh.
+     *
+     * The lagging controller stands in for the default one, which opens the window on a launched
+     * coroutine: the same gap, held open long enough for a Proof to land in it.
+     */
+    @Test
+    fun aRefusalFromBeforeThisEpisodesWindowOpenedRestores() = runTest {
+        val hold = ObservedHold()
+        val host = rawHost(joiners = setOf(bob, carol), hold = hold)
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+        host.admit(bob, bobKey, nonce = 3)
+        assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.Success), hold.verdicts, "rig: the first window was spent")
+
+        val lag = CompletableDeferred<Unit>()
+        hold.lagOpening = lag
+        host.partition(bob, alive = setOf(carol))
+        assertEquals(1, hold.opened.size, "rig: the controller has not been told of the second partition")
+
+        val mark = host.events.mark()
+        val toBob = host.sentTo(bob).size
+        host.admit(bob, bobKey, nonce = 4)
+        val edges = host.events.edgesSince(mark)
+        val direct = host.sentTo(bob).drop(toBob).welcomesFor(bob)
+
+        lag.complete(Unit)
+        host.advanceKeeping(alive = setOf(bob, carol), KEY_SEAT_HEARTBEAT.reconnectWindow * 2)
+
+        assertAll(
+            {
+                assertEquals(
+                    listOf<ResumeResult.HostVerdict>(ResumeResult.Success, ResumeResult.WindowClosed),
+                    hold.verdicts,
+                    "rig: the second ask read the first window's spent state",
+                )
+            },
+            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(bob)), edges, "restored, not released: ${edges.render()}") },
+            { assertEquals(listOf(ReturnKind.Restored), direct.map { it.returnKind }) },
+            { assertEquals(2, hold.opened.size, "rig: the second window did open, late") },
+            { assertEquals(Liveness.Connected, host.member(bob)?.liveness, "still a member after the late window would have run out") },
+            { assertTrue(host.rejectsTo(bob).isEmpty()) },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * The window expires while the host is asking about Bob's seat, so the controller answers
+     * `WindowClosed` for a seat the expiry has already taken, and Bob is admitted afresh. With the
+     * default controller this is the ordinary way the two meet: the ask is refused exactly when the
+     * window has closed. The new Bob must survive it, on the host and at a bystander: one `Left`, one
+     * `Joined`, the bystander told `Farewell` before `Welcome`, and a detector watching the new seat.
+     *
+     * On one thread the two cannot interleave inside either side's decision, since neither suspends
+     * between deciding and acting; this pins the outcome both orders must reach.
+     */
+    @Test
+    fun anExpiryDuringTheAskLeavesTheReadmittedMemberSeated() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val host = rawHost(joiners = setOf(bob, carol), hold = ObservedHold(gate = gate))
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+
+        val mark = host.events.mark()
+        val toCarol = host.sentTo(carol).size
+        host.admit(bob, bobKey, nonce = 3)
+        assertTrue(host.hold.verdicts.isEmpty(), "rig: the host is mid-ask")
+        assertNotNull(host.hold.real).expire(bob, testScheduler.currentTime)
+        testScheduler.runCurrent()
+        assertEquals(null, host.member(bob), "rig: the expiry took the seat during the ask")
+
+        gate.complete(Unit)
+        testScheduler.runCurrent()
+        val edges = host.events.edgesSince(mark)
+        val toCarolSince = host.sentTo(carol).drop(toCarol).filter { it.names(bob) }
+
+        host.advanceKeeping(alive = setOf(bob, carol), KEY_SEAT_HEARTBEAT.reconnectWindow * 2)
+
+        assertAll(
+            { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.WindowClosed), host.hold.verdicts, "rig: the ask was refused") },
+            {
+                assertEquals(
+                    listOf("Left(bob, ${LeaveReason.PartitionExpired})", "Joined(bob)"),
+                    edges.map { it.describe() },
+                    "one Left, one Joined",
+                )
+            },
+            {
+                assertEquals(
+                    listOf("Farewell", "Welcome"),
+                    toCarolSince.map { it::class.simpleName },
+                    "the bystander hears the departure, then the arrival: $toCarolSince",
+                )
+            },
+            { assertEquals(Liveness.Connected, host.member(bob)?.liveness, "the new Bob is still seated after the old window") },
+            { assertTrue((host.room as SeamRoom).hasDetector(bob), "and watched by a detector") },
+        )
+        host.room.leave()
+    }
+
     // ── The host's own key (Amendment A § 1.5, Amendment B) ──────────────────
 
     /**

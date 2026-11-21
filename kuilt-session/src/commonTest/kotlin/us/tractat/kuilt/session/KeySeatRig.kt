@@ -92,6 +92,16 @@ internal class ObservedHold(
     val calls = mutableListOf<ProvenResume>()
     val verdicts = mutableListOf<ResumeResult.HostVerdict>()
 
+    /**
+     * When set, a partition the room reports reaches the real controller only once this completes: a
+     * controller that lags in opening the window. The default one lags too — it opens it on a launched
+     * coroutine — but only for an instant, which a test cannot hold open.
+     */
+    var lagOpening: CompletableDeferred<Unit>? = null
+
+    /** The detection instant of every partition the real controller has been told of, in order. */
+    val opened = mutableListOf<Long>()
+
     val factory: JoinerReconnectControllerFactory = { roomId, scope, clock ->
         val controller = DefaultJoinerReconnectController(
             roomId = roomId,
@@ -101,6 +111,20 @@ internal class ObservedHold(
         )
         real = controller
         object : JoinerReconnectController by controller {
+            override fun onPeerUnresponsive(peerId: PeerId, at: Long) {
+                val lag = lagOpening
+                if (lag == null) {
+                    opened += at
+                    controller.onPeerUnresponsive(peerId, at)
+                } else {
+                    scope.launch {
+                        lag.await()
+                        opened += at
+                        controller.onPeerUnresponsive(peerId, at)
+                    }
+                }
+            }
+
             override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict {
                 calls += resume
                 gate?.await()
