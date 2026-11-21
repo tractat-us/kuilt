@@ -177,12 +177,16 @@ class ResetKarmaResultCount(private val countFile: File) : Action<Task> {
  * what the reporter reports, and a check that let a surplus through would let a count of 0 through,
  * which is what a reporter whose counted hooks never fire produces.
  *
- * **It also runs after a failed run.** A failing test, a Karma that never finished (a bundle
- * error, a browser or Node crash) and the wrapper's own config-time throw all fail the task before
- * this action is reached, unless the task ignores failures. `allTests`, which `build` runs, sets
- * `ignoreFailures` and `ignoreRunFailures` on every child test task, so on CI this runs after all
- * of them. A failing test still leaves a count, and a run that did not finish leaves none, so the
- * missing-count message sends the reader to the run failure above it first.
+ * **It also runs after a failed run.** A failing test, and a Karma run that fails (a bundle error,
+ * a browser or Node crash, the wrapper's own config-time throw), fail the task before this action
+ * is reached, unless the task ignores failures. But the topmost test aggregate, `allTests` under
+ * `build`, sets `ignoreFailures` and `ignoreRunFailures` on every child test task, so on CI the
+ * Karma failure is only logged and the task carries on. A failure before any test ran is then
+ * still caught first, by Gradle's "did not discover any tests" check (measured with the wrapper's
+ * config-time throw under `allTests`). A run that fails after some tests reported reaches this
+ * action with no count file, because the reporter writes it only when a run completes. So the
+ * missing-count message names the run failure, logged above it, as the likely cause, and a
+ * missing reporter second. A failing test still leaves a count, and is checked like any other run.
  */
 class VerifyKarmaResultCount(
     private val countFile: File,
