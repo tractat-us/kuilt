@@ -7247,6 +7247,9 @@ val verifySkillBodyBudget by tasks.registering {
 // compiler sees. It would retire with that one, if the router were generated from the reference
 // files. The slugger follows GitHub's: lowercase, drop everything but letters, digits, spaces,
 // `-` and `_`, then spaces to hyphens, with `-1`, `-2` on repeats.
+/** One file in the skill directory as the consumer sync sees it; path relative to that directory. */
+data class SkillSyncEntry(val path: String, val regular: Boolean, val executable: Boolean, val bytes: Long)
+
 val verifySkillReferences by tasks.registering {
     group = "verification"
     description = "Fails on a kuilt-primitives reference/ file the router does not name, a reference " +
@@ -7261,10 +7264,8 @@ val verifySkillReferences by tasks.registering {
     outputs.upToDateWhen { false }
     doLast {
         // What the consumer sync accepts, as a function so the control below runs the same code.
-        // `entries` are (path relative to the skill directory, regular non-link file, executable, bytes).
-        data class Entry(val path: String, val regular: Boolean, val executable: Boolean, val bytes: Long)
         val component = Regex("""[A-Za-z0-9._-]+""")
-        fun syncFailures(entries: List<Entry>): List<String> {
+        fun syncFailures(entries: List<SkillSyncEntry>): List<String> {
             val out = mutableListOf<String>()
             entries.forEach { e ->
                 val bad = e.path.split('/').filter { !component.matches(it) || it.startsWith('.') }
@@ -7284,13 +7285,13 @@ val verifySkillReferences by tasks.registering {
             return out
         }
         val syncControls = listOf(
-            "healthy" to (listOf(Entry("SKILL.md", true, false, 10), Entry("reference/a/b-c_1.md", true, false, 10)) to null),
-            "dotfile" to (listOf(Entry("reference/.hidden.md", true, false, 1)) to "SYNC"),
-            "bad character" to (listOf(Entry("reference/a b.md", true, false, 1)) to "SYNC"),
-            "script" to (listOf(Entry("route-check.py", true, false, 1)) to "SYNC"),
-            "executable" to (listOf(Entry("reference/a.md", true, true, 1)) to "SYNC"),
-            "symlink" to (listOf(Entry("reference/a.md", false, false, 1)) to "SYNC"),
-            "too big" to (listOf(Entry("reference/a.md", true, false, (1L shl 20) + 1)) to "SYNC"),
+            "healthy" to (listOf(SkillSyncEntry("SKILL.md", true, false, 10), SkillSyncEntry("reference/a/b-c_1.md", true, false, 10)) to null),
+            "dotfile" to (listOf(SkillSyncEntry("reference/.hidden.md", true, false, 1)) to "SYNC"),
+            "bad character" to (listOf(SkillSyncEntry("reference/a b.md", true, false, 1)) to "SYNC"),
+            "script" to (listOf(SkillSyncEntry("route-check.py", true, false, 1)) to "SYNC"),
+            "executable" to (listOf(SkillSyncEntry("reference/a.md", true, true, 1)) to "SYNC"),
+            "symlink" to (listOf(SkillSyncEntry("reference/a.md", false, false, 1)) to "SYNC"),
+            "too big" to (listOf(SkillSyncEntry("reference/a.md", true, false, (1L shl 20) + 1)) to "SYNC"),
         ).map { (name, case) -> name to (syncFailures(case.first) to case.second) }
 
         fun headingSlugs(lines: List<String>): Set<String> {
@@ -7402,7 +7403,7 @@ val verifySkillReferences by tasks.registering {
                 .filter { it.fileName.toString() != ".DS_Store" }
                 .map { p ->
                     val regular = java.nio.file.Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)
-                    Entry(
+                    SkillSyncEntry(
                         path = skillDir.toPath().relativize(p).toString().replace('\\', '/'),
                         regular = regular,
                         executable = regular && java.nio.file.Files.isExecutable(p),

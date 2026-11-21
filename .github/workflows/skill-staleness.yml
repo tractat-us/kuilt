@@ -312,6 +312,7 @@ jobs:
           # a second literal here is the wrong place to make it silently.
           MAX_DAYS: '7'
           LABEL: skill-stale
+          SKILL_DIR: .claude/skills/kuilt-primitives
         run: |
           set -euo pipefail
 
@@ -403,6 +404,19 @@ jobs:
               [ "$COOK_TS" -gt "$DOC_TS" ] && DOC_TS=$COOK_TS
             else
               echo "::warning::$COOK does not exist, so this family has no cookbook page for a route to land in; falling back to $RULE's own date."
+            fi
+            # The family's routes in the skill (#3601): `reference/<family>.md`, or the
+            # `reference/<family>/` directory once a family is split by section. Either
+            # is where a new row for this family lands, so touching it counts. These
+            # never feed the skill arm's shared SKILL.md timestamp above, which would
+            # let one family's row clear the check for all seven.
+            REF="$SKILL_DIR/reference/$FAMILY.md"
+            REF_DIR="$SKILL_DIR/reference/$FAMILY"
+            REF_TS=$(git log -1 --format=%ct -- "$REF" "$REF_DIR")
+            if [ -n "$REF_TS" ]; then
+              [ "$REF_TS" -gt "$DOC_TS" ] && DOC_TS=$REF_TS
+            else
+              echo "::warning::$FAMILY has no $REF or $REF_DIR/, so the skill routes nothing for it; verifySkillReferences should have refused that."
             fi
 
             DAYS=0
