@@ -352,6 +352,7 @@ class ReHelloReconnectTest {
         val reHello = assertNotNull(s.dropAndHeal(), "the reconnect says Hello again")
         s.challenge(reHello)
         val successor = PeerId("bob-2")
+        val reconnectingBefore = (s.room as SeamRoom).isReconnectRunning()
         s.fromHost(AdmitMessage.Farewell(bob.value, supersededBy = successor.value))
         val hellos = s.allHellos()
         s.advance(joinerConfig.reconnectWindow * 2)
@@ -361,7 +362,8 @@ class ReHelloReconnectTest {
             { assertEquals(listOf<MembershipEvent>(MembershipEvent.Left(bob, LeaveReason.Superseded(successor))), since.filterIsInstance<MembershipEvent.Left>()) },
             { assertTrue(since.none { it is MembershipEvent.HostLost }, since.render()) },
             { assertEquals(hellos, s.allHellos(), "a superseded room never says Hello again") },
-            { assertTrue(!(s.room as SeamRoom).hasReconnectInFlight(), "the reconnect loop stopped") },
+            { assertTrue(reconnectingBefore, "rig: the reconnect loop was running when the Farewell came") },
+            { assertTrue(!(s.room as SeamRoom).isReconnectRunning(), "the reconnect loop stopped") },
         )
     }
 

@@ -3180,6 +3180,12 @@ internal class SeamRoom(
      */
     internal fun hasReconnectInFlight(): Boolean = resumeMachine?.inFlightReconnectJob() != null
 
+    /**
+     * Test-visibility: is a reconnect loop still running? Unlike [hasReconnectInFlight], `false` for an
+     * episode whose job [leave] cancelled before it could decide — a superseded room's, say (#3159).
+     */
+    internal fun isReconnectRunning(): Boolean = resumeMachine?.inFlightReconnectJob()?.isActive == true
+
     /** Test-visibility: how many resume flights this joiner has started (#3165). */
     internal fun resumeFlightsStarted(): Int = resumeMachine?.flightsStarted() ?: 0
 
