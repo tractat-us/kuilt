@@ -195,9 +195,11 @@ class QuilterTest {
 
         // Only B ticks inside the test window: A's interval is an order of magnitude beyond it.
         // fullStateRetryLimit = 0 so no first-contact retry can heal B behind the guard's back.
-        // staleDigestSkipLimit = 0 because B has not acked A's dropped delta, so by default A would
-        // skip B's mismatched digests a few rounds before asking (#3617). That skip has its own
-        // test; this one is about the push-back, and wants it on the first round.
+        // staleDigestSkipLimit = 0 because B's digest reaches A 50 ms after A's dropped write. A
+        // write that young and unacked is indistinguishable from one still in flight, so by
+        // default A skips a few rounds before asking (#3617). That skip has its own tests, and a
+        // partition, where the write is older than the interval, is answered at once
+        // (QuilterFullStateBoundTest). This test is about the push-back and wants it on the first round.
         val repA = gcounterReplicator(
             seamA,
             backgroundScope,
