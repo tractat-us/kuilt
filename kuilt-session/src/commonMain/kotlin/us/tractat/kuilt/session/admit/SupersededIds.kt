@@ -25,7 +25,11 @@ import us.tractat.kuilt.identity.DidKey
  * - **An id seated again is forgotten** ([forget]): from then on its Hellos are a member's.
  * - **Only while the successor is seated.** The room reads [successorFor] only for a successor that
  *   still holds a seat: once it has left there is no membership to take back, and the old id is
- *   challenged as any Hello is.
+ *   challenged and admitted as any Hello is.
+ * - **Peer ids are per-process.** The host cannot tell the superseded process from a new process that
+ *   reuses its id under the same key, so both are told `Farewell(supersededBy)` while the successor
+ *   holds a seat. A new process must therefore never reuse a superseded id under the same key. There
+ *   is no time-based expiry and no wire mark: the only release is the successor's seat going.
  *
  * Not thread-safe: the room calls it under its own lock.
  */
