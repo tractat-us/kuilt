@@ -41,13 +41,14 @@ public suspend fun callerSuppliedRoomIdSample(
 ```
 
 **Intent:** rejoin / reconnect after a dropped connection; "hold the slot open" for a grace window.
-**Primitive:** `ResumeToken` (`us.tractat.kuilt.session.partition`) presented to `Room.resume` — `Room.resumeToken` mints it, `Room` is the whole public surface. (`SeamRoom`, which this entry used to name, is `internal`; `SeamRoomFactory` builds it.) Don't re-track the grace window yourself.
+**Primitive:** none to call — keep the `Room`. A joiner built by `SeamRoomFactory` says Hello again after a tear, and the device key its `Hello` proves restores the held seat. `Room.resume` does the same on demand; the `ResumeToken` it still takes is not presented. (`SeamRoom` is `internal`; `SeamRoomFactory` builds it.) Don't re-track the grace window yourself.
 
-Keep the existing room. After a transport tear, a joiner built by `SeamRoomFactory` attempts
-resume automatically within the reconnect window; the explicit call below is for manual control.
+Keep the existing room. After a transport tear, a joiner built by `SeamRoomFactory` says Hello
+again automatically within the reconnect window; the explicit call below is for manual control.
 This requires a loom that heals the **same seam instance** the room already holds, with the
 **same `selfId`**. `MuxClientLoom` and `NwLoom` provide that stable handle. The host keys the held seat by
-`token.peerId`, so a new transport identity cannot take it over.
+peer id and device key, so another device's key cannot take it over. If the seat was already gone,
+the Hello is admitted afresh and `resume` reports `WindowClosed` with the room still in session.
 
 A loom that returns a new seam on each join leaves the old room's seam torn: reconnect ends in
 `HostLost`, and a later `resume` on that room returns `WindowClosed` without asking the host.
@@ -62,21 +63,20 @@ may hold several seats. Presenting a saved token at join time is the separate
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#resumeAfterDropSample -->
 ```kotlin
 public suspend fun resumeAfterDropSample(room: Room): Boolean {
-    // After the admit handshake the joiner holds a reconnect credential — save it.
+    // resume() still takes the room's token, but no longer presents it: it says Hello again,
+    // and the device key proves the member.
     val token: ResumeToken = room.resumeToken ?: return false
     // Keep this room: its loom must heal the SAME seam with the SAME selfId (e.g. MuxClientLoom).
-    // SeamRoomFactory joiners attempt resume automatically after a tear; this is manual control.
-    // Once that seam is usable again, present the token within the host's reconnect window.
+    // SeamRoomFactory joiners say Hello again automatically after a tear; this is manual control.
     return when (val outcome = room.resume(token)) {
-        ResumeResult.Success -> false // back in the room; state resync follows
-        // The host answered, and said no. WHY is in the code, never in the message: an elapsed
-        // window and a token for another room are terminal, a window the host has not opened
-        // yet is not. See classifyRejectCodeSample.
+        ResumeResult.Success -> false // the held seat is back; state resync follows
+        // The host answered, and said no. WHY is in the code, never in the message.
+        // See classifyRejectCodeSample.
         is ResumeResult.Refused -> outcome.code.retryable
-        // No reply within resumeTimeout, or the seam tore under the Resume: the host is unreachable now.
+        // No reply within resumeTimeout, or the seam tore under the Hello: the host is unreachable now.
         ResumeResult.TimedOut -> true
-        // We never asked: this room is already over (left, or the host was lost), or the frame
-        // could not be sent. Re-join fresh.
+        // The seat was gone and the host admitted this room afresh, which it keeps — or this room
+        // is already over (left, or the host was lost), and only a fresh join helps.
         ResumeResult.WindowClosed -> false
     }
 }
