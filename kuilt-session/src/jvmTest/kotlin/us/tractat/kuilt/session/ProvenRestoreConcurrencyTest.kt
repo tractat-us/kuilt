@@ -10,6 +10,8 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -20,9 +22,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
@@ -35,10 +39,13 @@ import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.ReturnKind
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ProvenResume
 import us.tractat.kuilt.session.partition.ResumeResult
+import us.tractat.kuilt.session.partition.ResumeSecret
+import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.StageTracker
 import us.tractat.kuilt.test.assertAll
@@ -803,6 +810,185 @@ class ProvenRestoreConcurrencyTest {
         }
 
     /**
+     * The joiner side, outside any reconnect episode: the host's `Welcome` answering the joiner's latest
+     * Hello arrives again, stale, while a caller's own `resume()` installs its flight. The flight's
+     * install forgets that Hello, so the `Welcome` must settle nothing whichever lands first. The room
+     * reads the `Welcome`'s challenger and takes the flight in one critical section; were they two, a
+     * flight installed between them would be taken by an answer to a Hello it never sent, and report
+     * `Success` (review round 2 on #3614).
+     *
+     * The gap between two such sections holds no suspension point and calls out to nothing, so a
+     * single thread cannot reach it: only a second thread installing the flight can. Each round is
+     * then settled honestly, by challenging the caller's Hello and answering it, so the next round's
+     * stale `Welcome` again answers the latest Hello and passes the challenger check.
+     */
+    @Test
+    fun aStaleWelcomeRacingACallersResumeSettlesNothing() =
+        runConcurrencyStress(cap = ARM_CAP) { stage ->
+            Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
+                val rig = JoinerRig(dispatcher, RoomDevice.of(fakeKeyStore(0)))
+                var completed = 0
+                var settledByStale = 0
+                var honest = 0
+                val failures = mutableListOf<String>()
+                try {
+                    val token = rig.admit(stage)
+                    for (round in 0 until STALE_WELCOME_ROUNDS) {
+                        val handled = rig.framesHandled.value
+                        val hellos = rig.hellos.value.size
+                        val welcomeSpin = jitter.nextLong(0, STALE_WELCOME_SPIN_NANOS)
+                        val resumeSpin = jitter.nextLong(0, STALE_WELCOME_SPIN_NANOS)
+                        val stale = rig.scope.launch {
+                            spin(welcomeSpin)
+                            rig.inbound.send(Swatch(AdmitMessage.encode(rig.restoredWelcome), sender = host))
+                        }
+                        val call = rig.scope.async {
+                            spin(resumeSpin)
+                            rig.room.resume(token)
+                        }
+                        stale.join()
+                        stage.at("round $round: the stale Welcome is handled") { rig.snapshot() }
+                        rig.framesHandled.first { it > handled }
+                        stage.at("round $round: the caller says Hello, or the stale Welcome settled it") { rig.snapshot() }
+                        coroutineScope {
+                            val hello = async { rig.hellos.first { it.size > hellos } }
+                            select<Unit> {
+                                hello.onAwait { }
+                                call.onAwait { }
+                            }
+                            hello.cancel()
+                        }
+                        // Settled with no Hello of its own, a call was taken by the stale Welcome. The round
+                        // then re-arms with a second call, so the next round's stale Welcome has a Hello
+                        // with a challenger again.
+                        val settling = if (call.isCompleted) {
+                            settledByStale++
+                            if (failures.size < 5) failures += "round $round: ${call.await()} welcomeSpin=$welcomeSpin resumeSpin=$resumeSpin"
+                            val rearm = rig.scope.async { rig.room.resume(token) }
+                            stage.at("round $round: the re-arming call says Hello") { rig.snapshot() }
+                            rig.hellos.first { it.size > hellos }
+                            rearm
+                        } else {
+                            call
+                        }
+                        // Settle the round honestly: the host challenges the latest Hello, the joiner
+                        // answers, and the host's Welcome closes the flight.
+                        val proofs = rig.proofCount.value
+                        rig.inbound.send(Swatch(AdmitMessage.encode(handChallenge(rig.hellos.value.last(), joiner, host)), sender = host))
+                        stage.at("round $round: the joiner answers the challenge") { rig.snapshot() }
+                        rig.proofCount.first { it > proofs }
+                        rig.inbound.send(Swatch(AdmitMessage.encode(rig.restoredWelcome), sender = host))
+                        stage.at("round $round: the honest Welcome settles the call") { rig.snapshot() }
+                        if (settling.await() == ResumeResult.Success) honest++
+                        completed++
+                    }
+                    println(
+                        "proven-restore stale-welcome-race: completed=$completed settledByStale=$settledByStale " +
+                            "honest=$honest failures=$failures",
+                    )
+                    assertAll(
+                        { assertEquals(STALE_WELCOME_ROUNDS, completed, "every round ran: $failures") },
+                        { assertEquals(0, settledByStale, "a stale Welcome settles no caller's flight: $failures") },
+                        { assertEquals(completed, honest, "the honest Welcome settled every round's call") },
+                    )
+                } finally {
+                    rig.close()
+                }
+            }
+        }
+
+    /**
+     * A joiner room the probe plays the host for. Its first Hello is broadcast and every later one
+     * is sent to the host alone; both land in [hellos]. [framesHandled] counts the frames the room's
+     * collector has finished handling, and [proofCount] the Proofs the joiner sent.
+     */
+    private class JoinerRig(dispatcher: CoroutineDispatcher, device: RoomDevice) {
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        // Bounded, as every Swatch delivery channel is (forbidUnboundedSwatchDelivery): a round sends a few frames.
+        val inbound = Channel<Swatch>(capacity = 64)
+        val framesHandled = MutableStateFlow(0)
+        val hellos = MutableStateFlow<List<AdmitMessage.Hello>>(emptyList())
+        val proofCount = MutableStateFlow(0)
+        private val ticks = AtomicLong(1_000_000)
+
+        private val seam = object : Seam {
+            override val selfId = joiner
+            override val peers = MutableStateFlow(setOf(joiner, host))
+            override val state = MutableStateFlow<SeamState>(SeamState.Woven)
+            override val incoming = flow {
+                for (frame in inbound) {
+                    emit(frame)
+                    framesHandled.update { it + 1 }
+                }
+            }
+            override suspend fun broadcast(payload: ByteArray) = record(payload)
+            override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+                if (peer == host) record(payload)
+            }
+            private fun record(payload: ByteArray) {
+                when (val message = AdmitMessage.decode(payload)) {
+                    is AdmitMessage.Hello -> hellos.update { it + message }
+                    is AdmitMessage.Proof -> proofCount.update { it + 1 }
+                    else -> Unit
+                }
+            }
+            override suspend fun close(reason: CloseReason) = Unit
+        }
+
+        val room = SeamRoom(
+            seam = seam,
+            role = SessionRole.Joiner,
+            memberName = "joiner",
+            scope = scope,
+            clock = { Instant.fromEpochMilliseconds(ticks.incrementAndGet()) },
+            heartbeatConfig = HeartbeatConfig(interval = 1.seconds, timeout = 100_000.hours, resumeTimeout = 100_000.hours),
+            roomId = null,
+            device = device,
+            reweave = { seam },
+        )
+
+        /** The host's `Welcome` to the joiner when its seat is held: the one a stale copy repeats. */
+        val restoredWelcome = AdmitMessage.Welcome(
+            assignedPeerId = joiner.value,
+            displayName = "joiner",
+            sessionId = joiner.value,
+            key = TEST_KEY_A,
+            roomId = "room-1",
+            returnKind = ReturnKind.Restored,
+        )
+
+        /** The host challenges the joiner's broadcast Hello and admits it; returns its token. */
+        suspend fun admit(stage: StageTracker): ResumeToken {
+            room.start()
+            stage.at("setup: the joiner says Hello") { snapshot() }
+            val hello = hellos.first { it.isNotEmpty() }.first()
+            inbound.send(Swatch(AdmitMessage.encode(handChallenge(hello, joiner, host)), sender = host))
+            stage.at("setup: the joiner answers the challenge") { snapshot() }
+            proofCount.first { it > 0 }
+            val welcome = AdmitMessage.Welcome(
+                assignedPeerId = joiner.value,
+                displayName = "joiner",
+                sessionId = joiner.value,
+                key = TEST_KEY_A,
+                roomId = "room-1",
+                resumeSecret = ResumeSecret.generate(),
+            )
+            inbound.send(Swatch(AdmitMessage.encode(welcome), sender = host))
+            stage.at("setup: the joiner is admitted") { snapshot() }
+            framesHandled.first { it >= 2 }
+            return checkNotNull(room.resumeToken) { "the joiner holds a resume token" }
+        }
+
+        fun snapshot(): String =
+            "handled=${framesHandled.value} hellos=${hellos.value.size} proofs=${proofCount.value} pending=${room.hasPendingResume()}"
+
+        suspend fun close() {
+            room.leave()
+            scope.cancel()
+        }
+    }
+
+    /**
      * The window controller this probe drives the room with. A partition is announced at once, with
      * a deadline that differs from the room's own estimate, so the room records the episode's
      * `WindowOpened` and a refusal is acted on. [flow] has no buffer: an emit returns only once the
@@ -1057,6 +1243,7 @@ class ProvenRestoreConcurrencyTest {
 
     private companion object {
         val host = PeerId("host")
+        val joiner = PeerId("joiner")
         val bob = PeerId("bob")
         val carol = PeerId("carol")
         val sentinel = PeerId("sentinel")
@@ -1066,6 +1253,10 @@ class ProvenRestoreConcurrencyTest {
         // may bring one back as a new process.
         const val SUPERSEDE_ROUNDS = 5_000
         const val REHELLO_ROUNDS = 1_000
+        const val STALE_WELCOME_ROUNDS = 20_000
+
+        /** Up to about as long as the room takes to handle a frame, so the two arrivals overlap. */
+        const val STALE_WELCOME_SPIN_NANOS = 20_000L
 
         /** How long a Hello waits for its challenge before the rig reads it as answered by a Farewell instead. */
         val TOLD_GRACE = 500.milliseconds
