@@ -191,7 +191,7 @@ class ResumeAckAfterHostLostTest {
             // The room is live: a fresh resume() goes to the host rather than answering WindowClosed.
             backgroundScope.launch { room.resume(token) }
             runCurrent()
-            val resumesAfterAnotherCall = seam.resumesSent
+            val hellosAfterAnotherCall = seam.hellosToHost
 
             val fired = assertNotNull(rig, "precondition: the rig fired after the timer and before the verdict")
             assertAll(
@@ -201,7 +201,7 @@ class ResumeAckAfterHostLostTest {
                 { assertEquals(ResumeResult.Success, result, "an ack that wins the lock resumes the room") },
                 { assertEquals(1, events.count { it is MembershipEvent.Resumed }, "one Resumed (events: $events)") },
                 { assertFalse(events.any { it is MembershipEvent.HostLost }, "a resumed room is not host-lost (events: $events)") },
-                { assertEquals(2, resumesAfterAnotherCall, "the room is live: another resume() sends another Resume") },
+                { assertEquals(2, hellosAfterAnotherCall, "the room is live: another resume() sends another Resume") },
             )
         }
 
@@ -226,7 +226,7 @@ class ResumeAckAfterHostLostTest {
             // Episode one: the host answers the Resume, and its ack resumes the room.
             seam.tear()
             runCurrent()
-            val firstResumeSent = seam.resumesSent == 1 && room.hasPendingResume()
+            val firstHelloSent = seam.hellosToHost == 1 && room.hasPendingResume()
             challengeReHello(seam)
             seam.deliver(restoredWelcome)
             runCurrent()
@@ -239,17 +239,17 @@ class ResumeAckAfterHostLostTest {
             seam.dropHost()
             seam.tear()
             runCurrent()
-            val secondResumeSent = seam.resumesSent == 2 && room.hasPendingResume()
+            val secondHelloSent = seam.hellosToHost == 2 && room.hasPendingResume()
             advanceTimeBy(config.reconnectWindow.inWholeMilliseconds + 1)
             runCurrent()
 
             assertAll(
                 { assertTrue(monitoredAtStart, "precondition: the joiner monitors its host") },
-                { assertTrue(firstResumeSent, "precondition: episode one sent a Resume and awaited its verdict") },
+                { assertTrue(firstHelloSent, "precondition: episode one said Hello and awaited its answer") },
                 { assertEquals(1, resumedByFirst, "precondition: the ack resumed episode one (events: $events)") },
                 { assertTrue(firstEnded, "precondition: episode one ended before the next tear") },
                 { assertTrue(monitoredAfterFirst, "precondition: episode one restored the host detector") },
-                { assertTrue(secondResumeSent, "precondition: episode two sent a Resume and awaited its verdict") },
+                { assertTrue(secondHelloSent, "precondition: episode two said Hello and awaited its answer") },
                 {
                     assertTrue(
                         events.any { (it as? MembershipEvent.HostLost)?.reason is FailureReason.WindowExpired },
@@ -280,7 +280,7 @@ class ResumeAckAfterHostLostTest {
             seam.dropHost()
             seam.tear()
             runCurrent()
-            val startedBeforeHello = room.hasReconnectInFlight() && !room.hasPendingResume() && seam.resumesSent == 1
+            val startedBeforeHello = room.hasReconnectInFlight() && !room.hasPendingResume() && seam.hellosToHost == 1
             seam.deliver(restoredWelcome)
             runCurrent()
             val resumedByStale = events.count { it is MembershipEvent.Resumed } - 1
@@ -290,7 +290,7 @@ class ResumeAckAfterHostLostTest {
             assertAll(
                 { assertTrue(startedBeforeHello, "precondition: episode two began and had not said Hello") },
                 { assertEquals(0, resumedByStale, "the stale Welcome closed nothing (events: $events)") },
-                { assertEquals(2, seam.resumesSent, "episode two said Hello") },
+                { assertEquals(2, seam.hellosToHost, "episode two said Hello") },
                 { assertTrue(room.hasPendingResume(), "episode two awaits its Hello's answer") },
             )
             room.leave()
@@ -313,7 +313,7 @@ class ResumeAckAfterHostLostTest {
             seam.dropHost()
             seam.tear()
             runCurrent()
-            val flightWaiting = room.hasPendingResume() && seam.resumesSent == 1
+            val flightWaiting = room.hasPendingResume() && seam.hellosToHost == 1
             seam.deliver(restoredWelcome)
             runCurrent()
             val resumedByStale = events.count { it is MembershipEvent.Resumed } - 1
@@ -323,7 +323,7 @@ class ResumeAckAfterHostLostTest {
             assertAll(
                 { assertTrue(flightWaiting, "precondition: episode two's flight waits to send its Hello") },
                 { assertEquals(0, resumedByStale, "the stale Welcome closed nothing (events: $events)") },
-                { assertEquals(2, seam.resumesSent, "episode two said Hello once its host was back") },
+                { assertEquals(2, seam.hellosToHost, "episode two said Hello once its host was back") },
                 { assertTrue(room.hasPendingResume(), "episode two awaits its Hello's answer") },
             )
             room.leave()
@@ -345,7 +345,7 @@ class ResumeAckAfterHostLostTest {
             runCurrent()
             val call = async { room.resume(token) }
             runCurrent()
-            val waiting = room.hasPendingResume() && !room.hasReconnectInFlight() && seam.resumesSent == 0
+            val waiting = room.hasPendingResume() && !room.hasReconnectInFlight() && seam.hellosToHost == 0
             seam.deliver(restoredWelcome)
             runCurrent()
             val settledByStale = call.isCompleted
@@ -356,7 +356,7 @@ class ResumeAckAfterHostLostTest {
                 { assertTrue(waiting, "precondition: the caller's flight waits to send its Hello, outside any episode") },
                 { assertFalse(settledByStale, "the stale Welcome settled nothing") },
                 { assertFalse(events.any { it is MembershipEvent.Resumed }, "nothing was resumed (events: $events)") },
-                { assertEquals(1, seam.resumesSent, "the caller's Hello went out once its host was back") },
+                { assertEquals(1, seam.hellosToHost, "the caller's Hello went out once its host was back") },
             )
             room.leave()
         }
@@ -378,7 +378,7 @@ class ResumeAckAfterHostLostTest {
             seam.dropHost()
             seam.tear()
             runCurrent()
-            val flightWaiting = room.hasPendingResume() && seam.resumesSent == 1
+            val flightWaiting = room.hasPendingResume() && seam.hellosToHost == 1
             seam.deliver(AdmitMessage.Reject("key-conflict: about an earlier exchange", RejectCode.KeyConflict))
             runCurrent()
             seam.listHost()
@@ -387,7 +387,7 @@ class ResumeAckAfterHostLostTest {
             assertAll(
                 { assertTrue(flightWaiting, "precondition: episode two's flight waits to send its Hello") },
                 { assertFalse(events.any { it is MembershipEvent.HostLost }, "the stale Reject ended nothing (events: $events)") },
-                { assertEquals(2, seam.resumesSent, "episode two said Hello once its host was back") },
+                { assertEquals(2, seam.hellosToHost, "episode two said Hello once its host was back") },
                 { assertTrue(room.hasPendingResume(), "episode two awaits its Hello's answer") },
             )
             room.leave()
@@ -472,7 +472,7 @@ class ResumeAckAfterHostLostTest {
             seam.dropHost()
             seam.tear()
             runCurrent()
-            val waiting = room.hasPendingResume() && seam.resumesSent == 0
+            val waiting = room.hasPendingResume() && seam.hellosToHost == 0
             seam.deliver(AdmitMessage.Farewell(joinerId.value, supersededBy = "joiner-2"))
             runCurrent()
 
@@ -480,7 +480,7 @@ class ResumeAckAfterHostLostTest {
                 { assertTrue(waiting, "precondition: the reconnect's flight waits to send its Hello") },
                 { assertEquals(true, pendingInGap, "precondition: the hook ran with the flight still pending") },
                 { assertEquals(false, pendingAfterAttempt, "precondition: the waiting attempt ran to its end inside the gap") },
-                { assertEquals(0, seam.resumesSent, "a superseded room says no Hello") },
+                { assertEquals(0, seam.hellosToHost, "a superseded room says no Hello") },
             )
         }
 
@@ -498,7 +498,7 @@ class ResumeAckAfterHostLostTest {
         seam.deliver(restoredWelcome)
         runCurrent()
         assertAll(
-            { assertEquals(1, seam.resumesSent, "precondition: episode one said Hello once") },
+            { assertEquals(1, seam.hellosToHost, "precondition: episode one said Hello once") },
             { assertEquals(1, events.count { it is MembershipEvent.Resumed }, "precondition: episode one was restored (events: $events)") },
             { assertFalse(room.hasReconnectInFlight(), "precondition: episode one ended") },
             { assertTrue(room.hasDetector(hostId), "precondition: episode one restored the host detector") },
@@ -589,7 +589,7 @@ class ResumeAckAfterHostLostTest {
         runCurrent()
         challengeReHello(seam)
         assertAll(
-            { assertEquals(1, seam.resumesSent, "precondition: the re-Hello went out") },
+            { assertEquals(1, seam.hellosToHost, "precondition: the re-Hello went out") },
             { assertTrue(room.hasPendingResume(), "precondition: its verdict has not come back") },
         )
         val joined: Deferred<ResumeResult.JoinerOutcome> = async { room.resume(token) }
@@ -622,8 +622,9 @@ class ResumeAckAfterHostLostTest {
 /**
  * A joiner's seam that the test plays the host on. It starts `Woven` with the host listed, tears on
  * [tear], and is healed in place by the room's re-weave, which also lists a host [dropHost] took out
- * of [peers]. It counts the `Resume` frames sent to the host, and runs [onStateCollectionEnded] as
- * each collection of [state] ends, saying whether the collecting coroutine was cancelled.
+ * of [peers]. It counts the Hellos sent to the host alone ([hellosToHost]): a joiner's first Hello is
+ * broadcast, so these are its re-Hellos. It runs [onStateCollectionEnded] as each collection of
+ * [state] ends, saying whether the collecting coroutine was cancelled.
  *
  * [deliver] queues a frame for the room's collector coroutine, which is how a real fabric delivers.
  * [deliverNow] instead runs the frame through the room's collector on the caller's own stack, now,
@@ -653,7 +654,7 @@ private class ScriptedSeam(
     var proofsSent: Int = 0
         private set
 
-    var resumesSent: Int = 0
+    var hellosToHost: Int = 0
         private set
 
     fun deliver(message: AdmitMessage) {
@@ -701,7 +702,7 @@ private class ScriptedSeam(
         val hello = decoded as? AdmitMessage.Hello ?: return
         if (peer == hostId) {
             this.hello = hello
-            resumesSent++
+            hellosToHost++
         }
     }
 
