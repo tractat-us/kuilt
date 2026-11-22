@@ -674,6 +674,128 @@ class ProvenRestoreConcurrencyTest {
         }
 
     /**
+     * A superseded process's re-Hello racing its own supersession (#3159, Task 1.7). Bob's seat is
+     * partitioned; a new process of his device comes back under a fresh id while the old one — whose
+     * link healed — says Hello again under its own. Both prove the same key, on two threads. The window
+     * answers `Success` once and refuses after, as a spent window does.
+     *
+     * Either the old process restores its own seat first, and the new id then gets a seat of its own
+     * beside it (Decided 30), or the new id takes the seat over first, and the old process must then be
+     * **told**, never seated: the host answers its exchange with `Farewell(supersededBy)` whether the
+     * Hello came in after the takeover (the Hello gate) or before it (the Proof-time check, read under
+     * the lock that recorded the takeover). A single thread cannot put the old exchange's decision
+     * after the takeover's record and before its own seat, which is the window the Proof-time check
+     * closes; without it the old process is admitted to an additional seat and the superseded
+     * membership is back.
+     */
+    @Test
+    fun aSupersededProcessReHelloingAgainstItsTakeoverIsToldNotSeated() =
+        runConcurrencyStress(cap = ARM_CAP) { stage ->
+            Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
+                val rig = Rig(dispatcher, interval = 1.seconds, RoomDevice.of(fakeKeyStore(0)))
+                var completed = 0
+                var oldWon = 0
+                var newWon = 0
+                var toldAtProof = 0
+                var reSeated = 0
+                var wrongOutcome = 0
+                val failures = mutableListOf<String>()
+                try {
+                    rig.start(stage)
+                    var holder = bob
+                    for (round in 0 until REHELLO_ROUNDS) {
+                        val old = holder
+                        val fresh = PeerId("bob-rehello-$round")
+                        rig.peers.update { it + fresh }
+                        rig.drainChallenges()
+                        rig.partition(stage, round, old)
+                        val spent = AtomicBoolean(false)
+                        rig.controller.onAsk = { resume, at ->
+                            if (resume.peerId == old && spent.compareAndSet(false, true)) {
+                                rig.scope.launch { rig.controller.flow.emit(JoinerReconnectEvent.Resumed(resume.peerId, at)) }
+                                spin(jitter.nextLong(0, MAX_SPIN_NANOS))
+                                ResumeResult.Success
+                            } else {
+                                ResumeResult.WindowClosed
+                            }
+                        }
+                        val introsFresh = rig.hostIntrosTo(fresh)
+                        val oldChallenged = AtomicBoolean(false)
+                        val exchanges = listOf(
+                            rig.scope.launch { rig.prove(fresh, TEST_DEVICE_A, TEST_KEY_A) },
+                            rig.scope.launch {
+                                val challenge = rig.helloOrTold(old) ?: return@launch
+                                oldChallenged.set(true)
+                                rig.inbound.send(Swatch(AdmitMessage.encode(handProof(challenge, host, TEST_DEVICE_A)), sender = old))
+                            },
+                        ).shuffled(jitter)
+                        exchanges.forEach { it.join() }
+                        stage.at("round $round: awaiting the new id's seat") { rig.snapshot() }
+                        rig.awaitEdge(fresh)
+                        rig.awaitIntros(fresh, introsFresh + 1)
+                        // The old exchange's own answer: its restored seat, or the Farewell telling it.
+                        withTimeoutOrNull(STALL_GRACE) {
+                            rig.sent.first { frames ->
+                                rig.events.value.any { it is MembershipEvent.Resumed && it.peerId == old } ||
+                                    frames.count { (to, m) -> to == old && m is AdmitMessage.Farewell && m.supersededBy == fresh.value } >= 2
+                            }
+                        }
+                        rig.quiesce(stage, round)
+
+                        val supersededByFresh = rig.events.value.any {
+                            it is MembershipEvent.Left && it.peerId == old && it.reason == LeaveReason.Superseded(fresh)
+                        }
+                        val oldRestored = rig.events.value.any { it is MembershipEvent.Resumed && it.peerId == old }
+                        val oldJoinedAgain = rig.events.value.any { it is MembershipEvent.Joined && it.member.id == old }
+                        val toldOld = rig.supersededFarewellsTo(old)
+                        val good = when {
+                            supersededByFresh -> !rig.room.isAdmitted(old) && !oldJoinedAgain && toldOld >= 2 && rig.room.isAdmitted(fresh)
+                            oldRestored -> rig.room.isAdmitted(old) && rig.room.isAdmitted(fresh) && toldOld == 0
+                            else -> false
+                        }
+                        when {
+                            supersededByFresh -> newWon++
+                            oldRestored -> oldWon++
+                        }
+                        if (supersededByFresh && oldChallenged.get()) toldAtProof++
+                        if (supersededByFresh && (oldJoinedAgain || rig.room.isAdmitted(old))) reSeated++
+                        if (!good) wrongOutcome++
+                        if (!good && failures.size < 5) {
+                            failures += "round $round old=${old.value} superseded=$supersededByFresh restored=$oldRestored " +
+                                "joinedAgain=$oldJoinedAgain told=$toldOld challenged=${oldChallenged.get()} " +
+                                "admitted=${rig.room.isAdmitted(old)}/${rig.room.isAdmitted(fresh)} edges=${rig.edgesOf(old)}/${rig.edgesOf(fresh)}"
+                        }
+                        completed++
+                        if (!good) break
+                        if (supersededByFresh) {
+                            holder = fresh
+                        } else {
+                            // Back to one seat for the key: the fresh id's additional seat says Goodbye.
+                            rig.inbound.send(Swatch(AdmitMessage.encode(AdmitMessage.Goodbye), sender = fresh))
+                            stage.at("round $round: the extra seat leaves") { rig.snapshot() }
+                            rig.events.first { events -> events.any { it is MembershipEvent.Left && it.peerId == fresh } }
+                        }
+                    }
+                    println(
+                        "proven-restore rehello-race: completed=$completed oldWon=$oldWon newWon=$newWon " +
+                            "toldAtProof=$toldAtProof reSeated=$reSeated wrongOutcome=$wrongOutcome " +
+                            "retries=${rig.retries.get()} failures=$failures",
+                    )
+                    assertAll(
+                        { assertEquals(REHELLO_ROUNDS, completed, "every round ran") },
+                        { assertEquals(0, reSeated, "a superseded process is never seated again: $failures") },
+                        { assertEquals(0, wrongOutcome, "one restore, or one takeover and a told old process: $failures") },
+                        { assertTrue(oldWon > 0, "the old process restored its seat first in some round") },
+                        { assertTrue(newWon > 0, "the new id took the seat over first in some round") },
+                        { assertTrue(toldAtProof > 0, "in some round the old exchange was challenged before the takeover, and told at its proof") },
+                    )
+                } finally {
+                    rig.close()
+                }
+            }
+        }
+
+    /**
      * The window controller this probe drives the room with. A partition is announced at once, with
      * a deadline that differs from the room's own estimate, so the room records the episode's
      * `WindowOpened` and a refusal is acted on. [flow] has no buffer: an emit returns only once the
@@ -693,7 +815,7 @@ class ProvenRestoreConcurrencyTest {
         var onAsk: suspend (ProvenResume, Long) -> ResumeResult.HostVerdict = { _, _ -> ResumeResult.WindowClosed }
 
         override fun onPeerUnresponsive(peerId: PeerId, at: Long) {
-            if (peerId !in raceIds) return
+            if (peerId == carol) return
             episode.value = at
             scope.launch { flow.emit(JoinerReconnectEvent.WindowOpened(peerId, deadlineFor(at), at)) }
         }
@@ -703,7 +825,7 @@ class ProvenRestoreConcurrencyTest {
         override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict = onAsk(resume, at)
 
         override fun onPeerRecovered(peerId: PeerId, at: Long) {
-            if (peerId !in raceIds) return
+            if (peerId == carol) return
             recoveredCount.value = recovered.incrementAndGet()
         }
 
@@ -721,12 +843,28 @@ class ProvenRestoreConcurrencyTest {
         val peers = MutableStateFlow(setOf(host, bob, bobPrime, bobThird, carol))
         // Bounded, as every Swatch delivery channel is (forbidUnboundedSwatchDelivery): a round sends a few frames.
         val inbound = Channel<Swatch>(capacity = 64)
-        private val challenges = mapOf(
-            bob to Channel<AdmitMessage.Challenge>(Channel.UNLIMITED),
-            bobPrime to Channel<AdmitMessage.Challenge>(Channel.UNLIMITED),
-            bobThird to Channel<AdmitMessage.Challenge>(Channel.UNLIMITED),
-            carol to Channel<AdmitMessage.Challenge>(Channel.UNLIMITED),
-        )
+        /** Each joiner id's challenges, in arrival order; an id a round makes up gets its channel on first use. */
+        private val challenges = java.util.concurrent.ConcurrentHashMap<PeerId, Channel<AdmitMessage.Challenge>>()
+
+        fun challengesFor(peer: PeerId): Channel<AdmitMessage.Challenge> =
+            challenges.computeIfAbsent(peer) { Channel(Channel.UNLIMITED) }
+
+        /** Forget every challenge no exchange took, so a later round reads only its own. */
+        fun drainChallenges() {
+            challenges.values.forEach { channel -> while (channel.tryReceive().isSuccess) Unit }
+        }
+
+        /**
+         * A Hello from [peer] under bob's key, and the challenge it drew — or null when the host
+         * answered it with `Farewell(supersededBy)` instead, as it does a superseded id (#3159, Task 1.7).
+         */
+        suspend fun helloOrTold(peer: PeerId): AdmitMessage.Challenge? {
+            inbound.send(Swatch(AdmitMessage.encode(currentHello(peer.value, sessionId = peer.value, key = TEST_KEY_A)), sender = peer))
+            return withTimeoutOrNull(TOLD_GRACE) { challengesFor(peer).receive() }
+        }
+
+        fun supersededFarewellsTo(peer: PeerId): Int =
+            sent.value.count { (to, m) -> to == peer && m is AdmitMessage.Farewell && m.peerId == peer.value && m.supersededBy != null }
 
         /** Every admit frame the host sent, in send order, since the round began. */
         val sent = MutableStateFlow<List<Pair<PeerId, AdmitMessage>>>(emptyList())
@@ -760,7 +898,7 @@ class ProvenRestoreConcurrencyTest {
                 if (peer == bob && payload.isPing()) spin(slowPingNanos)
                 val message = AdmitMessage.decode(payload) ?: return
                 if (message is AdmitMessage.Challenge) {
-                    challenges[peer]?.send(message)
+                    challengesFor(peer).send(message)
                 } else {
                     sent.update { it + (peer to message) }
                 }
@@ -799,7 +937,7 @@ class ProvenRestoreConcurrencyTest {
         /** A Hello from [peer] under bob's key, and the challenge it drew. */
         suspend fun hello(peer: PeerId): AdmitMessage.Challenge {
             inbound.send(Swatch(AdmitMessage.encode(currentHello(peer.value, sessionId = peer.value, key = TEST_KEY_A)), sender = peer))
-            return checkNotNull(challenges[peer]).receive()
+            return challengesFor(peer).receive()
         }
 
         /** Rig retries: a drop the detector could not see yet, or an exchange the room never answered. */
@@ -823,7 +961,7 @@ class ProvenRestoreConcurrencyTest {
         /** Hello, then the Proof answering its challenge; [beforeProof] runs once the challenge is in. */
         suspend fun prove(peer: PeerId, device: DeviceKey, key: DidKey, beforeProof: suspend () -> Unit = {}) {
             inbound.send(Swatch(AdmitMessage.encode(currentHello(peer.value, sessionId = peer.value, key = key)), sender = peer))
-            val challenge = checkNotNull(challenges[peer]).receive()
+            val challenge = challengesFor(peer).receive()
             beforeProof()
             inbound.send(Swatch(AdmitMessage.encode(handProof(challenge, host, device)), sender = peer))
         }
@@ -928,6 +1066,10 @@ class ProvenRestoreConcurrencyTest {
         /** The ids a race round's seat moves between: whichever holds it, and the two that race for it. */
         val raceIds = setOf(bob, bobPrime, bobThird)
         const val SUPERSEDE_ROUNDS = 5_000
+        const val REHELLO_ROUNDS = 2_000
+
+        /** How long a Hello waits for its challenge before the rig reads it as answered by a Farewell instead. */
+        val TOLD_GRACE = 500.milliseconds
         val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
         /** Each arm takes under 40 s on a dev Mac; the cap is a wedge backstop with room for a slower runner. */
         val ARM_CAP = 3.minutes
