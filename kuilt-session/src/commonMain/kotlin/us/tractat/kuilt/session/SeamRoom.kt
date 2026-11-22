@@ -1764,7 +1764,7 @@ internal class SeamRoom(
                             runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
                         }
                     } else {
-                        val successor = lock.withLock { supersededIds.successorFor(sender, keyed.key) }
+                        val successor = lock.withLock { seatedSuccessorFor(sender, keyed.key) }
                         if (successor != null) {
                             // A superseded process saying Hello again, usually its reconnect after a
                             // link that was dead when Decided 19's direct Farewell went (#3159, Task
@@ -2199,9 +2199,18 @@ internal class SeamRoom(
      * whose key proved itself and won a window keeps it. [settleSpentWindow] runs first and clears
      * any such answer this pass does not act on, so the next pass reaches here.
      */
+    /**
+     * **Under [lock].** The id that took [peerId]'s seat over under [key], while it still holds that
+     * seat; else null. A successor that has left holds no membership for [peerId]'s Hello to take
+     * back, so [peerId] is then challenged as any Hello is (review round 1 on #3614). The record is
+     * kept, so [peerId] is told again should its successor be seated again.
+     */
+    private fun seatedSuccessorFor(peerId: PeerId, key: DidKey): PeerId? =
+        supersededIds.successorFor(peerId, key)?.takeIf { it in admittedById }
+
     private fun toldSuperseded(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long, asked: AskedWindow?): SeatOutcome? {
         if (asked?.answer == WindowAnswer.Restored) return null
-        val successor = supersededIds.successorFor(joinerPeerId, keyed.key) ?: return null
+        val successor = seatedSuccessorFor(joinerPeerId, keyed.key) ?: return null
         return if (retire(joinerPeerId, generation)) SeatOutcome.ToldSuperseded(successor) else SeatOutcome.Stale
     }
 

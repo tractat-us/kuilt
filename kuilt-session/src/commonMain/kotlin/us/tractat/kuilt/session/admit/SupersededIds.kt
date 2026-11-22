@@ -23,6 +23,9 @@ import us.tractat.kuilt.identity.DidKey
  *   churns peer ids grow host memory without limit. A forgotten id's Hello is admitted again, to an
  *   additional seat — the behaviour before this record existed, and no worse.
  * - **An id seated again is forgotten** ([forget]): from then on its Hellos are a member's.
+ * - **Only while the successor is seated.** The room reads [successorFor] only for a successor that
+ *   still holds a seat: once it has left there is no membership to take back, and the old id is
+ *   challenged as any Hello is.
  *
  * Not thread-safe: the room calls it under its own lock.
  */
