@@ -5066,17 +5066,19 @@ internal class SeamRoom(
     }
 
     /**
-     * Attempt to resume this room from a [ResumeToken] after a transport drop.
+     * Say Hello to the host again, as the reconnect loop does (#3159, Task 1.7). [token] is not
+     * presented: the device key proves the member now, and Task 1.8 removes this method with it.
      *
-     * **Joiner only.** The host's [JoinerReconnectController] holds the reconnect window;
-     * this method sends [AdmitMessage.Resume] to the host and awaits the reply:
-     * - Host replies [AdmitMessage.ResumeAck] → [ResumeResult.Success]; [MembershipEvent.Resumed] fires.
-     *   Unless the room has gone terminal before the ack is handled: then → [ResumeResult.WindowClosed]
-     *   and no event (#3094; see [handleResumeAck]).
-     * - Host replies [AdmitMessage.Reject] → [ResumeResult.Refused], carrying the host's
-     *   [RejectCode] so the caller can tell an elapsed window from an invalid token from a window
-     *   the host has not opened yet (#2364).
-     * - Host says nothing within `HeartbeatConfig.resumeTimeout`, or the seam the `Resume` went out
+     * **Joiner only.** This method sends a fresh [AdmitMessage.Hello] to the host, answers its
+     * challenge, and awaits the reply:
+     * - The host's `Welcome` to this member marked `Restored` → [ResumeResult.Success];
+     *   [MembershipEvent.Resumed] fires. Unmarked — the seat was gone, and the host admitted this
+     *   member afresh, which the room keeps → [ResumeResult.WindowClosed]. Either way, unless the
+     *   room has gone terminal before the `Welcome` is handled: then → [ResumeResult.WindowClosed]
+     *   and no event (#3094; see [closeReconnect]).
+     * - Host replies [AdmitMessage.Reject] → [ResumeResult.Refused], carrying its [RejectCode]
+     *   (#2364).
+     * - Host says nothing within `HeartbeatConfig.resumeTimeout`, or the seam the Hello went out
      *   on tears first so that no reply can arrive → [ResumeResult.TimedOut].
      *
      * **Not valid** after [MembershipEvent.HostLost] — the room is terminal at that point and this
