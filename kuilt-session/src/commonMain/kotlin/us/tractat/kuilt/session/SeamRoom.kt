@@ -1205,7 +1205,7 @@ internal class SeamRoom(
      * **Joiner only.** The fabric senders whose challenge echoing [latestHelloNonce] this joiner
      * answered: the *verified challengers* of its latest Hello (#3159, Task 1.7). Emptied whenever a
      * new Hello replaces the nonce, in the same critical section, and — with the nonce — when a
-     * reconnect episode starts, or a flight starts outside one
+     * reconnect episode is claimed, or a flight starts outside one
      * ([JoinerResumeHost.forgetLatestHello]), so the Hello that closed the last episode has no
      * challengers left to close or end this one. Guarded by [lock].
      *

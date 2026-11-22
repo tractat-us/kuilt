@@ -63,9 +63,9 @@ internal interface JoinerResumeHost {
 
     /**
      * Forget the latest Hello: its nonce, and the challengers that answered for it. Called when an
-     * episode starts, and when a flight is installed outside one, before the attempt's own Hello is
-     * minted, so a `Welcome` or terminal `Reject` left over from an earlier Hello finds no verified
-     * challenger and closes or ends nothing (review round 1 on #3614). Until the next
+     * episode is claimed ([JoinerResumeMachine.attemptReconnect]), and when a flight is installed
+     * outside one, before the attempt's own Hello is minted, so a `Welcome` or terminal `Reject` left
+     * over from an earlier Hello finds no verified challenger and closes or ends nothing (review round 1 on #3614). Until the next
      * [prepareReHello] the room answers no challenge, since there is no Hello for one to echo.
      */
     fun forgetLatestHello()
@@ -278,7 +278,8 @@ internal class JoinerResumeMachine(
      *
      * Kept (not cleared on success) so it survives as post-mortem evidence of an episode that
      * *recovered through* refusals: a record cleared on success would erase the very loop the log
-     * line exists to describe. Reset only when a new episode starts. Guarded by [lock]; read by tests via `SeamRoom.lastResumeRefusal()`.
+     * line exists to describe. Reset only when a new episode is claimed ([attemptReconnect]). Guarded
+     * by [lock]; read by tests via `SeamRoom.lastResumeRefusal()`.
      */
     private var lastRefusal: ResumeRefusal? = null
 
@@ -362,8 +363,8 @@ internal class JoinerResumeMachine(
 
     /**
      * Guarded by [lock]: the host's self-`Welcome` closed the current reconnect episode. Set by
-     * [takeFlightForWelcome], and cleared at both ends of an episode: when it starts, and in the
-     * critical section in [runReconnect] that reads it to decide how the episode ended. Every
+     * [takeFlightForWelcome], and cleared at both ends of an episode: when it is claimed
+     * ([attemptReconnect]), and in the critical section in [runReconnect] that reads it to decide how the episode ended. Every
      * welcomed episode sets it, so a value carried into the next episode would close that one on a
      * lost window.
      *
@@ -459,6 +460,20 @@ internal class JoinerResumeMachine(
                 reconnecting -> return
                 else -> {
                     reconnecting = true
+                    // Fresh episode: forget any reject recorded by a prior reconnect on this machine,
+                    // and the refusal record that described it (attempt numbers are per-episode), and
+                    // any earlier Welcome. The latest Hello is forgotten too: until this episode mints
+                    // its own, a leftover Welcome or Reject from an earlier Hello has no challenger to
+                    // come from, so it can neither close this episode nor end it.
+                    //
+                    // In the claiming section, not in [runReconnect]: the guard is set from here on, and
+                    // a frame handled before the launched episode first runs would otherwise find a
+                    // claimed episode and the previous Hello's challengers both, and close it before its
+                    // own Partitioned (review round 2 on #3614).
+                    refusal = null
+                    lastRefusal = null
+                    ackResumed = false
+                    host.forgetLatestHello()
                     // Flip the guard and record the Job atomically under the lock, so leave()
                     // can cancel it (see [inFlightReconnectJob]) with no window where the
                     // guard is set but the Job is not yet stored.
@@ -535,17 +550,7 @@ internal class JoinerResumeMachine(
             return
         }
 
-        // Fresh episode: forget any reject recorded by a prior reconnect on this machine, and the
-        // refusal record that described it (attempt numbers are per-episode), and any earlier Welcome.
-        // The latest Hello is forgotten in the same section: until this episode mints its own, a
-        // leftover Welcome or Reject from the Hello that closed the last one has no challenger to
-        // come from, so it can neither close this episode nor end it.
-        lock.withLock {
-            refusal = null
-            lastRefusal = null
-            ackResumed = false
-            host.forgetLatestHello()
-        }
+        // The episode's state was reset when [attemptReconnect] claimed it.
 
         // Silence the host-liveness detector: for the reconnect's duration WE decide
         // host-liveness, so a late PeerLost can't tear down the re-Hello in flight.
