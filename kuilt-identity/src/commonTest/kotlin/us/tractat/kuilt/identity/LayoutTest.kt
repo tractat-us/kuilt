@@ -8,6 +8,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * The byte layout every signed statement is made of. The expected bytes in each golden vector are
@@ -104,14 +105,14 @@ class LayoutTest {
             { assertEquals(HEADER_SIZE, Layout.encode(TAG, 255, emptyList()).size, "version 255 is the largest byte") },
             {
                 assertFailsWith<IllegalArgumentException>("a 65 536-character tag") {
-                    Layout.encode("a".repeat(Layout.MAX_FIELD_SIZE + 1), 1, emptyList())
+                    Layout.encode(KUILT_PREFIX + "a".repeat(Layout.MAX_FIELD_SIZE - KUILT_PREFIX.length + 1), 1, emptyList())
                 }
             },
             // The control: the longest tag a u16 prefix can carry still encodes, so the refusal above is the length.
             {
                 assertEquals(
                     2 + Layout.MAX_FIELD_SIZE + 1,
-                    Layout.encode("a".repeat(Layout.MAX_FIELD_SIZE), 1, emptyList()).size,
+                    Layout.encode(KUILT_PREFIX + "a".repeat(Layout.MAX_FIELD_SIZE - KUILT_PREFIX.length), 1, emptyList()).size,
                     "a 65 535-character tag",
                 )
             },
@@ -133,6 +134,27 @@ class LayoutTest {
             { assertFailsWith<IllegalArgumentException>("a non-ASCII tag") { Layout.decode(bytes, "kuilt/é", 1, 0) } },
             // The control: the same bytes with a field count of zero and the ASCII tag decode.
             { assertEquals(0, assertNotNull(Layout.decode(bytes, TAG, 1, 0), "the control decodes").size) },
+        )
+    }
+
+    @Test
+    fun encodeAndDecodeRefuseATagOutsideKuilts() {
+        // An app signature is the header for an `app/` tag, then the app's bytes (#3600). It can never
+        // be one of these statements only because no statement tag starts anywhere but `kuilt/`.
+        val bytes = Layout.encode(TAG, 1, emptyList())
+        val outside = listOf("app/chat", "app/kuilt/grant", "kuilt", "x", "")
+        val encodeRefusals = outside.map { tag -> refusal { Layout.encode(tag, 1, emptyList()) } }
+        val decodeRefusals = outside.map { tag -> refusal { Layout.decode(bytes, tag, 1, 0) } }
+        assertAll(
+            *outside.indices.map { i ->
+                { assertTrue(encodeRefusals[i]?.message.orEmpty().contains("kuilt/"), "encode refuses \"${outside[i]}\": ${encodeRefusals[i]}") }
+            }.toTypedArray(),
+            *outside.indices.map { i ->
+                { assertTrue(decodeRefusals[i]?.message.orEmpty().contains("kuilt/"), "decode refuses \"${outside[i]}\": ${decodeRefusals[i]}") }
+            }.toTypedArray(),
+            // The control: kuilt's own namespace, the bare prefix included, still encodes and decodes.
+            { assertNotNull(Layout.decode(bytes, TAG, 1, 0), "\"$TAG\" decodes") },
+            { assertEquals(2 + KUILT_PREFIX.length + 1, Layout.encode(KUILT_PREFIX, 1, emptyList()).size, "\"kuilt/\" encodes") },
         )
     }
 
@@ -181,10 +203,19 @@ class LayoutTest {
         )
     }
 
+    /** The [IllegalArgumentException] [block] threw, or `null` when it returned. Nothing else is caught. */
+    private fun refusal(block: () -> Unit): IllegalArgumentException? = try {
+        block()
+        null
+    } catch (e: IllegalArgumentException) {
+        e
+    }
+
     private fun ByteArray.withByte(index: Int, value: Int): ByteArray = copyOf().also { it[index] = value.toByte() }
 
     private companion object {
         const val TAG = "kuilt/t"
+        const val KUILT_PREFIX = "kuilt/"
 
         /** `u16` tag length + 7 tag bytes. */
         const val VERSION_OFFSET = 2 + 7

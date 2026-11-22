@@ -17,6 +17,17 @@ The key. `DeviceKey` signs, and its `id` is the `DidKey` that checks those signa
 accessor for the private half, so a key that a hardware or browser store will not hand out is
 still a `DeviceKey`. `DeviceKey.generate()` makes one in memory.
 
+An app signs its own bytes with `signApp(context, message)`, and another device checks them with
+`verifyApp(context, message, signature)` on the signer's `DidKey`. The context says what the
+signature is for, such as `"chess/move"`, and one made for a move is refused as a resignation. The
+key signs `app/<context>` in front of the message, a header no statement of kuilt's own can start
+with, so an app that signs whatever a peer sends it can never be talked into signing a proof that
+lets the peer in as this device. A `kuilt` or `kuilt/…` context is refused for the same reason. The
+raw `sign` underneath is `@IdentityInternalApi`: kuilt's own statements use it, an app does not.
+A key implemented outside kuilt, such as a Secure Enclave key, still implements `sign`, and marks
+its override `@IdentityInternalApi` too. That keeps the gate on a caller holding the concrete type;
+an `@OptIn` on the override would compile, and would let such a caller sign raw bytes unmarked.
+
 The pass. A `Grant` is a host's signed promise that one device may come back: to one room, or to
 any room that host runs, until a time the host picks, or for good. The device keeps it and shows it
 when it returns, and `isSignedByIssuer` checks the host really signed it. It is not a secret,

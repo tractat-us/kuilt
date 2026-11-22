@@ -1,5 +1,3 @@
-@file:OptIn(IdentityInternalApi::class)
-
 package us.tractat.kuilt.identity
 
 /**

@@ -11,8 +11,11 @@ package us.tractat.kuilt.identity
  * ```
  *
  * Every `u16` is big-endian. The tag separates domains, so a signature made over one kind of
- * statement can never be presented as another. The layout knows nothing about what a field means:
- * fixed widths, reserved-empty fields and scope tags are each statement type's to enforce.
+ * statement can never be presented as another. Every statement tag starts `kuilt/`, which [encode]
+ * and [decode] enforce: an app signature ([signApp]) opens with this same header for an `app/` tag,
+ * and is kept apart from every statement only by that third byte. The layout knows nothing about
+ * what a field means: fixed widths, reserved-empty fields and scope tags are each statement type's
+ * to enforce.
  *
  * [decode] is total and strict: it returns `null` for any byte string [encode] could not have
  * produced for this tag, version and field count — another tag or version, too few or too many
@@ -31,11 +34,12 @@ internal object Layout {
     /**
      * The layout of [fields] under [tag] and [version].
      *
-     * @throws IllegalArgumentException if [tag] is not ASCII or longer than [MAX_FIELD_SIZE] bytes,
-     *   [version] is not a byte value, or any field is longer than [MAX_FIELD_SIZE] bytes. Each is
-     *   a programming error, never a property of input from the wire.
+     * @throws IllegalArgumentException if [tag] does not start `kuilt/`, is not ASCII or is longer
+     *   than [MAX_FIELD_SIZE] bytes, [version] is not a byte value, or any field is longer than
+     *   [MAX_FIELD_SIZE] bytes. Each is a programming error, never a property of input from the wire.
      */
     fun encode(tag: String, version: Int, fields: List<ByteArray>): ByteArray {
+        requireStatementTag(tag)
         val header = header(tag, version)
         fields.forEachIndexed { index, field ->
             require(field.size <= MAX_FIELD_SIZE) {
@@ -62,6 +66,7 @@ internal object Layout {
      */
     fun decode(bytes: ByteArray, tag: String, version: Int, fieldCount: Int): List<ByteArray>? {
         require(fieldCount >= 0) { "fieldCount $fieldCount is negative" }
+        requireStatementTag(tag)
         val header = header(tag, version)
         if (bytes.size < header.size) return null
         for (i in header.indices) if (bytes[i] != header[i]) return null
@@ -91,7 +96,24 @@ internal object Layout {
 
     private const val U16_SIZE = 2
 
-    private fun header(tag: String, version: Int): ByteArray {
+    private const val STATEMENT_NAMESPACE = "kuilt/"
+
+    /**
+     * Refuses a statement tag outside `kuilt/`. Not in [header], which the `app/` path shares: this
+     * is the rule that keeps a statement's header from ever being an app signature's (#3600).
+     */
+    private fun requireStatementTag(tag: String) {
+        require(tag.startsWith(STATEMENT_NAMESPACE)) { "statement tag \"$tag\" does not start \"$STATEMENT_NAMESPACE\"" }
+    }
+
+    /**
+     * The bytes every layout under [tag] and [version] opens with: `u16 tag length ‖ ASCII tag ‖
+     * version byte`. An app signature ([signApp]) is this header for its `app/` tag, then the app's
+     * message unframed.
+     *
+     * @throws IllegalArgumentException as [encode] does for [tag] and [version].
+     */
+    fun header(tag: String, version: Int): ByteArray {
         require(tag.all { it.code < 0x80 }) { "tag \"$tag\" is not ASCII" }
         require(tag.length <= MAX_FIELD_SIZE) { "tag is ${tag.length} bytes; at most $MAX_FIELD_SIZE" }
         require(version in 0..MAX_VERSION) { "version $version is not a byte value" }

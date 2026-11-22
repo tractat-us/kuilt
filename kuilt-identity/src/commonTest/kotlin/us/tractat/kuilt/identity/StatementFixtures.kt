@@ -8,6 +8,7 @@ package us.tractat.kuilt.identity
 internal class FixedDeviceKey(override val id: DidKey, private val signature: ByteArray) : DeviceKey {
     val signed = mutableListOf<ByteArray>()
 
+    @IdentityInternalApi
     override suspend fun sign(message: ByteArray): ByteArray {
         signed += message.copyOf()
         return signature.copyOf()
@@ -18,6 +19,7 @@ internal class FixedDeviceKey(override val id: DidKey, private val signature: By
 internal class Impostor(private val claimed: DidKey, private val actual: DeviceKey) : DeviceKey {
     override val id: DidKey get() = claimed
 
+    @IdentityInternalApi
     override suspend fun sign(message: ByteArray): ByteArray = actual.sign(message)
 }
 

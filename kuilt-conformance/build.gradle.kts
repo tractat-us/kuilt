@@ -52,6 +52,9 @@ tasks.withType<Test>().configureEach {
 // every fabric adapter can subclass SeamConformanceSuite from its own test
 // source set. It therefore exposes kotlin-test / coroutines-test as `api`.
 kotlin {
+    // DeviceKeyStoreConformanceSuite checks that a store's key signs for its name with the raw
+    // DeviceKey.sign, which is @IdentityInternalApi (#3600).
+    compilerOptions { optIn.add("us.tractat.kuilt.identity.IdentityInternalApi") }
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-core"))

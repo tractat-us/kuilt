@@ -34,6 +34,8 @@ kotlin {
         @OptIn(ExperimentalWasmDsl::class)
         wasmJs { browser { testRuns.create("webkit") } }
     }
+    // The module that declares @IdentityInternalApi is the one place it is not a warning sign.
+    compilerOptions { optIn.add("us.tractat.kuilt.identity.IdentityInternalApi") }
     sourceSets {
         // MANUAL appleMain, as in :kuilt-seal, :kuilt-otel-tap and :kuilt-store. The default
         // hierarchy template's appleMain compiles, but Dokka's source-set discovery never registers

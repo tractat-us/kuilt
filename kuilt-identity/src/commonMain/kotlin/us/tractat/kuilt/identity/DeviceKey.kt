@@ -28,7 +28,10 @@ import kotlin.io.encoding.Base64
  * @sample us.tractat.kuilt.identity.sampleDeviceKeySigns
  */
 public interface DeviceKey {
-    /** This key's public name. [DidKey.verify] on it accepts every signature [sign] makes. */
+    /**
+     * This key's public name. [DidKey.verify] on it accepts every signature [sign] makes, and
+     * [DidKey.verifyApp] every one [signApp] makes.
+     */
     public val id: DidKey
 
     /**
@@ -39,8 +42,19 @@ public interface DeviceKey {
      * sharing one give the private key away. Random nonces and deterministic ones (RFC 6979) both
      * meet that, so signing the same message twice may give two signatures or the same one.
      *
+     * **An app signs with [signApp], not this.** kuilt's own statements — the admission proof, the
+     * challenge, the grant — are signatures over raw bytes, so an app that signed raw bytes a peer
+     * handed it could be made to sign one of them. [signApp] signs under an `app/` prefix no kuilt
+     * statement can start with. This member is behind [IdentityInternalApi] for that reason (#3600).
+     *
+     * A key implemented outside kuilt, such as one held in a Secure Enclave, still implements this,
+     * and Kotlin asks the override to opt in too. Mark it `@IdentityInternalApi`, as every key in
+     * kuilt does, so a caller holding the concrete type still has to opt in. `@OptIn` on the
+     * override compiles as well, but lifts the gate for that caller.
+     *
      * @throws IllegalStateException when this platform's cryptographic provider cannot sign here.
      */
+    @IdentityInternalApi
     public suspend fun sign(message: ByteArray): ByteArray
 
     public companion object {
@@ -75,6 +89,7 @@ internal class SoftwareDeviceKey private constructor(
     private val privateKey: ECDSA.PrivateKey,
     override val id: DidKey,
 ) : DeviceKey {
+    @IdentityInternalApi
     override suspend fun sign(message: ByteArray): ByteArray = providerCall(::signingFailed) {
         privateKey.signatureGenerator(SHA256, ECDSA.SignatureFormat.RAW).generateSignature(message)
     }

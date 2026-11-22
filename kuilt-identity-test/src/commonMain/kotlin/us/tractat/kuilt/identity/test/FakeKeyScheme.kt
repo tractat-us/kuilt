@@ -8,6 +8,7 @@ import org.kotlincrypto.hash.sha2.SHA512
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.IdentityInternalApi
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.identity.KeyScheme
 import kotlin.random.Random
@@ -183,6 +184,7 @@ private class FakeDeviceKey(
     override val id: DidKey,
     private val before: suspend (FakeKeyOperation) -> Unit,
 ) : DeviceKey {
+    @IdentityInternalApi
     override suspend fun sign(message: ByteArray): ByteArray {
         before(FakeKeyOperation.Sign(id, message))
         return fakeSignature(id, message)
