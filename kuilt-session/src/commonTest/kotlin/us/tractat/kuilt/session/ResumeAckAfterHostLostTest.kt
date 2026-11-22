@@ -201,7 +201,7 @@ class ResumeAckAfterHostLostTest {
                 { assertEquals(ResumeResult.Success, result, "an ack that wins the lock resumes the room") },
                 { assertEquals(1, events.count { it is MembershipEvent.Resumed }, "one Resumed (events: $events)") },
                 { assertFalse(events.any { it is MembershipEvent.HostLost }, "a resumed room is not host-lost (events: $events)") },
-                { assertEquals(2, hellosAfterAnotherCall, "the room is live: another resume() sends another Resume") },
+                { assertEquals(2, hellosAfterAnotherCall, "the room is live: another resume() says Hello again") },
             )
         }
 
@@ -292,6 +292,50 @@ class ResumeAckAfterHostLostTest {
                 { assertEquals(0, resumedByStale, "the stale Welcome closed nothing (events: $events)") },
                 { assertEquals(2, seam.hellosToHost, "episode two said Hello") },
                 { assertTrue(room.hasPendingResume(), "episode two awaits its Hello's answer") },
+            )
+            room.leave()
+        }
+
+    /**
+     * A `Welcome` answering the joiner's admission Hello, queued behind the tear that starts the first
+     * episode. The tear watcher claims the episode and launches it, and the room's frame handler takes
+     * the `Welcome` before the launched episode first runs. The episode must already have forgotten
+     * that Hello by then, so the claim and the reset are one critical section: otherwise the `Welcome`
+     * answers a Hello still on record, and the room emits `Resumed` for itself before the episode's own
+     * `Partitioned` (review round 2 on #3614).
+     *
+     * The rig needs no second thread: the claim launches the episode rather than running it, and the
+     * frame was queued first. Two witnesses place the `Welcome` in that gap: the claim had recorded its
+     * job when the frame was handled, and the frame was handled before the episode's `Partitioned`.
+     */
+    @Test
+    fun `a stale Welcome queued behind an episode's claim closes nothing`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = ScriptedSeam(joinerId, hostId)
+            val (room, _) = admittedJoiner(seam)
+            val events = recordEvents(room)
+            val handledBefore = seam.framesHandled
+            var claimedAtHandling: Boolean? = null
+            seam.beforeHandling = { claimedAtHandling = room.hasReconnectInFlight() }
+            var handledAtPartition: Int? = null
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                room.events.collect { event ->
+                    if (event is MembershipEvent.Partitioned && event.peerId == hostId && handledAtPartition == null) {
+                        handledAtPartition = seam.framesHandled
+                    }
+                }
+            }
+
+            seam.tear()
+            seam.deliver(restoredWelcome)
+            runCurrent()
+
+            assertAll(
+                { assertEquals(true, claimedAtHandling, "precondition: the episode was claimed when the Welcome was handled") },
+                { assertEquals(handledBefore + 1, handledAtPartition, "precondition: the Welcome was handled before the episode began (events: $events)") },
+                { assertFalse(events.any { it is MembershipEvent.Resumed }, "the stale Welcome closed nothing (events: $events)") },
+                { assertTrue(room.hasReconnectInFlight(), "the episode is still under way") },
+                { assertEquals(1, seam.hellosToHost, "the episode said Hello") },
             )
             room.leave()
         }
@@ -647,9 +691,20 @@ private class ScriptedSeam(
     override val incoming: Flow<Swatch> = object : Flow<Swatch> {
         override suspend fun collect(collector: FlowCollector<Swatch>) {
             this@ScriptedSeam.collector = collector
-            for (frame in frames) collector.emit(frame)
+            for (frame in frames) {
+                beforeHandling()
+                collector.emit(frame)
+                framesHandled++
+            }
         }
     }
+
+    /** Runs as the room's collector takes each queued frame, before it handles it. */
+    var beforeHandling: () -> Unit = {}
+
+    /** How many queued frames the room's collector has finished handling. */
+    var framesHandled: Int = 0
+        private set
 
     var proofsSent: Int = 0
         private set
