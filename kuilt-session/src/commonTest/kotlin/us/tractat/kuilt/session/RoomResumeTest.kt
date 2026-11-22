@@ -373,14 +373,16 @@ class RoomResumeTest {
         hostSeam.sendTo(joinerRoom.selfId, ack)
         advanceTimeBy(10L)
         val pendingAfterAcks = joinerRoom.hasPendingResume()
+        val outcome = resumeResult.await()
 
         assertAll(
             { assertTrue(pending, "rig: the Hello's flight was in flight") },
             { assertTrue(pendingAfterAcks, "no ack settles the flight") },
-            { assertIs<ResumeResult.TimedOut>(resumeResult.await(), "unanswered, the flight times out") },
+            { assertIs<ResumeResult.TimedOut>(outcome, "unanswered, the flight times out") },
             { assertEquals(0, resumed.size, "no ack resumes anything") },
         )
     }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private suspend fun TestScope.makeSeamRoom(
