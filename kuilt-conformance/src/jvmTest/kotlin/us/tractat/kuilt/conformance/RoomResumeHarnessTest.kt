@@ -1,12 +1,16 @@
 package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.test.TestScope
-import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertFailsWith
 
-/** JVM-only: direct calls to runTest properties return Unit here, but a promise on Wasm. */
+/**
+ * Positive controls for the return properties (#3159, Task 1.7): each rigs one observation of the
+ * reference harness and shows the property it backs reds on it, so none of them can pass by absence.
+ *
+ * JVM-only: direct calls to runTest properties return Unit here, but a promise on Wasm.
+ */
 class RoomResumeHarnessTest {
     private fun suite(
         change: (RoomConformanceSuite.ResumeHarness) -> RoomConformanceSuite.ResumeHarness,
@@ -15,45 +19,37 @@ class RoomResumeHarnessTest {
             change(referenceResumeHarness(scope, fastHeartbeatConfig))
     }
 
-    /**
-     * Positive control for the forged-resume property (#3165): a host that checks only a token's
-     * public fields lets the forgery through, and the property must red on it — on the follow-up
-     * resume, which is the half that tells a spent window from an unspent one.
-     */
+    /** A rig that releases nothing fails the fresh-admission property's precondition, never passes it. */
     @Test
-    fun aHostThatIgnoresTheSecretFailsTheForgedResumeProperty() {
+    fun aReleaseThatReleasesNothingFailsItsPrecondition() {
         val failure = assertFailsWith<AssertionError> {
-            object : RoomConformanceSuite() {
-                override fun newResumeHarness(scope: TestScope): ResumeHarness =
-                    referenceResumeHarness(scope, fastHeartbeatConfig, ignoreSecret = true)
-            }.aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen()
+            suite { it.copy(releaseSeat = {}) }.aReturnAfterTheSeatWentIsAFreshAdmission()
         }
-        assertAll(
-            { assertContains(failure.message.orEmpty(), "a forgery without the secret must be refused") },
-            { assertContains(failure.message.orEmpty(), "the forgery must not spend its window") },
-        )
+        assertContains(failure.message.orEmpty(), "the return rig released the joiner's seat on the host")
     }
 
+    /** A dead Hello counter cannot prove a return said Hello. */
     @Test
-    fun anUnpreparedWindowFailsItsPrecondition() {
+    fun aDeadHelloCounterCannotProveAReturn() {
         val failure = assertFailsWith<AssertionError> {
-            suite { it.copy(prepare = { token, _ -> token }) }.resumeExpiredHasExactCode()
+            suite { it.copy(helloRequests = { 0 }) }.aReturnRestoresAHeldSeat()
         }
-        assertContains(failure.message.orEmpty(), "resume rig must reach the requested host verdict")
+        assertContains(failure.message.orEmpty(), "the joiner must say Hello again, once")
     }
 
+    /** The `Resume` counter is read: a room seen sending one fails the return property. */
     @Test
-    fun anUnobservedVerdictFailsEvenWhenTheReplyIsCorrect() {
+    fun aResumeFrameOnTheWireFailsTheReturnProperty() {
         val failure = assertFailsWith<AssertionError> {
-            suite { it.copy(hostVerdicts = { emptyList() }) }.resumeNotYetOpenHasExactCode()
+            suite { it.copy(resumeRequests = { 1 }) }.aReturnRestoresAHeldSeat()
         }
-        assertContains(failure.message.orEmpty(), "the host must render exactly one verdict")
+        assertContains(failure.message.orEmpty(), "a return sends no Resume frame")
     }
 
     @Test
     fun aDeadSendCounterCannotProveLocalWindowClosed() {
         val failure = assertFailsWith<AssertionError> {
-            suite { it.copy(resumeRequests = { 0 }) }.resumeAfterLeaveIsLocalWindowClosed()
+            suite { it.copy(helloRequests = { 0 }) }.resumeAfterLeaveIsLocalWindowClosed()
         }
         assertContains(failure.message.orEmpty(), "the send observation must be live")
     }

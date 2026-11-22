@@ -162,8 +162,8 @@ class RoomConformanceGapDeclarationTest {
      * asserts against `resumeToken?.roomId` and so is the test that made the old
      * `resumeToken ?: return@runTest` skip self-contradictory), one plain membership property, and
      * `Room.leave`'s documented obligations, which are ungated core precisely because no fabric
-     * may excuse them (#2501). The resume mapping properties use their own required fixture and
-     * remain obligations even when link fault injection is unavailable.
+     * may excuse them (#2501). The return properties use their own required fixture and remain
+     * obligations even when link fault injection is unavailable.
      *
      * Without this, a future change that widened the gap to cover the whole suite would be green
      * here and nobody would notice that "declares a gap" had quietly become "opts out".
@@ -176,11 +176,8 @@ class RoomConformanceGapDeclarationTest {
         suite.leaveIsIdempotent()
         suite.leaveDoesNotReportFailureAsCancellation()
         suite.channelStateTornAfterLeave()
-        suite.resumeSuccessIsAcknowledged()
-        suite.resumeNotYetOpenHasExactCode()
-        suite.resumeExpiredHasExactCode()
-        suite.resumeInvalidTokenHasExactCode()
+        suite.aReturnRestoresAHeldSeat()
+        suite.aReturnAfterTheSeatWentIsAFreshAdmission()
         suite.resumeAfterLeaveIsLocalWindowClosed()
-        suite.aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen()
     }
 }

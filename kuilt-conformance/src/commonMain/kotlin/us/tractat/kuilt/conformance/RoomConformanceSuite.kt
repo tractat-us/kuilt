@@ -53,10 +53,8 @@ import us.tractat.kuilt.session.RoomFrame
 import us.tractat.kuilt.session.RoomFramePrefix
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
-import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -127,8 +125,8 @@ import kotlin.time.Instant
  *    job rather than a meta-test's, and the arm that declines still ends in an assertion
  *    ([injectorOrDeclaredGap]) rather than in a bare `return`.
  *  - **The refusal branch — a property that needed no hatch at all.**
- *    [aTokenMintedForAnotherRoomIsRefused] was simply never written; see its KDoc for what the
- *    `Room.resume` surface can and cannot observe.
+ *    `aTokenMintedForAnotherRoomIsRefused` was simply never written, until #2306 wrote it. #3159 Task
+ *    1.7 retired it with the token's presentation: see the (8a) note.
  *
  * **What the fixture still cannot detect, said plainly.** A harness that *could* fault-inject and
  * declares [FaultInjection.Unsupported] anyway is invisible here — there is no capability on
@@ -144,12 +142,17 @@ import kotlin.time.Instant
  * **rig** = a mutation of this suite itself. The "before" column is the measurement of the hole —
  * what the *pre-#2306* suite did under the same mutation.
  *
+ * **The table is a record, not a current claim, where it names a retired property.** M1, M3 and M4
+ * were measured before #3159 Task 1.7, which retired `aTokenMintedForAnotherRoomIsRefused` and the
+ * token mapping properties along with the token's presentation; their rows say what those
+ * properties caught then.
+ *
  * | # | Mutation | Kind | after | before |
  * |---|----------|------|-------|--------|
- * | M1 | `SeamRoom.resumeToken` returns `null` — a room opting out of resume entirely | real | RED: [resumeWithinWindowFiresResumed] and [aTokenMintedForAnotherRoomIsRefused] on the loud precondition, naming `role=Joiner … roster=1 member(s)` | [joinerLearnsHostRoomIdOnAdmission] RED — but [resumeWithinWindowFiresResumed] **green by absence** |
+ * | M1 | `SeamRoom.resumeToken` returns `null` — a room opting out of resume entirely | real | RED: [resumeWithinWindowFiresResumed] and `aTokenMintedForAnotherRoomIsRefused` on the loud precondition, naming `role=Joiner … roster=1 member(s)` | [joinerLearnsHostRoomIdOnAdmission] RED — but [resumeWithinWindowFiresResumed] **green by absence** |
  * | M2 | [injectorOrDeclaredGap] drops its assertion — i.e. the pre-#2306 silent `?: return@runTest`, exactly | rig | RED: all four `blankTrackingUrl*` **as measured — the set is seven since #2501** | all green; the four gated obligations passed under a gap declaring nothing |
  * | M3 | delete the `proof.roomId != roomId` check in `KeyAdmission.checkProof` — a proof for another room admits | real | **re-pointed (#3212):** RED in `:kuilt-session`'s `KeyAdmissionTest.proofForAnotherRoomIsRejected`, 1 of 23, 2 of its assertions. The controller's own guard, this row's old subject, reds nothing in this suite (40 of 40 green) — see below | every pre-existing test of this suite **green** |
- * | M4 | the host drops a foreign token silently instead of refusing it | synthetic | RED: [aTokenMintedForAnotherRoomIsRefused], 2 of 3 — `Got TimedOut` | all green |
+ * | M4 | the host drops a foreign token silently instead of refusing it | synthetic | RED: `aTokenMintedForAnotherRoomIsRefused`, 2 of 3 — `Got TimedOut` | all green |
  *
  * **M1 is the argument for [requireResumeToken].** The same fabric was *already* failing
  * [joinerLearnsHostRoomIdOnAdmission] while [resumeWithinWindowFiresResumed] returned green without
@@ -169,8 +172,8 @@ import kotlin.time.Instant
  * (#3165). Measured on #3212: deleting it reds `:kuilt-session`'s own `JoinerReconnectControllerTest`
  * (2 of 19) and nothing in this suite (40 of 40 green). The room-id property now rests on two room
  * checks: the proof's, which `proofForAnotherRoomIsRejected` pins; and the `Resume` frame's, which
- * reds only [resumeInvalidTokenHasExactCode] when deleted alone, because the controller's guard
- * still refuses the token. [aTokenMintedForAnotherRoomIsRefused] reds, all 4 assertions, only when
+ * reds only `resumeInvalidTokenHasExactCode` when deleted alone, because the controller's guard
+ * still refuses the token. `aTokenMintedForAnotherRoomIsRefused` reds, all 4 assertions, only when
  * both `Resume`-path checks go. Either way the defect is visible to the tree but not to the
  * *contract*, which is precisely what a second [RoomFactory] inherits nothing of: an
  * implementation's private suite is not a conformance obligation.
@@ -369,102 +372,63 @@ public abstract class RoomConformanceSuite {
     public open fun newHarness(scope: CoroutineScope): RoomHarness = defaultHarness(scope)
 
     /**
-     * A resume rig that observes the host's actual verdict before its wire mapping.
+     * A return rig: two devices, a way to make the host let go of a seat, and two send counters
+     * (#3159, Task 1.7).
      *
-     * [prepare] puts the host into the requested state and returns the token to present. It must
-     * not manufacture a joiner outcome. [hostVerdicts] records only verdicts rendered in response
-     * to real resume requests; it must not echo the requested fixture state. [resumeRequests]
-     * counts the joiner's attempted resume sends, including sends that fail.
+     * A joiner's return is a fresh Hello since Task 1.7: [Room.resume] — like the room's own reconnect —
+     * says Hello again and the host's key → seat table decides. So the observations are of the Hello,
+     * not of a token's mapping. [releaseSeat] makes the host give up the named joiner's seat for real,
+     * on the host's own state; the properties check that it did against the host's roster, so a rig
+     * that releases nothing fails its precondition rather than passing a fresh admission it never set
+     * up. [helloRequests] counts the joiner's attempted Hello sends, including sends that fail;
+     * [resumeRequests] counts its `Resume` frames, which a room whose return is a Hello never sends.
      *
      * These observations prove the rig ran independently of the code being asserted. They do not
-     * prove the controller's timing policy; that remains the controller's own obligation.
+     * prove the host's hold policy; that remains the controller's own obligation.
+     *
+     * [hostFactory] and [joinerFactory] are **distinct devices**, each with its own key store: one
+     * store shared between them would make the joiner the host's second tab, which the key → seat table
+     * gives a seat of its own rather than restoring (Decided 30).
      */
     public data class ResumeHarness(
         val hostFactory: RoomFactory,
         val joinerFactory: RoomFactory,
-        val prepare: suspend (ResumeToken, ResumeResult.HostVerdict) -> ResumeToken,
-        val hostVerdicts: () -> List<ResumeResult.HostVerdict>,
+        val releaseSeat: suspend (joiner: PeerId) -> Unit,
+        val helloRequests: () -> Int,
         val resumeRequests: () -> Int,
     )
 
     /**
-     * Bind the resume mapping properties to the implementation under test.
+     * Bind the return properties to the implementation under test.
      *
      * Required and non-nullable: a default reference rig would let a different room pass by
-     * testing the reference instead of itself. There is no fault-injection opt-out for mappings.
+     * testing the reference instead of itself. There is no fault-injection opt-out here.
      */
     public abstract fun newResumeHarness(scope: TestScope): ResumeHarness
 
-    /** An accepted host verdict must reach the joiner as an acknowledgement. */
-    @Test
-    public fun resumeSuccessIsAcknowledged(): TestResult =
-        assertResumeMapping(ResumeResult.Success, null)
-
-    /** A host that has not opened a window must return the retryable code for that state. */
-    @Test
-    public fun resumeNotYetOpenHasExactCode(): TestResult =
-        assertResumeMapping(ResumeResult.WindowNotYetOpen, RejectCode.ResumeWindowNotYetOpen)
-
-    /** A closed host window must arrive as a refusal, never the joiner's local WindowClosed. */
-    @Test
-    public fun resumeExpiredHasExactCode(): TestResult =
-        assertResumeMapping(ResumeResult.WindowClosed, RejectCode.ResumeWindowExpired)
-
-    /** Structural token rejection must retain its own code, even among terminal refusals. */
-    @Test
-    public fun resumeInvalidTokenHasExactCode(): TestResult =
-        assertResumeMapping(ResumeResult.TokenInvalid("session-mismatch"), RejectCode.ResumeTokenInvalid)
-
     /**
-     * A resume carrying the member's id and room but **not its secret** is refused, and leaves that
-     * member's window open (#3165).
-     *
-     * Every member learns every other member's id and the room id from the roster, so those fields
-     * prove nothing: without this property a room whose host checks only them lets any member
-     * resume as any partitioned other, spending the victim's window and locking it out. The
-     * forgery is presented here by the joiner itself with its own token's secret replaced — the
-     * host cannot tell who sent it, which is the point — and the property has two halves because
-     * either alone is vacuous: the forgery is refused as [RejectCode.ResumeTokenInvalid], **and**
-     * the genuine token afterwards succeeds. The second is the only thing that tells a check made
-     * before the window is spent from one made after it.
+     * A joiner whose seat the host still holds comes back by saying Hello again, and is restored: one
+     * Hello, no `Resume` frame, [ResumeResult.Success], and the host announces
+     * [MembershipEvent.Resumed] for it rather than a departure and a new member.
      */
     @Test
-    public fun aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen(): TestResult =
+    public fun aReturnRestoresAHeldSeat(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newResumeHarness(this)
             val host = h.hostFactory.host(Pattern("Alice"))
             val joiner = h.joinerFactory.join(InMemoryTag("Bob"))
             try {
-                host.awaitRoster("the resume rig admitted the joiner") { it.size == 1 }
-                joiner.awaitRoster("the resume rig identified the host") { it.isNotEmpty() }
-                val token = h.prepare(joiner.requireResumeToken(), ResumeResult.Success)
-                val forged = token.copy(secret = ResumeSecret.generate())
-                val refused = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(forged) }
-                val genuine = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(token) }
+                host.awaitRoster("the return rig admitted the joiner") { it.size == 1 }
+                joiner.awaitRoster("the return rig identified the host") { it.isNotEmpty() }
+                val hostResumed = async { host.awaitEvent("the host's Resumed") { it as? MembershipEvent.Resumed } }
+                val hellos = h.helloRequests()
+                val result = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(joiner.requireResumeToken()) }
                 assertAll(
-                    {
-                        assertEquals(
-                            RejectCode.ResumeTokenInvalid,
-                            assertIs<ResumeResult.Refused>(refused, "a forgery without the secret must be refused").code,
-                        )
-                    },
-                    {
-                        assertEquals(
-                            ResumeResult.Success,
-                            genuine,
-                            "the member's own resume must succeed after a forgery: the forgery must not spend its window",
-                        )
-                    },
-                    {
-                        // Where the forgery is refused — before the window controller or inside it —
-                        // is the room's business; that it never spends the window is not.
-                        assertEquals(
-                            listOf<ResumeResult.HostVerdict>(ResumeResult.Success),
-                            h.hostVerdicts().filter { it == ResumeResult.Success },
-                            "only the genuine resume may be granted",
-                        )
-                    },
-                    { assertEquals(2, h.resumeRequests(), "the joiner must actually send both resumes") },
+                    { assertEquals(ResumeResult.Success, result, "a held seat must be restored") },
+                    { assertEquals(hellos + 1, h.helloRequests(), "the joiner must say Hello again, once") },
+                    { assertEquals(0, h.resumeRequests(), "a return sends no Resume frame") },
+                    { assertEquals(joiner.selfId, hostResumed.await().peerId, "the host restores the seat it held") },
+                    { assertEquals(listOf(joiner.selfId), host.roster.value.map { it.id }, "one seat, the same one") },
                 )
             } finally {
                 joiner.leave()
@@ -472,38 +436,33 @@ public abstract class RoomConformanceSuite {
             }
         }
 
-    private fun assertResumeMapping(verdict: ResumeResult.HostVerdict, code: RejectCode?): TestResult =
+    /**
+     * A joiner whose seat the host has let go comes back to a fresh admission, which the room keeps:
+     * [ResumeResult.WindowClosed] — the truth about the seat — with the joiner a member again and its
+     * room still in session, not ended. Amendment C of the identity plan: a fresh admission after the
+     * window closed is a success.
+     */
+    @Test
+    public fun aReturnAfterTheSeatWentIsAFreshAdmission(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newResumeHarness(this)
             val host = h.hostFactory.host(Pattern("Alice"))
             val joiner = h.joinerFactory.join(InMemoryTag("Bob"))
             try {
-                host.awaitRoster("the resume rig admitted the joiner") { it.size == 1 }
-                joiner.awaitRoster("the resume rig identified the host") { it.isNotEmpty() }
-                val token = h.prepare(joiner.requireResumeToken(), verdict)
-                assertEquals(emptyList(), h.hostVerdicts(), "preparing a rig must not record a verdict")
-                val result = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(token) }
+                host.awaitRoster("the return rig admitted the joiner") { it.size == 1 }
+                joiner.awaitRoster("the return rig identified the host") { it.isNotEmpty() }
+                h.releaseSeat(joiner.selfId)
+                val releasedRoster = host.roster.value.map { it.id }
+                val hostJoined = async { host.awaitEvent("the host's Joined") { it as? MembershipEvent.Joined } }
+                val hellos = h.helloRequests()
+                val result = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(joiner.requireResumeToken()) }
                 assertAll(
-                    {
-                        val observed = h.hostVerdicts()
-                        assertEquals(1, observed.size, "the host must render exactly one verdict")
-                        if (verdict is ResumeResult.TokenInvalid) {
-                            assertIs<ResumeResult.TokenInvalid>(observed.single(),
-                                "resume rig must reach structural token rejection")
-                        } else {
-                            assertEquals(verdict, observed.single(),
-                                "resume rig must reach the requested host verdict before mapping it")
-                        }
-                    },
-                    { assertEquals(1, h.resumeRequests(), "the joiner must actually send its resume") },
-                    {
-                        if (code == null) {
-                            assertEquals(ResumeResult.Success, result, "host success must be acknowledged")
-                        } else {
-                            assertEquals(code, assertIs<ResumeResult.Refused>(result).code,
-                                "exact reject code for host verdict $verdict")
-                        }
-                    },
+                    { assertEquals(emptyList(), releasedRoster, "the return rig released the joiner's seat on the host") },
+                    { assertEquals(ResumeResult.WindowClosed, result, "a gone seat is a fresh admission") },
+                    { assertEquals(hellos + 1, h.helloRequests(), "the joiner must say Hello again, once") },
+                    { assertEquals(0, h.resumeRequests(), "a return sends no Resume frame") },
+                    { assertEquals(joiner.selfId, hostJoined.await().member.id, "the host admits the joiner afresh") },
+                    { assertTrue(joiner.roster.value.isNotEmpty(), "the joiner's room keeps the admission") },
                 )
             } finally {
                 joiner.leave()
@@ -511,7 +470,7 @@ public abstract class RoomConformanceSuite {
             }
         }
 
-    /** A left joiner answers locally; the request counter is first proven live on a real refusal. */
+    /** A left joiner answers locally; the Hello counter is first proven live on a real return. */
     @Test
     public fun resumeAfterLeaveIsLocalWindowClosed(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -519,22 +478,20 @@ public abstract class RoomConformanceSuite {
             val host = h.hostFactory.host(Pattern("Alice"))
             val joiner = h.joinerFactory.join(InMemoryTag("Bob"))
             try {
-                host.awaitRoster("the resume rig admitted the joiner") { it.size == 1 }
-                joiner.awaitRoster("the resume rig identified the host") { it.isNotEmpty() }
-                val verdict = ResumeResult.WindowNotYetOpen
-                val token = h.prepare(joiner.requireResumeToken(), verdict)
+                host.awaitRoster("the return rig admitted the joiner") { it.size == 1 }
+                joiner.awaitRoster("the return rig identified the host") { it.isNotEmpty() }
+                val token = joiner.requireResumeToken()
+                val hellos = h.helloRequests()
                 val live = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(token) }
                 assertAll(
-                    { assertEquals(RejectCode.ResumeWindowNotYetOpen, assertIs<ResumeResult.Refused>(live).code) },
-                    { assertEquals(listOf(verdict), h.hostVerdicts(), "the host observation must be live") },
-                    { assertEquals(1, h.resumeRequests(), "the send observation must be live") },
+                    { assertEquals(ResumeResult.Success, live, "the live return reached the host") },
+                    { assertEquals(hellos + 1, h.helloRequests(), "the send observation must be live") },
                 )
                 joiner.leave()
                 val closed = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(token) }
                 assertAll(
                     { assertEquals(ResumeResult.WindowClosed, closed) },
-                    { assertEquals(1, h.resumeRequests(), "a left joiner must not attempt a resume send") },
-                    { assertEquals(listOf(verdict), h.hostVerdicts(), "no host verdict after leave") },
+                    { assertEquals(hellos + 1, h.helloRequests(), "a left joiner must not say Hello again") },
                 )
             } finally {
                 joiner.leave()
@@ -1436,147 +1393,14 @@ public abstract class RoomConformanceSuite {
             joinerRoom.leave()
         }
 
-    // ── (8a) a resume token minted for another room is refused ───────────────
-
-    /**
-     * **The negative half of [joinerLearnsHostRoomIdOnAdmission].** That test asserts a joiner's
-     * token names the host's room, and its own comment reasons about a room that would "refuse its
-     * own members' resumes" — but nothing ever presented a room with a token naming a *different*
-     * room and checked that it said no. Only [ResumeResult.Success] had a property in this suite;
-     * every refusal branch was covered by the reference implementation's private tests
-     * (`RoomResumeTest`, `JoinerReconnectControllerTest`), which a second [RoomFactory] inherits
-     * nothing from.
-     *
-     * ### The contrast pair is the property, not the refusal alone
-     *
-     * A lone "the foreign token is refused" would be satisfied by a room that refuses *everything* —
-     * a dead host, a window that never opened, a resume path that silently drops. So the two resumes
-     * happen against the **same host at the same instant**, one with a token whose [RoomId] has been
-     * tampered with and one with the genuine token, and the property is that they get different
-     * answers. That contrast is what pins the refusal to the *token* rather than to the moment; it
-     * is also what proves the refused attempt did not spend the single-use window, which is the
-     * denial-of-service shape a room that consumed a window on an invalid token would have.
-     *
-     * ### What the `Room.resume` surface can and cannot observe — read before strengthening this
-     *
-     * #2306 asked for [ResumeResult.TokenInvalid] here, and at the time it was **not observable
-     * through [Room.resume]**: the reference host produced it (`DefaultJoinerReconnectController`
-     * checks the room id before it touches any window, which is why this test needs no window state
-     * of its own for the *refusal* half), it travelled the wire as an
-     * `AdmitMessage.Reject(RejectCode.ResumeTokenInvalid)`, and the joiner's resume machine
-     * completed **every** reject as [ResumeResult.WindowClosed] — so an elapsed window, a foreign
-     * token and a window the host had not opened yet were one value.
-     *
-     * #2364 fixed that. A reject now completes as [ResumeResult.Refused] carrying the host's own
-     * [us.tractat.kuilt.session.admit.RejectCode], and the host-side verdicts are a different half of the hierarchy
-     * ([ResumeResult.HostVerdict]) that a joiner cannot receive at all — `refused is
-     * ResumeResult.TokenInvalid` is now a *compile* error here, which is how this KDoc's own
-     * warning stopped needing to be prose. So `Room.resume`'s reachable range is
-     * `{Success, Refused, TimedOut, WindowClosed}`, and this test asserts a refusal that is a
-     * **host verdict** (not local silence) and whose code is
-     * **terminal**. It still excludes [ResumeResult.TimedOut], which is the rig receipt —
-     * `TimedOut` means no verdict arrived at all, so a host that never saw the frame reds here
-     * instead of passing as a refusal it never made — and now also excludes
-     * [ResumeResult.WindowClosed], which after #2364 means the *joiner* gave up locally without
-     * asking.
-     *
-     * This contrast property leaves the code unpinned: a room may honestly answer
-     * [us.tractat.kuilt.session.admit.RejectCode.ResumeTokenInvalid] or
-     * [us.tractat.kuilt.session.admit.RejectCode.RoomMismatch] for a token naming a room it
-     * does not serve. What every implementation owes is that the answer is **not retryable** —
-     * re-presenting that token can never work, and a room that said otherwise would send the
-     * joiner into a doomed retry loop for its whole window.
-     * [resumeInvalidTokenHasExactCode] separately observes a [ResumeResult.TokenInvalid] verdict
-     * at the host and pins its exact mapping to [RejectCode.ResumeTokenInvalid]. The companion
-     * mapping properties cover the other host verdicts without inferring them from terminality.
-     *
-     * ### Mutation receipt
-     *
-     * A room refuses a foreign token twice over: its own `session-mismatch` check on the `Resume`
-     * frame (#3165), then the window controller's room-id guard
-     * ([us.tractat.kuilt.session.partition.DefaultJoinerReconnectController.tryResume]). Deleting
-     * both makes the foreign token indistinguishable from the genuine one: it consumes the window, so
-     * the first resume returns [ResumeResult.Success] (reddening the refusal assertions) and the
-     * second returns a refusal (reddening the positive control). Measured on #3212: all 4 assertions
-     * red. Deleting either alone leaves this test green, because the other still refuses; the room's
-     * check alone reds [resumeInvalidTokenHasExactCode].
-     *
-     * Weakening the guard to answer `RejectCode.ResumeWindowNotYetOpen` (retryable) instead of removing it
-     * keeps the first two assertions green and reds only the third — which is why the terminality
-     * of the code, not merely the presence of a refusal, is the assertion that carries this test.
-     *
-     * **Not invisible everywhere, though — say what the row actually claims.** That same mutation
-     * reds two tests in `:kuilt-session`'s own `JoinerReconnectControllerTest`. What was missing is
-     * narrower: the guard was proven by the *implementation's private suite* and by nothing in the
-     * *contract*, so a second [RoomFactory] subclassing this suite inherited no such property at
-     * all. Making a room refuse a foreign token is the kind of obligation every implementation owes
-     * and only one had been asked for.
-     */
-    @Test
-    public fun aTokenMintedForAnotherRoomIsRefused(): TestResult =
-        runTest(timeout = TEST_WEDGE_BACKSTOP) {
-            val h = newHarness(backgroundScope)
-            val faultyLoom = h.faults.injectorOrDeclaredGap("a resume token minted for another room is refused")
-                ?: return@runTest
-
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
-            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
-
-            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
-            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
-
-            val token = joinerRoom.requireResumeToken()
-            // Same peer, same issue time, one room id away — so the only thing that can distinguish
-            // the two attempts below is the claim the host is supposed to be checking.
-            val foreign = token.copy(roomId = RoomId("${token.roomId.value}-a-different-room"))
-
-            // Open the window: partition long enough for the host's detector to fire, then heal, so
-            // both resumes below are presented to a host that WOULD accept a valid one.
-            faultyLoom.setFaultProfileOnAll(FaultProfile.DropAll(Direction.Both))
-            repeat(4) { h.advanceClock(100L); advanceTimeBy(100L) }
-            faultyLoom.setFaultProfileOnAll(FaultProfile.Healthy)
-            advanceTimeBy(50L)
-
-            val refused = joinerRoom.resume(foreign)
-            val accepted = joinerRoom.resume(token)
-
-            assertAll(
-                {
-                    assertFalse(
-                        refused is ResumeResult.Success,
-                        "a room must not resume a token minted for a different room; got $refused",
-                    )
-                },
-                {
-                    assertIs<ResumeResult.Refused>(
-                        refused,
-                        "the refusal must be a VERDICT the host rendered, not silence and not a local " +
-                            "give-up: ResumeResult.TimedOut means no reply arrived and " +
-                            "ResumeResult.WindowClosed means this joiner never asked, either of which " +
-                            "would make the assertion above vacuous. Got $refused",
-                    )
-                },
-                {
-                    assertFalse(
-                        (refused as? ResumeResult.Refused)?.code?.retryable ?: true,
-                        "a token minted for another room can never validate here, so the host's " +
-                            "RejectCode must be terminal — a retryable one sends the joiner into a " +
-                            "doomed retry loop for its whole window. Got $refused",
-                    )
-                },
-                {
-                    assertIs<ResumeResult.Success>(
-                        accepted,
-                        "the genuine token must still resume: a refused token must not spend the window, " +
-                            "and this is also what proves the host was reachable when it refused",
-                    )
-                },
-            )
-
-            joinerRoom.leave()
-            hostRoom.leave()
-        }
-
+    // ── (8a) retired: a resume token minted for another room ─────────────────
+    //
+    // `aTokenMintedForAnotherRoomIsRefused` presented a token naming another room through
+    // `Room.resume` and required a terminal refusal. Since #3159 Task 1.7 a return says Hello again and
+    // presents no token, so through `Room.resume` there is nothing for a room to refuse; the property a
+    // second implementation owes in its place is that a proof naming another room admits nobody, which
+    // `:kuilt-session`'s `KeyAdmissionTest.proofForAnotherRoomIsRejected` pins, and the `Resume` frame's
+    // own room check is pinned on hand-written frames in `ForgedResumeTest` until Task 1.8 retires it.
     // ── (9) HostLost is terminal — broadcast after HostLost is a no-op ──────
 
     @Test
