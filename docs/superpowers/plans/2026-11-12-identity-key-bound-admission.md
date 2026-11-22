@@ -276,6 +276,29 @@ These are Iain's rulings on the open questions raised by the code and spec-confo
 - **`Resumed` fires once per return.** If a retry Hello reaches a seat the host has already restored for the same return, it must not emit `Resumed` again. 1.7 adds the guard.
 - **Follow-up:** #3616 covers what is left of the verified-challenger rule: a `Reject` that echoes its challenge nonce (a wire change), `sender == hostPeerId` on reconnect, and terminal Hello-gate refusals during a reconnect.
 
+## Amendment E — rulings of 2026-11-22 (after #3614's round-2 review)
+
+Iain's rulings on a design review of #3614. They change how a joiner recognises an answer and how the host defines `Resumed`. Where they differ from the tasks above or below, including Amendments C and D, these rulings win.
+
+The common root is that the wire correlates only one direction. `Hello.joinerNonce` is echoed by `Challenge` and answered by `Proof`. A `Welcome` and a `Reject` carry no nonce, though, so the joiner tells whether one answers its Hello by its *sender*: the verified challengers. Separately, the host bounds a "return" from its own state (`restoredReturns`), and a return is not a state the host has. Round 1, round 2 and the round-2 review's findings all come from these two gaps. So does the converse of the ruled limit: a retry that reaches a seat admitted afresh reads as that seat's restore, and the joiner reports `Success` for a seat it lost.
+
+- **C1: every answer names the Hello it answers.** A direct `Welcome` and every `Reject` carry `answers = joinerNonce`. The joiner accepts one only if `answers` equals its latest Hello's nonce. The check and the flight take happen in one critical section. This **replaces Amendment C's verified-challenger rule**. The nonce check is strictly stronger, and `latestHelloChallengers`/`forgetLatestHello` and the sender proxy are deleted. It also closes #3616 items 1–3. A Hello-gate refusal echoes the nonce too, so a reconnect ends `Refused(code)`.
+- **C2: a `Welcome` names the membership.** The host mints an opaque `membership` id in `admitMember`/`supersedeSeat`, keeps it through `restoreSeat`, and sends it on the direct `Welcome`. A closing `Welcome` whose id matches the joiner's is a restore. Any other id is a fresh admission, and that comparison is #3615's trigger. `ReturnKind` stays for `Returning` (2.6) and the under-new-id inherit, but it no longer closes an episode.
+- **`Resumed` on the host fires on a partition's recovery: once per partition.** `restoreSeat` emits it only if the seat is `Partitioned`. A restore on a connected seat is silent. This **replaces Amendment D's "once per return"**, and `restoredReturns` is deleted. It **overrides Task 1.5**'s "`Restore` on a connected seat … emits `Resumed`". Amendment A §1.5's "skips `tryResume`" is unaffected. It matches `WindowOpened`'s KDoc: a resume before `expiresAt` → `Resumed`, else `Left`.
+- **Task 1.7's joiner `Success`** comes from a `Welcome` whose `membership` matches, not from `Welcome(Restored)`.
+- **The limit Iain accepted earlier today dissolves.** A seat that was never partitioned, restarted twice: the host saw no partition and says nothing, while the joiner compares ids and reports restored. Both are true.
+- **Where it lands: in 1.8 (#3215)**, with that slice's `ProtocolVersion` bump (7). There is no shipped consumer and no compatibility window. #3616 items 1–3 fold in. #3615 shrinks to the roster rebuild, plus the new signal driven by the membership comparison.
+- **#3614 round 3 stays small:**
+  - Move the episode reset into `attemptReconnect`'s claiming section. C1 does not fix this: a stale `Welcome` matches the nonce until a new Hello is minted.
+  - Fold `handleWelcome`'s challenger check and flight take into one lock section.
+  - Fix the stale `Room.resume`/`resumeToken` KDoc.
+  - Fix the detached `toldSuperseded` KDoc.
+  - Fix the wall-clock `TOLD_GRACE` outcome.
+  - Make `PendingChallenges.take`'s `answering` parameter required.
+
+  C1/C2 delete the challenger fix in 1.8. It is still made now, so that `main` has no known race in between.
+- **To rewrite in 1.8:** the `Welcome` KDoc (`AdmitMessage.kt`), the `ReturnKind.Restored` KDoc, and the rejoin docs.
+
 ## Global Constraints
 
 - **Each task is one PR and one sub-issue of #3159.**
