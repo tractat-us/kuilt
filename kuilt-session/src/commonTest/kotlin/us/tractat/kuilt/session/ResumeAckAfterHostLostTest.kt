@@ -422,6 +422,52 @@ class ResumeAckAfterHostLostTest {
         }
 
     /**
+     * A room told it was superseded while its reconnect's Hello waits for the host mints no Hello,
+     * even once the host is addressable again inside that gap: the gate in the room's re-Hello reads
+     * the supersession in the same critical section that would mint the nonce (inherited obligation 4,
+     * #3159 Task 1.7).
+     *
+     * The gap is between the supersession being recorded and the room's `leave()` taking the flight.
+     * The hook is the room's `Left(self, Superseded)` itself, seen by an unconfined collector, which
+     * lists the host and switches the room's [InlineSwitchDispatcher] to run in place, so the waiting
+     * Hello resumes and reaches the gate before `leave()` does. [hasPendingResume] read in the hook
+     * shows the flight was still there.
+     */
+    @Test
+    fun `a room superseded while its Hello waits for its host mints no Hello`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = ScriptedSeam(joinerId, hostId)
+            val dispatcher = InlineSwitchDispatcher(StandardTestDispatcher(testScheduler))
+            val (room, _) = admittedJoiner(seam, scope = CoroutineScope(backgroundScope.coroutineContext + dispatcher))
+            var pendingInGap: Boolean? = null
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                room.events.collect { event ->
+                    if ((event as? MembershipEvent.Left)?.reason is LeaveReason.Superseded && pendingInGap == null) {
+                        pendingInGap = room.hasPendingResume()
+                        dispatcher.inline = true
+                        seam.listHost()
+                    }
+                }
+            }
+            seam.healListsHost = false
+            seam.dropHost()
+            seam.tear()
+            runCurrent()
+            val waiting = room.hasPendingResume() && seam.resumesSent == 0
+            seam.deliver(AdmitMessage.Farewell(joinerId.value, supersededBy = "joiner-2"))
+            runCurrent()
+            dispatcher.inline = false
+            runCurrent()
+
+            assertAll(
+                { assertTrue(waiting, "precondition: the reconnect's flight waits to send its Hello") },
+                { assertEquals(true, pendingInGap, "precondition: the hook ran with the flight still pending") },
+                { assertTrue(dispatcher.inlineLaunches > 0, "precondition: the waiting Hello resumed in place") },
+                { assertEquals(0, seam.resumesSent, "a superseded room says no Hello") },
+            )
+        }
+
+    /**
      * Episode one: the host introduces itself (so the joiner monitors it, and a later drop reaches the
      * room through that detector), the link tears, the joiner says Hello again, the host challenges it,
      * and its restored `Welcome` closes the episode.

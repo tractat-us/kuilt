@@ -42,6 +42,7 @@ import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -312,6 +313,60 @@ class ReHelloReconnectTest {
             { assertTrue(since.none { it is MembershipEvent.HostLost }, since.render()) },
             { assertEquals(1, since.count { it is MembershipEvent.Resumed && it.peerId == bob }, since.render()) },
             { assertEquals(1, s.hellosToHost().size) },
+        )
+        s.room.leave()
+    }
+
+    /**
+     * Amendment C: a retryable `Reject` from anyone settles the flight and schedules another Hello —
+     * here a bystander's, sent before the host challenged anything. The retry is what the host then
+     * answers.
+     */
+    @Test
+    fun aRetryableRejectFromABystanderSaysHelloAgain() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = scripted()
+        val mark = s.log.mark()
+        val reHello = assertNotNull(s.dropAndHeal(), "the reconnect says Hello again")
+        s.from(eve, AdmitMessage.Reject("host-failed: forged", RejectCode.HostFailed))
+        s.advance(joinerConfig.interval * 2)
+        val retry = assertNotNull(s.hellosToHost().drop(1).firstOrNull(), "the bystander's refusal scheduled a second Hello")
+        s.challenge(retry)
+        s.welcome(returnKind = ReturnKind.Restored)
+        s.advance(joinerConfig.reconnectWindow)
+
+        val since = s.log.since(mark)
+        assertAll(
+            { assertTrue(since.none { it is MembershipEvent.HostLost }, since.render()) },
+            { assertEquals(1, since.count { it is MembershipEvent.Resumed && it.peerId == bob }, since.render()) },
+            { assertEquals(2, s.hellosToHost().size, "one retry, then nothing more") },
+            { assertTrue(!retry.joinerNonce.contentEquals(reHello.joinerNonce), "the retry carries a fresh nonce") },
+        )
+        s.room.leave()
+    }
+
+    /**
+     * Amendment C: the host's own `Welcome` closes the episode even between attempts. A bystander's
+     * retryable `Reject` settled the flight, and while the loop waits out its interval the host's
+     * `Welcome` for the challenged Hello arrives: the loop says no second Hello.
+     */
+    @Test
+    fun aWelcomeBetweenAttemptsClosesTheEpisode() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = scripted()
+        val mark = s.log.mark()
+        val reHello = assertNotNull(s.dropAndHeal(), "the reconnect says Hello again")
+        s.challenge(reHello)
+        s.from(eve, AdmitMessage.Reject("host-failed: forged", RejectCode.HostFailed))
+        val pendingAfterReject = (s.room as SeamRoom).hasPendingResume()
+        s.welcome(returnKind = ReturnKind.Restored)
+        s.advance(joinerConfig.reconnectWindow * 2)
+
+        val since = s.log.since(mark)
+        assertAll(
+            { assertFalse(pendingAfterReject, "precondition: the bystander's refusal settled the flight") },
+            { assertEquals(1, s.hellosToHost().size, "the Welcome closed the episode: no second Hello") },
+            { assertTrue(since.none { it is MembershipEvent.HostLost }, since.render()) },
+            { assertEquals(1, since.count { it is MembershipEvent.Resumed && it.peerId == bob }, since.render()) },
+            { assertEquals(Liveness.Connected, s.room.roster.value.single { it.id == hostId }.liveness, "the episode closed") },
         )
         s.room.leave()
     }

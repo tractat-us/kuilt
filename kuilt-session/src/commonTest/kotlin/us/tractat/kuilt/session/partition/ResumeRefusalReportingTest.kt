@@ -5,7 +5,9 @@
 
 package us.tractat.kuilt.session.partition
 
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.PeerId
@@ -16,6 +18,8 @@ import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.session.FailureReason
+import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SeamRoom
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
@@ -28,6 +32,7 @@ import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -181,6 +186,31 @@ class ResumeRefusalReportingTest {
             assertTrue(
                 record.attempt in 2..ceiling,
                 "an episode reports at most one refusal per retry interval (attempts=${record.attempt}, ceiling=$ceiling)",
+            )
+        }
+
+    /**
+     * A window lost to retryable refusals ends `HostLost(Refused)`, carrying the last refusal's code,
+     * not `WindowExpired`: the consumer can tell a host that kept refusing from one that never answered.
+     */
+    @Test
+    fun `a window lost to retryable refusals ends HostLost Refused with their code`() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = rig()
+            val events = mutableListOf<MembershipEvent>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { rig.room.events.collect { events += it } }
+            rig.dropAndHeal()
+            repeat((config.reconnectWindow / TICK).toInt() + 10) { rig.tick() }
+
+            val lost = events.filterIsInstance<MembershipEvent.HostLost>()
+            assertAll(
+                { assertTrue(assertNotNull(rig.room.lastResumeRefusal(), "precondition: the episode was refused").attempt >= 2) },
+                { assertEquals(1, lost.size, "the window was lost (events: $events)") },
+                {
+                    val reason = lost.singleOrNull()?.reason
+                    assertIs<FailureReason.Refused>(reason, "a window lost to refusals says so (reason: $reason)")
+                    assertEquals(RejectCode.HostFailed, reason.code)
+                },
             )
         }
 
