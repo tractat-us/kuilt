@@ -458,13 +458,22 @@ public abstract class RoomConformanceSuite {
                 val hellos = h.helloRequests()
                 val result = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(joiner.requireResumeToken()) }
                 val announced = hostJoined.await().member.id
+                // Kept, not merely granted: time moves on past a whole reconnect window, the room still
+                // reads Woven, and a frame it sends reaches the host from the readmitted member. A room
+                // that ended on the WindowClosed verdict still lists the roster it had, so the roster
+                // alone could not tell the two apart.
+                advanceTimeBy(fastHeartbeatConfig.reconnectWindow * 2 + fastHeartbeatConfig.timeout)
+                val afterwards = joiner.channel(FRESH_ADMISSION_CHANNEL).state.value
                 assertAll(
                     { assertEquals(ResumeResult.WindowClosed, result, "a gone seat is a fresh admission") },
                     { assertEquals(hellos + 1, h.helloRequests(), "the joiner must say Hello again, once") },
                     { assertEquals(0, h.resumeRequests(), "a return sends no Resume frame") },
                     { assertEquals(joiner.selfId, announced, "the host admits the joiner afresh") },
-                    { assertTrue(joiner.roster.value.isNotEmpty(), "the joiner's room keeps the admission") },
+                    { assertIs<SeamState.Woven>(afterwards, "the joiner's room keeps the admission: still in session, got $afterwards") },
                 )
+                joiner.broadcast(applicationPayload("after-the-return"))
+                val reached = host.awaitHeld(joiner.selfId, count = 1, expected = "a frame the readmitted joiner sent")
+                assertEquals(listOf("after-the-return"), reached.map { it.payload.decodeToString() }, "the readmitted joiner's frame reaches the host")
             } finally {
                 joiner.leave()
                 host.leave()
@@ -2132,6 +2141,9 @@ public abstract class RoomConformanceSuite {
          * [awaitBudget], so it can never be the thing that expires a wait.
          */
         val SLOW_TEARDOWN = 1.seconds
+
+        /** The channel [aReturnAfterTheSeatWentIsAFreshAdmission] reads its live state on. */
+        const val FRESH_ADMISSION_CHANNEL = "fresh-admission"
 
         /** The channel [channelStateTornAfterLeave] takes its views on before the leave. */
         const val TERMINAL_STATE_CHANNEL = "terminal-state"
