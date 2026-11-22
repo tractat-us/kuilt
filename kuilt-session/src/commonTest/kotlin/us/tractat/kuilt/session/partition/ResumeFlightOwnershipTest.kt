@@ -26,7 +26,6 @@ import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -34,20 +33,20 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
- * Once the host's `ResumeAck` has taken a resume flight, that flight's verdict is the ack's, whatever
- * the joiner's own tear or deadline path sees afterwards (#3155 review).
+ * Once the host's `Welcome` to this member has taken a reconnect flight, that flight's verdict is the
+ * Welcome's, whatever the joiner's own tear or deadline path sees afterwards (#3155 review; since
+ * #3159 Task 1.7 the reconnect says Hello again, and the `Welcome` closes it where a `ResumeAck` did).
  *
- * The room's ack handler takes the flight under the lock, then emits `Resumed` and completes the
- * flight **outside** it. On a multi-threaded dispatcher the seam can tear, or the `resumeTimeout`
- * deadline can fire, between those two steps. A tear or deadline path that settles the flight as
- * `TimedOut` regardless would then report a failed attempt for a room that has already announced
- * `Resumed`; the reconnect loop retries, and the room fires a second `Resumed` or a contradictory
- * `HostLost`.
+ * The room's handler takes the flight under the lock, then emits `Resumed` and completes the flight
+ * **outside** it. On a multi-threaded dispatcher the seam can tear, or the `resumeTimeout` deadline
+ * can fire, between those two steps. A tear or deadline path that settles the flight as `TimedOut`
+ * regardless would then report a failed attempt for a room that has already announced `Resumed`;
+ * the reconnect loop retries, and the room fires a second `Resumed` or a contradictory `HostLost`.
  *
- * A test dispatcher cannot split the ack handler, which has no suspension point, so these tests play
- * its two halves by hand: [JoinerResumeMachine.takeFlightForAck] is the ack taking the flight, and
- * completing the taken deferred with [ResumeResult.Success] is the ack finishing. The tear or the
- * deadline is forced between them.
+ * A test dispatcher cannot split the handler, which has no suspension point, so these tests play its
+ * two halves by hand: [JoinerResumeMachine.takeFlightForWelcome] is the `Welcome` taking the flight,
+ * and completing the taken deferred with [ResumeResult.Success] is the handler finishing. The tear or
+ * the deadline is forced between them. "Sent" below counts the Hellos to the host.
  */
 class ResumeFlightOwnershipTest {
 
@@ -144,13 +143,12 @@ class ResumeFlightOwnershipTest {
                 host = FlightResumeHost(hostId),
             )
             machine.mintTokenIfAbsent("room-1", ResumeSecret.generate())
-            val token = assertNotNull(machine.resumeToken)
             val bound = config.resumeTimeout.inWholeMilliseconds
 
-            val owner = async { machine.resume(token) }
+            val owner = async { machine.resume() }
             runCurrent()
             advanceTimeBy(bound / 2)
-            val joined = async { machine.resume(token) }
+            val joined = async { machine.resume() }
             runCurrent()
             advanceTimeBy(bound / 2 - 10)
             seam.listHost() // the owner sends now, at about one bound in
@@ -159,7 +157,7 @@ class ResumeFlightOwnershipTest {
             advanceTimeBy(bound / 2 + 20) // past join + bound, short of send + bound
             runCurrent()
             val stillPending = machine.hasPendingFlight()
-            machine.takeFlightForAck()?.first?.complete(ResumeResult.Success)
+            machine.takeFlightForWelcome()?.first?.complete(ResumeResult.Success)
             runCurrent()
             val ownerResult = owner.await()
             val joinedResult = joined.await()
@@ -191,7 +189,8 @@ class ResumeFlightOwnershipTest {
                 { assertEquals(1, seam.resumesSent, "precondition: the first Resume went out") },
                 { assertTrue(machine.hasPendingFlight(), "precondition: the first Resume is in flight") },
             )
-            val (flight, resumes) = checkNotNull(machine.takeFlightForAck()) { "the flight vanished before the ack took it" }
+            val (taken, resumes) = checkNotNull(machine.takeFlightForWelcome()) { "the flight vanished before the Welcome took it" }
+            val flight = checkNotNull(taken) { "the Welcome found no flight to take" }
             check(resumes) { "precondition: the ack found a live room and resumes it" }
             return flight
         }
@@ -242,7 +241,7 @@ private class FlightResumeHost(private val hostPeer: PeerId) : JoinerResumeHost 
     }
     override fun restartIncomingCollect() = Unit
     override fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant) = Unit
-    override fun onNoOpResume(hostId: PeerId, at: Instant) = Unit
+    override fun prepareReHello(): ByteArray = byteArrayOf(1)
     override fun claimHostLost(): Boolean = true
     override suspend fun onReconnectFailed(at: Instant, reason: FailureReason) {
         failures += reason
