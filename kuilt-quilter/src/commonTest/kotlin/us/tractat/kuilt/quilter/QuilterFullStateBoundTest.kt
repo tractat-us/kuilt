@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.quilter
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -10,6 +11,9 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.GSet
@@ -22,6 +26,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -37,7 +42,12 @@ import kotlin.time.Duration.Companion.seconds
  *   flight and at most one more owed, encoded from the state as it is when that send starts.
  *
  * Every test counts whole-state frames on the wire. The anti-entropy tick is an hour away and
- * first-contact retries are off, so the only whole-state traffic is what each test drives.
+ * first-contact retries are off, so the only whole-state traffic is what each test drives. The
+ * clock is the test scheduler's, so a write's age is virtual time.
+ *
+ * The first digest a peer sends on a link is its first-contact announcement, and a request it
+ * prompts does not hold the bound. So the requester tests first [announce] each peer with a
+ * matched digest, as a real peer does, and only then drive mismatches.
  */
 class QuilterFullStateBoundTest {
 
@@ -73,14 +83,30 @@ class QuilterFullStateBoundTest {
         seam.directed.filter { it.first == to }
             .mapNotNull { (decoded(it.second) as? QuiltMessage.FullState)?.state }
 
-    private fun TestScope.quilterOn(seam: Seam, initial: GSet<String> = GSet.of("x")) = Quilter(
+    private fun TestScope.quilterOn(
+        seam: Seam,
+        initial: GSet<String> = GSet.of("x"),
+        config: QuilterConfig = this@QuilterFullStateBoundTest.config,
+        deltaTargets: (Set<PeerId>) -> Set<PeerId> = { it },
+    ) = Quilter(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
         initial = initial,
         messageSerializer = msgSer,
         scope = backgroundScope,
         config = config,
+        clock = MonotonicMillis { testScheduler.currentTime },
+        deltaTargets = deltaTargets,
     )
+
+    /** [from]'s first-contact announcement: a digest that matches, as on a fresh link. */
+    private suspend fun TestScope.announce(seam: FakeSeam, quilter: Quilter<GSet<String>>, from: PeerId) {
+        seam.deliver(
+            from,
+            encode(QuiltMessage.RootDigest(ReplicaId(from.value), root = quilter.stateRootForTest(), upThrough = 0L)),
+        )
+        testScheduler.runCurrent()
+    }
 
     /**
      * Six mismatched digests, from three peers, inside one timeout. Before #3617 each one asked for
@@ -90,8 +116,9 @@ class QuilterFullStateBoundTest {
     fun aLaggingReplicaHasOneRequestInFlightNotOnePerRound() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self) + peers)
-            quilterOn(seam)
+            val quilter = quilterOn(seam)
             testScheduler.runCurrent()
+            peers.forEach { announce(seam, quilter, it) }
 
             seam.deliver(peer, mismatchedDigest(peer))
             testScheduler.runCurrent()
@@ -121,8 +148,9 @@ class QuilterFullStateBoundTest {
     fun aLostReplyFreesTheBoundOnceTheTimeoutRunsOut() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
-            quilterOn(seam)
+            val quilter = quilterOn(seam)
             testScheduler.runCurrent()
+            announce(seam, quilter, peer)
 
             seam.deliver(peer, mismatchedDigest(peer))
             testScheduler.runCurrent()
@@ -152,6 +180,7 @@ class QuilterFullStateBoundTest {
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
             val quilter = quilterOn(seam)
             testScheduler.runCurrent()
+            announce(seam, quilter, peer)
 
             seam.deliver(peer, mismatchedDigest(peer))
             testScheduler.runCurrent()
@@ -257,7 +286,8 @@ class QuilterFullStateBoundTest {
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
             val quilter = quilterOn(seam)
             testScheduler.runCurrent()
-            quilter.apply(Patch(GSet.of("mine"))) // the peer never acks it
+            announce(seam, quilter, peer)
+            quilter.apply(Patch(GSet.of("mine"))) // the peer never acks it, and the digests below are no older
             testScheduler.runCurrent()
 
             val afterEach = (1..config.staleDigestSkipLimit + 1).map {
@@ -280,6 +310,7 @@ class QuilterFullStateBoundTest {
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
             val quilter = quilterOn(seam)
             testScheduler.runCurrent()
+            announce(seam, quilter, peer)
             quilter.apply(Patch(GSet.of("mine")))
             testScheduler.runCurrent()
             seam.deliver(peer, encode(QuiltMessage.Ack(acker = ReplicaId(peer.value), sender = selfReplica, seq = 1L)))
@@ -290,6 +321,170 @@ class QuilterFullStateBoundTest {
 
             assertEquals(1, requestsSent(seam), "a peer level with our deltas is asked on its first mismatch")
         }
+
+    /**
+     * The review finding behind the age signal: after a partition an unacked delta is lost, not in
+     * flight, and nothing re-sends it until a later write reveals the gap. Both sides wrote while
+     * cut off, under the default config. Skipping on "unacked" alone made each side ignore the
+     * other's digests three times, which at N = 20 is over an hour; the age signal answers the
+     * first digest once the writes are older than the interval.
+     */
+    @Test
+    fun aPartitionWhereBothSidesWroteHealsOnTheFirstDigestAfterTheWindow() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val loom = InMemoryLoom()
+            var cut = false
+            val seamA = CutSeam(loom.host(Pattern("partition"))) { cut }
+            val seamB = CutSeam(loom.join(InMemoryTag("b"))) { cut }
+            val defaults = QuilterConfig(expectVirtualTime = true)
+            val a = quilterOn(seamA, initial = GSet.empty(), config = defaults)
+            val b = quilterOn(seamB, initial = GSet.empty(), config = defaults)
+            testScheduler.runCurrent()
+
+            cut = true
+            a.apply(Patch(GSet.of("a")))
+            b.apply(Patch(GSet.of("b")))
+            // One tick (at 1 min) falls inside the partition, and its digests are lost with it.
+            testScheduler.advanceTimeBy(defaults.antiEntropyInterval * 1.5)
+            testScheduler.runCurrent()
+            val apartA = a.state.value.elements
+            val apartB = b.state.value.elements
+
+            cut = false
+            // The next tick, at 2 min, is the first digest each way since the partition lifted.
+            testScheduler.advanceTimeBy(defaults.antiEntropyInterval * 0.5 + 1.seconds)
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(setOf("a"), apartA, "rig: A must not have seen B's write while cut off") },
+                { assertEquals(setOf("b"), apartB, "rig: B must not have seen A's write while cut off") },
+                { assertEquals(setOf("a", "b"), a.state.value.elements, "A heals on the first digest after the window") },
+                { assertEquals(setOf("a", "b"), b.state.value.elements, "B heals on the first digest after the window") },
+            )
+        }
+
+    /**
+     * The peer's first digest on a link is its grant-free announcement, so it drops the request
+     * that digest prompts. Holding the bound for that request would shut every request out until
+     * the timeout, once per join. The second digest is a real one, and does hold the bound.
+     */
+    @Test
+    fun theFirstDigestOnALinkDoesNotHoldTheBound() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
+            quilterOn(seam)
+            testScheduler.runCurrent()
+
+            val afterEach = (1..3).map {
+                seam.deliver(peer, mismatchedDigest(peer))
+                testScheduler.runCurrent()
+                requestsSent(seam)
+            }
+
+            assertEquals(
+                listOf(1, 2, 2),
+                afterEach,
+                "the announcement asks without holding the bound, the next digest asks and holds it, the third waits",
+            )
+        }
+
+    /** A peer outside the delta targets never receives our deltas, so never acking them is no reason to skip it. */
+    @Test
+    fun aPeerOutsideTheDeltaTargetsIsNeverSkipped() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
+            val quilter = quilterOn(seam, deltaTargets = { emptySet() })
+            testScheduler.runCurrent()
+            announce(seam, quilter, peer)
+            quilter.apply(Patch(GSet.of("mine"))) // unacked and young: a delta target would be skipped
+            testScheduler.runCurrent()
+
+            seam.deliver(peer, mismatchedDigest(peer))
+            testScheduler.runCurrent()
+
+            assertEquals(1, requestsSent(seam), "a peer outside the delta targets is asked on its first mismatch")
+        }
+
+    /**
+     * Eviction frees a slot that the departure could not. The tick keeps a departed but not yet
+     * evicted peer in its draw, and an unproven peer is pushed the whole state, so a send to the
+     * dead link can claim the slot *after* the departure freed it. Only the eviction then frees it,
+     * and the peer's later first contact needs it free.
+     */
+    @Test
+    fun evictionFreesASlotHeldBySendsToADepartedPeer() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val fake = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
+            val seam = HoldingSeam(fake, ::isWholeState)
+            seam.swallow = true
+            val ticking = config.copy(antiEntropyInterval = 1.minutes, evictionAfter = 3.minutes)
+            val quilter = quilterOn(seam, config = ticking)
+            testScheduler.runCurrent()
+            // Seen at t = 0 but never sends a digest, so it stays unproven and the tick pushes it state.
+            fake.deliver(peer, encode(QuiltMessage.Ack(acker = ReplicaId(peer.value), sender = selfReplica, seq = 0L)))
+            testScheduler.runCurrent()
+
+            fake.removePeer(peer)
+            testScheduler.runCurrent()
+            testScheduler.advanceTimeBy(ticking.antiEntropyInterval * 2.5) // ticks at 1 and 2 min
+            testScheduler.runCurrent()
+            val heldByTheTick = peer in quilter.fullStateSlotsForTest
+
+            testScheduler.advanceTimeBy(ticking.antiEntropyInterval) // tick at 3 min evicts
+            testScheduler.runCurrent()
+            val evicted = peer !in quilter.knownPeersForTest
+
+            seam.swallow = false
+            fake.addPeer(peer)
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertTrue(heldByTheTick, "rig: the tick must have claimed the slot after the departure freed it") },
+                { assertTrue(evicted, "rig: the peer must have been evicted") },
+                {
+                    assertEquals(
+                        listOf(setOf("x")),
+                        wholeStatesTo(fake, peer).map { it.elements },
+                        "the rejoined peer's first contact must find the slot free and deliver",
+                    )
+                },
+            )
+        }
+
+    /** Close cancels a whole-state send parked on a slow link, and the slot goes with it. */
+    @Test
+    fun closeCancelsAParkedWholeStateSendAndFreesItsSlot() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val fake = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
+            val seam = HoldingSeam(fake, ::isWholeState)
+            seam.hold.value = true
+            val quilter = quilterOn(seam)
+            testScheduler.runCurrent()
+            val heldBeforeClose = quilter.fullStateSlotsForTest
+
+            quilter.close()
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(setOf(peer), heldBeforeClose, "rig: the first-contact send must be parked in its slot") },
+                { assertEquals(1, seam.wholeStateSendsCancelled, "close must cancel the parked send") },
+                { assertEquals(emptySet(), quilter.fullStateSlotsForTest, "and its slot must be free") },
+            )
+        }
+}
+
+/**
+ * A [Seam] that drops every outbound frame, broadcast and directed alike, while [cut] is true:
+ * a partition between two peers whose links both stay up.
+ */
+private class CutSeam(private val delegate: Seam, private val cut: () -> Boolean) : Seam by delegate {
+    override suspend fun broadcast(payload: ByteArray) {
+        if (!cut()) delegate.broadcast(payload)
+    }
+
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        if (!cut()) delegate.sendTo(peer, payload)
+    }
 }
 
 /**
@@ -305,14 +500,21 @@ private class HoldingSeam(
     var swallow = false
     var wholeStateSendsStarted = 0
         private set
+    var wholeStateSendsCancelled = 0
+        private set
 
     suspend fun deliver(from: PeerId, payload: ByteArray) = delegate.deliver(from, payload)
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         if (isWholeState(payload)) {
             wholeStateSendsStarted++
-            if (swallow) awaitCancellation()
-            hold.first { !it }
+            try {
+                if (swallow) awaitCancellation()
+                hold.first { !it }
+            } catch (e: CancellationException) {
+                wholeStateSendsCancelled++
+                throw e
+            }
         }
         delegate.sendTo(peer, payload)
     }
