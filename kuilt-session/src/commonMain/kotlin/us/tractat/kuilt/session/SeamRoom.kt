@@ -51,6 +51,7 @@ import us.tractat.kuilt.core.flushWithin
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.validFirstHop
 import org.kotlincrypto.random.CryptoRand
+import us.tractat.kuilt.identity.AdmissionProof
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.session.admit.AdmitMessage
@@ -64,6 +65,7 @@ import us.tractat.kuilt.session.admit.ReturnKind
 import us.tractat.kuilt.session.admit.Seat
 import us.tractat.kuilt.session.admit.SeatDecision
 import us.tractat.kuilt.session.admit.SeatLiveness
+import us.tractat.kuilt.session.admit.SupersededIds
 import us.tractat.kuilt.session.admit.decideSeat
 import us.tractat.kuilt.session.election.ElectionLobby
 import us.tractat.kuilt.session.election.LobbyMessage
@@ -896,6 +898,13 @@ internal class SeamRoom(
      * #3612 and ends when Task 1.8 deletes `Resume`.
      */
     private val proofResumes = mutableSetOf<PeerId>()
+
+    /**
+     * **Host only.** The ids whose seat a new id of the same key took over, so their Hello is answered
+     * with `Farewell(supersededBy)` rather than a challenge (#3159, Task 1.7): see [SupersededIds].
+     * Guarded by [lock]; written by [supersedeSeat] and [admitMember], read by the Hello gate.
+     */
+    private val supersededIds = SupersededIds()
 
     /**
      * **Host only.** For each seat a Proof exchange is asking the window controller about, that
@@ -1743,7 +1752,20 @@ internal class SeamRoom(
                             runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
                         }
                     } else {
-                        challengeJoiner(sender, keyed)
+                        val successor = lock.withLock { supersededIds.successorFor(sender, keyed.key) }
+                        if (successor != null) {
+                            // A superseded process saying Hello again, usually its reconnect after a
+                            // link that was dead when Decided 19's direct Farewell went (#3159, Task
+                            // 1.7). Tell it again rather than challenge it: admitted, it would take an
+                            // additional seat of its key and the superseded membership would be back.
+                            logger.info { "room.hello.superseded peer=${sender.value} by=${successor.value}" }
+                            scope.launch {
+                                val farewell = AdmitMessage.Farewell(sender.value, supersededBy = successor.value)
+                                runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(farewell)) }
+                            }
+                        } else {
+                            challengeJoiner(sender, keyed)
+                        }
                     }
                 }
             }
@@ -1758,9 +1780,15 @@ internal class SeamRoom(
                     // always answers the challenge that was current when it arrived. Taken inside the
                     // launch, a proof delayed past its sender's Goodbye and next Hello would take
                     // that newer challenge and, failing its nonce, refuse the joiner's honest answer.
-                    val pending = pendingChallenges.take(sender)
+                    //
+                    // A proof for an older challenge (#3159, Task 1.7) — the sender said Hello again, or a
+                    // stale Hello on another path replaced the challenge it answers — leaves the current
+                    // one untaken and is dropped here, never refused: see [PendingChallenges.take]. Its
+                    // nonce is read without the signature, which is checked only against a match.
+                    val answering = AdmissionProof.decode(msg.statement)?.hostNonce
+                    val pending = pendingChallenges.take(sender, answering)
                     if (pending == null) {
-                        logger.debug { "room.proof.dropped peer=${sender.value}: no open challenge" }
+                        logger.debug { "room.proof.dropped peer=${sender.value}: no open challenge it answers" }
                     } else {
                         scope.launch { handleProof(sender, msg, pending) }
                     }
@@ -1937,6 +1965,11 @@ internal class SeamRoom(
                     runCatchingCancellable { seam.sendTo(joinerPeerId, AdmitMessage.encode(seating.reject)) }
                     return
                 }
+                is SeatOutcome.ToldSuperseded -> {
+                    val farewell = AdmitMessage.Farewell(joinerPeerId.value, supersededBy = seating.successor.value)
+                    runCatchingCancellable { seam.sendTo(joinerPeerId, AdmitMessage.encode(farewell)) }
+                    return
+                }
                 is SeatOutcome.Restored -> {
                     if (seating.endedPause) {
                         propagateUnpaused(joinerPeerId)
@@ -2048,6 +2081,9 @@ internal class SeamRoom(
 
         class Refused(val reject: AdmitMessage.Reject) : SeatOutcome
 
+        /** The joiner's id was superseded by [successor] under the key it proved: tell it, seat nobody. */
+        class ToldSuperseded(val successor: PeerId) : SeatOutcome
+
         /**
          * The held seat came back. [endedPause]: the seat was partitioned until now. [burst] is null
          * when the challenge stopped being current, so a newer exchange owes the joiner its Welcomes.
@@ -2115,7 +2151,7 @@ internal class SeamRoom(
         val current = pendingChallenges.isCurrent(joinerPeerId, generation)
         // 2.6: host-side grant verification feeds this (plan amendment bf12e0ffc); revocation is checked from 2.4.
         val decision = decideSeat(joinerPeerId, keyed.key, heldSeats(), holdsValidGrant = false)
-        val outcome = settleSpentWindow(joinerPeerId, current, decision, asked) ?: when (decision) {
+        val outcome = settleSpentWindow(joinerPeerId, current, decision, asked) ?: toldSuperseded(joinerPeerId, keyed, generation, asked) ?: when (decision) {
             is SeatDecision.Restore -> settleRestore(joinerPeerId, generation, current, asked)
             is SeatDecision.ReleaseAndAdmit ->
                 if (current) SeatOutcome.Released(decision.released, releaseHeldSeat(decision.released)) else SeatOutcome.Stale
@@ -2135,6 +2171,22 @@ internal class SeamRoom(
                 logger.info { "room.seat.released peer=${released.value} readmitted=${joinerPeerId.value}" }
             }
         }
+    }
+
+    /**
+     * **Under [lock].** A superseded process whose Hello was challenged before its seat was taken over
+     * (#3159, Task 1.7): the Hello gate answers every later Hello from that id with the `Farewell`,
+     * and this is the same answer for the one that slipped in first. Read under the lock that recorded
+     * the supersession ([supersedeSeat]), so whichever comes first, the old process is not seated.
+     *
+     * Null when [asked] holds a spent window `Success`: that answer must be acted on, and an exchange
+     * whose key proved itself and won a window keeps it. [settleSpentWindow] runs first and clears
+     * any such answer this pass does not act on, so the next pass reaches here.
+     */
+    private fun toldSuperseded(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long, asked: AskedWindow?): SeatOutcome? {
+        if (asked?.answer == WindowAnswer.Restored) return null
+        val successor = supersededIds.successorFor(joinerPeerId, keyed.key) ?: return null
+        return if (retire(joinerPeerId, generation)) SeatOutcome.ToldSuperseded(successor) else SeatOutcome.Stale
     }
 
     /**
@@ -2324,6 +2376,8 @@ internal class SeamRoom(
             "the superseded seat was read under this lock"
         }
         fanOutToOtherMembers(previous, AdmitMessage.Farewell(previous.value, supersededBy = joinerPeerId.value))
+        // Before the joiner is added, which forgets its own id should it have been superseded once.
+        supersededIds.record(previous, held.key, successor = joinerPeerId)
         logger.info { "room.seat.superseded peer=${previous.value} by=${joinerPeerId.value}" }
         val admitted = admitMember(joinerPeerId, held.identity, held.key)
         return SeatOutcome.Superseded(previous, detached, admitted.burst)
@@ -2408,6 +2462,7 @@ internal class SeamRoom(
         )
         val existing = admittedById.values.toList()
         addToRoster(member)
+        supersededIds.forget(joinerPeerId)
         // The resume secret is minted in the SAME critical section that admits the member — see
         // [resumeSecrets] for the invariant this keeps, and for why only a host that can answer a
         // resume holds one. `closed`: addToRoster admitted nobody, so there is no member to hold a
@@ -5116,6 +5171,7 @@ internal class SeamRoom(
             windowOpenedEpisodeMs.clear()
             // With the members it belongs to, keeping `resumeSecrets.keys == admittedById.keys`.
             resumeSecrets.clear()
+            supersededIds.clear()
             _roster.value = emptySet()
             _rosterPeers.value = setOf(selfId)
             memberInboxes.values.toList().also { memberInboxes.clear() }
