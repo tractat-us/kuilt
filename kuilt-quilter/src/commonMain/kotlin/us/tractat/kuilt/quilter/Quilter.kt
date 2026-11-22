@@ -7,6 +7,7 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -77,7 +78,47 @@ public data class QuilterConfig(
      * Default `false`: warn as usual. See [strictTestGuard].
      */
     val expectVirtualTime: Boolean = false,
-)
+    /**
+     * How long this replica waits for the answer to its one outstanding
+     * [QuiltMessage.FullStateRequest] before it may ask again (#3617).
+     *
+     * A replica keeps **at most one** whole-state request in flight, across all its peers, not one
+     * per peer: while one is outstanding, a mismatched [QuiltMessage.RootDigest] from any peer asks
+     * for nothing. The request clears when a [QuiltMessage.FullState] from the asked peer arrives,
+     * when that peer leaves or is evicted, or when this timeout runs out. The timeout is what heals a
+     * lost request or a lost reply.
+     *
+     * **A timeout shorter than the link's lag makes this a rate limiter, not an in-flight bound.**
+     * If the reply takes longer than this to arrive, the request expires while the reply is still
+     * queued, the next mismatched digest asks again, and a second whole state is in flight. The
+     * bound then caps requests at one per timeout rather than at one outstanding. Set it above the
+     * worst lag you expect a whole state to take to cross the link.
+     */
+    val fullStateRequestTimeout: Duration = 30.seconds,
+    /**
+     * How many mismatched [QuiltMessage.RootDigest]s in a row from one peer this replica ignores
+     * while that peer has not yet acknowledged all of this replica's own deltas (#3617).
+     *
+     * A digest compares the sender's state against ours. When the sender has not acked our latest
+     * delta, the mismatch is most likely our own write still on its way to it, and asking for its
+     * whole state would ship a state that is about to converge anyway. So the request is skipped.
+     * The skip is capped because the digest exchange is the only backstop for a relayed delta that
+     * was lost: after this many consecutive skips from one peer the next mismatch requests anyway,
+     * and the count starts again. A matched digest or a sent request resets it. `0` never skips.
+     *
+     * Applies only to peers in the delta-target set, the peers this replica pushes deltas to: a
+     * peer outside it never receives our deltas, so it never acks them, and the skip would only
+     * slow its backstop down.
+     */
+    val staleDigestSkipLimit: Int = 3,
+) {
+    init {
+        require(fullStateRequestTimeout.isPositive()) {
+            "fullStateRequestTimeout must be positive, was $fullStateRequestTimeout"
+        }
+        require(staleDigestSkipLimit >= 0) { "staleDigestSkipLimit must not be negative, was $staleDigestSkipLimit" }
+    }
+}
 
 /**
  * A provider of monotonic time in milliseconds. The default reads from
@@ -387,6 +428,29 @@ public class Quilter<S : Quilted<S>>(
      */
     private var rootCache: Pair<S, Long>? = null
 
+    /**
+     * The one [QuiltMessage.FullStateRequest] this replica has in flight, or `null` when it has
+     * none (#3617). One per replica, not one per peer: a per-peer cap still lets every lagging peer
+     * ship its whole state at once. See [QuilterConfig.fullStateRequestTimeout]. Under [lock].
+     */
+    private var outstandingRequest: OutstandingFullStateRequest? = null
+
+    /**
+     * Consecutive mismatched digests per peer that [onRootDigest] has skipped because the peer had
+     * not acked our own deltas. Capped by [QuilterConfig.staleDigestSkipLimit]. Under [lock].
+     */
+    private val staleDigestSkips: MutableMap<PeerId, Int> = mutableMapOf()
+
+    /**
+     * Per-peer whole-state send slots (#3617). A peer with no entry is idle. An entry means one
+     * sender coroutine is shipping that peer a [QuiltMessage.FullState], and
+     * [FullStateSlot.dirty] means another was asked for meanwhile, so exactly one more send follows
+     * with the state as it is *then*. Every whole-state send goes through [requestFullStateSend],
+     * so a peer has at most one whole state in flight from this replica and one owed, however many
+     * times it was asked. Under [lock].
+     */
+    private val fullStateSlots: MutableMap<PeerId, FullStateSlot> = mutableMapOf()
+
     /** Counts anti-entropy iterations; logged each tick so virtual-time cycling is visible. */
     private var antiEntropyCount = 0L
 
@@ -470,6 +534,8 @@ public class Quilter<S : Quilted<S>>(
             pendingResendJobs.clear()
             pendingFullStateJobs.values.forEach { it.cancel() }
             pendingFullStateJobs.clear()
+            fullStateSlots.keys.toList().forEach(::clearFullStateSlot)
+            clearOutstandingRequest()
         }
     }
 
@@ -806,12 +872,64 @@ public class Quilter<S : Quilted<S>>(
      *
      * Must be called under [lock]; the suspending send is launched on [scope] outside it.
      */
-    private fun sendUnprovenPeerFullState(peer: PeerId) {
-        val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
-        scope.launch {
-            runCatchingCancellable { seam.sendTo(peer, bytes) }
-                .onFailure { logger.debug { "unproven-peer fullState to $peer failed: ${it.message}" } }
+    private fun sendUnprovenPeerFullState(peer: PeerId) = requestFullStateSend(peer)
+
+    /**
+     * Asks for [peer] to be sent this replica's whole state, through its send slot (#3617). Every
+     * whole-state send in this class comes here. Under [lock].
+     *
+     * An idle peer gets a sender coroutine. A peer already being sent one is marked dirty instead,
+     * and gets exactly one more send once the current one finishes, encoded from the state as it is
+     * then. So a back-pressured link holds at most one whole state from this replica plus one owed,
+     * where it used to hold one pre-encoded copy per request, each in its own coroutine. Asking is
+     * never dropped: a request that lands mid-send is superseded by a newer state, not lost.
+     *
+     * The slot is cleared when the peer leaves [Seam.peers] ([onPeersChanged]), when it is evicted,
+     * and on [close], so a send that died with an old link cannot leave a slot that refuses the
+     * next one. What that rests on: a [Seam.sendTo] to a link that is gone fails or returns, and
+     * does not hang. A send that hangs on a peer still in [Seam.peers] holds the slot for as long
+     * as it hangs.
+     */
+    private fun requestFullStateSend(peer: PeerId) {
+        val busy = fullStateSlots[peer]
+        if (busy != null) {
+            busy.dirty = true
+            return
         }
+        // Lazy, so the slot is in the map before its coroutine can look itself up there: an
+        // unconfined dispatcher would otherwise run the whole send inside `launch`.
+        lateinit var slot: FullStateSlot
+        slot = FullStateSlot(scope.launch(start = CoroutineStart.LAZY) { runFullStateSlot(peer, slot) })
+        fullStateSlots[peer] = slot
+        slot.job.start()
+    }
+
+    /**
+     * The sender coroutine of one [FullStateSlot]. Encodes the *current* state under [lock], sends
+     * it outside the lock, and goes round again only if the slot was marked dirty meanwhile. Exits,
+     * and frees the slot, on any path, so a failed encode cannot wedge the peer.
+     */
+    private suspend fun runFullStateSlot(peer: PeerId, slot: FullStateSlot) {
+        try {
+            while (true) {
+                val bytes = lock.withLock {
+                    if (fullStateSlots[peer] !== slot) return
+                    slot.dirty = false
+                    encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
+                }
+                runCatchingCancellable { seam.sendTo(peer, bytes) }
+                    .onFailure { logger.debug { "fullState to $peer failed: ${it.message}" } }
+                val again = lock.withLock { fullStateSlots[peer] === slot && slot.dirty }
+                if (!again) return
+            }
+        } finally {
+            lock.withLock { if (fullStateSlots[peer] === slot) fullStateSlots.remove(peer) }
+        }
+    }
+
+    /** Frees [peer]'s send slot and cancels its sender, if it has one. Under [lock]. */
+    private fun clearFullStateSlot(peer: PeerId) {
+        fullStateSlots.remove(peer)?.job?.cancel()
     }
 
     /**
@@ -1339,6 +1457,22 @@ public class Quilter<S : Quilted<S>>(
  */
 internal fun contiguousFrontier(dots: Set<Dot>, floor: VersionVector): VersionVector =
     VersionVector.contiguous(dots, floor)
+
+/**
+ * One peer's whole-state send slot in [Quilter]: present while its sender coroutine ([job]) is
+ * shipping that peer a [QuiltMessage.FullState]. [dirty] records that another send was asked for
+ * during this one. Mutated only under the owning [Quilter]'s lock.
+ */
+private class FullStateSlot(val job: Job) {
+    var dirty: Boolean = false
+}
+
+/**
+ * The one [QuiltMessage.FullStateRequest] a [Quilter] has in flight: the [peer] it asked, and the
+ * [expiry] timer that clears it after [QuilterConfig.fullStateRequestTimeout]. Compared by identity,
+ * so an expiry that fires after a newer request replaced this one clears nothing.
+ */
+private class OutstandingFullStateRequest(val peer: PeerId, val expiry: Job)
 
 /**
  * Convenience factory for [Quilter] that derives the message serializer internally.
