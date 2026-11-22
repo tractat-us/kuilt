@@ -1056,10 +1056,20 @@ class ProvenRestoreConcurrencyTest {
         /**
          * A Hello from [peer] under bob's key, and the challenge it drew — or null when the host
          * answered it with `Farewell(supersededBy)` instead, as it does a superseded id (#3159, Task 1.7).
+         *
+         * Decided by whichever answer arrives first, never by a clock. The Hello gate tells [peer] only
+         * once its successor holds the seat, and the takeover has already sent [peer] its own
+         * `Farewell` by then, so the gate's answer is the second: [TOLD_BY_GATE]. A Hello challenged
+         * before the takeover sees the takeover's `Farewell` too, but never a second one until it
+         * proves, so one `Farewell` alone decides nothing.
          */
-        suspend fun helloOrTold(peer: PeerId): AdmitMessage.Challenge? {
+        suspend fun helloOrTold(peer: PeerId): AdmitMessage.Challenge? = coroutineScope {
             inbound.send(Swatch(AdmitMessage.encode(currentHello(peer.value, sessionId = peer.value, key = TEST_KEY_A)), sender = peer))
-            return withTimeoutOrNull(TOLD_GRACE) { challengesFor(peer).receive() }
+            val told = async { sent.first { supersededFarewellsTo(peer) >= TOLD_BY_GATE } }
+            select<AdmitMessage.Challenge?> {
+                challengesFor(peer).onReceive { it }
+                told.onAwait { null }
+            }.also { told.cancel() }
         }
 
         fun supersededFarewellsTo(peer: PeerId): Int =
@@ -1275,8 +1285,8 @@ class ProvenRestoreConcurrencyTest {
         /** Up to about as long as the room takes to handle a frame, so the two arrivals overlap. */
         const val STALE_WELCOME_SPIN_NANOS = 20_000L
 
-        /** How long a Hello waits for its challenge before the rig reads it as answered by a Farewell instead. */
-        val TOLD_GRACE = 500.milliseconds
+        /** The superseded `Farewell`s an old id has had once the Hello gate told it: the takeover's, then the gate's. */
+        const val TOLD_BY_GATE = 2
         val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
         /** Each arm takes under 40 s on a dev Mac; the cap is a wedge backstop with room for a slower runner. */
         val ARM_CAP = 3.minutes
