@@ -1186,6 +1186,18 @@ internal class SeamRoom(
     private var latestHelloNonce: ByteArray? = null
 
     /**
+     * **Joiner only.** The fabric senders whose challenge echoing [latestHelloNonce] this joiner
+     * answered: the *verified challengers* of its latest Hello (#3159, Task 1.7). Emptied whenever a
+     * new Hello replaces the nonce, in the same critical section. Guarded by [lock].
+     *
+     * Two things read it. A self-`Welcome` closes a reconnect only from a sender here, so a `Welcome`
+     * that answers an older Hello — or none — never ends an episode it has nothing to do with. And a
+     * terminal `Reject` ends one only from a sender here (Amendment C): from anyone else it is about
+     * another exchange, or forged.
+     */
+    private val latestHelloChallengers = mutableSetOf<PeerId>()
+
+    /**
      * **Joiner only.** Each fabric sender whose challenge this joiner verified, and the key it signed
      * that challenge with. A `Welcome` is accepted only from a sender here, and a host intro only when
      * it names this key, so the host's entry on a joiner's roster carries a key the host proved.
@@ -1249,9 +1261,16 @@ internal class SeamRoom(
                 host = object : JoinerResumeHost {
                     override fun hostPeer(): PeerId? = lock.withLock { hostPeerId }
 
-                    override fun isTerminal(): Boolean = lock.withLock { closed || hostLost }
+                    override fun isTerminal(): Boolean = lock.withLock { closed || hostLost || supersededBy != null }
 
-                    override fun isClosed(): Boolean = lock.withLock { closed }
+                    override fun isClosed(): Boolean = lock.withLock { closed || supersededBy != null }
+
+                    override fun prepareReHello(): ByteArray? = lock.withLock {
+                        // Inherited obligation 4 (#3159, Task 1.7): the gate and the nonce in one
+                        // critical section, so a room told it was superseded mints no Hello after.
+                        if (closed || hostLost || supersededBy != null) return null
+                        AdmitMessage.encode(newHello())
+                    }
 
                     override fun silenceHostDetector(hostId: PeerId) {
                         lock.withLock { stopDetector(hostId) }
@@ -1314,23 +1333,6 @@ internal class SeamRoom(
                         // number it can no longer see is stale (the #1777 lesson, same reason as
                         // markPartitioned's).
                         emitEvent(MembershipEvent.WindowOpened(hostId, windowDeadline))
-                    }
-
-                    override fun onNoOpResume(hostId: PeerId, at: Instant) {
-                        // #1637. The episode closed on the resume machine's dwell, not on a
-                        // ResumeAck — the host never partitioned us, so [handleResumeAck] (which
-                        // is where a real resume resets liveness and emits its closing edge) never
-                        // runs. [markRecovered] does exactly the two things that are owed here:
-                        // clear the Partitioned level [onReconnectStarted] applied, and announce
-                        // it. Its host-only [propagateUnpaused] branch is unreachable from a
-                        // joiner, and its `wasPartitioned` gate makes a double-close silent.
-                        //
-                        // Recovered(hostId), NOT Resumed(selfId): the arc opened on the HOST, so
-                        // the closing edge must name the host or an edge-keying consumer cannot
-                        // match the two. It is also the literally true event — "a partitioned
-                        // peer's link recovered before the window expired" — where `Resumed` would
-                        // claim a resume that did not happen.
-                        markRecovered(hostId, at)
                     }
 
                     override fun claimHostLost(): Boolean = this@SeamRoom.claimHostLost()
@@ -1805,9 +1807,10 @@ internal class SeamRoom(
                 }
             }
             is AdmitMessage.ResumeAck -> {
-                if (_role.value == SessionRole.Joiner) {
-                    handleResumeAck(sender)
-                }
+                // A joiner sends no `Resume` since its reconnect says Hello again (#3159, Task 1.7), so
+                // an ack answers nothing it asked; the host's own `Welcome` closes a reconnect now.
+                // The frame goes in Task 1.8.
+                logger.debug { "room.resume-ack.dropped from=${sender.value}: this joiner sends no Resume" }
             }
             is AdmitMessage.Goodbye -> {
                 if (_role.value == SessionRole.Host) {
@@ -1839,10 +1842,13 @@ internal class SeamRoom(
             is AdmitMessage.Reject -> {
                 if (_role.value == SessionRole.Joiner) {
                     // A Reject means one of two things depending on where we are:
-                    //  - resume in flight  → resolve the parked resume as Refused, carrying the host's code (#2364);
-                    //  - initial join      → the host refused admission; fail loudly (#1178) instead of
-                    //                         swallowing it and leaving join()'s consumer hanging.
-                    val hadPendingResume = resumeMachine?.rejectFlight(msg.reason, msg.code) ?: false
+                    //  - reconnect under way → the machine takes it: a terminal code only from a peer
+                    //                          whose challenge this joiner answered for its latest
+                    //                          Hello, a retryable one from anyone (Amendment C, #2364);
+                    //  - initial join        → the host refused admission; fail loudly (#1178) instead of
+                    //                          swallowing it and leaving join()'s consumer hanging.
+                    val fromChallenger = lock.withLock { sender in latestHelloChallengers }
+                    val hadPendingResume = resumeMachine?.rejectFlight(msg.reason, msg.code, fromChallenger) ?: false
                     if (!hadPendingResume) {
                         scope.launch {
                             failAdmission(AdmissionFailure.Rejected(msg.reason, msg.code), clock())
@@ -2531,7 +2537,18 @@ internal class SeamRoom(
         runCatchingCancellable { seam.sendTo(member.id, hostIntro) }
     }
 
+    /** The first admission's Hello, broadcast: this joiner does not know its host yet. */
     private suspend fun sendHello() {
+        val hello = lock.withLock { newHello() }
+        runCatchingCancellable { seam.broadcast(AdmitMessage.encode(hello)) }
+    }
+
+    /**
+     * **Joiner only; under [lock].** A Hello with a fresh joiner nonce, which becomes
+     * [latestHelloNonce] here — before the Hello goes, so the challenge answering it always finds it
+     * (#3211) — and empties [latestHelloChallengers], whose challenges answered the nonce replaced.
+     */
+    private fun newHello(): AdmitMessage.Hello {
         val hello = AdmitMessage.Hello(
             displayName = resolvedMemberName,
             sessionId = selfId.value,
@@ -2543,9 +2560,9 @@ internal class SeamRoom(
             // single-use only if the nonce is never reused (#3210).
             joinerNonce = CryptoRand.Default.nextBytes(ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE)),
         )
-        // Kept before the Hello goes, so the challenge answering it always finds it (#3211).
-        lock.withLock { latestHelloNonce = hello.joinerNonce }
-        runCatchingCancellable { seam.broadcast(AdmitMessage.encode(hello)) }
+        latestHelloNonce = hello.joinerNonce
+        latestHelloChallengers.clear()
+        return hello
     }
 
     /**
@@ -2657,7 +2674,12 @@ internal class SeamRoom(
             logger.debug { "room.challenge.ignored from=${sender.value}: not an answerable challenge" }
             return
         }
-        lock.withLock { verifiedHostKeys[sender] = answer.hostKey }
+        lock.withLock {
+            verifiedHostKeys[sender] = answer.hostKey
+            // A verified challenger of the latest Hello, unless a newer Hello replaced the nonce while
+            // this one was signed: then the proof answers a challenge its host no longer holds.
+            if (nonce != null && nonce.contentEquals(latestHelloNonce)) latestHelloChallengers += sender
+        }
         runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(AdmitMessage.Proof(answer.proof.wire))) }
             .onFailure { logger.debug { "room.proof.send-failed to=${sender.value}: $it" } }
     }
@@ -2747,7 +2769,16 @@ internal class SeamRoom(
      * [AdmitMessage.ResumeAck], not as Welcome.
      */
     private fun handleWelcome(sender: PeerId, welcome: AdmitMessage.Welcome) {
-        lock.withLock {
+        val closesReconnect = lock.withLock { acceptWelcome(sender, welcome) }
+        if (closesReconnect) closeReconnect(sender, restored = welcome.returnKind == ReturnKind.Restored)
+    }
+
+    /**
+     * **Joiner only; under [lock].** [handleWelcome]'s critical section. Returns whether this is the
+     * host's `Welcome` to this member answering its latest Hello — one that may close a reconnect.
+     */
+    private fun acceptWelcome(sender: PeerId, welcome: AdmitMessage.Welcome): Boolean {
+        run {
             val assignedId = PeerId(welcome.assignedPeerId)
 
             // Joiner-side cross-admit hardening (#1180): once we've identified our host, ignore
@@ -2757,15 +2788,15 @@ internal class SeamRoom(
             // foreign. (Cannot gate on Welcome.roomId — bootstrap/host-intro Welcomes carry null.)
             // Complements the #1172 Change A host-side gate that stops foreign Welcomes at the source.
             val establishedHost = hostPeerId
-            if (establishedHost != null && sender != establishedHost) return@withLock
+            if (establishedHost != null && sender != establishedHost) return false
 
             // Key-proving gate (#3211): every Welcome comes from the host, and a host has signed a
             // challenge before it sends one. So a Welcome from a sender whose challenge this joiner
             // has not verified is dropped, whatever its shape, and the host's intro (it names its
             // sender) must carry the very key that challenge was signed with. This is what makes the
             // host's own entry on this roster a proven key; every other entry is host-asserted.
-            val provenKey = verifiedHostKeys[sender] ?: return@withLock
-            if (assignedId == sender && welcome.key != provenKey) return@withLock
+            val provenKey = verifiedHostKeys[sender] ?: return false
+            if (assignedId == sender && welcome.key != provenKey) return false
 
             // Identify the host from the FIRST Welcome we accept, whatever its shape (#1994).
             //
@@ -2810,10 +2841,12 @@ internal class SeamRoom(
                 resumeMachine?.mintTokenIfAbsent(welcome.roomId, welcome.resumeSecret)
                 // The host explicitly admitted us — disarm the admit deadline (#1178).
                 admitted.complete(Unit)
-                return@withLock
+                // It may close a reconnect only if it answers this joiner's latest Hello (#3159, Task
+                // 1.7): from a sender whose challenge for that Hello's nonce this joiner answered.
+                return sender in latestHelloChallengers
             }
 
-            if (admittedById.containsKey(assignedId)) return@withLock // already known
+            if (admittedById.containsKey(assignedId)) return false // already known
             val identity = MemberIdentity(
                 displayName = welcome.displayName,
                 sessionId = welcome.sessionId,
@@ -2822,6 +2855,7 @@ internal class SeamRoom(
             val member = Member(id = assignedId, identity = identity, key = welcome.key, liveness = Liveness.Connected)
             addToRoster(member)
         }
+        return false
     }
 
     /**
@@ -2840,42 +2874,44 @@ internal class SeamRoom(
     }
 
     /**
-     * Joiner-side: host confirmed our [AdmitMessage.Resume] was accepted.
+     * **Joiner only.** The host's `Welcome` to this member answered its latest Hello (#3159, Task
+     * 1.7): close the reconnect it was sent for, if one is under way, and settle the flight.
      *
-     * The host's [JoinerReconnectController] validated the token and the reconnect
-     * window was still open. Update liveness, emit [MembershipEvent.Resumed], and
-     * resolve the pending resume flight ([JoinerResumeMachine.takeFlightForAck]) so
-     * [resume] returns [ResumeResult.Success], unless the room has gone terminal.
+     * [restored]: the Welcome is marked `ReturnKind.Restored`, so the seat came back, and the room
+     * emits [MembershipEvent.Resumed] for itself, as the `ResumeAck` it replaces did. Unmarked, the
+     * seat was gone and this was a fresh admission, which the room keeps (Amendment C): it emits
+     * [MembershipEvent.Recovered] for the host if it held the host partitioned — the arc the
+     * reconnect opened is on the host — and nothing was resumed. The flight then settles
+     * [ResumeResult.WindowClosed], which is the truth about the seat; the episode is a success all
+     * the same ([JoinerResumeMachine.takeFlightForWelcome]).
      *
-     * **Host-authoritative gate + idempotence latch:** mirroring [handleFarewell],
-     * only a ResumeAck from the identified host ([hostPeerId]) is honored — a forged
-     * ack from another admitted peer, or one arriving before the host is identified,
-     * is dropped. The pending resume flight is the idempotence latch: a genuine ack
-     * takes it and fires exactly one [MembershipEvent.Resumed]; a duplicate or stray
-     * host ack finds no pending flight ([JoinerResumeMachine.takeFlightForAck]
-     * returns `null`) and emits nothing.
+     * **A terminal room closes nothing (#3094).** A reconnect window that expires leaves its flight
+     * installed until [leave] takes it. The `Welcome` and the window's verdict are ordered by [lock],
+     * and whichever takes it first wins: a `Welcome` handled before the verdict closes the episode,
+     * while a verdict that the window was lost marks the room [hostLost] before it releases the
+     * lock. A `Welcome` handled after that finds the room terminal, settles the flight as
+     * [ResumeResult.WindowClosed], and emits nothing. The take, the check and the closing edge share
+     * one critical section, so no `Resumed` can follow `HostLost`.
      *
-     * **A terminal room resumes nothing (#3094).** A reconnect window that expires leaves its
-     * flight installed until [leave] takes it. The ack and the window's verdict are ordered by
-     * [lock], and whichever takes it first wins: an ack handled before the verdict resumes the room,
-     * and the episode with it, while a verdict that the window was lost marks the room [hostLost]
-     * before it releases the lock. An ack handled after that finds the room terminal, settles the
-     * flight as [ResumeResult.WindowClosed], which is what [resume] returns on a terminal room, and
-     * emits no `Resumed`. The take, the check and the `Resumed` share one critical section, so no
-     * `Resumed` can follow `HostLost`.
+     * The host is the only sender a joiner takes a `Welcome` from once it has one ([acceptWelcome]),
+     * and the joiner's own `Welcome` closes a reconnect only from a sender whose challenge for the
+     * latest Hello it answered, so neither a foreign host nor a late answer to an older Hello closes
+     * one.
      */
-    private fun handleResumeAck(sender: PeerId) {
-        val (flight, resumes) = lock.withLock {
-            val host = hostPeerId
-            if (host == null || sender != host) return
-            val (flight, resumes) = resumeMachine?.takeFlightForAck() ?: return
-            if (resumes) {
+    private fun closeReconnect(sender: PeerId, restored: Boolean) {
+        val (flight, closes) = lock.withLock {
+            val taken = resumeMachine?.takeFlightForWelcome() ?: return
+            if (taken.second) {
+                val wasPartitioned = admittedById[sender]?.liveness is Liveness.Partitioned
                 updateMemberLiveness(sender, Liveness.Connected)
-                emitEvent(MembershipEvent.Resumed(selfId))
+                when {
+                    restored -> emitEvent(MembershipEvent.Resumed(selfId))
+                    wasPartitioned -> emitEvent(MembershipEvent.Recovered(sender, clock()))
+                }
             }
-            flight to resumes
+            taken
         }
-        flight.complete(if (resumes) ResumeResult.Success else ResumeResult.WindowClosed)
+        flight?.complete(if (closes && restored) ResumeResult.Success else ResumeResult.WindowClosed)
     }
 
     /**
@@ -4604,8 +4640,12 @@ internal class SeamRoom(
         if (claimHostLost()) announceHostLost(at, reason)
     }
 
-    /** Sets [hostLost] and returns whether this call set it: the one place the flag is raised. */
+    /**
+     * Sets [hostLost] and returns whether this call set it: the one place the flag is raised. A
+     * superseded room is never host-lost: it was told why it ended, and its own `leave()` follows.
+     */
     private fun claimHostLost(): Boolean = lock.withLock {
+        if (supersededBy != null) return false
         val was = hostLost
         hostLost = true
         !was
@@ -5050,7 +5090,7 @@ internal class SeamRoom(
      * contract.
      */
     override suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome =
-        resumeMachine?.resume(token) ?: ResumeResult.WindowClosed
+        resumeMachine?.resume() ?: ResumeResult.WindowClosed
 
     /**
      * Drain the lanes as they stand on entry, then ask the seam. See [Room.flush].
