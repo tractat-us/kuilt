@@ -294,6 +294,33 @@ class ProvenRestoreTest {
         host.room.leave()
     }
 
+    /**
+     * The other converse: a return ends when its member leaves. Bob's seat is restored, he says
+     * Goodbye, and he is admitted again as a new member. His next restart is that membership's first
+     * return, with its own `Resumed`.
+     */
+    @Test
+    fun aMemberAdmittedAgainAfterLeavingHasANewReturnWithItsOwnResumed() = runTest {
+        val host = rawHost(joiners = setOf(bob, carol))
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+
+        val mark = host.events.mark()
+        host.admit(bob, bobKey, nonce = 3)
+        host.say(bob, AdmitMessage.Goodbye)
+        assertEquals(null, host.member(bob), "rig: Bob's Goodbye ended his membership")
+        host.admit(bob, bobKey, nonce = 4)
+        host.admit(bob, bobKey, nonce = 5)
+
+        val edges = host.events.edgesSince(mark).map { it.describe() }
+        assertEquals(
+            listOf("Resumed(bob)", "Left(bob, ${LeaveReason.Normal})", "Joined(bob)", "Resumed(bob)"),
+            edges,
+            "one Resumed for each membership's return",
+        )
+        host.room.leave()
+    }
+
     // ── Same id, different key ───────────────────────────────────────────────
 
     /**
