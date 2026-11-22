@@ -830,6 +830,7 @@ internal class JoinerResumeMachine(
         seam.sendTo(hostId, hello)
         return true
     }
+
     /**
      * A joined caller's wait: first for the owner's send (or the flight settling) under the same
      * bound the owner's own pre-send wait has, then for the verdict under [awaitFlightBounded] —
@@ -859,16 +860,17 @@ internal class JoinerResumeMachine(
      * the deadline keeps that reply's verdict: the deadline then only awaits it.
      *
      * Both caller kinds route through here — the owner (after sending) and a joined caller
-     * (the `!ownsFlight` early return) — so neither can hang. A late-arriving ResumeAck/Reject
-     * after the slot was cleared is a no-op: [takeFlightForAck]/[rejectFlight] find no pending
-     * flight (or a *later* flight, which the host's single-use-per-window token still resolves
-     * honestly).
+     * (the `!ownsFlight` early return) — so neither can hang. A late-arriving `Welcome` or `Reject`
+     * after the slot was cleared settles no flight: a `Welcome` answering this flight's Hello still
+     * closes the episode ([takeFlightForWelcome]), and one answering an older Hello is not taken at
+     * all, since the room accepts a closing `Welcome` only from a peer whose challenge it answered
+     * for its latest Hello.
      *
      * Only [withTimeoutOrNull]'s own deadline yields null here; an *external* cancellation (e.g.
      * the auto-reconnect window elapsing around an internal [resume]) propagates through
      * unchanged, preserving cancellation discipline.
      *
-     * **A flight whose seam tears settles at once (#3151).** The reply to a `Resume` can only come
+     * **A flight whose seam tears settles at once (#3151).** The reply to a Hello can only come
      * back over the generation it went out on, so once [seam] reads [SeamState.Torn] no verdict can
      * arrive and waiting out the deadline only spends the reconnect window. The flight then settles
      * as [ResumeResult.TimedOut] for every caller, exactly as the deadline would have settled it.
@@ -926,10 +928,10 @@ internal class JoinerResumeMachine(
      * Settle the shared flight [deferred] as [result] **only if it still holds the single-flight
      * slot**, deciding that under [lock]; otherwise leave it alone.
      *
-     * A flight that has left the slot was taken by whoever settles it: the room's ResumeAck handler
-     * ([takeFlightForAck], which takes the flight and checks for a terminal room in one critical
-     * section, where it either emits `Resumed` and settles on [ResumeResult.Success] or settles on
-     * [ResumeResult.WindowClosed], then completes the flight once the lock is released),
+     * A flight that has left the slot was taken by whoever settles it: the room's self-`Welcome`
+     * handler ([takeFlightForWelcome], which takes the flight and checks for a terminal room in one
+     * critical section, where it emits the closing edge when it closes the episode, then completes the
+     * flight once the lock is released),
      * [rejectFlight], or `leave()` ([takePendingFlight], completing [ResumeResult.WindowClosed]).
      * Every one of them completes synchronously after taking, so a
      * caller that finds the slot gone only has to await. Completing regardless — as this did before
