@@ -12,6 +12,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.test.fakeDeviceKey
 import us.tractat.kuilt.identity.test.fakeDidKey
@@ -146,7 +147,7 @@ class ReHelloReconnectTest {
         suspend fun advance(duration: Duration) {
             var left = duration
             while (left > Duration.ZERO) {
-                fake.deliver(hostId, HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray())
+                if (fake.state.value !is SeamState.Torn) fake.deliver(hostId, HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray())
                 test.testScheduler.advanceTimeBy(TICK)
                 test.testScheduler.runCurrent()
                 left -= TICK

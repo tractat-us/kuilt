@@ -9,6 +9,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.test.fakeDeviceKey
 import us.tractat.kuilt.identity.test.fakeDidKey
@@ -71,6 +72,7 @@ class ResumeRefusalReportingTest {
             fake.directed.filter { it.first == hostId }.mapNotNull { AdmitMessage.decode(it.second) as? AdmitMessage.Hello }
 
         private suspend fun fromHost(message: AdmitMessage) {
+            if (fake.state.value is SeamState.Torn) return
             fake.deliver(hostId, AdmitMessage.encode(message))
             test.testScheduler.runCurrent()
         }
@@ -100,7 +102,7 @@ class ResumeRefusalReportingTest {
 
         /** One [TICK], with the host pinging and every new re-Hello refused. */
         suspend fun tick(refuse: Boolean = true) {
-            fake.deliver(hostId, HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray())
+            if (fake.state.value !is SeamState.Torn) fake.deliver(hostId, HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray())
             test.testScheduler.advanceTimeBy(TICK)
             test.testScheduler.runCurrent()
             if (refuse) refuseEveryReHello()
