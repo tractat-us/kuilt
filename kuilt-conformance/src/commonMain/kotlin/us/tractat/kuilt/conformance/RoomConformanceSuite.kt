@@ -471,9 +471,9 @@ public abstract class RoomConformanceSuite {
                     { assertEquals(joiner.selfId, announced, "the host admits the joiner afresh") },
                     { assertIs<SeamState.Woven>(afterwards, "the joiner's room keeps the admission: still in session, got $afterwards") },
                 )
-                joiner.broadcast(applicationPayload("after-the-return"))
+                joiner.broadcast(applicationPayload("first"))
                 val reached = host.awaitHeld(joiner.selfId, count = 1, expected = "a frame the readmitted joiner sent")
-                assertEquals(listOf("after-the-return"), reached.map { it.payload.decodeToString() }, "the readmitted joiner's frame reaches the host")
+                assertEquals(listOf("first"), reached.map { it.payload.decodeToString() }, "the readmitted joiner's frame reaches the host")
             } finally {
                 joiner.leave()
                 host.leave()
