@@ -41,6 +41,7 @@ public interface DeviceKey {
      *
      * @throws IllegalStateException when this platform's cryptographic provider cannot sign here.
      */
+    @IdentityInternalApi
     public suspend fun sign(message: ByteArray): ByteArray
 
     public companion object {
