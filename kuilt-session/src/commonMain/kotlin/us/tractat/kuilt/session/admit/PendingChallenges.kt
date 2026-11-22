@@ -87,14 +87,15 @@ internal class PendingChallenges(private val clock: () -> Instant) {
      * The challenge pending for [sender], or `null` when there is none, it has expired, or it was
      * already taken. A non-null result marks the entry taken; it stays current (see [isCurrent]).
      *
-     * [answering] is the host nonce the Proof says it answers, when it decodes far enough to say. A
+     * [answering] is the host nonce the Proof says it answers, or null when it does not decode far
+     * enough to say; the caller passes what it read either way, so no call site can forget it. A
      * Proof naming another nonce answers an **older** challenge — one a newer Hello from the same
      * sender replaced — and leaves this entry untaken, so the answer to the current challenge still
      * finds it (#3159, Task 1.7). A joiner that says Hello again sends such a proof in good faith,
      * and a refusal would end it; only the sender itself can write under its fabric id, so ignoring
      * the proof hides nothing.
      */
-    fun take(sender: PeerId, answering: ByteArray? = null): Pending? {
+    fun take(sender: PeerId, answering: ByteArray?): Pending? {
         val now = clock()
         return lock.withLock {
             val entry = liveEntry(sender, now) ?: return@withLock null
