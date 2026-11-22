@@ -117,4 +117,35 @@ class ReHelloAdmissionTest {
         )
         h.room.leave()
     }
+
+    /**
+     * The same answer for the one Hello that slipped in first: the superseded process said Hello —
+     * and was challenged — before its seat was taken over, and its proof arrives after. The Hello
+     * gate cannot see it; the proof's own check, read under the lock that recorded the takeover, tells
+     * it instead of seating it in an additional seat of its key.
+     */
+    @Test
+    fun aSupersededIdsProofForAChallengeDrawnBeforeTheTakeoverIsTold() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val h = rawHost(joiners = setOf(bob1, bob2))
+        h.admit(bob1, bobDevice, nonce = 1)
+        h.partition(bob1, alive = emptySet())
+        h.say(bob1, h.hello("bob-1", bobDevice.id, nonce = 3))
+        val early = h.challengesTo(bob1).last()
+        val mark = h.events.mark()
+        h.admit(bob2, bobDevice, nonce = 2)
+        assertEquals(
+            listOf<MembershipEvent>(MembershipEvent.Left(bob1, LeaveReason.Superseded(bob2))),
+            h.events.since(mark).filterIsInstance<MembershipEvent.Left>(),
+            "rig: bob-2 superseded bob-1 while bob-1's challenge was open",
+        )
+        val sentToBob1 = h.sentTo(bob1).size
+        h.say(bob1, h.proof(early, bobDevice, bob1))
+
+        assertAll(
+            { assertEquals(listOf<AdmitMessage>(AdmitMessage.Farewell(bob1.value, supersededBy = bob2.value)), h.sentTo(bob1).drop(sentToBob1)) },
+            { assertEquals(listOf(bob2), h.room.roster.value.map { it.id }, "the superseded process is not seated") },
+            { assertTrue(h.events.since(mark).none { it is MembershipEvent.Joined && it.member.id == bob1 }) },
+        )
+        h.room.leave()
+    }
 }
