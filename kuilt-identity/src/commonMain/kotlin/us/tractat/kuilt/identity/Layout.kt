@@ -91,7 +91,14 @@ internal object Layout {
 
     private const val U16_SIZE = 2
 
-    private fun header(tag: String, version: Int): ByteArray {
+    /**
+     * The bytes every layout under [tag] and [version] opens with: `u16 tag length ‖ ASCII tag ‖
+     * version byte`. An app signature ([signApp]) is this header for its `app/` tag, then the app's
+     * message unframed.
+     *
+     * @throws IllegalArgumentException as [encode] does for [tag] and [version].
+     */
+    fun header(tag: String, version: Int): ByteArray {
         require(tag.all { it.code < 0x80 }) { "tag \"$tag\" is not ASCII" }
         require(tag.length <= MAX_FIELD_SIZE) { "tag is ${tag.length} bytes; at most $MAX_FIELD_SIZE" }
         require(version in 0..MAX_VERSION) { "version $version is not a byte value" }
