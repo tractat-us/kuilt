@@ -14,7 +14,8 @@ package us.tractat.kuilt.identity
  * statement can never be presented as another. Every statement tag starts `kuilt/`, which [encode]
  * and [decode] enforce: an app signature ([signApp]) opens with this same header for an `app/` tag,
  * and is kept apart from every statement only by that third byte. The layout knows nothing about
- * what a field means: fixed widths, reserved-empty fields and scope tags are each statement type's to enforce.
+ * what a field means: fixed widths, reserved-empty fields and scope tags are each statement type's
+ * to enforce.
  *
  * [decode] is total and strict: it returns `null` for any byte string [encode] could not have
  * produced for this tag, version and field count — another tag or version, too few or too many
