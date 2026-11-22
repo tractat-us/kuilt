@@ -21,14 +21,11 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
-import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -183,41 +180,6 @@ class RoomResumeTest {
         assertIs<ResumeResult.WindowClosed>(result)
     }
 
-    // ── Test 4a: wrong roomId → Refused(ResumeTokenInvalid) ──────────────────
-
-    /**
-     * Acceptance criterion 4a: [Room.resume] with a wrong [RoomId] is refused; no state change.
-     *
-     * The value used to be [ResumeResult.WindowClosed] — the same value the host returns for a
-     * window that genuinely elapsed, and the same one the joiner returns when it never asked at
-     * all. Since #2364 it carries the host's own [RejectCode.ResumeTokenInvalid].
-     */
-    @Test
-    fun `resume with wrong roomId is refused as ResumeTokenInvalid`() = runTest {
-        var clockMs = 0L
-        val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
-        val loom = InMemoryLoom()
-        val hostRoom = makeSeamRoom(loom.host(Pattern("Alice")), SessionRole.Host, "Alice", clock, RoomId("room-abc"))
-        val joinerRoom = makeSeamRoom(loom.join(InMemoryTag("Bob")), SessionRole.Joiner, "Bob", clock)
-
-        hostRoom.roster.first { it.size == 1 }
-        // The joiner must have identified its host: a Resume goes to the host alone (#3165).
-        joinerRoom.roster.first { it.isNotEmpty() }
-
-        val badToken = ResumeToken(
-            peerId = joinerRoom.selfId,
-            roomId = RoomId("room-xyz"), // wrong room
-            issuedAt = 0L,
-            // The member's real secret, so the room check is the only thing this token gets wrong.
-            secret = assertNotNull(joinerRoom.resumeToken, "the joiner must hold its token").secret,
-        )
-
-        val result = joinerRoom.resume(badToken)
-        assertEquals(
-            ResumeResult.Refused("resume-token-invalid: session-mismatch", RejectCode.ResumeTokenInvalid),
-            result,
-        )
-    }
 
     // ── Test 4b: the joiner gave up first → WindowClosed ─────────────────────
 
@@ -230,10 +192,10 @@ class RoomResumeTest {
      * detector fires, its reconnect finds no `reweave` and goes terminal, and the `resume` below
      * short-circuits on `isTerminal()`. While every reject also completed as
      * [ResumeResult.WindowClosed] the two were indistinguishable, so nothing here noticed which
-     * one it was measuring. A host that really does refuse an elapsed window now answers
-     * `Refused(RejectCode.ResumeWindowExpired)` — see
-     * [a joiner can tell an invalid token from a not-yet-open window from an elapsed one], whose
-     * third arm drops only the joiner's *outbound* traffic so the joiner stays alive to hear it.
+     * one it was measuring. A live joiner whose seat the host let go is admitted afresh instead,
+     * which [Room.resume] reports as [ResumeResult.WindowClosed] with the room still in session — see
+     * [a re-Hello tells a held seat from a gone one], whose
+     * second arm drops only the joiner's *outbound* traffic so the joiner stays alive to hear it.
      */
     @Test
     fun `resume after the joiner's own reconnect has failed returns WindowClosed`() = runTest {
@@ -274,33 +236,27 @@ class RoomResumeTest {
         assertIs<ResumeResult.WindowClosed>(result)
     }
 
-    // ── Test 4c: refusals are distinguishable at the Room.resume surface (#2364) ─
+    // ── Test 4c: a re-Hello tells a held seat from a gone one (#2364, #3159 Task 1.7) ─
 
     /**
-     * **The three ways a host can say no must not arrive as one value.** (#2364)
+     * What [Room.resume] reports is the truth about the seat. It says Hello again, and:
+     * - while the host still holds the seat — here it has noticed nothing — the `Welcome` is marked
+     *   `Restored` and the answer is [ResumeResult.Success];
+     * - once the host has opened a window and let it elapse, the seat is gone, so the Hello is a fresh
+     *   admission: [ResumeResult.WindowClosed], and the room keeps that admission rather than ending.
      *
-     * `Room.resume` used to answer every host `Reject` with [ResumeResult.WindowClosed], whatever
-     * the host actually said. A consumer handed that value read the cookbook's "grace window
-     * elapsed — re-join fresh" and acted on it — even when the real answer was *"that token names
-     * a room I don't serve"* (terminal for a different reason) or *"I haven't noticed your drop
-     * yet"* (**transient**, and the one case where re-joining fresh is the wrong move). The
-     * information existed — `rejectFlight` recorded the [RejectCode] — and was thrown away at the
-     * public surface.
+     * The second arm drops only the joiner's **outbound** traffic: the host's detector stops hearing
+     * the joiner (so it opens, then expires, the window) while the joiner keeps hearing the host, so
+     * the joiner never goes terminal itself and its Hello really does reach a live host. A joiner that
+     * had gone terminal would answer [ResumeResult.WindowClosed] locally and never ask, which the
+     * host's second admission below excludes.
      *
-     * The three arms are presented to the **same host** so nothing but the host's own reason can
-     * separate them:
-     * 1. a token minted for another room — terminal, and nothing to do with a window;
-     * 2. the genuine token before the host's detector has fired — **transient**, retry;
-     * 3. the genuine token once the host's grace window has elapsed — terminal.
-     *
-     * Arm 3 drops only the joiner's **outbound** traffic: the host's detector stops hearing the
-     * joiner (so it opens, then expires, the window) while the joiner keeps hearing the host, so
-     * the joiner never goes terminal itself and its `resume` really does reach a live host. A
-     * joiner that had gone terminal would answer [ResumeResult.WindowClosed] locally and never ask
-     * — which is exactly the vacuity the [ResumeResult.Refused] assertions below exclude.
+     * Before Task 1.7 the token was presented and these were three refusal codes; the token is not
+     * presented any more, so a token for another room says nothing (its host-side check is pinned on a
+     * hand-written frame in `ForgedResumeTest`).
      */
     @Test
-    fun `a joiner can tell an invalid token from a not-yet-open window from an elapsed one`() = runTest {
+    fun `a re-Hello tells a held seat from a gone one`() = runTest {
         var clockMs = 0L
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
         val loom = InMemoryLoom()
@@ -311,17 +267,16 @@ class RoomResumeTest {
 
         hostRoom.roster.first { it.size == 1 }
         joinerRoom.roster.first { it.isNotEmpty() }
-
         val token = assertNotNull(joinerRoom.resumeToken, "joiner must hold a resume token after admit")
-        val foreign = token.copy(roomId = RoomId("${token.roomId.value}-a-different-room"))
+        val joined = mutableListOf<MembershipEvent.Joined>()
+        backgroundScope.launch { hostRoom.events.filterIsInstance<MembershipEvent.Joined>().collect { joined.add(it) } }
+        advanceTimeBy(1L)
+        val joinedBefore = joined.size
 
-        // (1) Wrong room — the host refuses before it looks at any window state.
-        val invalidToken = joinerRoom.resume(foreign)
+        // (1) The host has noticed nothing: the seat is held, and connected.
+        val held = joinerRoom.resume(token)
 
-        // (2) Genuine token, but the host has noticed nothing: no window has ever opened.
-        val notYetOpen = joinerRoom.resume(token)
-
-        // (3) Genuine token after the host opened a window and let it elapse.
+        // (2) The host opened a window and let it elapse: the seat is gone.
         faultyJoiner.setFaultProfile(FaultProfile.DropAll(Direction.Outbound))
         repeat(9) {
             clockMs += 100L
@@ -329,60 +284,16 @@ class RoomResumeTest {
         }
         faultyJoiner.heal()
         advanceTimeBy(50L)
-        val windowElapsed = joinerRoom.resume(token)
+        val gone = joinerRoom.resume(token)
 
         assertAll(
-            {
-                assertEquals(
-                    ResumeResult.Refused("resume-token-invalid: session-mismatch", RejectCode.ResumeTokenInvalid),
-                    invalidToken,
-                    "a token minted for another room must surface the host's own terminal code",
-                )
-            },
-            {
-                assertEquals(
-                    ResumeResult.Refused("resume-window-not-yet-open", RejectCode.ResumeWindowNotYetOpen),
-                    notYetOpen,
-                    "a window the host has not opened yet must surface as RETRYABLE — this is the arm " +
-                        "a consumer must not treat as 'grace window elapsed, re-join fresh'",
-                )
-            },
-            {
-                assertEquals(
-                    ResumeResult.Refused("resume-window-expired", RejectCode.ResumeWindowExpired),
-                    windowElapsed,
-                    "an elapsed grace window must surface as the host's terminal expiry code, not as " +
-                        "the joiner's local WindowClosed (which would mean it never asked)",
-                )
-            },
-            {
-                assertNotEquals(
-                    invalidToken,
-                    notYetOpen,
-                    "a token for another room (terminal) and a window that has not opened yet " +
-                        "(transient — retry, do NOT re-join fresh) must not be the same value: " +
-                        "got $invalidToken for both",
-                )
-            },
-            {
-                assertNotEquals(
-                    invalidToken,
-                    windowElapsed,
-                    "an invalid token and an elapsed grace window must not be the same value: " +
-                        "got $invalidToken for both",
-                )
-            },
-            {
-                assertNotEquals(
-                    notYetOpen,
-                    windowElapsed,
-                    "a window that has not opened yet and one that has elapsed must not be the " +
-                        "same value: got $notYetOpen for both",
-                )
-            },
+            { assertEquals(ResumeResult.Success, held, "a held seat is restored") },
+            { assertEquals(ResumeResult.WindowClosed, gone, "a gone seat is a fresh admission") },
+            { assertEquals(joinedBefore + 1, joined.size, "the host admitted the joiner afresh, once") },
+            { assertEquals(setOf(joinerRoom.selfId), hostRoom.roster.value.map { it.id }.toSet(), "and holds it as its member") },
+            { assertTrue(joinerRoom.roster.value.isNotEmpty(), "the joiner's room is still in session") },
         )
     }
-
     // ── Test 5: WindowOpened.expiresAt is Instant (#461) ─────────────────────
 
     /**
@@ -420,20 +331,18 @@ class RoomResumeTest {
         )
     }
 
-    // ── Test 6: ResumeAck host-authoritative gate + Resumed idempotence (#1618) ─
+    // ── Test 6: a ResumeAck closes nothing (#3159, Task 1.7) ──────────────────
 
     /**
-     * Regression for #1618: [SeamRoom]'s ResumeAck handler must be
-     * host-authoritative and idempotent — mirroring the Farewell gate.
-     *
-     * A ResumeAck from a **non-host** peer is ignored, and a **duplicate**
-     * ResumeAck from the host emits exactly **one** [MembershipEvent.Resumed].
-     * The sequence {non-host ack, host ack, duplicate host ack} must therefore
-     * yield a single Resumed. Before the fix the handler emitted unconditionally
-     * for every ResumeAck, so this sequence produced three.
+     * Since a reconnect says Hello again, a joiner sends no `Resume`, so a `ResumeAck` answers
+     * nothing it asked — from the host or anyone else. Before Task 1.7 the host's ack resolved the
+     * flight (#1618 gated it to the host and made `Resumed` idempotent); now the host's own
+     * `Welcome` does, and only from a peer whose challenge the joiner answered. Here the joiner's
+     * outbound is dropped, so its Hello never reaches the host: every ack is ignored, nothing is
+     * resumed, and the flight times out on its own.
      */
     @Test
-    fun `ResumeAck is host-gated and Resumed is idempotent`() = runTest {
+    fun `a ResumeAck from the host or anyone else closes nothing`() = runTest {
         var clockMs = 0L
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
         val loom = InMemoryLoom()
@@ -442,48 +351,36 @@ class RoomResumeTest {
         val joinerDelegate = loom.join(InMemoryTag("Bob"))
         val joinerSeam = FaultySeam(joinerDelegate, backgroundScope, FaultProfile.Healthy)
         val joinerRoom = makeSeamRoom(joinerSeam, SessionRole.Joiner, "Bob", clock)
-        // A third, non-host peer in the mesh whose ResumeAck must be ignored.
         val nonHostSeam = loom.join(InMemoryTag("Carol"))
 
         hostRoom.roster.first { it.size == 1 }
-        joinerRoom.roster.first { it.isNotEmpty() } // host now identified as hostPeerId
-        val token = joinerRoom.resumeToken
-        assertNotNull(token, "joiner must hold a resume token after admit")
+        joinerRoom.roster.first { it.isNotEmpty() }
+        val token = assertNotNull(joinerRoom.resumeToken, "joiner must hold a resume token after admit")
 
         val resumed = mutableListOf<MembershipEvent.Resumed>()
         backgroundScope.launch {
             joinerRoom.events.filterIsInstance<MembershipEvent.Resumed>().collect { resumed.add(it) }
         }
-        advanceTimeBy(1L) // let the collector subscribe
+        advanceTimeBy(1L)
 
-        // Drop the joiner's outbound so its Resume never reaches the host: the host
-        // never auto-answers, leaving a pending resume flight we resolve by hand.
         joinerSeam.setFaultProfile(FaultProfile.DropAll(Direction.Outbound))
         val resumeResult = async { joinerRoom.resume(token) }
-        advanceTimeBy(10L) // resume() installs the pending flight and enters its await
+        advanceTimeBy(10L)
+        val pending = joinerRoom.hasPendingResume()
 
         val ack = AdmitMessage.encode(AdmitMessage.ResumeAck)
-
-        // 1. Non-host peer's ResumeAck — ignored (no Resumed, flight untouched).
         nonHostSeam.sendTo(joinerRoom.selfId, ack)
-        advanceTimeBy(10L)
-
-        // 2. Host's ResumeAck — resolves the flight, emits exactly one Resumed.
         hostSeam.sendTo(joinerRoom.selfId, ack)
         advanceTimeBy(10L)
+        val pendingAfterAcks = joinerRoom.hasPendingResume()
 
-        // 3. Duplicate host ResumeAck — no pending flight, no second Resumed.
-        hostSeam.sendTo(joinerRoom.selfId, ack)
-        advanceTimeBy(10L)
-
-        assertIs<ResumeResult.Success>(resumeResult.await())
-        assertEquals(
-            1,
-            resumed.size,
-            "exactly one Resumed after {non-host, host, duplicate-host} acks",
+        assertAll(
+            { assertTrue(pending, "rig: the Hello's flight was in flight") },
+            { assertTrue(pendingAfterAcks, "no ack settles the flight") },
+            { assertIs<ResumeResult.TimedOut>(resumeResult.await(), "unanswered, the flight times out") },
+            { assertEquals(0, resumed.size, "no ack resumes anything") },
         )
     }
-
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private suspend fun TestScope.makeSeamRoom(
