@@ -44,11 +44,22 @@ internal interface JoinerResumeHost {
     /** The identified host peer, or null if the host has not introduced itself yet. */
     fun hostPeer(): PeerId?
 
-    /** True when the room is terminal: closed (a `leave()` owns teardown) or host-lost. */
+    /** True when the room is terminal: closed (a `leave()` owns teardown), host-lost, or superseded. */
     fun isTerminal(): Boolean
 
-    /** True when the room is closed — a `leave()` already owns teardown. */
+    /**
+     * True when the room is closed — a `leave()` already owns teardown — or superseded, whose own
+     * `leave()` is on its way and which must never be announced `HostLost` (#3159, Task 1.7).
+     */
     fun isClosed(): Boolean
+
+    /**
+     * The encoded Hello a reconnect sends the host, with a fresh joiner nonce that is now the one a
+     * challenge must echo (#3159, Task 1.7); or null when the room must not say Hello again, because
+     * it is closed, host-lost or superseded. Gate and nonce are one critical section of the shared
+     * lock, so a room that has been told it was superseded never mints another Hello.
+     */
+    fun prepareReHello(): ByteArray?
 
     /**
      * Stop the host-liveness detector for the reconnect's duration, so a late `PeerLost`
@@ -78,22 +89,10 @@ internal interface JoinerResumeHost {
     fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant)
 
     /**
-     * The reconnect episode completed **without** a `ResumeAck`, because the host never
-     * partitioned us in the first place (#1637 — see [runReconnect]'s dwell). Close the arc
-     * [onReconnectStarted] opened: clear [hostId]'s partitioned level and announce the recovery.
-     *
-     * This exists because the normal success path emits nothing here. On a real resume the
-     * room's `ResumeAck` handler is what restores liveness and emits the closing edge; the
-     * no-op path completes precisely when no `ResumeAck` will ever arrive, so without this
-     * callback the `Partitioned` + `WindowOpened` pair would stay open forever — the roster
-     * pinned `Partitioned` on a host that is demonstrably reachable.
-     */
-    fun onNoOpResume(hostId: PeerId, at: Instant)
-
-    /**
      * Mark the room host-lost now, and return whether this call did it (`false` when it already
-     * was). The machine calls it inside the critical section that decides an episode failed, so a
-     * `ResumeAck` handled after that decision finds the room terminal (#3094).
+     * was, or the room was superseded). The machine calls it inside the critical section that decides
+     * an episode failed, so a host's `Welcome` handled after that decision finds the room terminal
+     * (#3094).
      */
     fun claimHostLost(): Boolean
 
@@ -107,9 +106,10 @@ internal interface JoinerResumeHost {
 }
 
 /**
- * One host `Reject` of a resume, carrying the episode context that makes a *refusal loop* legible.
+ * One `Reject` of a reconnect's Hello, carrying the episode context that makes a *refusal loop*
+ * legible.
  *
- * A refused joiner retries every [HeartbeatConfig.interval] for the whole
+ * A joiner refused retryably says Hello again every [HeartbeatConfig.interval] for the whole
  * [HeartbeatConfig.reconnectWindow]; before #1637's post-mortem that loop emitted nothing at all,
  * so the only observable of an episode was the terminal `HostLost` a minute later — long after the
  * mechanism that produced it had gone. This record is what [JoinerResumeMachine] logs on each
@@ -118,19 +118,15 @@ internal interface JoinerResumeHost {
  * get?*
  *
  * Everything here is an identity or a state, never a size: a count on its own says only *that*
- * something happened, whereas [host] + [code] + [dwell] say *what*.
+ * something happened, whereas [host] + [code] say *what*.
  *
- * @property host the peer that refused us — the host whose window we are trying to land on.
- * @property roomId the room the presented [ResumeToken] names.
+ * @property host the host this joiner is saying Hello to.
+ * @property roomId the room this joiner was admitted to, as its own `Welcome` named it.
  * @property code the structured refusal ([RejectCode.retryable] decides whether the loop goes on).
- * @property reason the host's free text, verbatim.
+ * @property reason the refuser's free text, verbatim.
  * @property attempt 1-based index of this refusal within the current reconnect episode.
  * @property elapsed time since the episode began, against [budget].
  * @property budget the [HeartbeatConfig.reconnectWindow] the whole episode is spending.
- * @property dwell time spent so far in the #1637 dwell (consecutive [RejectCode.ResumeWindowNotYetOpen]
- *   refusals), or null when this refusal is not part of one. Zero on the refusal that starts it.
- * @property dwellTarget how long the dwell must reach before the episode completes as a no-op
- *   resume — the host's own [HeartbeatConfig.timeout].
  */
 internal data class ResumeRefusal(
     val host: PeerId,
@@ -140,42 +136,45 @@ internal data class ResumeRefusal(
     val attempt: Int,
     val elapsed: Duration,
     val budget: Duration,
-    val dwell: Duration?,
-    val dwellTarget: Duration,
 ) {
     /**
      * The `resume.refused` log line, in the flat `key=value` shape the rest of the session layer
-     * emits (`room.event`, `resume.ok`, `resume.no-op`) so one grep spans them all. The two
-     * progress fields render as `elapsed/limit` because neither number means anything alone:
-     * "8 s in" is only alarming against a 60 s budget, and a dwell is only nearly-over against the
-     * host's own timeout.
+     * emits (`room.event`, `resume.ok`) so one grep spans them all. The progress field renders as
+     * `elapsed/limit` because the number means nothing alone: "8 s in" is only alarming against a
+     * 60 s budget.
      */
     fun render(): String =
         "resume.refused host=${host.value} roomId=$roomId code=${code.id} " +
             "retryable=${code.retryable} attempt=$attempt " +
             "elapsedMs=${elapsed.inWholeMilliseconds}/${budget.inWholeMilliseconds} " +
-            "dwellMs=${dwell?.inWholeMilliseconds ?: "none"}/${dwellTarget.inWholeMilliseconds} " +
             "reason=$reason"
 }
 
 /**
  * **Joiner-side** reconnect/resume state machine, extracted from the room (#1122).
  *
- * Owns the four pieces of joiner resume state and their transitions:
- * - [resumeToken] — the credential minted at admit time ([mintTokenIfAbsent]) and presented
- *   to the host on [resume];
- * - the **single-flight resume slot** (`pendingResume`) — concurrent [resume] calls coalesce
- *   onto one in-flight attempt (#1280), resolved by the host's ResumeAck ([takeFlightForAck])
- *   or Reject ([rejectFlight]), or abandoned at teardown ([takePendingFlight]);
+ * **A reconnect says Hello again (#3159, Task 1.7).** Each attempt sends the host a fresh `Hello`
+ * ([JoinerResumeHost.prepareReHello]), the room answers the host's challenge as it did at the first
+ * admission, and the attempt ends on the host's own `Welcome` to this member: marked
+ * `ReturnKind.Restored` when the seat came back, unmarked when it was gone and this was a fresh
+ * admission. Both end the episode as a success (Amendment C). The `Resume` frame is never sent;
+ * the host still answers one until Task 1.8 retires it.
+ *
+ * Owns the four pieces of joiner reconnect state and their transitions:
+ * - [resumeToken] — minted at admit time ([mintTokenIfAbsent]), still read by `Room.resumeToken`
+ *   until Task 1.8 removes it; a reconnect no longer presents it;
+ * - the **single-flight slot** (`pendingResume`) — concurrent [resume] calls coalesce onto one
+ *   in-flight Hello (#1280), resolved by the host's self-`Welcome` ([takeFlightForWelcome]) or a
+ *   `Reject` ([rejectFlight]), or abandoned at teardown ([takePendingFlight]);
  * - the **reconnect guard** (`reconnecting`) — the two racing tear-detection paths (transport
  *   `Torn` and heartbeat `TransportClosed`) both call [attemptReconnect]; exactly one wins;
  * - the **auto-reconnect loop** ([runReconnect], #1037) — re-weave the base, await `Woven`,
- *   restart the incoming collector, and [resume], retrying under one
+ *   restart the incoming collector, and say Hello again ([resume]), retrying under one
  *   [HeartbeatConfig.reconnectWindow] budget before falling to
  *   [JoinerResumeHost.onReconnectFailed].
  *
- * The host-side half of the protocol lives in [JoinerReconnectController] (window
- * open/expire/token validation); this machine is its joiner-side counterpart.
+ * The host-side half lives in the room's key → seat table, which asks [JoinerReconnectController]
+ * about a partitioned seat; this machine is its joiner-side counterpart.
  *
  * **Lock model — shared, by design.** The machine guards its state with the **same reentrant
  * [lock] instance** the room uses, passed in at construction; it does not own an independent
@@ -219,18 +218,18 @@ internal class JoinerResumeMachine(
     /**
      * Pending [resume] calls waiting for the host's reply.
      *
-     * When the joiner sends [AdmitMessage.Resume], it parks a [CompletableDeferred] here.
-     * The host replies with [AdmitMessage.ResumeAck] (success) or [AdmitMessage.Reject]
-     * (failure); the room's admit-frame handler resolves it via [takeFlightForAck] /
+     * When the joiner says Hello again, it parks a [CompletableDeferred] here. The host answers with
+     * this member's own [AdmitMessage.Welcome] (once its challenge is answered) or an
+     * [AdmitMessage.Reject]; the room's admit-frame handler resolves it via [takeFlightForWelcome] /
      * [rejectFlight]. The room's `leave()` takes whatever is left with [takePendingFlight].
      */
     private var pendingResume: CompletableDeferred<ResumeResult.JoinerOutcome>? = null
 
     /**
-     * Completes when the current flight's `Resume` has actually gone out (#3165). Installed with
+     * Completes when the current flight's Hello has actually gone out (#3165). Installed with
      * [pendingResume] and guarded by [lock]; a caller that joins the flight reads it there.
      *
-     * Since a `Resume` goes to the host alone, the flight's owner may wait up to
+     * Since the Hello goes to the host alone, the flight's owner may wait up to
      * [HeartbeatConfig.resumeTimeout] for the host to be addressable *before* it sends. A joined
      * caller that started its reply deadline at the moment it joined could then settle the shared
      * flight as [ResumeResult.TimedOut] after the host had already spent the window but before its
@@ -245,10 +244,11 @@ internal class JoinerResumeMachine(
      * [FailureReason.Refused] instead of [FailureReason.WindowExpired].
      *
      * **Only a code that declares itself terminal short-circuits the loop** ([RejectCode.retryable]
-     * false, #1572). Every other reject — including one from a host that sends no code at all, which
-     * decodes as [RejectCode.Unknown] — is recorded and *not* obeyed: a window that has not opened
-     * yet also rejects (the fast-reconnect race), and the retry is what recovers it. Reset at the
-     * start of each [runReconnect] episode; discarded if a later retry succeeds. Guarded by [lock].
+     * false, #1572), and only from the peer whose challenge this joiner answered (Amendment C; see
+     * [rejectFlight]). Every other reject — including one from a host that sends no code at all,
+     * which decodes as [RejectCode.Unknown] — is recorded and *not* obeyed: it schedules another
+     * Hello. Reset at the start of each [runReconnect] episode; discarded if a later retry succeeds.
+     * Guarded by [lock].
      */
     private var refusal: Refusal? = null
 
@@ -268,9 +268,8 @@ internal class JoinerResumeMachine(
      * refused since the last episode began.
      *
      * Kept (not cleared on success) so it survives as post-mortem evidence of an episode that
-     * *recovered through* refusals — the #1637 no-op path ends on the success branch, and a record
-     * cleared there would erase the very loop the log line exists to describe. Reset only when a
-     * new episode starts. Guarded by [lock]; read by tests via `SeamRoom.lastResumeRefusal()`.
+     * *recovered through* refusals: a record cleared on success would erase the very loop the log
+     * line exists to describe. Reset only when a new episode starts. Guarded by [lock]; read by tests via `SeamRoom.lastResumeRefusal()`.
      */
     private var lastRefusal: ResumeRefusal? = null
 
@@ -343,8 +342,8 @@ internal class JoinerResumeMachine(
      *
      * The room's `leave()` calls this and completes the flight as [ResumeResult.WindowClosed]: the
      * room is terminal, so its reply can never arrive, and without this every caller awaiting the
-     * flight (#1280) hangs forever. The room's ResumeAck handler takes it through [takeFlightForAck]
-     * instead.
+     * flight (#1280) hangs forever. The room's self-`Welcome` handler takes it through
+     * [takeFlightForWelcome] instead.
      */
     fun takePendingFlight(): CompletableDeferred<ResumeResult.JoinerOutcome>? = lock.withLock {
         val d = pendingResume
@@ -353,64 +352,78 @@ internal class JoinerResumeMachine(
     }
 
     /**
-     * Guarded by [lock]: a `ResumeAck` resumed the room during the current reconnect episode. Set by
-     * [takeFlightForAck], and cleared at both ends of an episode: when it starts, and in the critical
-     * section in [runReconnect] that reads it to decide how the episode ended. Every ack-resumed
-     * episode sets it, so a value carried into the next episode would resume that one on a lost
-     * window.
+     * Guarded by [lock]: the host's self-`Welcome` closed the current reconnect episode. Set by
+     * [takeFlightForWelcome], and cleared at both ends of an episode: when it starts, and in the
+     * critical section in [runReconnect] that reads it to decide how the episode ended. Every
+     * welcomed episode sets it, so a value carried into the next episode would close that one on a
+     * lost window.
+     *
+     * The flag, not the flight, is what closes an episode (Amendment C: the self-`Welcome` closes
+     * it). A `Welcome` can arrive between attempts — after a retryable `Reject` settled one flight
+     * and before the next Hello — and finds no flight to settle; the loop reads this flag before it
+     * says Hello again, so that `Welcome` still ends the episode.
      */
     private var ackResumed = false
 
     /**
-     * The ResumeAck handler's take: the pending flight, and whether this ack resumes the room, or
-     * null when no flight is pending. Called inside the room's critical section, which emits
-     * `Resumed` there when it does resume; the handler completes the flight after it releases the
-     * lock.
+     * The self-`Welcome` handler's take: the pending flight (null between attempts), and whether
+     * this `Welcome` closes the room's reconnect, or null when there is neither a flight nor an
+     * episode for it to close. Called inside the room's critical section, which restores the host's
+     * liveness and emits the closing edge there when it does close; the handler completes the
+     * flight after it releases the lock.
      *
-     * **Whoever takes the lock first wins (#3094).** An ack resumes the room unless the room is
-     * already terminal, and a resuming ack marks the episode resumed. [runReconnect] decides the
-     * episode in one critical section: if an ack resumed it, the room is resumed even when the
-     * window's timer has already fired, and otherwise it marks the room host-lost
-     * ([JoinerResumeHost.claimHostLost]) before releasing the lock. So an ack handled after that
-     * decision finds the room terminal, settles the flight as [ResumeResult.WindowClosed], and
+     * **Whoever takes the lock first wins (#3094).** A `Welcome` closes the episode unless the room
+     * is already terminal, and marks the episode welcomed. [runReconnect] decides the episode in one
+     * critical section: if a `Welcome` closed it, the room carries on even when the window's timer
+     * has already fired, and otherwise it marks the room host-lost
+     * ([JoinerResumeHost.claimHostLost]) before releasing the lock. So a `Welcome` handled after
+     * that decision finds the room terminal, settles the flight as [ResumeResult.WindowClosed], and
      * emits nothing.
      */
-    fun takeFlightForAck(): Pair<CompletableDeferred<ResumeResult.JoinerOutcome>, Boolean>? = lock.withLock {
-        val d = pendingResume ?: return null
+    fun takeFlightForWelcome(): Pair<CompletableDeferred<ResumeResult.JoinerOutcome>?, Boolean>? = lock.withLock {
+        val d = pendingResume
+        if (d == null && !reconnecting) return null
         pendingResume = null
         val resumes = !host.isTerminal()
-        if (resumes) ackResumed = true
+        if (resumes && reconnecting) ackResumed = true
         d to resumes
     }
 
     /**
-     * Resolves the pending flight as [ResumeResult.Refused], carrying the host's [message] and
-     * [code] verbatim, and returns whether a flight was actually in flight — `false` means the
-     * Reject arrived during the initial join (no resume pending), which the room fails loudly as
-     * an admission rejection instead (#1178).
+     * Resolves the pending flight as [ResumeResult.Refused], carrying the refuser's [message] and
+     * [code] verbatim, and returns whether this machine took the `Reject` — `false` means it
+     * arrived with no reconnect under way (the initial join), which the room fails loudly as an
+     * admission rejection instead (#1178).
      *
-     * The [message] is **recorded, not obeyed as authoritative**, and so is [code] — with one
-     * exception. A `Reject` is usually not terminal (a window that has not opened yet also
-     * rejects — the fast-reconnect race), so the flight completes and [runReconnect]'s retry loop
-     * runs unchanged; the recorded [refusal] then only refines the terminal label to
-     * [FailureReason.Refused] if the window ultimately expires. Only when [code] declares itself
-     * non-[RejectCode.retryable] does [runReconnect] stop early — and a host that sends no code
-     * decodes as [RejectCode.Unknown], which is retryable, so old hosts keep the pre-#1572
-     * behaviour exactly.
+     * **A terminal code counts only from a verified challenger (Amendment C).** [fromChallenger]
+     * says the `Reject` came from a peer whose challenge this joiner answered for its current Hello.
+     * A terminal `Reject` from anyone else is ignored and leaves the flight to its own answer: it
+     * is about some other exchange — an impostor's `KeyConflict` sent to the id it claimed, which is
+     * this one — or forged by a bystander. What is left of the impostor case: a `Reject` the host
+     * sends to this id about an impostor's exchange *after* this joiner answered the host's
+     * challenge cannot be told from one about this joiner's own, since a `Reject` names no
+     * challenge, and still ends the episode.
+     *
+     * Any retryable code, from anyone, settles the flight as refused, which only schedules another
+     * Hello: the loop waits an interval and tries again. A host that sends no code decodes as
+     * [RejectCode.Unknown], which is retryable. The recorded [refusal] refines the terminal label to
+     * [FailureReason.Refused] if the window ultimately expires.
      *
      * **The value handed to the caller is [ResumeResult.Refused], not [ResumeResult.WindowClosed]
-     * (#2364).** It used to be the latter, unconditionally, whatever the host said — so an
-     * elapsed window, a token for another room and a not-yet-open window were one value at the
-     * public surface, and the last of those is the *transient* one. Nothing about the retry loop
-     * changes: it has always decided on `refusal.code`, never on the value returned here.
+     * (#2364)**, so a terminal refusal and a transient one stay distinct at the public surface.
      */
-    fun rejectFlight(message: String, code: RejectCode): Boolean = lock.withLock {
+    fun rejectFlight(message: String, code: RejectCode, fromChallenger: Boolean): Boolean = lock.withLock {
         val d = pendingResume
+        if (d == null) return reconnecting
+        if (!code.retryable && !fromChallenger) {
+            logger.info { "resume.reject-ignored code=${code.id} reason=$message: not from the peer whose challenge this joiner answered" }
+            return true
+        }
         pendingResume = null
         // Count within the episode, so runReconnect can report each reject exactly once.
-        if (d != null) refusal = Refusal(message, code, attempt = (refusal?.attempt ?: 0) + 1)
-        d?.complete(ResumeResult.Refused(message, code))
-        d != null
+        refusal = Refusal(message, code, attempt = (refusal?.attempt ?: 0) + 1)
+        d.complete(ResumeResult.Refused(message, code))
+        true
     }
 
     /**
@@ -449,28 +462,23 @@ internal class JoinerResumeMachine(
     /**
      * Attempt to keep the session alive across a host transport tear (#1037).
      *
-     * When this machine holds a [resumeToken] and a [reweave] lambda it reports
+     * When this machine has a [reweave] lambda and a known host it reports
      * [JoinerResumeHost.onReconnectStarted] (the room emits the dual-role `Partitioned` +
      * `WindowOpened` events), then, under a single [HeartbeatConfig.reconnectWindow] budget:
      * re-weaves the base, waits for [SeamState.Woven], restarts the room's incoming collect on
-     * the fresh generation, and calls [resume]. On [ResumeResult.Success] the room stays live
-     * (its ResumeAck handler already emitted `Resumed`); on timeout / re-weave failure / a
-     * non-Success resume it marks the room host-lost ([JoinerResumeHost.claimHostLost]) and falls
-     * to [JoinerResumeHost.onReconnectFailed]. Transient re-weave/resume failures are retried
-     * until the window deadline. One exception to the timeout rule: an ack that resumed the room
-     * after the window's timer fired but before the episode was decided resumes the episode too
-     * ([takeFlightForAck], #3094).
+     * the fresh generation, and says Hello again ([resume]). The episode ends when the host's
+     * `Welcome` to this member arrives — restored or a fresh admission, both a success (Amendment
+     * C) — and the room's handler has already restored the host's liveness and emitted the closing
+     * edge. On timeout / re-weave failure / a terminal refusal it marks the room host-lost
+     * ([JoinerResumeHost.claimHostLost]) and falls to [JoinerResumeHost.onReconnectFailed].
+     * Transient failures, a retryable refusal included, are retried until the window deadline. One
+     * exception to the timeout rule: a `Welcome` that closed the episode after the window's timer
+     * fired but before the episode was decided closes it all the same ([takeFlightForWelcome], #3094).
      *
-     * **A blip the host never observed (#1637).** When only *our* side of the link tore, the host's
-     * detector never fires, it opens no reconnect window, and it answers every `Resume` with the
-     * retryable [RejectCode.ResumeWindowNotYetOpen] — while our retries themselves refresh its
-     * `lastSeen`, so no window can ever open and retrying to the deadline guarantees a spurious
-     * `HostLost`. The retry loop therefore **dwells** on a persistent `ResumeWindowNotYetOpen` for
-     * one [HeartbeatConfig.timeout] (the longest the host can take to open a window it intends to
-     * open) and then completes the episode as a **no-op resume**: there was nothing to resume onto.
-     * That path takes the success branch — detector restored, guard cleared — plus
-     * [JoinerResumeHost.onNoOpResume], which closes the `Partitioned`/`WindowOpened` arc no
-     * `ResumeAck` will ever close.
+     * **No dwell any more.** A `Resume` to a host that never saw the blip (#1637) was refused
+     * `ResumeWindowNotYetOpen` until a dwell gave up on it. A Hello needs none: the host restores a
+     * seat it still holds as connected without consulting a window, and reads `WindowNotYetOpen`
+     * as a seat still held.
      *
      * **Non-conforming loom.** If, after re-weave, [seam] is still [SeamState.Torn], the loom
      * minted an unrelated seam instead of healing ours (it violates the same-instance-heal
@@ -481,45 +489,45 @@ internal class JoinerResumeMachine(
      * **Host-liveness detector is stopped for the reconnect's duration**
      * ([JoinerResumeHost.silenceHostDetector]). The host detector runs on the *same*
      * [HeartbeatConfig.reconnectWindow]; if left running it could fire `PeerLost` →
-     * host-lost on a *different* coroutine mid-reconnect, racing an in-flight resume into a
-     * contradictory `HostLost` + `Resumed`. Stopping it makes the reconnect authoritative over
-     * the host-liveness decision. On success the detector is **restarted**
-     * ([JoinerResumeHost.restoreHostDetector], so the resumed room is not left unmonitored)
-     * and [reconnecting] is cleared, arming the next episode: a later in-session tear re-fires
-     * `TransportClosed` → a fresh [attemptReconnect].
+     * host-lost on a *different* coroutine mid-reconnect, racing the re-Hello into a contradictory
+     * `HostLost` + `Resumed`. Stopping it makes the reconnect authoritative over the host-liveness
+     * decision. On success the detector is **restarted** ([JoinerResumeHost.restoreHostDetector],
+     * so the room is not left unmonitored) and [reconnecting] is cleared, arming the next episode: a
+     * later in-session tear re-fires `TransportClosed` → a fresh [attemptReconnect].
      *
-     * Without a [resumeToken] (torn before admit), a [reweave] (a directly-constructed joiner
-     * with no resume support), or a known host peer, it goes straight to
-     * [JoinerResumeHost.onReconnectFailed] — the pre-#1037 immediate-terminal behavior.
+     * **A superseded room stops (#3159, Task 1.7).** Its `leave()` cancels this job; until it does,
+     * [JoinerResumeHost.isTerminal] is already true, so no further Hello is attempted, and
+     * [JoinerResumeHost.prepareReHello] refuses to mint one in the same critical section that reads
+     * the flag. The episode then ends without `HostLost` ([JoinerResumeHost.isClosed]).
      *
-     * All suspend work (re-weave, await Woven, resume) runs **outside** [lock]; only flag
+     * Without a [reweave] (a directly-constructed joiner with no resume support) or a known host
+     * peer, it goes straight to [JoinerResumeHost.onReconnectFailed] — the pre-#1037
+     * immediate-terminal behavior.
+     *
+     * All suspend work (re-weave, await Woven, the Hello) runs **outside** [lock]; only flag
      * flips, field reads, and detector start/stop are under it, so the type stays correct
      * under a multi-threaded dispatcher.
      */
     private suspend fun runReconnect(at: Instant) {
         val reweaveFn = reweave
-        val (token, hostId) = lock.withLock { resumeToken to host.hostPeer() }
-        if (reweaveFn == null || token == null || hostId == null) {
-            // #1618 evidence capture: name which of the three null gates sent this tear straight
-            // to terminal HostLost (no WindowOpened). Identities, not sizes — no behavior change.
+        val (roomId, hostId) = lock.withLock { resumeToken?.roomId?.value to host.hostPeer() }
+        if (reweaveFn == null || hostId == null) {
+            // #1618 evidence capture: name which null gate sent this tear straight to terminal
+            // HostLost (no WindowOpened). Identities, not sizes — no behavior change.
             logger.info {
-                val reason = when {
-                    reweaveFn == null -> "no-reweave"
-                    token == null -> "no-token"
-                    else -> "no-host"
-                }
-                "resume.terminal reason=$reason host=$hostId roomId=${token?.roomId?.value}"
+                val reason = if (reweaveFn == null) "no-reweave" else "no-host"
+                "resume.terminal reason=$reason host=$hostId roomId=$roomId"
             }
             // Clear reconnectJob FIRST (this coroutine IS it) so onReconnectFailed → leave()
             // doesn't cancel its own coroutine mid-teardown. See the failure branch below.
-            if (lock.withLock { reconnectJob = null; host.claimHostLost() }) {
+            if (lock.withLock { reconnectJob = null; !host.isClosed() && host.claimHostLost() }) {
                 host.onReconnectFailed(at, FailureReason.Unrecoverable)
             }
             return
         }
 
         // Fresh episode: forget any reject recorded by a prior reconnect on this machine, and the
-        // refusal record that described it (attempt numbers are per-episode), and any earlier ack.
+        // refusal record that described it (attempt numbers are per-episode), and any earlier Welcome.
         lock.withLock {
             refusal = null
             lastRefusal = null
@@ -527,27 +535,19 @@ internal class JoinerResumeMachine(
         }
 
         // Silence the host-liveness detector: for the reconnect's duration WE decide
-        // host-liveness, so a late PeerLost can't tear down an in-flight resume.
+        // host-liveness, so a late PeerLost can't tear down the re-Hello in flight.
         // Restarted on success below.
         host.silenceHostDetector(hostId)
 
         host.onReconnectStarted(hostId, at, at + heartbeatConfig.reconnectWindow)
 
-        // Default: a window that elapses without a successful resume is WindowExpired. Only the
+        // Default: a window that elapses without a Welcome is WindowExpired. Only the
         // non-conforming-loom branch below reclassifies to Unrecoverable. This is a plain local,
         // read/written solely on this reconnect coroutine (the withTimeoutOrNull block runs inline
         // on it), so it needs no lock.
         var failureReason: FailureReason = FailureReason.WindowExpired
-        // #1637: did this episode end on the dwell (a blip the host never observed) rather than on a
-        // real ResumeAck? Same locality as [failureReason] — written inside the inline
-        // [withTimeoutOrNull] block, read on this coroutine after it, so no lock.
-        var noOpResume = false
         val resumed = withTimeoutOrNull(heartbeatConfig.reconnectWindow) {
             var ok = false
-            // #1637: the first instant this episode saw ResumeWindowNotYetOpen, or null when the last
-            // attempt produced anything else. Local to the retry loop, which runs inline on this
-            // coroutine.
-            var windowNotYetOpenSince: Instant? = null
             // The last refusal this loop has already reported, by its per-episode index. [refusal] is
             // sticky, so without this a single reject would be re-reported on every later iteration.
             var reportedRefusals = 0
@@ -555,11 +555,17 @@ internal class JoinerResumeMachine(
             // Never two immediate retries in a row (see below); every interval the loop waits re-arms it.
             var retriedAtOnce = false
             while (!ok) {
-                // Bail the instant the room goes terminal (e.g. leave() mid-window), even if
-                // the cancellation of this job hasn't propagated yet — so we never re-weave
-                // (which for a resumable loom would REOPEN the channel leave() just closed)
-                // after teardown begins.
+                // Bail the instant the room goes terminal (e.g. leave() mid-window, or a supersession),
+                // even if the cancellation of this job hasn't propagated yet — so we never re-weave
+                // (which for a resumable loom would REOPEN the channel leave() just closed) after
+                // teardown begins.
                 if (host.isTerminal()) return@withTimeoutOrNull false
+                // The host's Welcome may have closed the episode between attempts: after a retryable
+                // refusal settled the last flight, and before this one (Amendment C).
+                if (lock.withLock { ackResumed }) {
+                    ok = true
+                    continue
+                }
                 val reweaved = runCatchingCancellable { reweaveFn() }
                 if (reweaved.isFailure) {
                     // Transient re-weave failure (base not back yet) — retry until the deadline. The
@@ -595,117 +601,63 @@ internal class JoinerResumeMachine(
                 // #3151: wait for Woven OR Torn. A resumable loom can hand back a generation that is
                 // draining but not yet Torn, and when that generation then tears nothing re-points the
                 // handle, since only a weave does. `first { Woven }` alone would then wait out the whole
-                // window. A Torn here skips the resume; the tear check below re-weaves at once.
+                // window. A Torn here skips the Hello; the tear check below re-weaves at once.
                 val result = runCatchingCancellable {
                     if (seam.state.first { it is SeamState.Woven || it is SeamState.Torn } is SeamState.Torn) {
                         null
                     } else {
                         host.restartIncomingCollect()
-                        resume(token)
+                        resume()
                     }
                 }.getOrNull()
-                if (result is ResumeResult.Success) {
-                    // #1618 evidence capture: the resume landed — this tear recovered without
-                    // going terminal. Identities, not sizes — no behavior change.
-                    logger.info { "resume.ok host=$hostId roomId=${token.roomId.value}" }
+                // A fresh admission settles its flight as WindowClosed — the seat was gone — and still
+                // closes the episode, which the flag records (Amendment C).
+                if (result is ResumeResult.Success || lock.withLock { ackResumed }) {
+                    // #1618 evidence capture: the episode closed — this tear recovered without going
+                    // terminal. Identities, not sizes — no behavior change.
+                    logger.info { "resume.ok host=$hostId roomId=$roomId restored=${result is ResumeResult.Success}" }
                     ok = true
                 } else {
-                    // The refusal recorded for this episode, if the host answered at all. It is
-                    // *sticky* — kept until the episode ends, because the terminal label needs it —
-                    // so [Refusal.attempt] is what distinguishes a NEW reject from the last one.
+                    // The refusal recorded for this episode, if anyone answered at all. It is *sticky* —
+                    // kept until the episode ends, because the terminal label needs it — so
+                    // [Refusal.attempt] is what distinguishes a NEW reject from the last one.
                     val refusalNow = lock.withLock { refusal }
                     val code = refusalNow?.code
 
-                    // #1637: the host says no window has EVER opened for us. Only two things produce
-                    // that answer — the #1572 fast-reconnect race (a window IS coming, because the
-                    // host's own link closed and that fires TransportClosed at once), or a blip the
-                    // host never observed at all. The second is self-sustaining: our own Resume frames
-                    // refresh the host detector's lastSeen (any inbound frame calls observedPeer), so
-                    // its silence never reaches HeartbeatConfig.timeout and no window can ever open.
-                    // Retrying to the deadline then guarantees HostLost(Refused) on a link that is by
-                    // then perfectly healthy.
-                    //
-                    // Dwelling past the host's own timeout discriminates them: a window the host
-                    // intends to open is open by then. Past that, complete the episode as a **no-op
-                    // resume** — we were never partitioned, so there is nothing to resume onto. The
-                    // success branch below then restores the host detector AND calls
-                    // [JoinerResumeHost.onNoOpResume]: no ResumeAck arrives on this path, so the
-                    // room's ack handler never runs, and without that call the Partitioned +
-                    // WindowOpened arc this machine already emitted would stay open forever.
-                    //
-                    // WindowNotYetOpen is unambiguous, so this can never mask a real loss: an OPEN
-                    // window returns Success and an EXPIRED one is refused with
-                    // RejectCode.ResumeWindowExpired. The dwell is additionally gated on the
-                    // attempt having actually been *answered* — a reject resolves the flight as
-                    // [ResumeResult.Refused], whereas a host that has gone silent yields
-                    // [ResumeResult.TimedOut] (#1587) and must NOT keep a stale refusal's dwell
-                    // running. Reading THIS attempt's code off the result (rather than off the
-                    // sticky [refusal], as before #2364) says the same thing for an answered
-                    // attempt — rejectFlight writes both from one Reject — and additionally stops
-                    // an unanswered attempt (a send failure, a terminal room) from riding a
-                    // previous attempt's code.
-                    val refusedNotYetOpen =
-                        result is ResumeResult.Refused && result.code == RejectCode.ResumeWindowNotYetOpen
-                    // Dwell bookkeeping is hoisted above the terminal short-circuit and the refusal
-                    // report so a report can say how far into the dwell it landed. Nothing observable
-                    // moves: a terminal code is never ResumeWindowNotYetOpen, so the short-circuit
-                    // path only ever clears a loop-local that dies with the block.
-                    val dwellSince = if (refusedNotYetOpen) {
-                        windowNotYetOpenSince ?: clock().also { windowNotYetOpenSince = it }
-                    } else {
-                        windowNotYetOpenSince = null
-                        null
-                    }
-
                     // #1637 evidence capture: a refusal loop that says nothing is, from a log,
-                    // indistinguishable from a joiner that never tried — the whole episode used to
-                    // surface only as the terminal HostLost a minute later, which is why a real
-                    // hardware capture was misdiagnosed twice. Report each reject with the identities
-                    // and state a diagnosis needs (who refused, which code, which attempt, how far
-                    // through the budget and the dwell) rather than a bare count.
+                    // indistinguishable from a joiner that never tried. Report each reject with the
+                    // identities and state a diagnosis needs (who refused, which code, which attempt,
+                    // how far through the budget) rather than a bare count.
                     //
                     // INFO, not DEBUG, deliberately: the on-device captures collect INFO, so a DEBUG
                     // line would be invisible on exactly the hardware this exists to diagnose.
                     //
                     // Bounded by the retry cadence, not by traffic: at most one line per
-                    // [HeartbeatConfig.interval] of the [HeartbeatConfig.reconnectWindow] budget (12
-                    // at the defaults), and only when the host actually *answered* — a healthy
-                    // session, a transient re-weave failure, and a silent host all add nothing.
+                    // [HeartbeatConfig.interval] of the [HeartbeatConfig.reconnectWindow] budget, and
+                    // only when a refusal was taken — a healthy session, a transient re-weave failure,
+                    // and a silent host all add nothing.
                     if (refusalNow != null && refusalNow.attempt > reportedRefusals) {
                         reportedRefusals = refusalNow.attempt
                         val report = ResumeRefusal(
                             host = hostId,
-                            roomId = token.roomId.value,
+                            roomId = roomId ?: "unknown",
                             code = refusalNow.code,
                             reason = refusalNow.message,
                             attempt = refusalNow.attempt,
                             elapsed = clock() - at,
                             budget = heartbeatConfig.reconnectWindow,
-                            dwell = dwellSince?.let { clock() - it },
-                            dwellTarget = heartbeatConfig.timeout,
                         )
                         lock.withLock { lastRefusal = report }
                         logger.info { report.render() }
                     }
 
-                    // Fail fast ONLY on a code the host declared terminal (#1572). Everything
-                    // else — a not-yet-open window, an unrecognised code, a host too old to send
-                    // one — keeps retrying to the deadline, which is what recovers the
-                    // fast-reconnect race.
+                    // Fail fast ONLY on a code the challenger declared terminal (#1572; [rejectFlight]
+                    // takes no terminal code from anyone else). Everything else — an unrecognised code,
+                    // a host too old to send one, a host that could not consult its window — says
+                    // Hello again until the deadline.
                     if (code?.retryable == false) return@withTimeoutOrNull false
 
-                    if (dwellSince != null && clock() - dwellSince >= heartbeatConfig.timeout) {
-                        logger.info {
-                            "resume.no-op host=$hostId roomId=${token.roomId.value} " +
-                                "reason=host-never-partitioned " +
-                                "dwellMs=${heartbeatConfig.timeout.inWholeMilliseconds}"
-                        }
-                        noOpResume = true
-                        ok = true
-                        continue
-                    }
-
-                    // #3151: the generation this attempt resumed onto tore under it, so no reply can
+                    // #3151: the generation this attempt said Hello on tore under it, so no reply can
                     // come and the next weave will dial a fresh base. Waiting an interval first only
                     // spends the window: the observed cost was resumeTimeout + interval (20 s at the
                     // defaults) for an in-process socket. Never twice in a row: an immediate retry is
@@ -714,7 +666,7 @@ internal class JoinerResumeMachine(
                     // never a tight loop.
                     if (seam.state.value is SeamState.Torn && !retriedAtOnce) {
                         retriedAtOnce = true
-                        logger.info { "resume.generation-torn host=$hostId roomId=${token.roomId.value} → re-weaving at once" }
+                        logger.info { "resume.generation-torn host=$hostId roomId=$roomId → re-weaving at once" }
                         continue
                     }
                     retriedAtOnce = false
@@ -724,44 +676,44 @@ internal class JoinerResumeMachine(
             true
         } ?: false
 
-        // Not resumed (window elapsed, or a terminal reject cut the loop short) but a host reject
-        // was seen: label it Refused, carrying the code so the consumer can branch on it. A
+        // Not resumed (window elapsed, or a terminal reject cut the loop short) but a reject was
+        // seen: label it Refused, carrying the code so the consumer can branch on it. A
         // non-conforming loom already set Unrecoverable above and takes precedence (it returned
         // false before any reject could be recorded).
         if (!resumed && failureReason is FailureReason.WindowExpired) {
             lock.withLock { refusal }?.let { failureReason = FailureReason.Refused(it.message, it.code) }
         }
 
-        // One critical section decides how the episode ended, so the room's ResumeAck handler
-        // ([takeFlightForAck]) and this decision are ordered by the lock: whichever takes it first
-        // wins (#3094). An ack that resumed the room first resumes the episode, even when the
-        // window's timer has already fired, since the host has taken us back and the room has said
-        // `Resumed`. A failed episode marks the room host-lost here, not later in onReconnectFailed,
-        // so an ack handled after this decision finds the room terminal and resumes nothing.
-        // reconnectJob is cleared FIRST on every branch (this coroutine IS it): onReconnectFailed →
-        // leave() must not cancel its own coroutine, or leave()'s seam.close() would be cancelled
-        // mid-teardown.
+        // One critical section decides how the episode ended, so the room's self-Welcome handler
+        // ([takeFlightForWelcome]) and this decision are ordered by the lock: whichever takes it first
+        // wins (#3094). A Welcome that closed the episode first closes it, even when the window's
+        // timer has already fired, since the host has taken us back and the room has said so. A
+        // failed episode marks the room host-lost here, not later in onReconnectFailed, so a Welcome
+        // handled after this decision finds the room terminal and closes nothing. reconnectJob is
+        // cleared FIRST on every branch (this coroutine IS it): onReconnectFailed → leave() must not
+        // cancel its own coroutine, or leave()'s seam.close() would be cancelled mid-teardown.
         val (end, lateAck) = lock.withLock {
             reconnectJob = null
-            // Consume the episode's ack here as well as at the episode's start. Every ack-resumed
-            // episode sets it, so a flag carried into the next episode would resume that one even
+            // Consume the episode's Welcome here as well as at the episode's start. Every welcomed
+            // episode sets it, so a flag carried into the next episode would close that one even
             // though its window was lost: no HostLost, and a detector restored on a dead link.
             val lateAck = !resumed && ackResumed
             ackResumed = false
             val end = when {
                 resumed || lateAck -> {
                     // Re-arm: clear the guard and restart host-liveness monitoring on the healed
-                    // generation. The restarted detector both keeps the resumed room monitored and,
-                    // on a LATER tear, re-fires TransportClosed → a fresh [attemptReconnect]: with
-                    // the guard cleared, a subsequent in-session drop auto-resumes again (repeated
-                    // episodes). The host callback nests the reentrant lock, so the guard-clear and
-                    // the detector restart are atomic.
+                    // generation. The restarted detector both keeps the room monitored and, on a LATER
+                    // tear, re-fires TransportClosed → a fresh [attemptReconnect]: with the guard
+                    // cleared, a subsequent in-session drop reconnects again (repeated episodes). The
+                    // host callback nests the reentrant lock, so the guard-clear and the detector
+                    // restart are atomic.
                     reconnecting = false
                     refusal = null
                     host.restoreHostDetector(hostId)
                     EpisodeEnd.Resumed
                 }
-                // leave() already owns teardown; don't emit a spurious HostLost.
+                // leave() already owns teardown, or is about to for a superseded room; don't emit a
+                // spurious HostLost.
                 host.isClosed() -> EpisodeEnd.AlreadyEnded
                 host.claimHostLost() -> EpisodeEnd.Lost
                 else -> EpisodeEnd.AlreadyEnded
@@ -769,50 +721,41 @@ internal class JoinerResumeMachine(
             end to lateAck
         }
         if (lateAck) {
-            // #1618 evidence capture, as the in-loop success line: the episode resumed through an
-            // ack the loop itself never saw, because the window's timer fired first (#3094).
-            logger.info { "resume.ok host=$hostId roomId=${token.roomId.value} via=late-ack" }
+            // #1618 evidence capture, as the in-loop success line: the episode closed through a
+            // Welcome the loop itself never saw, because the window's timer fired first (#3094).
+            logger.info { "resume.ok host=$hostId roomId=$roomId via=late-welcome" }
         }
-        when (end) {
-            // #1637: the dwell path emits nothing of its own — no ResumeAck arrives, so the room's
-            // ack handler (which restores the host's liveness and emits the closing edge on a real
-            // resume) never runs. Close the arc here instead, once the detector is back so the room
-            // is monitored again before it is announced live.
-            EpisodeEnd.Resumed -> if (noOpResume) host.onNoOpResume(hostId, clock())
-            EpisodeEnd.Lost -> host.onReconnectFailed(clock(), failureReason)
-            EpisodeEnd.AlreadyEnded -> Unit
-        }
+        if (end == EpisodeEnd.Lost) host.onReconnectFailed(clock(), failureReason)
     }
 
     /** How [runReconnect]'s deciding critical section ended an episode. */
     private enum class EpisodeEnd { Resumed, Lost, AlreadyEnded }
 
     /**
-     * Attempt to resume from [token] after a transport drop: send [AdmitMessage.Resume] to
-     * the host — to the host alone, since it carries the member's secret ([sendToHost]) — and await
-     * the reply. The host replies [AdmitMessage.ResumeAck] → [ResumeResult.Success], unless the room
-     * has gone terminal by the time the ack is handled, which gives [ResumeResult.WindowClosed]
-     * ([takeFlightForAck]); or [AdmitMessage.Reject] → [ResumeResult.Refused].
+     * Say Hello to the host again and await its answer (#3159, Task 1.7): a fresh Hello, sent to the
+     * host alone ([sendToHost]); the room answers the host's challenge as at the first admission; and
+     * the host's `Welcome` to this member settles the flight — [ResumeResult.Success] when it is
+     * marked `Restored`, [ResumeResult.WindowClosed] when it is a fresh admission because the seat
+     * was gone, which the room keeps ([takeFlightForWelcome]). A `Reject` settles it
+     * [ResumeResult.Refused] ([rejectFlight]).
      *
-     * **Concurrent calls coalesce (#1280).** A room has one reconnect credential and one host,
-     * so all concurrent resume attempts target the same outcome: when a resume is already in
-     * flight, this call **joins** it — awaiting the same reply — instead of sending a second
-     * [AdmitMessage.Resume]. Joining (rather than re-sending) matters twice over: a second
-     * Resume would consume nothing on the host (the token is single-use per window), and its
-     * [AdmitMessage.Reject] could race the first attempt's ResumeAck into falsely resolving
-     * the shared reply as [ResumeResult.Refused] ([rejectFlight], #2364). It also keeps the internal
-     * auto-reconnect ([runReconnect]) and an app-level retry from stealing each other's reply
-     * slot — the pre-fix failure mode where the orphaned internal attempt timed out into
-     * host-lost *after* a successful resume. Callers that want a retry after a non-Success
-     * result simply call again: sequential calls are fresh attempts.
+     * `Room.resume(token)` reaches here too until Task 1.8 removes it; the token is not presented,
+     * since the key proves the member now.
      *
-     * State mutation (installing/joining the deferred) is under [lock]; the suspend send
-     * is outside. A genuine [CancellationException] from the broadcast propagates, but first
-     * resolves the shared deferred as [ResumeResult.WindowClosed] so joined callers are never
-     * orphaned. The room's `leave()` resolves any still-pending attempt the same way (via
-     * [takePendingFlight]), so no caller's `await` outlives the room.
+     * **Concurrent calls coalesce (#1280).** A room has one host, so all concurrent attempts target
+     * the same outcome: when one is already in flight, this call **joins** it — awaiting the same
+     * reply — instead of sending a second Hello, whose fresh nonce would orphan the first one's
+     * challenge. It also keeps the internal auto-reconnect ([runReconnect]) and an app-level call
+     * from stealing each other's reply slot. Callers that want a retry after a non-Success result
+     * simply call again: sequential calls are fresh attempts.
+     *
+     * State mutation (installing/joining the deferred) is under [lock]; the suspend send is outside.
+     * A genuine [CancellationException] from the send propagates, but first resolves the shared
+     * deferred as [ResumeResult.WindowClosed] so joined callers are never orphaned. The room's
+     * `leave()` resolves any still-pending attempt the same way (via [takePendingFlight]), so no
+     * caller's `await` outlives the room.
      */
-    suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome {
+    suspend fun resume(): ResumeResult.JoinerOutcome {
         // Install (or join) the deferred under lock; check terminal flags first.
         val (deferred, sent, ownsFlight) = lock.withLock {
             if (host.isTerminal()) return ResumeResult.WindowClosed
@@ -827,23 +770,15 @@ internal class JoinerResumeMachine(
                 Triple(reply, went, true)
             }
         }
-        // A resume is already in flight — join it (bounded) rather than orphaning its reply slot.
+        // A Hello is already in flight — join it (bounded) rather than orphaning its reply slot.
         if (!ownsFlight) return awaitJoinedFlight(deferred, sent)
 
-        val resumeMsg = AdmitMessage.encode(
-            AdmitMessage.Resume(
-                tokenPeerId = token.peerId.value,
-                tokenRoomId = token.roomId.value,
-                issuedAt = token.issuedAt,
-                resumeSecret = token.secret,
-            ),
-        )
         // Suspend send outside the lock. A genuine CancellationException propagates (correct),
         // but must still resolve the shared deferred — a joined caller would otherwise hang.
         // A host that is not addressable is TimedOut, exactly what an unanswered frame would have
         // become; any other send failure becomes WindowClosed for every caller of this flight.
         val sendResult = try {
-            runCatchingCancellable { sendToHost(resumeMsg, deferred).also { if (it) sent.complete(Unit) } }
+            runCatchingCancellable { sendToHost(deferred).also { if (it) sent.complete(Unit) } }
         } catch (e: CancellationException) {
             abandonFlight(deferred)
             throw e
@@ -859,22 +794,24 @@ internal class JoinerResumeMachine(
     }
 
     /**
-     * Sends [bytes] to the identified host **alone**, waiting (bounded by
+     * Sends this flight's Hello to the identified host **alone**, waiting (bounded by
      * [HeartbeatConfig.resumeTimeout]) for the host to be addressable on [seam]. Returns `false`
-     * when there is no host to send to — none identified, it never appeared, or the seam tore while
-     * waiting — so the flight settles as [ResumeResult.TimedOut], what a frame nobody received
-     * becomes anyway.
+     * when there is no Hello to send — no host identified, it never appeared, the seam tore while
+     * waiting, the flight was settled meanwhile, or the room may not say Hello again
+     * ([JoinerResumeHost.prepareReHello]) — so the flight settles as [ResumeResult.TimedOut], what a
+     * frame nobody received becomes anyway.
      *
-     * **Never a broadcast (#3165).** A `Resume` carries the member's resume secret, and on a flat or
-     * mesh fabric a broadcast reaches every peer — admitted or not — so one sniffed resume would let
-     * any of them forge this member's resumes for the life of the host. It was a broadcast from the
-     * first resume implementation, with no recorded reason; the one cost of addressing it is that a
-     * just-re-woven seam may not list the host yet, which is what the bounded wait covers.
+     * **Never a broadcast** (Amendment A § 1.7). On a flat loom a broadcast Hello is answered by
+     * every host that hears it, and a foreign host would admit this joiner to its own room. The one
+     * cost of addressing it is that a just-re-woven seam may not list the host yet, which is what
+     * the bounded wait covers.
+     *
+     * The Hello is minted after the wait, in the critical section that checks the flight still owns
+     * the slot, so its nonce is the one a challenge must echo from the moment it goes. A room told
+     * it was superseded after that section and before the send still sends this one Hello; the
+     * host answers it with the same `Farewell(supersededBy)`, which a room already ending ignores.
      */
-    private suspend fun sendToHost(
-        bytes: ByteArray,
-        flight: CompletableDeferred<ResumeResult.JoinerOutcome>,
-    ): Boolean {
+    private suspend fun sendToHost(flight: CompletableDeferred<ResumeResult.JoinerOutcome>): Boolean {
         val hostId = host.hostPeer() ?: return false
         // true: the host is addressable; false: the seam tore first; null: the bound elapsed.
         val addressable: Boolean? = withTimeoutOrNull(heartbeatConfig.resumeTimeout) {
@@ -888,12 +825,11 @@ internal class JoinerResumeMachine(
         }
         if (addressable != true) return false
         // The flight may have been settled while this waited — `leave()` took it, say. Sending then
-        // would have the host spend the window for a reply nobody is waiting for.
-        if (lock.withLock { pendingResume !== flight }) return false
-        seam.sendTo(hostId, bytes)
+        // would have the host decide an exchange nobody is waiting for.
+        val hello = lock.withLock { if (pendingResume !== flight) null else host.prepareReHello() } ?: return false
+        seam.sendTo(hostId, hello)
         return true
     }
-
     /**
      * A joined caller's wait: first for the owner's send (or the flight settling) under the same
      * bound the owner's own pre-send wait has, then for the verdict under [awaitFlightBounded] —
