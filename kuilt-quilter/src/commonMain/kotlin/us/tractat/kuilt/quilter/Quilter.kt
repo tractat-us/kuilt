@@ -1003,6 +1003,7 @@ public class Quilter<S : Quilted<S>>(
             cancelFullStateRetry(peer)
             digestOutstanding.remove(peer)
             everSentUsDigest.remove(peer)
+            forgetLink(peer)
         }
         recomputeUniversalAck()
         recomputeCut()
@@ -1028,6 +1029,10 @@ public class Quilter<S : Quilted<S>>(
     }
 
     private fun onPeersChanged(currentPeers: Set<PeerId>): Unit = lock.withLock {
+        // A departure keeps the peer in [knownPeers] until eviction, so a quick rejoin is not "new"
+        // and gets no first-contact state; it heals through [onFullState]'s push-back instead. That
+        // push-back must find a free send slot, not one held by a send that died with the old link.
+        (knownPeers - currentPeers).forEach(::forgetLink)
         val newPeers = currentPeers - seam.selfId - knownPeers
         knownPeers += currentPeers - seam.selfId
         newPeers.forEach { peer ->
@@ -1064,12 +1069,7 @@ public class Quilter<S : Quilted<S>>(
     private fun announceDigestTo(peer: PeerId) = sendRootDigestTo(peer, armGrant = false)
 
     private fun sendFullStateTo(peer: PeerId) {
-        val msg = QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq)
-        val bytes = encode(msg)
-        scope.launch {
-            runCatchingCancellable { seam.sendTo(peer, bytes) }
-                .onFailure { logger.debug { "sendFullStateTo $peer failed: ${it.message}" } }
-        }
+        requestFullStateSend(peer)
         scheduleFullStateRetry(peer, config.fullStateRetryLimit)
     }
 
@@ -1081,15 +1081,14 @@ public class Quilter<S : Quilted<S>>(
         pendingFullStateJobs[peer]?.cancel()
         pendingFullStateJobs[peer] = scope.launch {
             delay(config.fullStateRetryInterval)
-            // Snapshot the frame under the lock; perform the suspending send OUTSIDE it; then
-            // reschedule under the lock again — the lock is never held across `seam.sendTo`.
-            val bytes = lock.withLock {
+            // Through the peer's send slot, like every whole-state send (#3617): a retry that lands
+            // while the previous send is still crossing a slow link supersedes it rather than
+            // stacking a second whole state behind it.
+            lock.withLock {
                 if (peer !in knownPeers) return@launch
-                encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
+                requestFullStateSend(peer)
+                scheduleFullStateRetry(peer, attemptsLeft - 1)
             }
-            runCatchingCancellable { seam.sendTo(peer, bytes) }
-                .onFailure { logger.debug { "fullStateRetry sendTo $peer failed: ${it.message}" } }
-            lock.withLock { scheduleFullStateRetry(peer, attemptsLeft - 1) }
         }
     }
 
@@ -1284,6 +1283,7 @@ public class Quilter<S : Quilted<S>>(
      * and the sender's ack bookkeeping must all reflect it.
      */
     private fun onFullState(sender: PeerId, msg: QuiltMessage.FullState<S>) {
+        if (outstandingRequest?.peer == sender) clearOutstandingRequest()
         val current = _state.value
         val merged = current.piece(msg.state)
         if (merged != current) {
@@ -1321,14 +1321,71 @@ public class Quilter<S : Quilted<S>>(
     private fun onRootDigest(sender: PeerId, msg: QuiltMessage.RootDigest<S>) {
         everSentUsDigest.add(sender)
         if (msg.root == stateRoot()) {
+            staleDigestSkips.remove(sender)
             resyncReceiveCursor(sender, msg.sender, msg.upThrough)
             return
         }
+        if (!mayRequestFullStateFrom(sender)) return
+        armOutstandingRequest(sender)
         val bytes = encode(QuiltMessage.FullStateRequest<S>(requester = replica, sender = msg.sender))
         scope.launch {
             runCatchingCancellable { seam.sendTo(sender, bytes) }
                 .onFailure { logger.debug { "fullStateRequest to $sender failed: ${it.message}" } }
         }
+    }
+
+    /**
+     * Whether a mismatched digest from [sender] may ask for its whole state now (#3617). Under [lock].
+     *
+     * No, while this replica already has a request in flight to anyone ([outstandingRequest]): one
+     * whole state at a time is the bound. No, too, while [sender] is a delta target that has not
+     * acked all our own deltas, since the mismatch is then most likely our write still on its way
+     * there; but only [QuilterConfig.staleDigestSkipLimit] times in a row, so a lost relayed delta
+     * still gets its backstop. A skip from the in-flight bound does not count against that limit.
+     */
+    private fun mayRequestFullStateFrom(sender: PeerId): Boolean {
+        outstandingRequest?.let { inFlight ->
+            logger.debug { "fullStateRequest to $sender skipped — one to ${inFlight.peer} is in flight" }
+            return false
+        }
+        val skips = staleDigestSkips[sender] ?: 0
+        val behindOnOurDeltas = (ackedThrough[sender] ?: 0L) < nextSeq && sender in deltaTargets(knownPeers)
+        if (behindOnOurDeltas && skips < config.staleDigestSkipLimit) {
+            staleDigestSkips[sender] = skips + 1
+            return false
+        }
+        staleDigestSkips.remove(sender)
+        return true
+    }
+
+    /** Records a request in flight to [peer], cleared by [onFullState] or after the timeout. Under [lock]. */
+    private fun armOutstandingRequest(peer: PeerId) {
+        clearOutstandingRequest()
+        lateinit var request: OutstandingFullStateRequest
+        val expiry = scope.launch(start = CoroutineStart.LAZY) {
+            delay(config.fullStateRequestTimeout)
+            lock.withLock { if (outstandingRequest === request) outstandingRequest = null }
+        }
+        request = OutstandingFullStateRequest(peer, expiry)
+        outstandingRequest = request
+        expiry.start()
+    }
+
+    /** Drops the request in flight, if any, and its expiry timer. Under [lock]. */
+    private fun clearOutstandingRequest() {
+        outstandingRequest?.expiry?.cancel()
+        outstandingRequest = null
+    }
+
+    /**
+     * Drops what this replica holds against [peer]'s current link: its whole-state send slot, the
+     * request in flight to it, and its skip count. Called when [peer] leaves [Seam.peers] and when
+     * it is evicted. A frame lost with the old link must not leave either bound shut. Under [lock].
+     */
+    private fun forgetLink(peer: PeerId) {
+        clearFullStateSlot(peer)
+        if (outstandingRequest?.peer == peer) clearOutstandingRequest()
+        staleDigestSkips.remove(peer)
     }
 
     /**
@@ -1349,11 +1406,7 @@ public class Quilter<S : Quilted<S>>(
             logger.debug { "unsolicited fullStateRequest from $sender — ignored" }
             return
         }
-        val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
-        scope.launch {
-            runCatchingCancellable { seam.sendTo(sender, bytes) }
-                .onFailure { logger.debug { "fullState reply to $sender failed: ${it.message}" } }
-        }
+        requestFullStateSend(sender)
     }
 
     /**
