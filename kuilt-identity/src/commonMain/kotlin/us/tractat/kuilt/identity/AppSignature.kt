@@ -34,6 +34,9 @@ public suspend fun DeviceKey.signApp(context: String, message: ByteArray): ByteA
  * Whether [signature] is this key's [signApp] signature over [message] under [context]. `false`,
  * never a throw, for a signature that is not, as with [DidKey.verify].
  *
+ * Unlike [DidKey.verify], it does throw [IllegalArgumentException] on a context [signApp] refuses,
+ * so a verifier that takes the context off the wire must check it first.
+ *
  * @throws IllegalArgumentException when [context] is one [signApp] refuses: no signature can exist
  *   for it, so asking is the caller's mistake.
  * @throws IllegalStateException when this platform's cryptographic provider cannot run here.
