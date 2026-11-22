@@ -290,6 +290,8 @@ public final class us/tractat/kuilt/quilter/Quilter : us/tractat/kuilt/core/Scop
 public final class us/tractat/kuilt/quilter/QuilterConfig {
 	public fun <init> ()V
 	public synthetic fun <init> (JJJJIZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (JJJJIZZJIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (JJJJIZZJILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (JJJJIZZLkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1-UwyO8pc ()J
 	public final fun component2-UwyO8pc ()J
@@ -298,15 +300,21 @@ public final class us/tractat/kuilt/quilter/QuilterConfig {
 	public final fun component5 ()I
 	public final fun component6 ()Z
 	public final fun component7 ()Z
+	public final fun component8-UwyO8pc ()J
+	public final fun component9 ()I
 	public final fun copy-C0ewQK0 (JJJJIZZ)Lus/tractat/kuilt/quilter/QuilterConfig;
 	public static synthetic fun copy-C0ewQK0$default (Lus/tractat/kuilt/quilter/QuilterConfig;JJJJIZZILjava/lang/Object;)Lus/tractat/kuilt/quilter/QuilterConfig;
+	public final fun copy-x4zPwkw (JJJJIZZJI)Lus/tractat/kuilt/quilter/QuilterConfig;
+	public static synthetic fun copy-x4zPwkw$default (Lus/tractat/kuilt/quilter/QuilterConfig;JJJJIZZJIILjava/lang/Object;)Lus/tractat/kuilt/quilter/QuilterConfig;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAntiEntropyInterval-UwyO8pc ()J
 	public final fun getEvictionAfter-UwyO8pc ()J
 	public final fun getExpectVirtualTime ()Z
+	public final fun getFullStateRequestTimeout-UwyO8pc ()J
 	public final fun getFullStateRetryInterval-UwyO8pc ()J
 	public final fun getFullStateRetryLimit ()I
 	public final fun getResendRetryInterval-UwyO8pc ()J
+	public final fun getStaleDigestSkipLimit ()I
 	public final fun getStrictTestGuard ()Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;

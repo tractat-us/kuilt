@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class, ExperimentalVersionOverloading::class)
 
 package us.tractat.kuilt.quilter
 
@@ -94,7 +94,7 @@ public data class QuilterConfig(
      * bound then caps requests at one per timeout rather than at one outstanding. Set it above the
      * worst lag you expect a whole state to take to cross the link.
      */
-    val fullStateRequestTimeout: Duration = 30.seconds,
+    @IntroducedAt("0.7.7") val fullStateRequestTimeout: Duration = 30.seconds,
     /**
      * How many mismatched [QuiltMessage.RootDigest]s in a row from one peer this replica ignores
      * while that peer has not yet acknowledged all of this replica's own deltas (#3617).
@@ -110,7 +110,7 @@ public data class QuilterConfig(
      * peer outside it never receives our deltas, so it never acks them, and the skip would only
      * slow its backstop down.
      */
-    val staleDigestSkipLimit: Int = 3,
+    @IntroducedAt("0.7.7") val staleDigestSkipLimit: Int = 3,
 ) {
     init {
         require(fullStateRequestTimeout.isPositive()) {
