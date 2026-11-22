@@ -186,6 +186,72 @@ class SupersededMembershipTest {
      */
     @Test
     fun supersededJoinerDoesNotReHello() = runTest {
+        supersededJoinerDoesNotReHelloBody()
+    }
+
+    /**
+     * Inherited obligation 3 (#3159, Task 1.7): A's link is dead **both ways** when B supersedes it,
+     * so the direct `Farewell(supersededBy)` of Decided 19 goes into the dead link and A never hears
+     * it. When A's link comes back its reconnect says Hello again — and the host, which remembers the
+     * superseded id, answers that Hello with the same `Farewell` instead of a challenge. A ends with
+     * `Left(self, Superseded(by = B))` after exactly one Hello, and the host keeps one membership.
+     */
+    @Test
+    fun aSupersededProcessCutOffBothWaysEndsOnItsReHello() = runTest(timeout = us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP) {
+        val a = PeerId("tab-a")
+        val b = PeerId("tab-b")
+        val board = Switchboard(setOf(KEY_SEAT_HOST, a, b))
+        val host = boardRoom(board, KEY_SEAT_HOST, fakeKeyStore(HOST_DEVICE), SessionRole.Host)
+        val hostLog = EventLog(host, backgroundScope)
+        val shared = fakeKeyStore(1)
+        val aLink = FlakyLifecycleSeam(board.plug(a), backgroundScope)
+        val roomA = boardRoom(board, a, shared, SessionRole.Joiner, seam = aLink, reweave = { aLink })
+        val aLog = EventLog(roomA, backgroundScope)
+        testScheduler.runCurrent()
+        assertTrue(host.roster.value.any { it.id == a }, "rig: A was admitted")
+
+        // Dead both ways: the host partitions A by silence, and A's link tears.
+        board.mute(from = a, to = KEY_SEAT_HOST)
+        board.mute(from = KEY_SEAT_HOST, to = a)
+        aLink.enterWeaving()
+        testScheduler.advanceTimeBy(PARTITION_DETECTED)
+        testScheduler.runCurrent()
+        assertIs<Liveness.Partitioned>(host.roster.value.single { it.id == a }.liveness, "rig: the host holds A as partitioned")
+
+        val hostMark = hostLog.mark()
+        val roomB = boardRoom(board, b, shared, SessionRole.Joiner)
+        testScheduler.runCurrent()
+        val farewellsSentToA = board.sent(from = KEY_SEAT_HOST, to = a).count { it is AdmitMessage.Farewell && it.supersededBy == b.value }
+        val farewellsDeliveredToA = board.delivered(from = KEY_SEAT_HOST, to = a).count { it is AdmitMessage.Farewell }
+        val aLeftBeforeHeal = aLog.since(0).filterIsInstance<MembershipEvent.Left>()
+
+        // A's link comes back; its reconnect has every route to the host.
+        val sentByA = board.sent(from = a, to = KEY_SEAT_HOST).size
+        board.unmute(from = a, to = KEY_SEAT_HOST)
+        board.unmute(from = KEY_SEAT_HOST, to = a)
+        aLink.recover()
+        testScheduler.advanceTimeBy(KEY_SEAT_ADMIT_TIMEOUT * 10)
+        testScheduler.runCurrent()
+        val fromA = board.sent(from = a, to = KEY_SEAT_HOST).drop(sentByA)
+        val aEvents = aLog.since(0)
+
+        assertAll(
+            { assertEquals(1, farewellsSentToA, "rig: the host told A directly, as Decided 19 says") },
+            { assertEquals(0, farewellsDeliveredToA, "rig: that Farewell went into the dead link") },
+            { assertEquals(emptyList(), aLeftBeforeHeal, "rig: A did not know before its link came back") },
+            { assertEquals(1, fromA.count { it is AdmitMessage.Hello }, "A's reconnect said Hello once: ${fromA.map { it::class.simpleName }}") },
+            { assertEquals(0, fromA.count { it is AdmitMessage.Proof }, "the host challenged nothing, so A proved nothing") },
+            { assertEquals(listOf(superseded(a, by = b)), aEvents.filter { it is MembershipEvent.Left && it.peerId == a }, aEvents.render()) },
+            { assertTrue(aEvents.none { it is MembershipEvent.HostLost }, aEvents.render()) },
+            { assertTrue(roomA.roster.value.isEmpty(), "A's room has ended") },
+            { assertEquals(listOf(superseded(a, by = b)), hostLog.edgesSince(hostMark).filterIsInstance<MembershipEvent.Left>()) },
+            { assertEquals(setOf(b), host.roster.value.map { it.id }.toSet(), "one membership, B's") },
+        )
+        roomB.leave()
+        host.leave()
+    }
+
+    private suspend fun kotlinx.coroutines.test.TestScope.supersededJoinerDoesNotReHelloBody() {
         val a = PeerId("tab-a")
         val b = PeerId("tab-b")
         val board = Switchboard(setOf(KEY_SEAT_HOST, a, b))
