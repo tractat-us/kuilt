@@ -1857,8 +1857,12 @@ internal class SeamRoom(
                     //                          Hello, a retryable one from anyone (Amendment C, #2364);
                     //  - initial join        → the host refused admission; fail loudly (#1178) instead of
                     //                          swallowing it and leaving join()'s consumer hanging.
-                    val fromChallenger = lock.withLock { sender in latestHelloChallengers }
-                    val hadPendingResume = resumeMachine?.rejectFlight(msg.reason, msg.code, fromChallenger) ?: false
+                    // One critical section: whether the sender is a challenger of the latest Hello, and
+                    // the flight that Hello's attempt owns, are read together, so a new Hello cannot
+                    // replace the challengers between the two.
+                    val hadPendingResume = lock.withLock {
+                        resumeMachine?.rejectFlight(msg.reason, msg.code, fromChallenger = sender in latestHelloChallengers)
+                    } ?: false
                     if (!hadPendingResume) {
                         scope.launch {
                             failAdmission(AdmissionFailure.Rejected(msg.reason, msg.code), clock())
