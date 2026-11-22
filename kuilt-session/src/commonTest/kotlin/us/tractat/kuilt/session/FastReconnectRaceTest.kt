@@ -33,59 +33,35 @@ import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
-import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertIs
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
-/** The host's `Reject` message for a resume that arrives before its window opens (`SeamRoom.kt`). */
-private const val REJECT_WINDOW_NOT_YET_OPEN = "resume-window-not-yet-open"
-
-/** The host's `Reject` message for a resume whose window has already closed (`SeamRoom.kt`). */
-private const val REJECT_WINDOW_EXPIRED = "resume-window-expired"
-
 /**
- * Guards the **fast-reconnect race**: a host `Reject` of a resume is *recorded, never obeyed*.
+ * The **fast-reconnect race**, after #3159 Task 1.7: a joiner that re-weaves faster than its host
+ * notices the drop says Hello again, and the host restores the seat at once.
  *
- * The subtlety these tests exist to protect:
- *
- * 1. A host answers a resume it cannot place with a `Reject`. Two **very different situations**
- *    produce one — a reconnect window that has *expired*, and one that has **not opened yet**,
- *    because the host's own liveness detector has not noticed the joiner's link drop. Before
- *    #1572 the wire could not tell them apart; now [RejectCode] does, and only a code the joiner
- *    recognises as terminal ([RejectCode.retryable] false) short-circuits the loop. A reject
- *    from a peer that sends no code at all decodes as [RejectCode.Unknown], which is retryable —
- *    so an old host still gets the pre-#1572 retry-to-the-deadline behaviour.
- * 2. So a `Reject` is **not terminal by default**. `JoinerResumeMachine.rejectFlight` records it
- *    and completes the flight as `WindowClosed`, but the reconnect loop in `runReconnect` keeps
- *    retrying to its own window deadline. The retry loop *is* the recovery mechanism for the
- *    race — the joiner that re-wove faster than the host could notice simply tries again a
- *    moment later, and the retry lands.
- * 3. The recorded message only refines the *label* of a genuine expiry:
- *    [FailureReason.Refused] instead of [FailureReason.WindowExpired].
- *
- * The failure mode this pins down is an inviting one: treating `Reject` as authoritative and
- * short-circuiting the loop. That reads as an optimisation ("the host said no — stop asking"),
- * keeps every label assertion green, and silently destroys fast-reconnect recovery. Hence the
- * matched set below: one test asserts the loop **still ran** while the refusal was recorded
- * (`reweaveCount() > 1`), one asserts an early refusal is retried **into a successful resume**
- * with no [MembershipEvent.HostLost] at all, and one asserts that a reject the host codes as
- * genuinely terminal *does* short-circuit — the narrow case where stopping is correct.
+ * Before 1.7 a reconnect sent `Resume`, and a host that had not opened a reconnect window yet —
+ * its own detector had not noticed the drop — refused it `ResumeWindowNotYetOpen`. The joiner then
+ * had to retry until the window opened, and these tests pinned that the refusal was retried rather
+ * than obeyed. A Hello needs no window: the host's key → seat table restores a seat it still holds
+ * as connected without consulting one, restores a partitioned one through the window, and admits
+ * afresh once the seat is gone. So the race is gone, and what these tests pin now is that each of
+ * the three host states ends the episode without `HostLost`, on the first re-Hello.
  *
  * Determinism comes from [GatedPeersSeam]: the test, not the scheduler, decides when the host
- * notices the drop and opens its window.
+ * notices the drop.
  */
 class FastReconnectRaceTest {
 
@@ -102,87 +78,59 @@ class FastReconnectRaceTest {
         }
     }
 
+    /** The host never notices the drop, so it still holds the seat connected: one re-Hello restores it. */
     @Test
-    fun `a resume refused for the whole window reports Refused and still retried`() =
+    fun `a re-Hello the host did not see coming restores the seat at once`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
             val h = gatedHostHarness(clock)
 
             h.hostRoom.roster.first { it.size == 1 }
             h.joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(h.joinerRoom.resumeToken)
 
-            val hostLost = async { h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
-
-            // The host's view of its peer set is frozen, so it never opens a reconnect window:
-            // every resume the joiner sends is rejected with "resume-window-closed".
-            h.hostPeers.freeze()
-            h.muxClient.closeBase()
-            repeat(9) { advanceTimeBy(100L) }
-
-            val event = hostLost.await()
-            assertEquals(
-                FailureReason.Refused(REJECT_WINDOW_NOT_YET_OPEN, RejectCode.ResumeWindowNotYetOpen),
-                event.reason,
-            )
-            // The regression guard: a Reject must NOT short-circuit the loop. If it did, the
-            // joiner would have re-woven exactly once and given up immediately.
-            assertTrue(
-                h.reweaveCount() > 1,
-                "a rejected resume must be retried until the window expires, not abandoned " +
-                    "(re-weaves: ${h.reweaveCount()})",
-            )
-        }
-
-    @Test
-    fun `a resume refused before the host opens its window is retried into success`() =
-        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
-            val h = gatedHostHarness(clock)
-
-            h.hostRoom.roster.first { it.size == 1 }
-            h.joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(h.joinerRoom.resumeToken)
-
-            // Whichever lands first settles the episode. Awaiting the *race* rather than the
-            // Resumed alone keeps a regression legible: a short-circuiting reject produces a
-            // HostLost here, an assertion failure, not a five-second timeout.
             val outcome = async {
                 h.joinerRoom.events.first { it is MembershipEvent.Resumed || it is MembershipEvent.HostLost }
             }
-
-            // The fast-reconnect race: the joiner re-weaves and resumes before the host's own
-            // detector has fired, so the first attempts are rejected.
             h.hostPeers.freeze()
             h.muxClient.closeBase()
-            repeat(2) { advanceTimeBy(100L) }
-            assertTrue(h.reweaveCount() >= 1, "the joiner must have attempted at least one resume")
-            assertFalse(
-                outcome.isCompleted,
-                "with the host's window still closed, those attempts must have been rejected",
-            )
-
-            // Now the host notices the drop and opens the window — a later retry must land.
-            h.hostPeers.drop(PeerId("client"))
             repeat(4) { advanceTimeBy(100L) }
 
-            // A reject that a later retry recovers from must produce a Resumed and no HostLost.
             assertIs<MembershipEvent.Resumed>(outcome.await())
+            assertEquals(1, h.reweaveCount(), "one re-weave, one Hello: nothing to retry")
+            assertEquals(1, h.hostRoom.roster.value.size, "the host still holds one seat")
+        }
+
+    /** The host noticed the drop and holds the seat partitioned: the re-Hello restores it through the window. */
+    @Test
+    fun `a re-Hello after the host noticed restores the held seat`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
+            val h = gatedHostHarness(clock, reweaveDelayMs = 50L)
+
+            h.hostRoom.roster.first { it.size == 1 }
+            h.joinerRoom.roster.first { it.isNotEmpty() }
+
+            val outcome = async {
+                h.joinerRoom.events.first { it is MembershipEvent.Resumed || it is MembershipEvent.HostLost }
+            }
+            val hostPartitioned = async { h.hostRoom.events.first { it is MembershipEvent.Partitioned } }
+            h.hostPeers.freeze()
+            h.hostPeers.drop(PeerId("client"))
+            h.muxClient.closeBase()
+            repeat(4) { advanceTimeBy(100L) }
+
+            assertIs<MembershipEvent.Partitioned>(hostPartitioned.await(), "rig: the host noticed the drop")
+            assertIs<MembershipEvent.Resumed>(outcome.await())
+            assertEquals(1, h.reweaveCount(), "one re-weave, one Hello")
         }
 
     /**
-     * The #1572 payoff, and the counterpart to the two tests above: a reject the host codes as
-     * **terminal** ([RejectCode.ResumeWindowExpired]) must surface `HostLost` at once, instead of
-     * retrying futilely until the joiner's own window elapses.
-     *
-     * Deterministic by construction, and no gating needed: the host's transport close is
-     * immediate, so its 100 ms window opens and closes while the joiner's re-weave is still
-     * sleeping out its 250 ms delay. Every resume can then only find an **expired** window. The
-     * joiner's own window is 10 s, so a single re-weave inside half a second is proof the loop
-     * short-circuited — retrying to the deadline would have re-woven ~100 times.
+     * The host's window opens and closes while the joiner's re-weave is still sleeping, so the seat
+     * is gone by the time it says Hello again. That Hello is a fresh admission, which the room keeps:
+     * a success (Amendment C), not the `HostLost` the old terminal `ResumeWindowExpired` produced.
      */
     @Test
-    fun `a terminal reject surfaces HostLost without burning the joiner's window`() =
+    fun `a re-Hello after the host's window closed is a fresh admission and not HostLost`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
@@ -195,25 +143,30 @@ class FastReconnectRaceTest {
 
             h.hostRoom.roster.first { it.size == 1 }
             h.joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(h.joinerRoom.resumeToken)
 
-            val hostLost = async { h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
-
+            val hostLog = EventLog(h.hostRoom, backgroundScope)
+            val joinerLog = EventLog(h.joinerRoom, backgroundScope)
+            val hostMark = hostLog.mark()
+            val joinerMark = joinerLog.mark()
             h.muxClient.closeBase()
             repeat(5) { clockMs += 100L; advanceTimeBy(100L) }
 
-            assertTrue(
-                hostLost.isCompleted,
-                "a terminal reject must fail fast, not wait out the joiner's 10 s window " +
-                    "(re-weaves: ${h.reweaveCount()})",
+            val hostEdges = hostLog.edgesSince(hostMark)
+            val joinerEvents = joinerLog.since(joinerMark)
+            assertAll(
+                { assertIs<MembershipEvent.Left>(hostEdges.firstOrNull(), "rig: the host's window closed and the seat went: ${hostEdges.joinToString { it.describe() }}") },
+                {
+                    assertEquals(
+                        listOf(h.joinerRoom.selfId),
+                        hostEdges.filterIsInstance<MembershipEvent.Joined>().map { it.member.id },
+                        "the re-Hello was admitted afresh",
+                    )
+                },
+                { assertTrue(joinerEvents.none { it is MembershipEvent.HostLost }, joinerEvents.joinToString { it.describe() }) },
+                { assertEquals(1, h.reweaveCount(), "a completed fresh admission is not retried") },
+                { assertEquals(1, h.hostRoom.roster.value.size, "the host holds one seat again") },
             )
-            assertEquals(
-                FailureReason.Refused(REJECT_WINDOW_EXPIRED, RejectCode.ResumeWindowExpired),
-                hostLost.await().reason,
-            )
-            assertEquals(1, h.reweaveCount(), "a terminal reject must not be retried")
         }
-
     // ── Harness ──────────────────────────────────────────────────────────────
 
     private class GatedHarness(
