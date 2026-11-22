@@ -91,10 +91,11 @@ class AppSignatureTest {
             val forged = AdmissionProof.decode(layout + signature)
             Triple(victim.id.verifyApp(context, message, signature), forged, forged?.isSignedBy(victim.id))
         }
+        val honestVerifies = honest.isSignedBy(victim.id)
         assertAll(
-            { assertTrue(honest.isSignedBy(victim.id), "precondition: a proof the victim really signed verifies") },
+            { assertTrue(honestVerifies, "precondition: a proof the victim really signed verifies") },
             *rows.mapIndexed { i, (appVerifies, forged, forgedVerifies) ->
-                listOf(
+                listOf<() -> Unit>(
                     { assertTrue(appVerifies, "attempt $i: the app signature itself is sound") },
                     { assertNotNull(forged, "attempt $i: precondition, the assembled bytes decode as a proof") },
                     { assertEquals(false, forgedVerifies, "attempt $i: the assembled proof is not the victim's") },
