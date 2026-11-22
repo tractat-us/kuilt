@@ -712,6 +712,7 @@ class ProvenRestoreConcurrencyTest {
                 var newWon = 0
                 var toldAtProof = 0
                 var reSeated = 0
+                var slowChallenged = 0
                 var wrongOutcome = 0
                 val failures = mutableListOf<String>()
                 try {
@@ -722,6 +723,9 @@ class ProvenRestoreConcurrencyTest {
                         val fresh = PeerId("bob-rehello-$round")
                         rig.peers.update { it + fresh }
                         rig.drainChallenges()
+                        // Some rounds' host is slow to challenge the old id: its answer is still a
+                        // challenge, however late, and the rig must read it as one.
+                        rig.slowChallengeTo = old.takeIf { round % SLOW_CHALLENGE_EVERY == 0 }
                         rig.partition(stage, round, old)
                         val spent = AtomicBoolean(false)
                         rig.controller.onAsk = { resume, at ->
@@ -772,6 +776,7 @@ class ProvenRestoreConcurrencyTest {
                             oldRestored -> oldWon++
                         }
                         if (supersededByFresh && oldChallenged.get()) toldAtProof++
+                        if (rig.slowChallengeTo != null && oldChallenged.get()) slowChallenged++
                         if (supersededByFresh && (oldJoinedAgain || rig.room.isAdmitted(old))) reSeated++
                         if (!good) wrongOutcome++
                         if (!good && failures.size < 5) {
@@ -792,7 +797,7 @@ class ProvenRestoreConcurrencyTest {
                     }
                     println(
                         "proven-restore rehello-race: completed=$completed oldWon=$oldWon newWon=$newWon " +
-                            "toldAtProof=$toldAtProof reSeated=$reSeated wrongOutcome=$wrongOutcome " +
+                            "toldAtProof=$toldAtProof reSeated=$reSeated slowChallenged=$slowChallenged wrongOutcome=$wrongOutcome " +
                             "retries=${rig.retries.get()} failures=$failures",
                     )
                     assertAll(
@@ -802,6 +807,7 @@ class ProvenRestoreConcurrencyTest {
                         { assertTrue(oldWon > 0, "the old process restored its seat first in some round") },
                         { assertTrue(newWon > 0, "the new id took the seat over first in some round") },
                         { assertTrue(toldAtProof > 0, "in some round the old exchange was challenged before the takeover, and told at its proof") },
+                        { assertTrue(slowChallenged > 0, "in some round the host's late challenge reached the old exchange and was answered") },
                     )
                 } finally {
                     rig.close()
@@ -1076,6 +1082,10 @@ class ProvenRestoreConcurrencyTest {
         @Volatile
         var slowPingNanos: Long = 0
 
+        /** A joiner id whose challenges the host is slow to send, by [SLOW_CHALLENGE]; null for none. */
+        @Volatile
+        var slowChallengeTo: PeerId? = null
+
         /** An expiry emitted from its own coroutine this round, which [quiesce] waits out before its sentinels. */
         @Volatile
         var pendingExpiry: Job? = null
@@ -1091,6 +1101,7 @@ class ProvenRestoreConcurrencyTest {
                 if (peer == bob && payload.isPing()) spin(slowPingNanos)
                 val message = AdmitMessage.decode(payload) ?: return
                 if (message is AdmitMessage.Challenge) {
+                    if (peer == slowChallengeTo) delay(SLOW_CHALLENGE)
                     challengesFor(peer).send(message)
                 } else {
                     sent.update { it + (peer to message) }
@@ -1253,6 +1264,12 @@ class ProvenRestoreConcurrencyTest {
         // may bring one back as a new process.
         const val SUPERSEDE_ROUNDS = 5_000
         const val REHELLO_ROUNDS = 1_000
+
+        /** Every this many re-Hello rounds, the host challenges the old id [SLOW_CHALLENGE] late. */
+        const val SLOW_CHALLENGE_EVERY = 100
+
+        /** Slower than a rig waiting on a clock for its challenge would wait. */
+        val SLOW_CHALLENGE = 1.seconds
         const val STALE_WELCOME_ROUNDS = 20_000
 
         /** Up to about as long as the room takes to handle a frame, so the two arrivals overlap. */
