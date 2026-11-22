@@ -900,6 +900,22 @@ internal class SeamRoom(
     private val proofResumes = mutableSetOf<PeerId>()
 
     /**
+     * **Host only.** Members whose seat a Proof has already restored for the return it is in, so
+     * [restoreSeat] emits [MembershipEvent.Resumed] once per return (#3159, Amendment D). Guarded by
+     * [lock].
+     *
+     * A retry Hello reaches a seat its return has already restored when the joiner's attempt timed
+     * out before the host's `Welcome` arrived. The retry is challenged, its proof restores the seat,
+     * and the joiner is sent its burst again, but the seat came back once. A Hello carries nothing
+     * about the return it belongs to, so the host bounds a return by what it sees itself: it starts
+     * with the seat's partition, or with its admission for a seat never partitioned since, and ends
+     * with the next partition ([markPartitioned]) or departure ([detachMember]). So a seat the host
+     * never partitioned has one return from its first restore until it is partitioned: a second
+     * restart faster than the host's timeout looks exactly like a retry, and emits no `Resumed`.
+     */
+    private val restoredReturns = mutableSetOf<PeerId>()
+
+    /**
      * **Host only.** The ids whose seat a new id of the same key took over, so their Hello is answered
      * with `Farewell(supersededBy)` rather than a challenge (#3159, Task 1.7): see [SupersededIds].
      * Guarded by [lock]; written by [supersedeSeat] and [admitMember], read by the Hello gate.
@@ -2446,8 +2462,9 @@ internal class SeamRoom(
     private fun restoreSeat(held: Member, owesBurst: Boolean): SeatOutcome {
         val member = checkNotNull(updateMemberLiveness(held.id, Liveness.Connected)) { "the seat was read under this lock" }
         // In the section that restored the seat, like [markRecovered]'s `Recovered`, so a heal the
-        // decision saw is announced before this restore and never after it.
-        emitEvent(MembershipEvent.Resumed(held.id))
+        // decision saw is announced before this restore and never after it. Once per return: a retry
+        // that reaches a seat this return already restored is answered, not announced again.
+        if (restoredReturns.add(held.id)) emitEvent(MembershipEvent.Resumed(held.id))
         val burst = if (owesBurst) AdmissionBurst(member, admittedById.values.filter { it.id != held.id }, resumeSecrets[held.id]) else null
         return SeatOutcome.Restored(burst, endedPause = held.liveness is Liveness.Partitioned)
     }
@@ -3330,6 +3347,8 @@ internal class SeamRoom(
             episodeDetectedAtMs[peerId] = at.toEpochMilliseconds()
             // A new episode: whatever restore an earlier Proof left unechoed is over (see [proofResumes]).
             proofResumes.remove(peerId)
+            // ...and the return a Proof restored is over: the next restore is a new one (see [restoredReturns]).
+            restoredReturns.remove(peerId)
             // Null only for a peer that is not admitted, already excluded above.
             updateMemberLiveness(peerId, level) ?: return
             (existing != null) to level
@@ -4776,6 +4795,7 @@ internal class SeamRoom(
         episodeDetectedAtMs.remove(peerId)
         windowOpenedEpisodeMs.remove(peerId)
         proofResumes.remove(peerId)
+        restoredReturns.remove(peerId)
         // Pruned with the member, keeping `resumeSecrets.keys == admittedById.keys` (#3165).
         resumeSecrets.remove(peerId)
         // A later admission gets a fresh inbox; close this admission's inbox outside the lock.
@@ -5244,6 +5264,7 @@ internal class SeamRoom(
             admittedById.clear()
             episodeDetectedAtMs.clear()
             windowOpenedEpisodeMs.clear()
+            restoredReturns.clear()
             // With the members it belongs to, keeping `resumeSecrets.keys == admittedById.keys`.
             resumeSecrets.clear()
             supersededIds.clear()
