@@ -256,6 +256,7 @@ class GrantTest {
     fun aSignatureOfTheWrongSizeIsRefused() = runTest {
         val short = object : DeviceKey {
             override val id: DidKey = ISSUER
+            @IdentityInternalApi
             override suspend fun sign(message: ByteArray): ByteArray = ByteArray(63)
         }
         assertFailsWith<IllegalStateException> {
@@ -298,6 +299,7 @@ class GrantTest {
 
     /** A key whose name is fixed and whose "signature" is a constant, so a layout can be a golden vector. */
     private class FixedKey(override val id: DidKey) : DeviceKey {
+        @IdentityInternalApi
         override suspend fun sign(message: ByteArray): ByteArray = SIGNATURE.copyOf()
 
         companion object {

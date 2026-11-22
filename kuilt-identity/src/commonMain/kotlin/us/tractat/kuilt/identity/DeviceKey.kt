@@ -48,7 +48,9 @@ public interface DeviceKey {
      * statement can start with. This member is behind [IdentityInternalApi] for that reason (#3600).
      *
      * A key implemented outside kuilt, such as one held in a Secure Enclave, still implements this,
-     * and Kotlin asks the override to opt in too: annotate it `@OptIn(IdentityInternalApi::class)`.
+     * and Kotlin asks the override to opt in too. Mark it `@IdentityInternalApi`, as every key in
+     * kuilt does, so a caller holding the concrete type still has to opt in. `@OptIn` on the
+     * override compiles as well, but lifts the gate for that caller.
      *
      * @throws IllegalStateException when this platform's cryptographic provider cannot sign here.
      */
@@ -87,6 +89,7 @@ internal class SoftwareDeviceKey private constructor(
     private val privateKey: ECDSA.PrivateKey,
     override val id: DidKey,
 ) : DeviceKey {
+    @IdentityInternalApi
     override suspend fun sign(message: ByteArray): ByteArray = providerCall(::signingFailed) {
         privateKey.signatureGenerator(SHA256, ECDSA.SignatureFormat.RAW).generateSignature(message)
     }

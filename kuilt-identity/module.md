@@ -24,8 +24,9 @@ key signs `app/<context>` in front of the message, a header no statement of kuil
 with, so an app that signs whatever a peer sends it can never be talked into signing a proof that
 lets the peer in as this device. A `kuilt` or `kuilt/…` context is refused for the same reason. The
 raw `sign` underneath is `@IdentityInternalApi`: kuilt's own statements use it, an app does not.
-A key implemented outside kuilt, such as a Secure Enclave key, still implements `sign`, and its
-override opts in with `@OptIn(IdentityInternalApi::class)`.
+A key implemented outside kuilt, such as a Secure Enclave key, still implements `sign`, and marks
+its override `@IdentityInternalApi` too. That keeps the gate on a caller holding the concrete type;
+an `@OptIn` on the override would compile, and would let such a caller sign raw bytes unmarked.
 
 The pass. A `Grant` is a host's signed promise that one device may come back: to one room, or to
 any room that host runs, until a time the host picks, or for good. The device keeps it and shows it

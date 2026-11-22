@@ -344,6 +344,7 @@ private fun BigInteger.toFixedWidth(): ByteArray? {
  * raw `r ‖ s` [DeviceKey.sign] promises. Holds no key bytes, since the Keystore never hands them over.
  */
 internal class KeystoreDeviceKey(override val id: DidKey, private val signer: KeystoreSigner) : DeviceKey {
+    @IdentityInternalApi
     override suspend fun sign(message: ByteArray): ByteArray {
         val der = try {
             signer.signDer(message)

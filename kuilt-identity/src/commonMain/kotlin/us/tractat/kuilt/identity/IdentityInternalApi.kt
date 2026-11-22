@@ -10,7 +10,9 @@ package us.tractat.kuilt.identity
  * module boundary, so those declarations are `public` in the binary and gated here instead.
  *
  * The raw [DeviceKey.sign] is gated here too, since it can sign those statements' bytes. An app
- * signs with [signApp]. A `DeviceKey` implemented outside kuilt opts in on its `sign` override.
+ * signs with [signApp]. A `DeviceKey` implemented outside kuilt marks its `sign` override with this
+ * annotation too, not with `@OptIn`: the marker carries the gate to callers of the concrete type,
+ * where an `@OptIn` on the override would lift it for them.
  *
  * An annotated declaration may change shape or disappear in any release, patch releases included.
  * Opting in from outside kuilt's own modules means depending on that.

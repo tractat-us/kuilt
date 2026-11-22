@@ -274,6 +274,7 @@ internal suspend fun nameOf(publicKey: JsAny): DidKey? {
  * bytes.
  */
 internal class WebCryptoDeviceKey(override val id: DidKey, internal val privateKey: JsAny) : DeviceKey {
+    @IdentityInternalApi
     override suspend fun sign(message: ByteArray): ByteArray {
         val signature = cryptoCall<JsAny>("signing") { onSuccess, onError ->
             subtleSign(privateKey, message.toUint8Array(), onSuccess, onError)
