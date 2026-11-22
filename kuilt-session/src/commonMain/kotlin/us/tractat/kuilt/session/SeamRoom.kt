@@ -2809,8 +2809,15 @@ internal class SeamRoom(
      * joiner's latest Hello it may also close a reconnect ([closeReconnect], #3159 Task 1.7).
      */
     private fun handleWelcome(sender: PeerId, welcome: AdmitMessage.Welcome) {
-        val closesReconnect = lock.withLock { acceptWelcome(sender, welcome) }
-        if (closesReconnect) closeReconnect(sender, restored = welcome.returnKind == ReturnKind.Restored)
+        // One critical section: whether the sender is a challenger of the latest Hello, and the flight
+        // that Hello's attempt owns, are read together, as a Reject's are. Two sections left a gap in
+        // which a caller's resume() could install its flight and forget that Hello, and this Welcome,
+        // answering a Hello the flight never sent, then took it (review round 2 on #3614).
+        val (flight, verdict) = lock.withLock {
+            if (!acceptWelcome(sender, welcome)) return
+            closeReconnect(sender, restored = welcome.returnKind == ReturnKind.Restored)
+        } ?: return
+        flight?.complete(verdict)
     }
 
     /**
@@ -2914,8 +2921,12 @@ internal class SeamRoom(
     }
 
     /**
-     * **Joiner only.** The host's `Welcome` to this member answered its latest Hello (#3159, Task
-     * 1.7): close the reconnect it was sent for, if one is under way, and settle the flight.
+     * **Joiner only; under [lock].** The host's `Welcome` to this member answered its latest Hello
+     * (#3159, Task 1.7): close the reconnect it was sent for, if one is under way, and take the
+     * flight. Returns the flight (null between attempts) and the verdict [handleWelcome] completes it
+     * with once it releases the lock, or null when there is neither a flight nor an episode to close.
+     * Called in the section that found the sender a challenger of the latest Hello, so no flight
+     * installed after that Hello was forgotten can be taken here.
      *
      * [restored]: the Welcome is marked `ReturnKind.Restored`, so the seat came back, and the room
      * emits [MembershipEvent.Resumed] for itself, as the `ResumeAck` it replaces did. Unmarked, the
@@ -2938,20 +2949,20 @@ internal class SeamRoom(
      * latest Hello it answered, so neither a foreign host nor a late answer to an older Hello closes
      * one.
      */
-    private fun closeReconnect(sender: PeerId, restored: Boolean) {
-        val (flight, closes) = lock.withLock {
-            val taken = resumeMachine?.takeFlightForWelcome() ?: return
-            if (taken.second) {
-                val wasPartitioned = admittedById[sender]?.liveness is Liveness.Partitioned
-                updateMemberLiveness(sender, Liveness.Connected)
-                when {
-                    restored -> emitEvent(MembershipEvent.Resumed(selfId))
-                    wasPartitioned -> emitEvent(MembershipEvent.Recovered(sender, clock()))
-                }
+    private fun closeReconnect(
+        sender: PeerId,
+        restored: Boolean,
+    ): Pair<CompletableDeferred<ResumeResult.JoinerOutcome>?, ResumeResult.JoinerOutcome>? {
+        val (flight, closes) = resumeMachine?.takeFlightForWelcome() ?: return null
+        if (closes) {
+            val wasPartitioned = admittedById[sender]?.liveness is Liveness.Partitioned
+            updateMemberLiveness(sender, Liveness.Connected)
+            when {
+                restored -> emitEvent(MembershipEvent.Resumed(selfId))
+                wasPartitioned -> emitEvent(MembershipEvent.Recovered(sender, clock()))
             }
-            taken
         }
-        flight?.complete(if (closes && restored) ResumeResult.Success else ResumeResult.WindowClosed)
+        return flight to if (closes && restored) ResumeResult.Success else ResumeResult.WindowClosed
     }
 
     /**
