@@ -148,4 +148,62 @@ class ReHelloAdmissionTest {
         )
         h.room.leave()
     }
+
+    /**
+     * The superseded id is told only while its successor holds the seat (review round 1 on #3614).
+     * Once bob-2 says Goodbye there is no membership for bob-1's Hello to take back, so the record is
+     * not consulted: bob-1 is challenged as any Hello is. Whether a superseded id may come back while
+     * its successor is still seated is a separate question, and not this one.
+     */
+    @Test
+    fun aSupersededIdIsChallengedOnceItsSuccessorLeft() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val h = rawHost(joiners = setOf(bob1, bob2))
+        h.admit(bob1, bobDevice, nonce = 1)
+        h.partition(bob1, alive = emptySet())
+        h.admit(bob2, bobDevice, nonce = 2)
+        assertEquals(listOf(bob2), h.room.roster.value.map { it.id }, "rig: bob-2 took bob-1's seat over")
+        h.say(bob2, AdmitMessage.Goodbye)
+        assertEquals(emptyList(), h.room.roster.value.map { it.id }, "rig: bob-2 left")
+        val challengesToBob1 = h.challengesTo(bob1).size
+        val sentToBob1 = h.sentTo(bob1).size
+
+        h.say(bob1, h.hello("bob-1", bobDevice.id, nonce = 3))
+
+        assertAll(
+            { assertEquals(challengesToBob1 + 1, h.challengesTo(bob1).size, "bob-1 is challenged") },
+            {
+                assertTrue(
+                    h.sentTo(bob1).drop(sentToBob1).none { it is AdmitMessage.Farewell },
+                    "bob-1 is not told it was superseded by an id that has gone: ${h.sentTo(bob1).drop(sentToBob1)}",
+                )
+            },
+        )
+        h.room.leave()
+    }
+
+    /**
+     * The Proof-time half of the same rule: bob-1's challenge was drawn before the takeover, bob-2 has
+     * since left, and bob-1's proof now seats it rather than telling it about a membership that ended.
+     */
+    @Test
+    fun aSupersededIdsProofIsSeatedOnceItsSuccessorLeft() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val h = rawHost(joiners = setOf(bob1, bob2))
+        h.admit(bob1, bobDevice, nonce = 1)
+        h.partition(bob1, alive = emptySet())
+        h.say(bob1, h.hello("bob-1", bobDevice.id, nonce = 3))
+        val early = h.challengesTo(bob1).last()
+        h.admit(bob2, bobDevice, nonce = 2)
+        assertEquals(listOf(bob2), h.room.roster.value.map { it.id }, "rig: bob-2 took bob-1's seat over while bob-1's challenge was open")
+        h.say(bob2, AdmitMessage.Goodbye)
+        assertEquals(emptyList(), h.room.roster.value.map { it.id }, "rig: bob-2 left")
+        val sentToBob1 = h.sentTo(bob1).size
+
+        h.say(bob1, h.proof(early, bobDevice, bob1))
+
+        assertAll(
+            { assertTrue(h.sentTo(bob1).drop(sentToBob1).none { it is AdmitMessage.Farewell }, "bob-1 is not told: ${h.sentTo(bob1).drop(sentToBob1)}") },
+            { assertEquals(listOf(bob1), h.room.roster.value.map { it.id }, "bob-1 is seated") },
+        )
+        h.room.leave()
+    }
 }
