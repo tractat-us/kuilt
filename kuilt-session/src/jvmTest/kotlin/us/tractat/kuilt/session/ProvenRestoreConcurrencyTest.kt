@@ -858,7 +858,7 @@ class ProvenRestoreConcurrencyTest {
 
         /** Forget every challenge no exchange took, so a later round reads only its own. */
         fun drainChallenges() {
-            challenges.values.forEach { channel -> while (channel.tryReceive().isSuccess) Unit }
+            challenges.values.forEach { channel -> do { val left = channel.tryReceive() } while (left.isSuccess) }
         }
 
         /**
