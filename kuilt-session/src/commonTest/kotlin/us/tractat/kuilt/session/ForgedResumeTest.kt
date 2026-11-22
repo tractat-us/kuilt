@@ -54,6 +54,10 @@ import kotlin.time.Instant
  * is what proves the refusal left the window unspent. The window is opened by driving the host's
  * real [DefaultJoinerReconnectController] directly (the same seam `:kuilt-conformance`'s resume rig
  * uses), and its opening is asserted before any resume is attempted.
+ *
+ * **Every `Resume` here is written by hand ([presentResume]).** Since #3159 Task 1.7 no room sends
+ * one — a reconnect says Hello again — but the host still answers the frame until Task 1.8 retires
+ * it (#3612), so its checks stay pinned against frames an attacker would write.
  */
 class ForgedResumeTest {
     /** The number the next fake device gets: every store made in a test is a new device, so no two
@@ -122,8 +126,8 @@ class ForgedResumeTest {
                     issuedAt = 0L,
                     secret = ResumeSecret.generate(),
                 )
-                val forgedResult = attacker.resume(forged)
-                val realResult = victim.resume(victimToken)
+                val forgedResult = presentResume(loom, host, forged) { observed.verdicts }
+                val realResult = presentResume(loom, host, victimToken) { observed.verdicts }
 
                 assertAll(
                     {
@@ -190,7 +194,7 @@ class ForgedResumeTest {
                     ),
                 )
                 val reject = reply.await()
-                val realResult = victim.resume(victimToken)
+                val realResult = presentResume(loom, host, victimToken) { observed.verdicts }
 
                 assertAll(
                     { assertEquals(RejectCode.ResumeTokenInvalid, reject.code, "a secretless resume is refused") },
@@ -240,14 +244,14 @@ class ForgedResumeTest {
 
                 // Episode 1: a genuine resume, sent while the bystander records everything.
                 openWindowFor(victim.selfId, observed)
-                val first = victim.resume(victimToken)
+                val first = presentResume(loom, host, victimToken) { observed.verdicts }
 
                 // Episode 2: the bystander forges first, with any secret of the victim's it captured.
                 openWindowFor(victim.selfId, observed)
                 val captured = sniffed.mapNotNull { it.secretFor(victim.selfId) }
                 val forged = victimToken.copy(secret = captured.firstOrNull() ?: ResumeSecret.generate())
-                val forgedResult = bystander.resume(forged)
-                val second = victim.resume(victimToken)
+                val forgedResult = presentResume(loom, host, forged) { observed.verdicts }
+                val second = presentResume(loom, host, victimToken) { observed.verdicts }
 
                 val ownWelcome = sniffed.filterIsInstance<AdmitMessage.Welcome>()
                     .single { it.assignedPeerId == bystander.selfId.value }
@@ -364,8 +368,8 @@ class ForgedResumeTest {
                 val openedFor = opened.await().peerId
 
                 val forged = ResumeToken(victim.selfId, RoomId("not-this-room"), 0L, ResumeSecret.generate())
-                val forgedResult = attacker.resume(forged)
-                val victimResult = victim.resume(victimToken)
+                val forgedResult = presentResume(loom, host, forged) { verdicts }
+                val victimResult = presentResume(loom, host, victimToken) { verdicts }
 
                 assertAll(
                     { assertEquals(victim.selfId, openedFor, "precondition: the victim's window must be open") },
@@ -421,7 +425,7 @@ class ForgedResumeTest {
 
                 victim.leave() // Goodbye: the host removes the member and its secret; the window stays open.
                 host.roster.first { it.size == 1 }
-                val forgedResult = attacker.resume(ResumeToken(victimId, roomId, 0L, ResumeSecret.generate()))
+                val forgedResult = presentResume(loom, host, ResumeToken(victimId, roomId, 0L, ResumeSecret.generate())) { observed.verdicts }
                 advanceTimeBy(DefaultJoinerReconnectController.DEFAULT_RECONNECT_WINDOW_MS + 1_000)
                 runCurrent()
 
@@ -451,6 +455,48 @@ class ForgedResumeTest {
                 host.leave()
             }
         }
+
+    private var nextPresenter = 0
+
+    /**
+     * Present [token] to [host] as a `Resume` frame from a fresh, unadmitted peer on [loom], and read
+     * the host's answer: its `Reject`, which goes to the sender, as [ResumeResult.Refused]; or, when
+     * the host's controller granted the resume (it sends its `ResumeAck` to the token's member, not to
+     * the sender), [ResumeResult.Success] from the verdict [verdicts] gained. The host's checks key on
+     * the frame's fields, never its sender, so the presenter stands for whoever wrote the frame.
+     */
+    private suspend fun TestScope.presentResume(
+        loom: InMemoryLoom,
+        host: Room,
+        token: ResumeToken,
+        verdicts: () -> List<ResumeResult.HostVerdict>,
+    ): ResumeResult.JoinerOutcome {
+        val presenter = loom.join(InMemoryTag("presenter-${nextPresenter++}"))
+        try {
+            presenter.peers.first { host.selfId in it }
+            val reply = async {
+                presenter.incoming.mapNotNull { AdmitMessage.decode(it.toByteArray()) as? AdmitMessage.Reject }.first()
+            }
+            runCurrent()
+            val before = verdicts().size
+            presenter.sendTo(
+                host.selfId,
+                AdmitMessage.encode(AdmitMessage.Resume(token.peerId.value, token.roomId.value, token.issuedAt, token.secret)),
+            )
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+            val outcome = when {
+                reply.isCompleted -> reply.await().let { ResumeResult.Refused(it.reason, it.code) }
+                ResumeResult.Success in verdicts().drop(before) -> ResumeResult.Success
+                else -> ResumeResult.TimedOut
+            }
+            reply.cancel()
+            return outcome
+        } finally {
+            presenter.close()
+        }
+    }
 
     /** The victim secret a frame carries, if any — what a sniffing bystander would harvest. */
     private fun AdmitMessage.secretFor(victim: PeerId): ResumeSecret? = when (this) {
