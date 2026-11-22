@@ -266,6 +266,16 @@ Iain's rulings on the open questions posted on #3159 on 2026-11-20/21. They over
 - **Before the 0.7.7 tag (#3600):** the raw `DeviceKey.sign` goes behind `@IdentityInternalApi`, and a public `signApp(context, message)` signs under an `app/<context>` prefix and refuses a `kuilt/` context. This is its own task and PR.
 - **Release:** kuilt ships 0.7.7 with no compatibility window. fireworks-compose sequences its own app and server rollout, and its upgrade notice says so.
 
+## Amendment D — rulings of 2026-11-22 (during Task 1.7's review)
+
+These are Iain's rulings on the open questions raised by the code and spec-conformance reviews of #3614. Where they differ from the tasks below, the rulings win.
+
+- **1.7: `Room.resume` keeps returning `WindowClosed` for a fresh admission until 1.8.** This is a known regression: until then a caller cannot tell "you have a new seat" from "the room is over". 1.8 removes `Room.resume` (Decided 31). It must also retire or reshape the TCK property `aReturnAfterTheSeatWentIsAFreshAdmission`, which encodes that ambiguous value.
+- **A fresh admission gets its own joiner-side signal, and the joiner rebuilds its roster** from the admission burst, which the host's intro closes. That is not `Recovered(host)`, whose KDoc means "before the window expired". It is a new slice, #3615, which lands before 1.9. Until it lands, the joiner emits `Recovered(host)`.
+- **Peer ids are per-process.** A new process must not reuse a superseded id under the same key. While the successor holds a seat, the host keeps answering that id's Hello with `Farewell(supersededBy)`. Once the successor's seat is gone, the id is admitted normally (#3614 round 1). No time-based expiry and no wire mark. The `SupersededIds` KDoc and the rejoin docs say this.
+- **`Resumed` fires once per return.** If a retry Hello reaches a seat the host has already restored for the same return, it must not emit `Resumed` again. 1.7 adds the guard.
+- **Follow-up:** #3616 covers what is left of the verified-challenger rule: a `Reject` that echoes its challenge nonce (a wire change), `sender == hostPeerId` on reconnect, and terminal Hello-gate refusals during a reconnect.
+
 ## Global Constraints
 
 - **Each task is one PR and one sub-issue of #3159.**
