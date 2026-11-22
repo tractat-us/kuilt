@@ -29,7 +29,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
-import us.tractat.kuilt.session.admit.RejectCode
+import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -223,16 +223,16 @@ class JoinerReconnectTest {
         }
 
     @Test
-    fun `host reject during resume relabels HostLost as Refused`() =
+    fun `a reconnect after the host's window closed is readmitted rather than HostLost`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
 
-            // Host gets a SHORT reconnect window so, by the time the joiner re-weaves and Resumes,
-            // the host has no open window for it → tryResume → WindowClosed → Reject("resume-window-
-            // closed"). The joiner keeps a long (fast-config) window and retries, so the reject is
-            // recorded but not obeyed; the window then expires → HostLost(Refused).
+            // Host gets a SHORT reconnect window so, by the time the joiner re-weaves and says Hello
+            // again, the host has let the seat go. Before #3159 Task 1.7 the joiner's `Resume` was then
+            // refused terminally and the room ended HostLost(Refused). A Hello is admitted afresh
+            // instead, and the room keeps that admission (Amendment C): no HostLost at all.
             val hostConfig = HeartbeatConfig(
                 interval = 100.milliseconds,
                 timeout = 200.milliseconds,
@@ -249,7 +249,7 @@ class JoinerReconnectTest {
                 random = Random(13L),
             )
             val hostSeam = serverLoom.host(Pattern("table-7"))
-            SeamRoom(
+            val hostRoom = SeamRoom(
                 seam = hostSeam,
                 role = SessionRole.Host,
                 memberName = "table-7",
@@ -290,7 +290,9 @@ class JoinerReconnectTest {
             joinerRoom.roster.first { it.isNotEmpty() }
             assertNotNull(joinerRoom.resumeToken, "joiner must hold a resume token after admit")
 
-            val hostLost = async { joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
+            val joinerLog = EventLog(joinerRoom, backgroundScope)
+            val hostLog = EventLog(hostRoom, backgroundScope)
+            val hostMark = hostLog.mark()
 
             muxClient.closeBase()
 
@@ -298,14 +300,12 @@ class JoinerReconnectTest {
             // step so the reconnect deadline is reached.
             repeat(9) { clockMs += 100L; advanceTimeBy(100L) }
 
-            val event = hostLost.await()
-            assertIs<MembershipEvent.HostLost>(event)
-            // The teeth: a reject was seen and its cause carried — NOT the plain WindowExpired that
-            // fires when no reject arrives. The window had genuinely closed, so the host codes it
-            // terminal and the joiner stops early rather than retrying to its own deadline (#1572).
-            assertEquals(
-                FailureReason.Refused("resume-window-expired", RejectCode.ResumeWindowExpired),
-                event.reason,
+            val hostEdges = hostLog.edgesSince(hostMark)
+            assertAll(
+                { assertIs<MembershipEvent.Left>(hostEdges.firstOrNull(), "rig: the host let the seat go: ${hostEdges.joinToString { it.describe() }}") },
+                { assertEquals(listOf(joinerRoom.selfId), hostEdges.filterIsInstance<MembershipEvent.Joined>().map { it.member.id }, "readmitted once") },
+                { assertTrue(joinerLog.since(0).none { it is MembershipEvent.HostLost }, joinerLog.since(0).joinToString { it.describe() }) },
+                { assertTrue(joinerRoom.roster.value.any { it.liveness == Liveness.Connected }, "the joiner is in session with its host") },
             )
         }
 
