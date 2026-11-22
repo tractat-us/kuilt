@@ -93,6 +93,10 @@ public data class QuilterConfig(
      * queued, the next mismatched digest asks again, and a second whole state is in flight. The
      * bound then caps requests at one per timeout rather than at one outstanding. Set it above the
      * worst lag you expect a whole state to take to cross the link.
+     *
+     * A large timeout costs nothing per join: the first digest a peer sends on a new link is
+     * normally its first-contact announcement, which the peer will not answer a request for, so a
+     * request it prompts does not hold the bound.
      */
     @IntroducedAt("0.7.7") val fullStateRequestTimeout: Duration = 30.seconds,
     /**
@@ -100,11 +104,14 @@ public data class QuilterConfig(
      * while that peer has not yet acknowledged all of this replica's own deltas (#3617).
      *
      * A digest compares the sender's state against ours. When the sender has not acked our latest
-     * delta, the mismatch is most likely our own write still on its way to it, and asking for its
-     * whole state would ship a state that is about to converge anyway. So the request is skipped.
-     * The skip is capped because the digest exchange is the only backstop for a relayed delta that
-     * was lost: after this many consecutive skips from one peer the next mismatch requests anyway,
-     * and the count starts again. A matched digest or a sent request resets it. `0` never skips.
+     * delta and that delta is younger than [antiEntropyInterval], the mismatch is most likely our
+     * own write still on its way to it, and asking for its whole state would ship a state that is
+     * about to converge anyway. So the request is skipped. An unacked delta older than that is
+     * presumed lost, as after a partition, and is never a reason to skip. The skip is capped too,
+     * because a replica writing more often than the interval always has a young delta and the
+     * digest exchange is the only backstop for a relayed delta that was lost: after this many
+     * consecutive skips from one peer the next mismatch requests anyway, and the count starts
+     * again. A matched digest or a sent request resets it. `0` never skips.
      *
      * Applies only to peers in the delta-target set, the peers this replica pushes deltas to: a
      * peer outside it never receives our deltas, so it never acks them, and the skip would only
@@ -451,6 +458,24 @@ public class Quilter<S : Quilted<S>>(
      */
     private val fullStateSlots: MutableMap<PeerId, FullStateSlot> = mutableMapOf()
 
+    /**
+     * When this replica last applied a local write, read from [clock] (#3617). It is what tells a
+     * delta still crossing the link from one that was lost: [mayRequestFullStateFrom] skips a
+     * digest only while our newest unacked write is younger than [QuilterConfig.antiEntropyInterval].
+     * Read only while some peer is behind on our deltas, so `nextSeq > 0` and it has been set.
+     * Under [lock].
+     */
+    private var lastLocalWriteAt: Long = 0L
+
+    /**
+     * Peers that have sent us a [QuiltMessage.RootDigest] since their current link came up (#3617).
+     * The first digest on a link is normally the peer's first-contact announcement
+     * ([announceDigestTo] on its side), which arms no grant. A request it prompts is therefore
+     * dropped unanswered, and must not hold [outstandingRequest] until the timeout. Cleared by
+     * [forgetLink]. Under [lock].
+     */
+    private val digestSeenThisLink: MutableSet<PeerId> = mutableSetOf()
+
     /** Counts anti-entropy iterations; logged each tick so virtual-time cycling is visible. */
     private var antiEntropyCount = 0L
 
@@ -459,6 +484,9 @@ public class Quilter<S : Quilted<S>>(
 
     /** Exposed internally so tests can observe known-peer state. */
     internal val knownPeersForTest: Set<PeerId> get() = knownPeers
+
+    /** Exposed internally so tests can observe which peers hold a whole-state send slot. */
+    internal val fullStateSlotsForTest: Set<PeerId> get() = lock.withLock { fullStateSlots.keys.toSet() }
 
     // ownJob, scope, and closed are inherited from ScopedCloseable.
 
@@ -534,11 +562,10 @@ public class Quilter<S : Quilted<S>>(
             pendingResendJobs.clear()
             pendingFullStateJobs.values.forEach { it.cancel() }
             pendingFullStateJobs.clear()
-            // Forgotten, not cancelled: their coroutines are children of [ownJob], which is
-            // cancelled straight after this, outside the lock. Cancelling a parked send here
-            // would run the seam's cancellation handler while this thread holds the lock.
-            fullStateSlots.clear()
-            outstandingRequest = null
+            // The whole-state senders are not touched here. They are children of [ownJob], which
+            // close cancels straight after this and outside the lock, and each one frees its own
+            // slot on the way out. Cancelling one here would run the seam's cancellation handler
+            // for a parked send while this thread holds the lock (see [forgetFullStateSlot]).
         }
     }
 
@@ -560,6 +587,7 @@ public class Quilter<S : Quilted<S>>(
         check(!closed) { "Quilter($replica) is closed" }
         _state.update { it.piece(patch) }
         val seq = ++nextSeq
+        lastLocalWriteAt = clock.now()
         pendingDeltas[seq] = patch.delta
         recomputeDeliveredLocal()
         broadcastDelta(seq, patch.delta, parent = writeSends)
@@ -794,11 +822,13 @@ public class Quilter<S : Quilted<S>>(
             // with ascending iteration numbers, immediately distinguishing the #329 signature.
             logger.debug { "[Quilter/$replica] anti-entropy iteration=$n peers=${seam.peers.value.size}" }
             // Lock the state work, NOT the delay (which must stay a suspension point outside it).
-            lock.withLock {
-                evictStalePeers()
-                gossipDelivered()
-                reconcileWithRandomPeer()
+            val orphaned = lock.withLock {
+                evictStalePeers().also {
+                    gossipDelivered()
+                    reconcileWithRandomPeer()
+                }
             }
+            orphaned.forEach { it.cancel() } // outside the lock: see [forgetFullStateSlot]
         }
     }
 
@@ -887,9 +917,9 @@ public class Quilter<S : Quilted<S>>(
      * where it used to hold one pre-encoded copy per request, each in its own coroutine. Asking is
      * never dropped: a request that lands mid-send is superseded by a newer state, not lost.
      *
-     * The slot is cleared when the peer leaves [Seam.peers] ([onPeersChanged]), when it is evicted,
-     * and on [close], so a send that died with an old link cannot leave a slot that refuses the
-     * next one. What that rests on: a [Seam.sendTo] to a link that is gone fails or returns, and
+     * The slot is cleared when the peer leaves [Seam.peers] ([onPeersChanged]) and when it is
+     * evicted, and its sender, a child of [ownJob], is cancelled by [close] and frees its own slot,
+     * so a send that died with an old link cannot leave a slot that refuses the next one. What that rests on: a [Seam.sendTo] to a link that is gone fails or returns, and
      * does not hang. A send that hangs on a peer still in [Seam.peers] holds the slot for as long
      * as it hangs.
      */
@@ -930,10 +960,18 @@ public class Quilter<S : Quilted<S>>(
         }
     }
 
-    /** Frees [peer]'s send slot and cancels its sender, if it has one. Under [lock]. */
-    private fun clearFullStateSlot(peer: PeerId) {
-        fullStateSlots.remove(peer)?.job?.cancel()
-    }
+    /**
+     * Frees [peer]'s send slot and returns its sender, if it had one, **for the caller to cancel
+     * once it has released [lock]**. Under [lock].
+     *
+     * The sender is usually parked in [Seam.sendTo], so cancelling it runs the seam's cancellation
+     * handlers synchronously on the cancelling thread. Under the lock, a handler that waits on a
+     * thread which needs the lock would deadlock, and the [close] path is pinned by
+     * `QuilterConcurrencyTest` to hold no lock while sends are cancelled. Freeing the slot first is
+     * what matters for correctness: a new request gets a fresh slot at once, and the old sender,
+     * if it finishes before the cancel lands, finds its slot gone and exits.
+     */
+    private fun forgetFullStateSlot(peer: PeerId): Job? = fullStateSlots.remove(peer)?.job
 
     /**
      * FNV-1a 64 over the state as it would appear on the wire. Must be called under [lock].
@@ -981,13 +1019,14 @@ public class Quilter<S : Quilted<S>>(
         }
     }
 
-    private fun evictStalePeers() {
+    /** Returns the whole-state senders it orphaned, for the caller to cancel outside [lock]. */
+    private fun evictStalePeers(): List<Job> {
         val currentPeers = seam.peers.value
         val now = clock.now()
         val toEvict = knownPeers
             .filter { peer -> peer !in currentPeers && isStale(peer, now) }
             .toSet()
-        if (toEvict.isEmpty()) return
+        if (toEvict.isEmpty()) return emptyList()
 
         // W1 (ADR §4.6) — retain-capture-BEFORE-drop atomicity. Fold every evicting peer's
         // last-gossiped row into `retainedFrontier` (retain rule §4.3) FIRST, then drop the
@@ -998,7 +1037,7 @@ public class Quilter<S : Quilted<S>>(
         toEvict.forEach { peer ->
             frontiers[peer]?.let { retainedFrontier = retainedFrontier.ceilWith(it) }
         }
-        toEvict.forEach { peer ->
+        val orphaned = toEvict.mapNotNull { peer ->
             knownPeers.remove(peer)
             frontiers.remove(peer)
             ackedThrough.remove(peer)
@@ -1010,6 +1049,7 @@ public class Quilter<S : Quilted<S>>(
         }
         recomputeUniversalAck()
         recomputeCut()
+        return orphaned
     }
 
     private fun isStale(peer: PeerId, nowMs: Long): Boolean {
@@ -1031,21 +1071,26 @@ public class Quilter<S : Quilted<S>>(
         }
     }
 
-    private fun onPeersChanged(currentPeers: Set<PeerId>): Unit = lock.withLock {
-        // A departure keeps the peer in [knownPeers] until eviction, so a quick rejoin is not "new"
-        // and gets no first-contact state; it heals through [onFullState]'s push-back instead. That
-        // push-back must find a free send slot, not one held by a send that died with the old link.
-        (knownPeers - currentPeers).forEach(::forgetLink)
-        val newPeers = currentPeers - seam.selfId - knownPeers
-        knownPeers += currentPeers - seam.selfId
-        newPeers.forEach { peer ->
-            sendFullStateTo(peer)
-            announceDigestTo(peer)
+    private fun onPeersChanged(currentPeers: Set<PeerId>) {
+        val orphaned = lock.withLock {
+            // A departure keeps the peer in [knownPeers] until eviction, so a quick rejoin is not
+            // "new" and gets no first-contact state; it heals through [onFullState]'s push-back
+            // instead. That push-back must find a free send slot, not one held by a send that died
+            // with the old link.
+            val orphaned = (knownPeers - currentPeers).mapNotNull(::forgetLink)
+            val newPeers = currentPeers - seam.selfId - knownPeers
+            knownPeers += currentPeers - seam.selfId
+            newPeers.forEach { peer ->
+                sendFullStateTo(peer)
+                announceDigestTo(peer)
+            }
+            // A new peer that has not gossiped contributes EMPTY to `min over live` — but the
+            // cut is monotonic, so it cannot lower `S`. Safe: the joiner is FullState-synced and
+            // has no concurrent history to orphan (ADR §4.5). Recompute so membership is reflected.
+            if (newPeers.isNotEmpty()) recomputeCut()
+            orphaned
         }
-        // A new peer that has not gossiped contributes EMPTY to `min over live` — but the
-        // cut is monotonic, so it cannot lower `S`. Safe: the joiner is FullState-synced and
-        // has no concurrent history to orphan (ADR §4.5). Recompute so membership is reflected.
-        if (newPeers.isNotEmpty()) recomputeCut()
+        orphaned.forEach { it.cancel() } // outside the lock: see [forgetFullStateSlot]
     }
 
     /**
@@ -1323,13 +1368,18 @@ public class Quilter<S : Quilted<S>>(
      */
     private fun onRootDigest(sender: PeerId, msg: QuiltMessage.RootDigest<S>) {
         everSentUsDigest.add(sender)
+        val firstOnThisLink = digestSeenThisLink.add(sender)
         if (msg.root == stateRoot()) {
             staleDigestSkips.remove(sender)
             resyncReceiveCursor(sender, msg.sender, msg.upThrough)
             return
         }
         if (!mayRequestFullStateFrom(sender)) return
-        armOutstandingRequest(sender)
+        // The first digest on a link is normally the peer's grant-free announcement, so the peer
+        // will drop this request as unsolicited and no reply is coming: holding the bound for it
+        // would shut every request out until the timeout, once per join. If the announcement was
+        // lost and this is a real tick, one reply ships outside the bound, once per link.
+        if (!firstOnThisLink) armOutstandingRequest(sender)
         val bytes = encode(QuiltMessage.FullStateRequest<S>(requester = replica, sender = msg.sender))
         scope.launch {
             runCatchingCancellable { seam.sendTo(sender, bytes) }
@@ -1342,9 +1392,13 @@ public class Quilter<S : Quilted<S>>(
      *
      * No, while this replica already has a request in flight to anyone ([outstandingRequest]): one
      * whole state at a time is the bound. No, too, while [sender] is a delta target that has not
-     * acked all our own deltas, since the mismatch is then most likely our write still on its way
-     * there; but only [QuilterConfig.staleDigestSkipLimit] times in a row, so a lost relayed delta
-     * still gets its backstop. A skip from the in-flight bound does not count against that limit.
+     * acked our newest write **and** that write is younger than [QuilterConfig.antiEntropyInterval],
+     * since the mismatch is then most likely that write still on its way there. An unacked write
+     * older than that is presumed lost, as after a partition, and nothing else re-sends it until a
+     * later write reveals the gap, so the digest is answered at once. Even a recent write is
+     * skipped for only [QuilterConfig.staleDigestSkipLimit] digests in a row, because a replica
+     * that writes more often than the interval always has a recent one. A skip from the in-flight
+     * bound does not count against that limit.
      */
     private fun mayRequestFullStateFrom(sender: PeerId): Boolean {
         outstandingRequest?.let { inFlight ->
@@ -1352,8 +1406,10 @@ public class Quilter<S : Quilted<S>>(
             return false
         }
         val skips = staleDigestSkips[sender] ?: 0
-        val behindOnOurDeltas = (ackedThrough[sender] ?: 0L) < nextSeq && sender in deltaTargets(knownPeers)
-        if (behindOnOurDeltas && skips < config.staleDigestSkipLimit) {
+        val ourWriteInFlight = (ackedThrough[sender] ?: 0L) < nextSeq &&
+            clock.now() - lastLocalWriteAt < config.antiEntropyInterval.inWholeMilliseconds &&
+            sender in deltaTargets(knownPeers)
+        if (ourWriteInFlight && skips < config.staleDigestSkipLimit) {
             staleDigestSkips[sender] = skips + 1
             return false
         }
@@ -1382,13 +1438,18 @@ public class Quilter<S : Quilted<S>>(
 
     /**
      * Drops what this replica holds against [peer]'s current link: its whole-state send slot, the
-     * request in flight to it, and its skip count. Called when [peer] leaves [Seam.peers] and when
-     * it is evicted. A frame lost with the old link must not leave either bound shut. Under [lock].
+     * request in flight to it, its skip count, and whether it has sent a digest on this link.
+     * Called when [peer] leaves [Seam.peers] and when it is evicted. A frame lost with the old link
+     * must not leave either bound shut. Under [lock].
+     *
+     * @return the orphaned whole-state sender, if any, which the caller cancels after releasing
+     *   [lock] ([forgetFullStateSlot]).
      */
-    private fun forgetLink(peer: PeerId) {
-        clearFullStateSlot(peer)
+    private fun forgetLink(peer: PeerId): Job? {
         if (outstandingRequest?.peer == peer) clearOutstandingRequest()
         staleDigestSkips.remove(peer)
+        digestSeenThisLink.remove(peer)
+        return forgetFullStateSlot(peer)
     }
 
     /**
