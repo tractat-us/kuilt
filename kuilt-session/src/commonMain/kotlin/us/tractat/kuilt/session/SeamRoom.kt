@@ -1129,7 +1129,7 @@ internal class SeamRoom(
      *
      * After a re-weave heals [seam] onto a fresh generation, the old collect is still bound to
      * the dead generation (`ResumableChannel.incoming` binds `current()` once at collection start),
-     * so it must be cancelled and relaunched or the host's `ResumeAck` is never delivered. Tracked
+     * so it must be cancelled and relaunched or the host's answer to a reconnect is never delivered. Tracked
      * here so the [JoinerResumeMachine]'s reconnect (via [restartIncomingCollect]) can restart it
      * and [leave] can cancel it.
      */
@@ -1619,7 +1619,7 @@ internal class SeamRoom(
      *
      * Cancels any prior collector first. After a re-weave the previous collector is bound to the
      * dead generation (see [incomingCollectJob]); restarting binds a fresh collector to the healed
-     * generation, so the host's `ResumeAck` — buffered in the new channel's spool — is delivered.
+     * generation, so the host's answer to a re-Hello — buffered in the new channel's spool — is delivered.
      * The flip is under [lock]; the coroutine body's suspend work runs on the launched child.
      */
     private fun restartIncomingCollect() {
@@ -2765,8 +2765,8 @@ internal class SeamRoom(
      *
      * The self-admission welcome (`assignedPeerId == selfId`) mints [resumeToken] (once) from its
      * [RoomId] and the secret the host sent this member alone (#3165); no other shape mints, since
-     * no other shape carries this member's secret. It does not add self to the roster. Resume confirmations arrive as
-     * [AdmitMessage.ResumeAck], not as Welcome.
+     * no other shape carries this member's secret. It does not add self to the roster. When it answers this
+     * joiner's latest Hello it may also close a reconnect ([closeReconnect], #3159 Task 1.7).
      */
     private fun handleWelcome(sender: PeerId, welcome: AdmitMessage.Welcome) {
         val closesReconnect = lock.withLock { acceptWelcome(sender, welcome) }
