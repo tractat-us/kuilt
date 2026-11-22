@@ -29,6 +29,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.ReturnKind
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeToken
@@ -45,7 +46,8 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
- * A `ResumeAck` racing a joiner's expiring reconnect window must not resume a room that is ending
+ * The host's `Welcome` closing a joiner's reconnect — a `ResumeAck` before #3159 Task 1.7 — racing its
+ * expiring reconnect window must not resume a room that is ending
  * (#3094). The rule: the room's lock orders the ack against the window's verdict, and whichever
  * takes it first wins.
  *
@@ -78,7 +80,7 @@ class ResumeAckAfterHostLostTest {
     )
 
     @Test
-    fun `a ResumeAck handled after HostLost neither resumes the room nor reports Success`() =
+    fun `a closing Welcome handled after HostLost neither resumes the room nor reports Success`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = ScriptedSeam(joinerId, hostId)
             val (room, token) = admittedJoiner(seam)
@@ -91,7 +93,7 @@ class ResumeAckAfterHostLostTest {
                     events += event
                     if (event is MembershipEvent.HostLost && pendingWhenRigFired == null) {
                         pendingWhenRigFired = room.hasPendingResume()
-                        seam.deliverNow(AdmitMessage.ResumeAck)
+                        seam.deliverNow(restoredWelcome)
                         pendingAfterAck = room.hasPendingResume()
                     }
                 }
@@ -125,7 +127,7 @@ class ResumeAckAfterHostLostTest {
      * room's only call in there is its clock, read for the `HostLost` timestamp.
      */
     @Test
-    fun `a ResumeAck handled once the window is decided lost reports WindowClosed`() =
+    fun `a closing Welcome handled once the window is decided lost reports WindowClosed`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = ScriptedSeam(joinerId, hostId)
             var roomRef: SeamRoom? = null
@@ -164,7 +166,7 @@ class ResumeAckAfterHostLostTest {
      * and an ack takes the lock first. The host has taken the joiner back, so the room resumes.
      */
     @Test
-    fun `a ResumeAck handled after the window timer fires but before the verdict resumes the room`() =
+    fun `a closing Welcome handled after the window timer fires but before the verdict resumes the room`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = ScriptedSeam(joinerId, hostId)
             val (room, token) = admittedJoiner(seam)
@@ -208,7 +210,7 @@ class ResumeAckAfterHostLostTest {
      * `HostLost`, its flight left pending, and a host detector restored on a dead link.
      */
     @Test
-    fun `an episode resumed by an ack does not resume a later episode whose window is lost`() =
+    fun `an episode closed by a Welcome does not resume a later episode whose window is lost`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = ScriptedSeam(joinerId, hostId)
             val (room, _) = admittedJoiner(seam)
@@ -223,7 +225,8 @@ class ResumeAckAfterHostLostTest {
             seam.tear()
             runCurrent()
             val firstResumeSent = seam.resumesSent == 1 && room.hasPendingResume()
-            seam.deliver(AdmitMessage.ResumeAck)
+            challengeReHello(seam)
+            seam.deliver(restoredWelcome)
             runCurrent()
             val firstEnded = !room.hasReconnectInFlight()
             val monitoredAfterFirst = room.hasDetector(hostId)
@@ -275,7 +278,7 @@ class ResumeAckAfterHostLostTest {
     private fun TestScope.fireAck(room: SeamRoom, seam: ScriptedSeam, events: List<MembershipEvent>): AckRig {
         val before = room.hasPendingResume()
         val announced = events.any { it is MembershipEvent.HostLost }
-        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seam.deliverNow(AdmitMessage.ResumeAck) }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seam.deliverNow(restoredWelcome) }
         return AckRig(pendingBefore = before, pendingAfter = room.hasPendingResume(), hostLostAnnounced = announced)
     }
 
@@ -319,7 +322,8 @@ class ResumeAckAfterHostLostTest {
     }
 
     /**
-     * Tears the link, lets the joiner send a `Resume` the host never answers, joins that flight with a
+     * Tears the link, lets the joiner say Hello again and answer the host's challenge — so its own
+     * `Welcome` would close the reconnect — but has the host send no `Welcome`, joins that flight with a
      * caller's own `resume()`, and runs the clock past the window. Returns what that caller got.
      */
     private suspend fun TestScope.expireWindow(
@@ -329,8 +333,9 @@ class ResumeAckAfterHostLostTest {
     ): ResumeResult.JoinerOutcome {
         seam.tear()
         runCurrent()
+        challengeReHello(seam)
         assertAll(
-            { assertEquals(1, seam.resumesSent, "precondition: the Resume went out") },
+            { assertEquals(1, seam.resumesSent, "precondition: the re-Hello went out") },
             { assertTrue(room.hasPendingResume(), "precondition: its verdict has not come back") },
         )
         val joined: Deferred<ResumeResult.JoinerOutcome> = async { room.resume(token) }
@@ -340,6 +345,24 @@ class ResumeAckAfterHostLostTest {
         runCurrent()
         return joined.await()
     }
+
+    /** The host challenges the joiner's latest re-Hello, which the joiner answers: its Welcome would now count. */
+    private suspend fun TestScope.challengeReHello(seam: ScriptedSeam) {
+        val hello = assertNotNull(seam.hello, "precondition: the joiner said Hello again")
+        seam.deliver(handChallenge(hello, joinerId, hostId))
+        runCurrent()
+        assertTrue(seam.proofsSent > 0, "precondition: the joiner answered the host's challenge")
+    }
+
+    /** The host's Welcome to the joiner after a re-Hello that found its seat held: what a `ResumeAck` was. */
+    private val restoredWelcome = AdmitMessage.Welcome(
+        assignedPeerId = joinerId.value,
+        displayName = "joiner",
+        sessionId = joinerId.value,
+        key = TEST_KEY_B,
+        roomId = "room-1",
+        returnKind = ReturnKind.Restored,
+    )
 }
 
 /**
@@ -372,6 +395,9 @@ private class ScriptedSeam(
             for (frame in frames) collector.emit(frame)
         }
     }
+
+    var proofsSent: Int = 0
+        private set
 
     var resumesSent: Int = 0
         private set
@@ -407,7 +433,13 @@ private class ScriptedSeam(
     }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-        if (peer == hostId && AdmitMessage.decode(payload) is AdmitMessage.Resume) resumesSent++
+        val decoded = AdmitMessage.decode(payload)
+        if (peer == hostId && decoded is AdmitMessage.Proof) proofsSent++
+        val hello = decoded as? AdmitMessage.Hello ?: return
+        if (peer == hostId) {
+            this.hello = hello
+            resumesSent++
+        }
     }
 
     override suspend fun close(reason: CloseReason) {
