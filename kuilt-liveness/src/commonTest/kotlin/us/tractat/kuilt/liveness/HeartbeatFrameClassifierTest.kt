@@ -56,7 +56,7 @@ class HeartbeatFrameClassifierTest {
     }
 
     @Test
-    fun `a ping read through a sliced swatch is classified from the slice, not the backing array`() {
+    fun `a ping read through a sliced swatch is classified from the slice and not the backing array`() {
         // `dropFirst` keeps the backing array and moves an offset, so a compare that indexed the
         // array instead of the slice would see the leading byte and miss the ping.
         val sliced = Swatch(byteArrayOf(0x01) + ping).dropFirst(1)
