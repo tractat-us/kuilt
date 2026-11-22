@@ -120,7 +120,7 @@ class SubTimeoutBlipResumeTest {
     )
 
     @Test
-    fun `a blip shorter than the host timeout completes as a local no-op resume`() =
+    fun `a blip shorter than the host timeout is restored by its re-Hello`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             var nowMs = 0L
             val clock = { Instant.fromEpochMilliseconds(nowMs) }
@@ -131,8 +131,11 @@ class SubTimeoutBlipResumeTest {
             }
 
             val h = blipHarness(clock, fastConfig)
-            val recovered = backgroundScope.async {
-                h.joinerRoom.events.filterIsInstance<MembershipEvent.Recovered>().first()
+            val resumed = backgroundScope.async {
+                h.joinerRoom.events.filterIsInstance<MembershipEvent.Resumed>().first()
+            }
+            val hostResumed = backgroundScope.async {
+                h.hostRoom.events.filterIsInstance<MembershipEvent.Resumed>().first()
             }
             val hostLost = backgroundScope.async {
                 h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first()
@@ -150,25 +153,20 @@ class SubTimeoutBlipResumeTest {
 
             assertAll(
                 {
-                    assertTrue(
-                        recovered.isCompleted,
-                        "a blip the host never observed must close its own arc with Recovered(hostId)",
-                    )
-                },
-                {
-                    // The arc opened on the HOST (Partitioned(hostId) + WindowOpened(hostId)), so an
-                    // edge-keying consumer can only match a closing edge that names the host —
-                    // which Resumed(selfId), the real-resume edge, does not.
+                    // #3159 Task 1.7: the host still held the seat as connected, so the re-Hello's
+                    // Welcome is marked Restored and the joiner closes the arc as a real resume does.
+                    // The old dwell closed it with Recovered(hostId); there is no dwell any more.
                     assertEquals(
-                        hostId,
-                        recovered.takeIf { it.isCompleted }?.getCompleted()?.peerId,
-                        "the closing edge must name the host the arc opened on",
+                        h.joinerRoom.selfId,
+                        resumed.takeIf { it.isCompleted }?.getCompleted()?.peerId,
+                        "a blip the host never observed is restored by the re-Hello",
                     )
                 },
+                { assertTrue(hostResumed.isCompleted, "the host restored the connected seat, without a window") },
                 {
                     // The level, not just the edge: onReconnectStarted pinned the host Partitioned,
                     // and a roster left saying that about a demonstrably reachable host is exactly
-                    // the #1723 failure this callback exists to avoid.
+                    // the #1723 failure.
                     assertEquals(
                         Liveness.Connected,
                         h.joinerRoom.roster.value.single { it.id == hostId }.liveness,
