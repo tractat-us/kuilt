@@ -3001,10 +3001,14 @@ internal class SeamRoom(
      * this device holds the membership now, and a Hello from here would take it back and start the
      * two of them taking it in turns (the plan's Review Focus 1). Once only; a room that is already
      * ending does neither.
+     *
+     * **One ending.** A room already host-lost ends as that, so this and [claimHostLost] exclude each
+     * other: whichever takes [lock] first ends the room, and the other emits nothing (review round 1
+     * on #3614).
      */
     private suspend fun endSuperseded(by: PeerId) {
         lock.withLock {
-            if (closed || supersededBy != null) return
+            if (closed || hostLost || supersededBy != null) return
             supersededBy = by
         }
         logger.info { "room.superseded self=${selfId.value} by=${by.value}" }
