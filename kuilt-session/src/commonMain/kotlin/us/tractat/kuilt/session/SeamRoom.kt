@@ -2210,6 +2210,15 @@ internal class SeamRoom(
     }
 
     /**
+     * **Under [lock].** The id that took [peerId]'s seat over under [key], while it still holds that
+     * seat; else null. A successor that has left holds no membership for [peerId]'s Hello to take
+     * back, so [peerId] is then challenged as any Hello is (review round 1 on #3614). The record is
+     * kept, so [peerId] is told again should its successor be seated again.
+     */
+    private fun seatedSuccessorFor(peerId: PeerId, key: DidKey): PeerId? =
+        supersededIds.successorFor(peerId, key)?.takeIf { it in admittedById }
+
+    /**
      * **Under [lock].** A superseded process whose Hello was challenged before its seat was taken over
      * (#3159, Task 1.7): the Hello gate answers every later Hello from that id with the `Farewell`,
      * and this is the same answer for the one that slipped in first. Read under the lock that recorded
@@ -2219,15 +2228,6 @@ internal class SeamRoom(
      * whose key proved itself and won a window keeps it. [settleSpentWindow] runs first and clears
      * any such answer this pass does not act on, so the next pass reaches here.
      */
-    /**
-     * **Under [lock].** The id that took [peerId]'s seat over under [key], while it still holds that
-     * seat; else null. A successor that has left holds no membership for [peerId]'s Hello to take
-     * back, so [peerId] is then challenged as any Hello is (review round 1 on #3614). The record is
-     * kept, so [peerId] is told again should its successor be seated again.
-     */
-    private fun seatedSuccessorFor(peerId: PeerId, key: DidKey): PeerId? =
-        supersededIds.successorFor(peerId, key)?.takeIf { it in admittedById }
-
     private fun toldSuperseded(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long, asked: AskedWindow?): SeatOutcome? {
         if (asked?.answer == WindowAnswer.Restored) return null
         val successor = seatedSuccessorFor(joinerPeerId, keyed.key) ?: return null
