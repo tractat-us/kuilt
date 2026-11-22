@@ -195,6 +195,9 @@ class QuilterTest {
 
         // Only B ticks inside the test window: A's interval is an order of magnitude beyond it.
         // fullStateRetryLimit = 0 so no first-contact retry can heal B behind the guard's back.
+        // staleDigestSkipLimit = 0 because B has not acked A's dropped delta, so by default A would
+        // skip B's mismatched digests a few rounds before asking (#3617). That skip has its own
+        // test; this one is about the push-back, and wants it on the first round.
         val repA = gcounterReplicator(
             seamA,
             backgroundScope,
@@ -202,6 +205,7 @@ class QuilterTest {
                 antiEntropyInterval = 1.minutes,
                 fullStateRetryLimit = 0,
                 expectVirtualTime = true,
+                staleDigestSkipLimit = 0,
             ),
         )
         val repB = gcounterReplicator(

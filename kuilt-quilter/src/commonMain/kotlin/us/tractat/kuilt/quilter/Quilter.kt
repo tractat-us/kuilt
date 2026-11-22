@@ -534,8 +534,11 @@ public class Quilter<S : Quilted<S>>(
             pendingResendJobs.clear()
             pendingFullStateJobs.values.forEach { it.cancel() }
             pendingFullStateJobs.clear()
-            fullStateSlots.keys.toList().forEach(::clearFullStateSlot)
-            clearOutstandingRequest()
+            // Forgotten, not cancelled: their coroutines are children of [ownJob], which is
+            // cancelled straight after this, outside the lock. Cancelling a parked send here
+            // would run the seam's cancellation handler while this thread holds the lock.
+            fullStateSlots.clear()
+            outstandingRequest = null
         }
     }
 
