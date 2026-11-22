@@ -864,13 +864,13 @@ public class Quilter<S : Quilted<S>>(
      * survives — the older peer's own full-state ticks continue and `onFullState`'s push-back heals
      * both directions — but initiation becomes one-sided and the rate halves. This restores it.
      *
-     * Ships directly rather than through [sendFullStateTo], for the same reason
+     * Goes straight to the send slot ([requestFullStateSend]) rather than through [sendFullStateTo], for the same reason
      * [onFullStateRequest] does: that helper arms [scheduleFullStateRetry], which exists for the
      * first-contact path, and re-arming it on a recurring tick would stack a second retry machine
      * on a peer that already has one. No retry is needed here — the next round that draws this peer
      * is the retry.
      *
-     * Must be called under [lock]; the suspending send is launched on [scope] outside it.
+     * Must be called under [lock]; the suspending send runs in the slot's coroutine, outside it.
      */
     private fun sendUnprovenPeerFullState(peer: PeerId) = requestFullStateSend(peer)
 
@@ -1389,7 +1389,7 @@ public class Quilter<S : Quilted<S>>(
     }
 
     /**
-     * A peer's reply to our digest, asking for the state. Ships it directly rather than via
+     * A peer's reply to our digest, asking for the state. Ships it through the send slot ([requestFullStateSend]) rather than via
      * [sendFullStateTo]: that helper arms [scheduleFullStateRetry], which exists for the
      * first-contact path, and running it here would put two independent retry machines on one
      * peer.
