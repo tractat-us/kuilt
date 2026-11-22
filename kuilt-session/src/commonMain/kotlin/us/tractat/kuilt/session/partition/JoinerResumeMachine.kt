@@ -215,11 +215,12 @@ internal class JoinerResumeMachine(
     private val host: JoinerResumeHost,
 ) {
     /**
-     * The [ResumeToken] minted at admit time.
+     * The [ResumeToken] minted at admit time, which nothing presents any more.
      *
-     * Null until the joiner receives its own `Welcome` carrying a [RoomId] from the host.
-     * Used by [resume] to present credentials to the host. Read by the room's public
-     * `Room.resumeToken` so the application layer and the conformance TCK can access it.
+     * Null until the joiner receives its own `Welcome` carrying a [RoomId] and a secret from the
+     * host. [resume] says Hello again and the device key proves the member (#3159, Task 1.7), so the
+     * token is only read: by the room's public `Room.resumeToken`, and by [runReconnect]'s log line.
+     * Slice 1.8 removes it.
      */
     var resumeToken: ResumeToken? = null
         private set
@@ -884,11 +885,11 @@ internal class JoinerResumeMachine(
      * the deadline keeps that reply's verdict: the deadline then only awaits it.
      *
      * Both caller kinds route through here — the owner (after sending) and a joined caller
-     * (the `!ownsFlight` early return) — so neither can hang. A late-arriving `Welcome` or `Reject`
-     * after the slot was cleared settles no flight: a `Welcome` answering this flight's Hello still
-     * closes the episode ([takeFlightForWelcome]), and one answering an older Hello is not taken at
-     * all, since the room accepts a closing `Welcome` only from a peer whose challenge it answered
-     * for its latest Hello.
+     * (the `!ownsFlight` early return) — so neither can hang. A `Welcome` or `Reject` arriving after
+     * the deadline cleared the slot settles no flight. Inside a reconnect episode, the host's
+     * `Welcome` from a verified challenger of the latest Hello still closes the episode
+     * ([takeFlightForWelcome]); outside one it closes nothing, as there is nothing to close. A
+     * `Welcome` from any other sender, or a terminal `Reject` from one, is not taken at all.
      *
      * Only [withTimeoutOrNull]'s own deadline yields null here; an *external* cancellation (e.g.
      * the auto-reconnect window elapsing around an internal [resume]) propagates through
