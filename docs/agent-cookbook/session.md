@@ -568,7 +568,7 @@ internal suspend fun sampleParseDidKey() {
 }
 ```
 
-**The key behind the name:** `DeviceKey`. Its `id` is the `DidKey`, and `sign` makes the signature that `id.verify` accepts — ECDSA on P-256 over SHA-256, as 64 raw `r ‖ s` bytes. It is an interface with no accessor for the private half, so a key a hardware or browser store will not hand out still fits. `DeviceKey.generate()` makes one in memory, which is gone with the process: do not hand-roll keeping it, since keeping it is `DeviceKeyStore`'s job.
+**The key behind the name:** `DeviceKey`. Its `id` is the `DidKey`. An app signs with `signApp(context, message)`, and `id.verifyApp(context, message, signature)` checks it — ECDSA on P-256 over SHA-256, as 64 raw `r ‖ s` bytes. The `context` names what the signature is for, so one made for `"chess/move"` is refused for `"chess/resign"`. Do not reach for the raw `sign`: it is `@IdentityInternalApi`, because kuilt's own admission statements are raw signatures, and an app signing bytes a peer handed it could be made to sign one. `signApp` signs under an `app/<context>` prefix no kuilt statement can start with, and refuses a `kuilt` or `kuilt/…` context. It is an interface with no accessor for the private half, so a key a hardware or browser store will not hand out still fits. `DeviceKey.generate()` makes one in memory, which is gone with the process: do not hand-roll keeping it, since keeping it is `DeviceKeyStore`'s job.
 
 <!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleDeviceKeySigns -->
 ```kotlin
@@ -576,15 +576,26 @@ internal suspend fun sampleDeviceKeySigns() {
     // This device's key. A real app gets it from a key store, so it is the same key tomorrow.
     val key = DeviceKey.generate()
 
-    // The device signs something fresh; anyone holding only its public name can check the signature.
-    val challenge = "a fresh challenge from the room".encodeToByteArray()
-    val signature = key.sign(challenge)
-    check(key.id.verify(challenge, signature))
+    // The app signs its own bytes under a context naming what they are for; anyone holding only the
+    // device's public name can check the signature.
+    val move = "move 12: e4".encodeToByteArray()
+    val signature = key.signApp("chess/move", move)
+    check(key.id.verifyApp("chess/move", move, signature))
 
-    // A signature proves this key and this message, nothing else.
+    // A signature proves this key, this context and this message, nothing else.
     val someoneElse = DeviceKey.generate()
-    check(!someoneElse.id.verify(challenge, signature))
-    check(!key.id.verify("a different message".encodeToByteArray(), signature))
+    check(!someoneElse.id.verifyApp("chess/move", move, signature))
+    check(!key.id.verifyApp("chess/resign", move, signature))
+    check(!key.id.verifyApp("chess/move", "move 12: d4".encodeToByteArray(), signature))
+
+    // "kuilt" is kuilt's own context, so no app signature can pass for one of its statements.
+    val refused = try {
+        key.signApp("kuilt/admit-proof", move)
+        false
+    } catch (_: IllegalArgumentException) {
+        true
+    }
+    check(refused)
 }
 ```
 
