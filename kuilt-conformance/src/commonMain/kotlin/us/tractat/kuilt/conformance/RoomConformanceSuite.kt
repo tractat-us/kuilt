@@ -423,11 +423,12 @@ public abstract class RoomConformanceSuite {
                 val hostResumed = async { host.awaitEvent("the host's Resumed") { it as? MembershipEvent.Resumed } }
                 val hellos = h.helloRequests()
                 val result = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(joiner.requireResumeToken()) }
+                val announced = hostResumed.await().peerId
                 assertAll(
                     { assertEquals(ResumeResult.Success, result, "a held seat must be restored") },
                     { assertEquals(hellos + 1, h.helloRequests(), "the joiner must say Hello again, once") },
                     { assertEquals(0, h.resumeRequests(), "a return sends no Resume frame") },
-                    { assertEquals(joiner.selfId, hostResumed.await().peerId, "the host restores the seat it held") },
+                    { assertEquals(joiner.selfId, announced, "the host restores the seat it held") },
                     { assertEquals(listOf(joiner.selfId), host.roster.value.map { it.id }, "one seat, the same one") },
                 )
             } finally {
@@ -452,16 +453,16 @@ public abstract class RoomConformanceSuite {
                 host.awaitRoster("the return rig admitted the joiner") { it.size == 1 }
                 joiner.awaitRoster("the return rig identified the host") { it.isNotEmpty() }
                 h.releaseSeat(joiner.selfId)
-                val releasedRoster = host.roster.value.map { it.id }
+                assertEquals(emptyList(), host.roster.value.map { it.id }, "the return rig released the joiner's seat on the host")
                 val hostJoined = async { host.awaitEvent("the host's Joined") { it as? MembershipEvent.Joined } }
                 val hellos = h.helloRequests()
                 val result = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(joiner.requireResumeToken()) }
+                val announced = hostJoined.await().member.id
                 assertAll(
-                    { assertEquals(emptyList(), releasedRoster, "the return rig released the joiner's seat on the host") },
                     { assertEquals(ResumeResult.WindowClosed, result, "a gone seat is a fresh admission") },
                     { assertEquals(hellos + 1, h.helloRequests(), "the joiner must say Hello again, once") },
                     { assertEquals(0, h.resumeRequests(), "a return sends no Resume frame") },
-                    { assertEquals(joiner.selfId, hostJoined.await().member.id, "the host admits the joiner afresh") },
+                    { assertEquals(joiner.selfId, announced, "the host admits the joiner afresh") },
                     { assertTrue(joiner.roster.value.isNotEmpty(), "the joiner's room keeps the admission") },
                 )
             } finally {
