@@ -150,7 +150,7 @@ import kotlin.time.Instant
  * | # | Mutation | Kind | after | before |
  * |---|----------|------|-------|--------|
  * | M1 | `SeamRoom.resumeToken` returns `null` — a room opting out of resume entirely | real | RED: [resumeWithinWindowFiresResumed] and `aTokenMintedForAnotherRoomIsRefused` on the loud precondition, naming `role=Joiner … roster=1 member(s)` | [joinerLearnsHostRoomIdOnAdmission] RED — but [resumeWithinWindowFiresResumed] **green by absence** |
- * | M2 | [injectorOrDeclaredGap] drops its assertion — i.e. the pre-#2306 silent `?: return@runTest`, exactly | rig | RED: all four `blankTrackingUrl*` **as measured — the set is seven since #2501** | all green; the four gated obligations passed under a gap declaring nothing |
+ * | M2 | [injectorOrDeclaredGap] drops its assertion — i.e. the pre-#2306 silent `?: return@runTest`, exactly | rig | RED: all four `blankTrackingUrl*` **as measured — the set was seven from #2501, six since #3159 Task 1.7** | all green; the four gated obligations passed under a gap declaring nothing |
  * | M3 | delete the `proof.roomId != roomId` check in `KeyAdmission.checkProof` — a proof for another room admits | real | **re-pointed (#3212):** RED in `:kuilt-session`'s `KeyAdmissionTest.proofForAnotherRoomIsRejected`, 1 of 23, 2 of its assertions. The controller's own guard, this row's old subject, reds nothing in this suite (40 of 40 green) — see below | every pre-existing test of this suite **green** |
  * | M4 | the host drops a foreign token silently instead of refusing it | synthetic | RED: `aTokenMintedForAnotherRoomIsRefused`, 2 of 3 — `Got TimedOut` | all green |
  *
