@@ -57,7 +57,15 @@ under, and a host still holding that seat under the same peer id restores it. A 
 new peer id takes the old seat over while its member is partitioned: everyone sees
 `Left(old, LeaveReason.Superseded(by = new))` then `Joined(new)`, and the new member keeps the old one's
 identity. Beside a connected seat, such as a second browser tab, it gets a seat of its own, so one key
-may hold several seats. Presenting a saved token at join time is the separate
+may hold several seats.
+
+**A peer id belongs to one process, so never reuse a superseded one under the same key.** While the
+new id holds the seat, the host answers every Hello from the old id with `Farewell(supersededBy)`,
+and the room behind it ends with `Left(self, LeaveReason.Superseded(by = new))`. The host cannot tell
+the old process from a new one reusing its id, so both are told. Once the new id's seat is gone, the
+old id is admitted like any other. Nothing expires on a timer.
+
+Presenting a saved token at join time is the separate
 [cold-start rejoin gap (#1593)](https://github.com/tractat-us/kuilt/issues/1593).
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#resumeAfterDropSample -->
