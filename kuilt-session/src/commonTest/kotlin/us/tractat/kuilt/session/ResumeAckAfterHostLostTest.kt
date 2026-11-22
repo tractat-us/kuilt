@@ -337,6 +337,38 @@ class ResumeAckAfterHostLostTest {
         }
 
     /**
+     * Outside a reconnect episode the flight is the only scope the latest Hello has. A caller's own
+     * `resume()` waits for its host to be addressable, and the `Welcome` that admitted the joiner in
+     * the first place arrives again: it answers the first Hello, not this one, so it settles nothing,
+     * and the caller's Hello goes out once the host is back.
+     */
+    @Test
+    fun `a stale Welcome while a caller's resume waits for its host settles nothing`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = ScriptedSeam(joinerId, hostId)
+            val (room, token) = admittedJoiner(seam)
+            val events = recordEvents(room)
+            seam.dropHost()
+            runCurrent()
+            val call = async { room.resume(token) }
+            runCurrent()
+            val waiting = room.hasPendingResume() && !room.hasReconnectInFlight() && seam.resumesSent == 0
+            seam.deliver(restoredWelcome)
+            runCurrent()
+            val settledByStale = call.isCompleted
+            seam.listHost()
+            runCurrent()
+
+            assertAll(
+                { assertTrue(waiting, "precondition: the caller's flight waits to send its Hello, outside any episode") },
+                { assertFalse(settledByStale, "the stale Welcome settled nothing") },
+                { assertFalse(events.any { it is MembershipEvent.Resumed }, "nothing was resumed (events: $events)") },
+                { assertEquals(1, seam.resumesSent, "the caller's Hello went out once its host was back") },
+            )
+            room.leave()
+        }
+
+    /**
      * A terminal `Reject` from the host that answered episode one's Hello reaches the room in the same
      * window. The host has challenged nothing of episode two, so the `Reject` is about another exchange
      * and does not end the episode (Amendment C).

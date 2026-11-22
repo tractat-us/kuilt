@@ -63,10 +63,10 @@ internal interface JoinerResumeHost {
 
     /**
      * Forget the latest Hello: its nonce, and the challengers that answered for it. Called when an
-     * episode starts and when a flight is installed, before the attempt's own Hello is minted, so a
-     * `Welcome` or terminal `Reject` left over from an earlier Hello finds no verified challenger
-     * and closes or ends nothing (review round 1 on #3614). Until the next [prepareReHello] the room
-     * answers no challenge, since there is no Hello for one to echo.
+     * episode starts, and when a flight is installed outside one, before the attempt's own Hello is
+     * minted, so a `Welcome` or terminal `Reject` left over from an earlier Hello finds no verified
+     * challenger and closes or ends nothing (review round 1 on #3614). Until the next
+     * [prepareReHello] the room answers no challenge, since there is no Hello for one to echo.
      */
     fun forgetLatestHello()
 
@@ -778,9 +778,12 @@ internal class JoinerResumeMachine(
                 Triple(inFlight, inFlightSent, false)
             } else {
                 flightsStarted++
-                // A new flight answers only its own Hello, which [sendToHost] mints later: a Welcome
-                // or Reject for an earlier one must not settle it while it waits to send.
-                host.forgetLatestHello()
+                // Outside an episode — a caller's own `Room.resume` — the flight is the only scope the
+                // latest Hello has: forget it, so a Welcome or Reject for an earlier Hello cannot
+                // settle this flight while it waits to send. Inside one the episode's start already
+                // forgot it, and a Welcome answering an earlier attempt of this episode closes the
+                // episode, as Amendment C says, even after this flight is installed.
+                if (!reconnecting) host.forgetLatestHello()
                 val reply = CompletableDeferred<ResumeResult.JoinerOutcome>().also { pendingResume = it }
                 val went = CompletableDeferred<Unit>().also { pendingSent = it }
                 Triple(reply, went, true)
