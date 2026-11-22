@@ -94,7 +94,6 @@ public class Grant private constructor(
      * Never throws on a bad grant. It throws [IllegalStateException] only when this platform's
      * cryptographic provider cannot run at all.
      */
-    @OptIn(IdentityInternalApi::class)
     public suspend fun isSignedByIssuer(): Boolean = isSignedByIssuer(KeyScheme.P256)
 
     /**
