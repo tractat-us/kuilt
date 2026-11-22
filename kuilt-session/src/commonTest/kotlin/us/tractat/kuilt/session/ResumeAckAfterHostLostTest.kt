@@ -5,7 +5,11 @@ package us.tractat.kuilt.session
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Delay
+import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
@@ -19,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -47,6 +52,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlin.coroutines.CoroutineContext
 
 /**
  * The host's `Welcome` closing a joiner's reconnect — a `ResumeAck` before #3159 Task 1.7 — racing its
@@ -367,26 +373,35 @@ class ResumeAckAfterHostLostTest {
      * it was superseded. Whichever claim takes the lock first ends the room, and only it: here the
      * window's verdict did, so the room is host-lost and not also superseded (review round 1 on #3614).
      *
-     * The room runs on an unconfined dispatcher, so the `Farewell`'s handler runs the supersession on
-     * the stack that delivers it, which is what a second thread would do inside the gap. The hook is the
-     * room's clock, read for the `HostLost` timestamp once the window is decided.
+     * The gap has no suspension point, and the room launches its supersession rather than running it in
+     * the `Farewell`'s handler, so a test dispatcher can schedule neither into it. The room's dispatcher
+     * is therefore an [InlineSwitchDispatcher]: an ordinary test dispatcher until the hook — the room's
+     * clock, read for the `HostLost` timestamp once the window is decided — switches it to run launches
+     * in place, delivers the `Farewell`, and switches it back. The supersession then runs to its end on
+     * the hook's stack, which is what a second thread would do inside the gap, and the dispatcher counts
+     * the launches it ran in place, so a rig that ran none fails.
      */
     @Test
     fun `a supersession told once the window is decided lost leaves HostLost the only ending`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val seam = ScriptedSeam(joinerId, hostId)
-            val roomScope = CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler))
+            val dispatcher = InlineSwitchDispatcher(StandardTestDispatcher(testScheduler))
+            val roomScope = CoroutineScope(backgroundScope.coroutineContext + dispatcher)
             var roomRef: SeamRoom? = null
             var hostLostAtRig: Boolean? = null
+            var inlineLaunches = 0
             var events: List<MembershipEvent> = emptyList()
             val (room, token) = admittedJoiner(seam, scope = roomScope) {
                 val r = roomRef
                 // Decided (no job) but not yet torn down (the flight is still pending): only the gap.
                 if (r != null && hostLostAtRig == null && r.hasPendingResume() && !r.hasReconnectInFlight()) {
                     hostLostAtRig = events.any { it is MembershipEvent.HostLost }
+                    dispatcher.inline = true
                     backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
                         seam.deliverNow(AdmitMessage.Farewell(joinerId.value, supersededBy = "joiner-2"))
                     }
+                    dispatcher.inline = false
+                    inlineLaunches = dispatcher.inlineLaunches
                 }
             }
             roomRef = room
@@ -400,6 +415,7 @@ class ResumeAckAfterHostLostTest {
             }
             assertAll(
                 { assertEquals(false, hostLostAtRig, "precondition: the rig fired between the verdict and HostLost") },
+                { assertTrue(inlineLaunches > 0, "precondition: the Farewell's handler ran the room's launch in place") },
                 { assertEquals(1, endings.size, "one ending, not two (events: $events)") },
                 { assertIs<MembershipEvent.HostLost>(endings.firstOrNull(), "the window's verdict took the lock first") },
             )
@@ -648,4 +664,27 @@ private class EndHookedStateFlow<T>(
             onEnd(currentCoroutineContext()[Job]?.isCancelled == true)
         }
     }
+}
+
+/**
+ * [delegate], with a switch: while [inline] is on, a launch or resumption runs in place on the caller's
+ * stack instead of being queued, and [inlineLaunches] counts each one. Its delays and timeouts are
+ * [delegate]'s, so the room stays on virtual time.
+ *
+ * A dispatcher that never needs to dispatch runs work in place only when no unconfined event loop is
+ * already running on the thread; the room's own coroutines are queued while the switch is off, so the
+ * hook that turns it on runs outside one.
+ */
+@OptIn(InternalCoroutinesApi::class)
+private class InlineSwitchDispatcher(private val delegate: TestDispatcher) : CoroutineDispatcher(), Delay by delegate {
+    var inline: Boolean = false
+    var inlineLaunches: Int = 0
+        private set
+
+    override fun isDispatchNeeded(context: CoroutineContext): Boolean {
+        if (inline) inlineLaunches++
+        return !inline
+    }
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) = delegate.dispatch(context, block)
 }
