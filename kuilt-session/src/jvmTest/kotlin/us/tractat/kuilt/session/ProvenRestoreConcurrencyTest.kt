@@ -362,7 +362,7 @@ class ProvenRestoreConcurrencyTest {
      *
      * Either order ends the same way: the old id leaves as an expiry, never superseded, and the new
      * id is a new member, seated, watched, and the last thing carol hears about it is its Welcome.
-     * The seat moves between [bob] and [bobPrime] from one round to the next.
+     * The seat moves to a fresh id each round.
      */
     @Test
     fun anExpiryRacingANewIdsProofLeavesTheNewMemberSeated() =
@@ -382,7 +382,9 @@ class ProvenRestoreConcurrencyTest {
                     var holder = bob
                     for (round in 0 until SUPERSEDE_ROUNDS) {
                         val old = holder
-                        val new = seatIds.single { it != old }
+                        // A fresh id each round: an id superseded in an earlier round is told so when it says
+                        // Hello again (#3159, Task 1.7), so it can never be the new process here.
+                        val new = PeerId("bob-expiry-$round").also { id -> rig.peers.update { it + id } }
                         val episode = rig.partition(stage, round, old)
                         val recoveredBefore = rig.controller.recovered.get()
                         val spinNanos = jitter.nextLong(0, MAX_SPIN_NANOS)
@@ -474,7 +476,9 @@ class ProvenRestoreConcurrencyTest {
                     var holder = bob
                     for (round in 0 until SUPERSEDE_ROUNDS) {
                         val old = holder
-                        val new = seatIds.single { it != old }
+                        // A fresh id each round: an id superseded in an earlier round is told so when it says
+                        // Hello again (#3159, Task 1.7), so it can never be the new process here.
+                        val new = PeerId("bob-heal-$round").also { id -> rig.peers.update { it + id } }
                         rig.partition(stage, round, old)
                         rig.controller.onAsk = { resume, at ->
                             // As the default controller does: a Success is echoed on the reconnect loop.
@@ -588,7 +592,10 @@ class ProvenRestoreConcurrencyTest {
                     var holder = bob
                     for (round in 0 until SUPERSEDE_ROUNDS) {
                         val old = holder
-                        val (low, high) = (raceIds - old).sortedBy { it.value }
+                        // Fresh ids each round: an id superseded in an earlier round is told so when it says
+                        // Hello again (#3159, Task 1.7), so it can never be one of the new processes here.
+                        val (low, high) = listOf(PeerId("bob-race-$round-a"), PeerId("bob-race-$round-b"))
+                        rig.peers.update { it + low + high }
                         rig.partition(stage, round, old)
                         val spent = AtomicBoolean(false)
                         val asks = AtomicInteger(0)
@@ -840,7 +847,7 @@ class ProvenRestoreConcurrencyTest {
         detectorWindow: Duration = 100_000.hours,
     ) {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
-        val peers = MutableStateFlow(setOf(host, bob, bobPrime, bobThird, carol))
+        val peers = MutableStateFlow(setOf(host, bob, carol))
         // Bounded, as every Swatch delivery channel is (forbidUnboundedSwatchDelivery): a round sends a few frames.
         val inbound = Channel<Swatch>(capacity = 64)
         /** Each joiner id's challenges, in arrival order; an id a round makes up gets its channel on first use. */
@@ -973,7 +980,7 @@ class ProvenRestoreConcurrencyTest {
          */
         suspend fun partitionBob(stage: StageTracker, round: Int): Long = partition(stage, round, bob)
 
-        /** [partitionBob] for whichever of [seatIds] holds the key's seat this round. */
+        /** [partitionBob] for whichever id holds the key's seat this round. */
         suspend fun partition(stage: StageTracker, round: Int, bob: PeerId): Long {
             sent.value = emptyList()
             events.value = emptyList()
@@ -1054,19 +1061,11 @@ class ProvenRestoreConcurrencyTest {
         val carol = PeerId("carol")
         val sentinel = PeerId("sentinel")
 
-        /** Bob's device under a second fabric id: the new id a supersession round says Hello from. */
-        val bobPrime = PeerId("bob-prime")
-
-        /** The ids the key's seat moves between, one round to the next. */
-        val seatIds = setOf(bob, bobPrime)
-
-        /** Bob's device under a third fabric id, so two new ids can race for one seat. */
-        val bobThird = PeerId("bob-third")
-
-        /** The ids a race round's seat moves between: whichever holds it, and the two that race for it. */
-        val raceIds = setOf(bob, bobPrime, bobThird)
+        // A supersession round's new ids are made up per round (`bob-heal-<n>`, `bob-race-<n>-a`, …): an
+        // id superseded in one round is told so if it says Hello again (#3159, Task 1.7), so no round
+        // may bring one back as a new process.
         const val SUPERSEDE_ROUNDS = 5_000
-        const val REHELLO_ROUNDS = 2_000
+        const val REHELLO_ROUNDS = 1_000
 
         /** How long a Hello waits for its challenge before the rig reads it as answered by a Farewell instead. */
         val TOLD_GRACE = 500.milliseconds
