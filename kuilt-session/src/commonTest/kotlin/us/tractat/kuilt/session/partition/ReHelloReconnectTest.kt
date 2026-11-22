@@ -69,7 +69,7 @@ class ReHelloReconnectTest {
     private val hostId = PeerId("host")
     private val bob = PeerId("bob")
     private val eve = PeerId("eve")
-    private val room = RoomId("room-1")
+    private val roomId = RoomId("room-1")
     private val hostDevice = fakeDeviceKey(0)
 
     private val joinerConfig = HeartbeatConfig(
@@ -111,7 +111,7 @@ class ReHelloReconnectTest {
         suspend fun challenge(hello: AdmitMessage.Hello) {
             val before = sentToHost().count { it is AdmitMessage.Proof }
             val signed = Challenge.sign(
-                hostDevice, room.value, hostId.value, bob.value,
+                hostDevice, roomId.value, hostId.value, bob.value,
                 assertNotNull(hello.joinerNonce), ByteArray(Challenge.NONCE_SIZE) { 3 },
             )
             fromHost(AdmitMessage.Challenge(signed.wire))
@@ -126,7 +126,7 @@ class ReHelloReconnectTest {
                     displayName = "Bob",
                     sessionId = "session-bob",
                     key = fakeDidKey(1),
-                    roomId = room.value,
+                    roomId = roomId.value,
                     // Still minted until Task 1.8 retires it.
                     resumeSecret = ResumeSecret.generate(),
                     returnKind = returnKind,
@@ -385,7 +385,7 @@ class ReHelloReconnectTest {
         val host = SeamRoomFactory(
             base, backgroundScope, virtualClock(), fakeKeyStore(0),
             heartbeatConfig = hostConfig, reconnectControllerFactory = hold.factory,
-        ).adopt(hostTap, SessionRole.Host, memberName = "Host", roomId = room)
+        ).adopt(hostTap, SessionRole.Host, memberName = "Host", roomId = roomId)
         val joiner = SeamRoomFactory(base, backgroundScope, virtualClock(), fakeKeyStore(1), heartbeatConfig = joinerConfig)
             .adopt(link, SessionRole.Joiner, memberName = "Bob", reweave = { link })
         testScheduler.runCurrent()
