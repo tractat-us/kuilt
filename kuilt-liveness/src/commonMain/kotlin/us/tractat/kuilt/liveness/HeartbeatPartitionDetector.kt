@@ -332,9 +332,23 @@ public class HeartbeatPartitionDetector(
 
         internal fun pongPayload(): ByteArray = PONG_PREFIX.encodeToByteArray()
 
-        internal fun isPingFrame(frame: Swatch): Boolean = frame.decodeToString().startsWith(PING_PREFIX)
+        // The prefixes compared as bytes, never by decoding the frame (#3617). Every inbound frame
+        // passes through here, and decoding an 8.5 MB replicated state to a `String` just to read
+        // its first 20 characters allocated 16 MB per frame. The byte compare is the same test, not
+        // an approximation: both prefixes are ASCII, an ASCII byte decodes to exactly its own char,
+        // and a malformed sequence decodes to U+FFFD, never to an ASCII char.
+        private val PING_PREFIX_BYTES: ByteArray = PING_PREFIX.encodeToByteArray()
+        private val PONG_PREFIX_BYTES: ByteArray = PONG_PREFIX.encodeToByteArray()
 
-        internal fun isPongFrame(frame: Swatch): Boolean = frame.decodeToString().startsWith(PONG_PREFIX)
+        internal fun isPingFrame(frame: Swatch): Boolean = frame.startsWith(PING_PREFIX_BYTES)
+
+        internal fun isPongFrame(frame: Swatch): Boolean = frame.startsWith(PONG_PREFIX_BYTES)
+
+        private fun Swatch.startsWith(prefix: ByteArray): Boolean =
+            payloadSize >= prefix.size && prefix.indices.all { byteAt(it) == prefix[it] }
+
+        private fun ByteArray.startsWith(prefix: ByteArray): Boolean =
+            size >= prefix.size && prefix.indices.all { this[it] == prefix[it] }
 
         /**
          * Returns true if [bytes] is a heartbeat frame (ping or pong).
@@ -343,9 +357,7 @@ public class HeartbeatPartitionDetector(
          * from the application layer — they are consumed by the per-peer detectors
          * and must not be forwarded to [us.tractat.kuilt.session.Room.incoming].
          */
-        public fun isHeartbeatFrame(bytes: ByteArray): Boolean {
-            val s = bytes.decodeToString()
-            return s.startsWith(PING_PREFIX) || s.startsWith(PONG_PREFIX)
-        }
+        public fun isHeartbeatFrame(bytes: ByteArray): Boolean =
+            bytes.startsWith(PING_PREFIX_BYTES) || bytes.startsWith(PONG_PREFIX_BYTES)
     }
 }
