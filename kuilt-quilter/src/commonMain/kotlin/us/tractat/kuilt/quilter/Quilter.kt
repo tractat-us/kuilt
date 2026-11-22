@@ -374,6 +374,19 @@ public class Quilter<S : Quilted<S>>(
      */
     private val everSentUsDigest: MutableSet<PeerId> = mutableSetOf()
 
+    /**
+     * The last [stateRoot] and the state value it was computed from, compared by **identity**
+     * (#3617). Every digest sent and every digest received asks for the root, and computing it
+     * encodes the whole state: on an 8.5 MB board that was 5 GB of a four-minute allocation
+     * profile, for a value that changes only when the state does. Every write replaces [_state]'s
+     * value with what [Quilted.piece] returned, so an identical reference is an unchanged state.
+     * That leans on `S` being a value, never mutated in place, which this class already needs:
+     * [onFullState]'s `merged != current` and the [state] flow's conflation both compare an old
+     * value against a new one. An equal state reached through a different reference recomputes,
+     * which is the old cost and never a wrong root. Guarded by [lock], like [stateRoot] itself.
+     */
+    private var rootCache: Pair<S, Long>? = null
+
     /** Counts anti-entropy iterations; logged each tick so virtual-time cycling is visible. */
     private var antiEntropyCount = 0L
 
@@ -830,19 +843,6 @@ public class Quilter<S : Quilted<S>>(
         rootCache = state to root
         return root
     }
-
-    /**
-     * The last [stateRoot] and the state value it was computed from, compared by **identity**
-     * (#3617). Every digest sent and every digest received asks for the root, and computing it
-     * encodes the whole state: on an 8.5 MB board that was 5 GB of a four-minute allocation
-     * profile, for a value that changes only when the state does. Every write replaces [_state]'s
-     * value with what [Quilted.piece] returned, so an identical reference is an unchanged state.
-     * That leans on `S` being a value, never mutated in place, which this class already needs:
-     * [onFullState]'s `merged != current` and the [state] flow's conflation both compare an old
-     * value against a new one. An equal state reached through a different reference recomputes,
-     * which is the old cost and never a wrong root. Guarded by [lock], like [stateRoot] itself.
-     */
-    private var rootCache: Pair<S, Long>? = null
 
     /**
      * Ships a [QuiltMessage.RootDigest] to [peer]. Under [lock].
