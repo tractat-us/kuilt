@@ -1188,7 +1188,10 @@ internal class SeamRoom(
     /**
      * **Joiner only.** The fabric senders whose challenge echoing [latestHelloNonce] this joiner
      * answered: the *verified challengers* of its latest Hello (#3159, Task 1.7). Emptied whenever a
-     * new Hello replaces the nonce, in the same critical section. Guarded by [lock].
+     * new Hello replaces the nonce, in the same critical section, and — with the nonce — when a
+     * reconnect episode starts or installs a flight ([JoinerResumeHost.forgetLatestHello]), so the
+     * Hello that closed the last episode has no challengers left to close or end this one. Guarded by
+     * [lock].
      *
      * Two things read it. A self-`Welcome` closes a reconnect only from a sender here, so a `Welcome`
      * that answers an older Hello — or none — never ends an episode it has nothing to do with. And a
@@ -1270,6 +1273,13 @@ internal class SeamRoom(
                         // critical section, so a room told it was superseded mints no Hello after.
                         if (closed || hostLost || supersededBy != null) return null
                         AdmitMessage.encode(newHello())
+                    }
+
+                    override fun forgetLatestHello() {
+                        lock.withLock {
+                            latestHelloNonce = null
+                            latestHelloChallengers.clear()
+                        }
                     }
 
                     override fun silenceHostDetector(hostId: PeerId) {
