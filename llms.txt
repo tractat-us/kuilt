@@ -190,7 +190,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [kuilt-heddle-core](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-heddle-core/module.md): A whole fair-share scheduler in one process (LocalHeddle): weighted groups from a config file, a lease per free slot charged at its real cost, and a snapshot across restarts, with no network, Raft or coroutines.
 - [kuilt-heddle-coroutines](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-heddle-coroutines/module.md): Wait your turn for a slot: a coroutine front door over LocalHeddle that suspends until fair share grants a slot, charges the time the work held it, even when the work fails, and hands the slot back when a waiter gives up.
 - [kuilt-liveness](https://tractat-us.github.io/kuilt/api/kuilt-liveness/index.html): Peer-liveness detection over a kuilt Seam: heartbeats, partition events and reachability.
-- [kuilt-session](https://tractat-us.github.io/kuilt/api/kuilt-session/index.html): Membership-aware Room over a kuilt Loom: admit/identify handshake, roster, reconnect tokens and partition detection.
+- [kuilt-session](https://tractat-us.github.io/kuilt/api/kuilt-session/index.html): Membership-aware Room over a kuilt Loom: admit/identify handshake, roster, key-bound return and partition detection.
 - [kuilt-stream](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-stream/module.md): Wraps a byte stream as a kuilt Connection, with length-prefix framing and oversize protection.
 
 ## Modules: Fabrics & discovery
