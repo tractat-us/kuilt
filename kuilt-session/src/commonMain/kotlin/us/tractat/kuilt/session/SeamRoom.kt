@@ -1560,9 +1560,12 @@ internal class SeamRoom(
      * first restores [Liveness.Connected], and the loser finds nothing to do. [markRecovered] gates
      * its own [propagateUnpaused] on the same transition, so exactly one of those two sends it. A
      * third path ends a pause too: a same-`PeerId` `Hello` proving the seat's key restores the seat
-     * through [seatProvenJoiner] (#3212). Its restore is the same transition, taken under the same
-     * lock, so the three send one `Unpaused` between them, and this call swallows the controller's
-     * echo of that restore ([proofResumes]).
+     * through [seatProvenJoiner] (#3212), and this call swallows the controller's echo of that
+     * restore ([proofResumes]). Each of the three reads [Liveness.Partitioned] and writes
+     * [Liveness.Connected] in one [lock] section, so only the first to reach a pause finds it, and
+     * only that one sends `Unpaused`: one per pause. Each enqueues it in that same section (#3625) —
+     * here, [markRecovered], and the Proof's [restoreSeat] — so it is ordered against the `Paused`
+     * of any later re-detection.
      *
      * State mutation under lock; suspend send outside lock.
      */
@@ -2009,8 +2012,8 @@ internal class SeamRoom(
                     return
                 }
                 is SeatOutcome.Restored -> {
+                    // Its `Unpaused` was enqueued in the section that restored the seat ([restoreSeat]).
                     if (seating.endedPause) {
-                        propagateUnpaused(joinerPeerId)
                         // The window this partition opened, or is about to open, is not needed any
                         // more. A window `Success` spent needs nothing.
                         if (!asked.spent(joinerPeerId)) {
@@ -2463,12 +2466,19 @@ internal class SeamRoom(
      */
     private fun restoreSeat(held: Member, owesBurst: Boolean): SeatOutcome {
         val member = checkNotNull(updateMemberLiveness(held.id, Liveness.Connected)) { "the seat was read under this lock" }
+        val endedPause = held.liveness is Liveness.Partitioned
+        // Enqueued in the section that ended the pause, for [markPartitioned]'s reason (#3625): after
+        // it, a re-detection deciding in between enqueues its `Paused` first, and this `Unpaused` then
+        // releases, on every other member, a seat the host holds `Partitioned`. Only a host restores
+        // a seat, so there is no role to check. Before the `Resumed` below, which
+        // `PausedFanOutOrderConcurrencyTest` parks on to hold this thread inside the section.
+        if (endedPause) propagateUnpaused(held.id)
         // In the section that restored the seat, like [markRecovered]'s `Recovered`, so a heal the
         // decision saw is announced before this restore and never after it. Once per return: a retry
         // that reaches a seat this return already restored is answered, not announced again.
         if (restoredReturns.add(held.id)) emitEvent(MembershipEvent.Resumed(held.id))
         val burst = if (owesBurst) AdmissionBurst(member, admittedById.values.filter { it.id != held.id }, resumeSecrets[held.id]) else null
-        return SeatOutcome.Restored(burst, endedPause = held.liveness is Liveness.Partitioned)
+        return SeatOutcome.Restored(burst, endedPause = endedPause)
     }
 
     /**
@@ -3428,9 +3438,12 @@ internal class SeamRoom(
         // `Farewell` and `Welcome` on each bystander's lane, the late `Paused` followed them, and
         // the bystander held a seated member `Partitioned` with no `Unpaused` to come. A
         // `Resume` in the gap put `Unpaused` ahead of `Paused` the same way (#3026's second
-        // concern). Every other change to this member decides under [lock] too, so with the
-        // enqueue there it either precedes this `Paused` on every lane or sees the level this
-        // section wrote. `PausedFanOutOrderConcurrencyTest` parks this thread on the gap.
+        // concern). With the enqueue there, whatever a LATER section decides about this member is
+        // enqueued after this `Paused` on every lane, wherever that section enqueues. An EARLIER
+        // section's frame precedes it only if that section also enqueued under its own lock:
+        // every `Paused`/`Unpaused` sender now does, but the `Goodbye` handler's `Farewell` (#3628)
+        // and an admission's roster `Welcome` ([sendAdmissionBurst]) are still enqueued after their
+        // deciding section. `PausedFanOutOrderConcurrencyTest` parks this thread on the gap.
         // `fanOutToOtherMembers` re-enters the reentrant lock, and its `trySend` into an
         // UNLIMITED lane cannot suspend, so nothing suspend-capable runs under the lock.
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
@@ -3640,8 +3653,8 @@ internal class SeamRoom(
      * own `Paused` would be discarded and the late `Paused` would then pin a **recovered** member
      * `Partitioned` in that remote roster forever, with nothing to correct it. Enqueue order is wire
      * order (#1781). The enqueues themselves are ordered by [lock]: [markPartitioned],
-     * [refineWindow], [markRecovered] and [handleReconnectResumed] each enqueue inside the critical
-     * section that decided the transition (#3625), so a `Resume` can no longer land between
+     * [refineWindow], [markRecovered], [handleReconnectResumed] and a Proof's [restoreSeat] each
+     * enqueue inside the critical section that decided the transition (#3625), so a `Resume` can no longer land between
      * `markPartitioned`'s state commit and its `Paused` and put `Unpaused` first (#3026's second
      * concern).
      */
@@ -4294,7 +4307,8 @@ internal class SeamRoom(
      * after this function's own acquisition is released. A caller already holding [lock] keeps them
      * inside its section — [handleWindowExpired] and [releaseHeldSeat] do, so their `Farewell` is
      * ordered against every later section's enqueues, and [markPartitioned], [refineWindow],
-     * [markRecovered] and [handleReconnectResumed] do for their `Paused`/`Unpaused` (#3625). The
+     * [markRecovered], [handleReconnectResumed] and [restoreSeat] do for their `Paused`/`Unpaused`
+     * (#3625). The
      * lock is reentrant, and a [Channel.trySend] into an unbounded channel cannot suspend, so
      * nothing suspend-capable sits inside a critical section either way.
      *
