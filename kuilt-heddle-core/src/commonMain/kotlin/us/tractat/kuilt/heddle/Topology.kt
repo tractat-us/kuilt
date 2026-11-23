@@ -57,6 +57,19 @@ public data class Topology(public val root: String, public val children: List<No
         if (problems.isNotEmpty()) throw TopologyException(problems)
     }
 
+    /**
+     * This tree written back out as a document: the form an editor starts from when an admin
+     * changes the tree that is running.
+     *
+     * The two forms are exact inverses on a valid tree: `Topology.from(t.toDocument())` is
+     * [TopologyParse.Valid] with a topology equal to `t`. Every weight is written as the text
+     * [from] reads — `"3"` for a whole number, `"3/2"` for a ratio, always in lowest terms — and
+     * every child, template and ceiling is kept, in the order written.
+     *
+     * @sample us.tractat.kuilt.heddle.sampleTopologyToDocument
+     */
+    public fun toDocument(): TopologyDocument = TopologyDocument(root, children.map { it.written() })
+
     /** A child of a group: another [Group], or a [Lane] that work is charged to. */
     @Serializable
     public sealed interface Node {
@@ -320,8 +333,11 @@ private fun documentProblems(root: String, children: List<TopologyDocument.Node>
         walkGroup(at, children, template = null)
     }
 
-/** Where a node sits: its child indices from the root, and the names along the way for display. */
-private class Address(val path: List<Int>, val names: List<String>) {
+/**
+ * Where a node sits: its child indices from the root, and the names along the way for display. The
+ * one addressing [TopologyProblem] and [TopologyChange] share.
+ */
+internal class Address(val path: List<Int>, val names: List<String>) {
     fun child(index: Int, name: String): Address = Address(path + index, names + name)
     fun problem(kind: TopologyProblem.Kind, detail: String): TopologyProblem = TopologyProblem(path, names, kind, detail)
 }
