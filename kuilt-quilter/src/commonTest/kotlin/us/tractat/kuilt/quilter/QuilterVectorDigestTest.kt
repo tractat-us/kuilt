@@ -27,6 +27,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -92,6 +93,13 @@ class QuilterVectorDigestTest {
 
     private fun FakeSeam.resends(): List<QuiltMessage.Resend<GSet<String>>> =
         directed.mapNotNull { decodeMsg(it.second) as? QuiltMessage.Resend }
+
+    private fun kindOf(msg: Msg): String = when (msg) {
+        is QuiltMessage.VectorDigest -> "vectorDigest"
+        is QuiltMessage.RootDigest -> "rootDigest"
+        is QuiltMessage.FullState -> "fullState"
+        else -> "other"
+    }
 
     private fun vectorDigest(root: Long, vararg seen: Pair<ReplicaId, Long>): ByteArray =
         encodeMsg(QuiltMessage.VectorDigest(sender = peerReplica, root = root, seen = VersionVector.of(seen.toMap())))
@@ -327,21 +335,21 @@ class QuilterVectorDigestTest {
             testScheduler.runCurrent()
             val joined = seam.directed.size
 
-            testScheduler.advanceTimeBy(1.seconds + 1)
+            testScheduler.advanceTimeBy(1.seconds + 1.milliseconds)
             testScheduler.runCurrent()
-            val unproven = seam.directed.drop(joined).map { decodeMsg(it.second)::class }
+            val unproven = seam.directed.drop(joined).map { kindOf(decodeMsg(it.second)) }
             seam.deliver(peer, vectorDigest(root = quilter.stateRootForTest(), peerReplica to 0L))
             testScheduler.runCurrent()
             val latched = seam.directed.size
 
             testScheduler.advanceTimeBy(1.seconds)
             testScheduler.runCurrent()
-            val proven = seam.directed.drop(latched).map { decodeMsg(it.second)::class }
+            val proven = seam.directed.drop(latched).map { kindOf(decodeMsg(it.second)) }
 
             assertAll(
-                { assertTrue(QuiltMessage.VectorDigest::class in unproven, "an unproven peer gets the vector digest") },
-                { assertTrue(QuiltMessage.RootDigest::class in unproven, "and the root digest it can read") },
-                { assertEquals(listOf(QuiltMessage.VectorDigest::class), proven, "a proven peer, the vector digest alone") },
+                { assertTrue("vectorDigest" in unproven, "an unproven peer gets the vector digest") },
+                { assertTrue("rootDigest" in unproven, "and the root digest it can read") },
+                { assertEquals(listOf("vectorDigest"), proven, "a proven peer, the vector digest alone") },
             )
         }
 
