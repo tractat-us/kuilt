@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import java.util.concurrent.CountDownLatch
@@ -16,21 +18,27 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.identity.DeviceKey
+import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.test.fakeDeviceKey
+import us.tractat.kuilt.identity.test.fakeDidKey
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
-import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
+import us.tractat.kuilt.session.partition.ProvenResume
 import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.StageTracker
 import us.tractat.kuilt.test.assertAll
@@ -63,7 +71,9 @@ import kotlin.time.Duration.Companion.seconds
  *
  * The host's seam is a hand-written fake, as in [AdmissionRosterConcurrencyTest]. The bystander is a
  * recipient whose admit frames are recorded off `sendTo`, so the assertion reads the wire it would
- * have received. The bystander is not in `Seam.peers`, so no heartbeat runs to it. The member under
+ * have received. Every admission is the whole exchange since #3211: a Hello, the host's `Challenge`
+ * (taken off `sendTo` too), and a `Proof` signed with the key the Hello named. The bystander, the
+ * member and the latecomer each prove a different key, so no admission takes another's seat over. The bystander is not in `Seam.peers`, so no heartbeat runs to it. The member under
  * test is in `peers` while its detector must declare it unresponsive, and out of it before its
  * readmission, so a second detector does not pause it again.
  *
@@ -103,7 +113,7 @@ class PausedFanOutOrderConcurrencyTest {
     }
 
     private suspend fun withRig(body: suspend (Rig) -> Unit) {
-        val rig = Rig()
+        val rig = Rig(RoomDevice.of(fakeKeyStore(0)))
         try {
             body(rig)
         } finally {
@@ -111,13 +121,16 @@ class PausedFanOutOrderConcurrencyTest {
         }
     }
 
-    private class Rig {
+    private class Rig(device: RoomDevice) {
         private val executor = Executors.newFixedThreadPool(4)
         val scope = CoroutineScope(SupervisorJob() + executor.asCoroutineDispatcher())
         // Bounded: at most a few admit frames are ever in flight here.
         private val inbound = Channel<Swatch>(capacity = 8)
         private val peers = MutableStateFlow(setOf(HOST, MEMBER))
         private val bystanderFrames = MutableStateFlow<List<AdmitMessage>>(emptyList())
+
+        /** Each joiner's challenges, in the order the host sent them. */
+        private val challenges = listOf(BYSTANDER, MEMBER, LATECOMER).associateWith { Channel<AdmitMessage.Challenge>(Channel.UNLIMITED) }
         val policy = HoldPolicy()
         private val seam = object : Seam {
             override val selfId = HOST
@@ -126,8 +139,12 @@ class PausedFanOutOrderConcurrencyTest {
             override val incoming = inbound.receiveAsFlow()
             override suspend fun broadcast(payload: ByteArray) = Unit
             override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-                if (peer != BYSTANDER) return
                 val message = AdmitMessage.decode(payload) ?: return
+                if (message is AdmitMessage.Challenge) {
+                    challenges[peer]?.send(message)
+                    return
+                }
+                if (peer != BYSTANDER) return
                 bystanderFrames.update { it + message }
             }
             override suspend fun close(reason: CloseReason) = Unit
@@ -138,6 +155,7 @@ class PausedFanOutOrderConcurrencyTest {
             memberName = "host",
             scope = scope,
             clock = { Clock.System.now() },
+            device = device,
             heartbeatConfig = HeartbeatConfig(
                 interval = 20.milliseconds,
                 timeout = 100.milliseconds,
@@ -149,7 +167,15 @@ class PausedFanOutOrderConcurrencyTest {
         )
         private val release = CountDownLatch(1)
         private val parked = CompletableDeferred<Unit>()
+        @Volatile
         private var releasedInTime = true
+
+        /** The member's Welcomes on the bystander's wire when the parked thread went on; -1 if it never parked. */
+        @Volatile
+        private var welcomesWhenReleased = -1
+
+        /** Exchanges sent again because the first drew no admission in [EXCHANGE_GRACE]; see [admit]. */
+        private var retries = 0
 
         /** Park the thread that announces the first event matching [match], until [readmitWhileParked] is done. */
         fun parkOn(match: (MembershipEvent) -> Boolean) {
@@ -158,19 +184,40 @@ class PausedFanOutOrderConcurrencyTest {
                 parked.complete(Unit)
                 // Blocking on purpose: this IS the deciding thread, resumed inline by tryEmit.
                 releasedInTime = release.await(30, TimeUnit.SECONDS)
+                // Read on the deciding thread before it goes on: the witness that the readmission
+                // finished inside the gap, not merely that a latch was counted down.
+                welcomesWhenReleased = bystanderFrames.value.count { it.isWelcomeOf(MEMBER) }
             }
         }
 
         suspend fun admitBystanderAndMember(stage: StageTracker) {
             room.start()
             stage.at("bystander admitted", ::snapshot)
-            inbound.send(hello(BYSTANDER))
-            room.roster.first { members -> members.any { it.id == BYSTANDER } }
+            admit(BYSTANDER) { room.roster.value.any { it.id == BYSTANDER } }
             stage.at("member's Welcome reaches the bystander", ::snapshot)
-            inbound.send(hello(MEMBER))
-            bystanderFrames.first { frames -> frames.any { it.isWelcomeOf(MEMBER) } }
+            admit(MEMBER) { bystanderFrames.value.any { it.isWelcomeOf(MEMBER) } }
             stage.at("host's reconnect loop subscribed", ::snapshot)
             policy.subscribed.first { it == 1 }
+        }
+
+        /**
+         * Admit [peer] the way a current joiner is admitted: a Hello, the host's challenge, and a
+         * Proof signed with [peer]'s key. Returns once [admitted] holds, read off the bystander's wire
+         * or the roster. An exchange that draws nothing in [EXCHANGE_GRACE] is sent again, and
+         * counted: the room forgets the open challenge of a sender that leaves the route set, and a
+         * forgotten challenge seats nobody.
+         */
+        suspend fun admit(peer: PeerId, admitted: () -> Boolean) {
+            val (device, key) = credentialsOf(peer)
+            while (true) {
+                val hello = currentHello(peer.value, sessionId = peer.value, key = key)
+                inbound.send(Swatch(AdmitMessage.encode(hello), sender = peer))
+                val challenge = challenges.getValue(peer).receive()
+                inbound.send(Swatch(AdmitMessage.encode(handProof(challenge, HOST, device)), sender = peer))
+                val done = withTimeoutOrNull(EXCHANGE_GRACE) { merge(bystanderFrames, room.roster).first { admitted() } }
+                if (done != null) return
+                retries++
+            }
         }
 
         suspend fun awaitDetection(stage: StageTracker): Long {
@@ -182,29 +229,36 @@ class PausedFanOutOrderConcurrencyTest {
         suspend fun readmitWhileParked(stage: StageTracker) {
             stage.at("deciding thread parked", ::snapshot)
             parked.await()
+            // Out of the route set before it returns, so the readmission starts no second detector to
+            // pause it again. Dropped before the Goodbye, so the room's watcher of the route set has
+            // long seen the drop when the readmission's Hello opens a challenge it would forget.
+            peers.value = setOf(HOST)
             inbound.send(Swatch(AdmitMessage.encode(AdmitMessage.Goodbye), sender = MEMBER))
             stage.at("member's Farewell reaches the bystander", ::snapshot)
             bystanderFrames.first { frames -> frames.any { it is AdmitMessage.Farewell && it.peerId == MEMBER.value } }
-            // Out of the route set before it returns, so admitPeer starts no second detector.
-            peers.value = setOf(HOST)
             val welcomesBefore = bystanderFrames.value.count { it.isWelcomeOf(MEMBER) }
-            inbound.send(hello(MEMBER))
             stage.at("member's second Welcome reaches the bystander", ::snapshot)
-            bystanderFrames.first { frames -> frames.count { it.isWelcomeOf(MEMBER) } > welcomesBefore }
+            admit(MEMBER) { bystanderFrames.value.count { it.isWelcomeOf(MEMBER) } > welcomesBefore }
             release.countDown()
         }
 
         suspend fun assertLastFrameNamingTheMemberIsItsWelcome(stage: StageTracker) {
             // A later admission on the same lane: once its Welcome is recorded, every frame enqueued
             // for the bystander before it has been sent.
-            inbound.send(hello(LATECOMER))
             stage.at("latecomer's Welcome reaches the bystander (lane drained)", ::snapshot)
-            bystanderFrames.first { frames -> frames.any { it.isWelcomeOf(LATECOMER) } }
+            admit(LATECOMER) { bystanderFrames.value.any { it.isWelcomeOf(LATECOMER) } }
             val frames = bystanderFrames.value
             val naming = frames.filter { it.names(MEMBER) }
-            println("paused-fanout-order: frames naming member=$naming")
+            println("paused-fanout-order: welcomesWhenReleased=$welcomesWhenReleased retries=$retries frames naming member=$naming")
             assertAll(
                 { assertTrue(releasedInTime, "rig: the parked thread must have been released by the probe, not by its timeout") },
+                {
+                    assertEquals(
+                        2,
+                        welcomesWhenReleased,
+                        "rig: both of the member's Welcomes must be on the bystander's wire while the deciding thread is parked",
+                    )
+                },
                 {
                     assertIs<Liveness.Connected>(
                         room.roster.value.single { it.id == MEMBER }.liveness,
@@ -259,7 +313,7 @@ class PausedFanOutOrderConcurrencyTest {
             _events.emit(JoinerReconnectEvent.WindowOpened(peerId, expiresAt = expiresAt, detectedAt = detectedAt))
         }
 
-        override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
+        override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict =
             ResumeResult.WindowNotYetOpen
 
         override fun onPeerRecovered(peerId: PeerId, at: Long) = Unit
@@ -276,12 +330,19 @@ class PausedFanOutOrderConcurrencyTest {
         /** A deadline no HeartbeatConfig estimate can equal, so the refinement is Applied. */
         const val REFINED = 4_000_000_000_000L
 
-        fun hello(peer: PeerId) = Swatch(
-            AdmitMessage.encode(
-                AdmitMessage.Hello(displayName = peer.value, sessionId = peer.value, protocolVersion = ProtocolVersion.CURRENT),
-            ),
-            sender = peer,
-        )
+        /** How long one admission exchange may take before the rig sends it again. */
+        val EXCHANGE_GRACE = 3.seconds
+
+        /** The latecomer's key: a third one, so its admission takes nobody's seat over. */
+        val LATECOMER_KEY: DidKey = fakeDidKey(102)
+        val LATECOMER_DEVICE: DeviceKey = fakeDeviceKey(102)
+
+        fun credentialsOf(peer: PeerId): Pair<DeviceKey, DidKey> = when (peer) {
+            MEMBER -> TEST_DEVICE_A to TEST_KEY_A
+            BYSTANDER -> TEST_DEVICE_B to TEST_KEY_B
+            LATECOMER -> LATECOMER_DEVICE to LATECOMER_KEY
+            else -> error("no key for ${peer.value}")
+        }
 
         fun AdmitMessage.isWelcomeOf(peer: PeerId) = this is AdmitMessage.Welcome && assignedPeerId == peer.value
 
