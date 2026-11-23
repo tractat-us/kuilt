@@ -1703,16 +1703,9 @@ public class Quilter<S : Quilted<S>>(
     }
 
     /**
-     * Re-sends the requested delta range to [requester], or — when part of the range is already
-     * GC'd — heals it with a [QuiltMessage.FullState] instead.
-     *
-     * The range goes to [requester] alone, by [Seam.sendTo], the channel the Resend itself came
-     * over (#3622). A [QuiltMessage.VectorDigest] asks for a sender's missing deltas this way, and
-     * a delta that was lost by broadcast must not be re-sent the same way: where the broadcast path
-     * to that peer is down, the heal would be lost with it on every round, and the digest exchange
-     * would never fall back to a whole state.
-     *
-     * Both replies are addressed to [requester], the transport-level [PeerId] the Resend arrived from,
+     * Re-broadcasts the requested delta range, or — when part of the range is already
+     * GC'd — heals the requester with a [QuiltMessage.FullState] instead. The fallback is
+     * addressed to [requester], the transport-level [PeerId] the Resend arrived from,
      * never a PeerId fabricated from the wire message's [ReplicaId]: with a custom
      * replica id the fabricated peer is unknown to the seam and the resulting
      * PeerNotConnected is swallowed, silently disabling the gap-heal path.
@@ -1729,11 +1722,7 @@ public class Quilter<S : Quilted<S>>(
         }
         for (seq in msg.fromSeq..msg.toSeq) {
             val delta = pendingDeltas[seq] ?: continue
-            val bytes = encode(QuiltMessage.Delta(sender = replica, seq = seq, delta = delta))
-            scope.launch {
-                runCatchingCancellable { seam.sendTo(requester, bytes) }
-                    .onFailure { logger.debug { "resent delta $seq to $requester failed: ${it.message}" } }
-            }
+            broadcastDelta(seq, delta, parent = ownJob)
         }
     }
 
