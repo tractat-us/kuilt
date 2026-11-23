@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session
 
@@ -21,7 +21,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
@@ -55,6 +55,9 @@ import kotlin.time.Instant
  * uses), and its opening is asserted before any resume is attempted.
  */
 class ForgedResumeTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
 
     /** The host's real controller plus every verdict it rendered, in order. */
     private class ObservedController {
@@ -80,7 +83,7 @@ class ForgedResumeTest {
             loom = loom,
             scope = backgroundScope,
             clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = fakeKeyStore(nextDevice++),
             reconnectControllerFactory = observed?.factory,
         )
 
@@ -340,7 +343,7 @@ class ForgedResumeTest {
                 loom = loom,
                 scope = backgroundScope,
                 clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = fakeKeyStore(nextDevice++),
                 reconnectControllerFactory = trusting,
             ).host(Pattern("Host"), memberName = "Host")
             val victim = factory(loom).join(InMemoryTag("Victim"), memberName = "Victim")

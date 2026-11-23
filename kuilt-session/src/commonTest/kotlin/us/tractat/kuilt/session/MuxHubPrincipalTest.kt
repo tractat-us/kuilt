@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -9,7 +11,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
@@ -47,13 +49,13 @@ class MuxHubPrincipalTest {
                 fabric.serverLoom,
                 backgroundScope,
                 clock = zeroClock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = fakeKeyStore(0),
             )
             val hostRoom = hostFactory.host(Pattern("room"))
 
             // A joiner whose server-end connection is attested with a verified principal.
             val joinerLoom = fabric.clientLoom(PeerId("joiner"), Random(1L), principal = principal)
-            val joinerFactory = SeamRoomFactory(joinerLoom, backgroundScope, clock = zeroClock, deviceKeyStore = InMemoryDeviceKeyStore())
+            val joinerFactory = SeamRoomFactory(joinerLoom, backgroundScope, clock = zeroClock, deviceKeyStore = fakeKeyStore(1))
             joinerFactory.join(InMemoryTag("room"))
 
             // Await the admit handshake, then assert the verified principal rode onto the member.

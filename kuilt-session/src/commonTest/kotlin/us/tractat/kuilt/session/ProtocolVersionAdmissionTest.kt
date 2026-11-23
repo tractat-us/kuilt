@@ -1,13 +1,19 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.core.Seam
+import kotlin.time.Duration.Companion.seconds
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.admit.RejectCode
@@ -28,8 +34,12 @@ import kotlin.test.assertTrue
  * flat mesh, the host receives it, and the gate accepts or rejects on the declared version.
  */
 class ProtocolVersionAdmissionTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
+
     private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
-        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = InMemoryDeviceKeyStore())
+        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = fakeKeyStore(nextDevice++))
 
     /**
      * The #1569 property: a joiner declaring a protocol version outside the host's supported range
@@ -101,15 +111,7 @@ class ProtocolVersionAdmissionTest {
             // Positive control: the same host admits a joiner that DOES declare the current version,
             // so the roster assertion below is attributable to the gate and not to an inert host.
             val currentSeam = loom.join(InMemoryTag("Carol"))
-            currentSeam.broadcast(
-                AdmitMessage.encode(
-                    AdmitMessage.Hello(
-                        displayName = "Carol",
-                        sessionId = "session-carol",
-                        protocolVersion = ProtocolVersion.CURRENT,
-                    ),
-                ),
-            )
+            currentSeam.broadcast(AdmitMessage.encode(currentHello("Carol")))
             val admitted = host.roster.first { it.size == 1 }
 
             assertAll(
@@ -128,6 +130,81 @@ class ProtocolVersionAdmissionTest {
             currentSeam.close()
             host.leave()
         }
+
+    /**
+     * A v2 joiner, sending the bytes a v2 build sends (a version of 2, no key, no nonce), is told
+     * [RejectCode.ProtocolMismatch] (#3210). It is not dropped: the Hello still decodes, because the
+     * key and nonce are optional on the wire, so the gate reads its version and answers. Were either
+     * field required, the decode would fail, the host would say nothing, and the wait below would
+     * time out.
+     *
+     * The frame is [GOLDEN_V2_HELLO_HEX], captured from the v2 encoder, not a Hello this build
+     * encodes: a v2 peer does not run this build's encoder, and an encoder change (one that writes
+     * an explicit null, say) would otherwise change the sender along with the receiver.
+     */
+    @Test
+    fun `a v2 joiner is refused with ProtocolMismatch`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val host = factory(loom, backgroundScope).host(Pattern("HostA"), memberName = "HostA")
+
+            val v2Seam = loom.join(InMemoryTag("Bob"))
+            v2Seam.broadcast(GOLDEN_V2_HELLO_HEX.chunked(2).map { it.toInt(16).toByte() }.toByteArray())
+            val reject = withTimeoutOrNull(5.seconds) { firstReject(v2Seam) }
+
+            assertAll(
+                { assertEquals(RejectCode.ProtocolMismatch, reject?.code, "a v2 hello must be answered, not dropped") },
+                { assertEquals(emptySet(), host.roster.value, "host must not admit a v2 joiner") },
+            )
+            v2Seam.close()
+            host.leave()
+        }
+
+    /**
+     * A Hello declaring v3 must carry both the device key and the joiner nonce; one missing either is
+     * refused with [RejectCode.ProtocolMismatch], since it does not speak the version it declares
+     * (#3210). The control is a third joiner sending both, which the same host admits.
+     */
+    @Test
+    fun `a v3 hello missing its key or its nonce is refused with ProtocolMismatch`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val host = factory(loom, backgroundScope).host(Pattern("HostA"), memberName = "HostA")
+
+            val keyless = loom.join(InMemoryTag("Keyless"))
+            keyless.broadcast(AdmitMessage.encode(currentHello("Keyless").copy(key = null)))
+            val keylessReject = withTimeoutOrNull(5.seconds) { firstReject(keyless) }
+
+            val nonceless = loom.join(InMemoryTag("Nonceless"))
+            nonceless.broadcast(AdmitMessage.encode(currentHello("Nonceless").copy(joinerNonce = null)))
+            val noncelessReject = withTimeoutOrNull(5.seconds) { firstReject(nonceless) }
+
+            val complete = loom.join(InMemoryTag("Carol"))
+            complete.broadcast(AdmitMessage.encode(currentHello("Carol")))
+            val admitted = host.roster.first { it.isNotEmpty() }
+            delay(100)
+
+            assertAll(
+                { assertEquals(RejectCode.ProtocolMismatch, keylessReject?.code, "a keyless v3 hello is refused") },
+                { assertEquals(RejectCode.ProtocolMismatch, noncelessReject?.code, "a nonceless v3 hello is refused") },
+                {
+                    assertEquals(
+                        setOf("Carol"),
+                        host.roster.value.map { it.identity.displayName }.toSet(),
+                        "only the complete hello is admitted (control: ${admitted.map { it.identity.displayName }})",
+                    )
+                },
+            )
+            keyless.close()
+            nonceless.close()
+            complete.close()
+            host.leave()
+        }
+
+    private suspend fun firstReject(seam: Seam): AdmitMessage.Reject =
+        seam.incoming
+            .mapNotNull { AdmitMessage.decode(it.toByteArray()) as? AdmitMessage.Reject }
+            .first()
 
     /**
      * The happy path: a joiner on the current protocol version — the normal `join()` path, which now

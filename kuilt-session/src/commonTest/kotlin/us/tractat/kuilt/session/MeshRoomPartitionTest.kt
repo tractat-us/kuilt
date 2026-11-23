@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -12,7 +14,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.election.ElectionOutcome
 import us.tractat.kuilt.session.election.SeamElectionLobby
@@ -58,11 +60,12 @@ class MeshRoomPartitionTest {
             }
 
             val faulty = FaultyLoom(InMemoryLoom(), backgroundScope)
+            var nextDevice = 0 // each lobby below is a new device
             fun factory() = SeamRoomFactory(
                 loom = faulty,
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = fakeKeyStore(nextDevice++),
                 heartbeatConfig = fastHeartbeat,
             )
             fun lobby(seam: Seam) = SeamElectionLobby(
