@@ -93,8 +93,8 @@ public sealed interface MembershipEvent {
      * The member's [Liveness] transitions back to [Liveness.Connected].
      * Driven by [us.tractat.kuilt.session.partition.PartitionEvent.PeerRecovered], or on a member
      * other than the host by the host's announcement that the peer is back. That announcement covers
-     * a peer that came back through [Room.resume], so those members see this event where the host and
-     * the resuming peer see [Resumed].
+     * a partitioned peer whose return the host restored, so those members see this event where the
+     * host and the returning peer see [Resumed].
      */
     public data class Recovered(val peerId: PeerId, val at: Instant) : MembershipEvent
 
@@ -102,7 +102,7 @@ public sealed interface MembershipEvent {
      * A reconnect window opened for a peer whose link dropped.
      *
      * **Dual-role.** Emitted on the **host's** events when a joiner goes unresponsive and the
-     * host opens a window to admit its `resume` ([peerId] = the joiner; if the joiner resumes
+     * host opens a window to hold its seat ([peerId] = the joiner; if the joiner returns
      * before [expiresAt], [Resumed] follows, otherwise [Left] with [LeaveReason.PartitionExpired]);
      * and on a **joiner's** events when its host link tears and the joiner opens its own window to
      * re-weave and resume ([peerId] = the host; on success [Resumed] follows, otherwise [HostLost]).
@@ -111,11 +111,14 @@ public sealed interface MembershipEvent {
     public data class WindowOpened(val peerId: PeerId, val expiresAt: Instant) : MembershipEvent
 
     /**
-     * A partitioned joiner successfully resumed via [Room.resume].
+     * A partitioned joiner came back to its own seat.
      *
-     * Emitted on the **host's** events when the joiner's [us.tractat.kuilt.session.partition.ResumeToken]
-     * validated and the reconnect window was still open. Also emitted on the **joiner's** events
-     * to confirm local state recovery.
+     * Emitted on the **host's** events when a joiner whose seat the host held `Partitioned` said
+     * Hello again, proved the seat's device key, and the reconnect window was still open: once per
+     * partition (#3215). A restore of a seat the host still held connected — a retry, or a restart
+     * faster than the host noticed — emits nothing, since the host never saw the member go. Also
+     * emitted on the **joiner's** events, with its own id, when the host's answer names the
+     * membership it already held.
      */
     public data class Resumed(val peerId: PeerId) : MembershipEvent
 
@@ -128,7 +131,7 @@ public sealed interface MembershipEvent {
      * thread can land just after it, so ignore everything that follows: a [Partitioned] or
      * [WindowOpened] would start a countdown no event ends. Stop any countdown already running too,
      * since no [Recovered] or [Left] will come for it. A [Resumed] never follows it: the host's `Welcome`
-     * that arrives once the host is lost settles [Room.resume] as `WindowClosed` and emits nothing.
+     * that arrives once the host is lost closes nothing and emits nothing.
      *
      * The room then ends itself as [Room.leave] does: [Room.roster] empties and every
      * [Room.incomingFrom] flow completes. The event comes first and the room does not wait for a

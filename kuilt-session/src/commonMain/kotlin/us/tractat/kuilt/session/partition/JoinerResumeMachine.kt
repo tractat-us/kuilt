@@ -62,13 +62,16 @@ internal interface JoinerResumeHost {
     fun prepareReHello(): ByteArray?
 
     /**
-     * Forget the latest Hello: its nonce, and the challengers that answered for it. Called when an
-     * episode is claimed ([JoinerResumeMachine.attemptReconnect]), and when a flight is installed
-     * outside one, before the attempt's own Hello is minted, so a `Welcome` or terminal `Reject` left
-     * over from an earlier Hello finds no verified challenger and closes or ends nothing (review round 1 on #3614). Until the next
-     * [prepareReHello] the room answers no challenge, since there is no Hello for one to echo.
+     * Forget the latest Hello's nonce. Called when an episode is claimed
+     * ([JoinerResumeMachine.attemptReconnect]), and when a flight is installed outside one, before
+     * the attempt's own Hello is minted, so a `Welcome` or `Reject` that names an earlier Hello
+     * closes or ends nothing (review round 1 on #3614; #3215). Until the next [prepareReHello] the
+     * room answers no challenge and acts on no answer, since there is no Hello for one to name.
      */
     fun forgetLatestHello()
+
+    /** The room's id as its host named it, or null before the first `Welcome`: for log lines. */
+    fun roomId(): String?
 
     /**
      * Stop the host-liveness detector for the reconnect's duration, so a late `PeerLost`
@@ -164,14 +167,11 @@ internal data class ResumeRefusal(
  *
  * **A reconnect says Hello again (#3159, Task 1.7).** Each attempt sends the host a fresh `Hello`
  * ([JoinerResumeHost.prepareReHello]), the room answers the host's challenge as it did at the first
- * admission, and the attempt ends on the host's own `Welcome` to this member: marked
- * `ReturnKind.Restored` when the seat came back, unmarked when it was gone and this was a fresh
- * admission. Both end the episode as a success (Amendment C). The `Resume` frame is never sent;
- * the host still answers one until Task 1.8 retires it.
+ * admission, and the attempt ends on the host's own `Welcome` to this member, which names that
+ * Hello: naming the membership this room already held when the seat came back, another one when it
+ * was gone and this was a fresh admission (#3215). Both end the episode as a success (Amendment C).
  *
- * Owns the four pieces of joiner reconnect state and their transitions:
- * - [resumeToken] — minted at admit time ([mintTokenIfAbsent]), still read by `Room.resumeToken`
- *   until Task 1.8 removes it; a reconnect no longer presents it;
+ * Owns the joiner's reconnect state and its transitions:
  * - the **single-flight slot** (`pendingResume`) — concurrent [resume] calls coalesce onto one
  *   in-flight Hello (#1280), resolved by the host's self-`Welcome` ([takeFlightForWelcome]) or a
  *   `Reject` ([rejectFlight]), or abandoned at teardown ([takePendingFlight]);
@@ -215,17 +215,6 @@ internal class JoinerResumeMachine(
     private val host: JoinerResumeHost,
 ) {
     /**
-     * The [ResumeToken] minted at admit time, which nothing presents any more.
-     *
-     * Null until the joiner receives its own `Welcome` carrying a [RoomId] and a secret from the
-     * host. [resume] says Hello again and the device key proves the member (#3159, Task 1.7), so the
-     * token is only read: by the room's public `Room.resumeToken`, and by [runReconnect]'s log line.
-     * Slice 1.8 removes it.
-     */
-    var resumeToken: ResumeToken? = null
-        private set
-
-    /**
      * Pending [resume] calls waiting for the host's reply.
      *
      * When the joiner says Hello again, it parks a [CompletableDeferred] here. The host answers with
@@ -254,8 +243,8 @@ internal class JoinerResumeMachine(
      * [FailureReason.Refused] instead of [FailureReason.WindowExpired].
      *
      * **Only a code that declares itself terminal short-circuits the loop** ([RejectCode.retryable]
-     * false, #1572), and only from the peer whose challenge this joiner answered (Amendment C; see
-     * [rejectFlight]). Every other reject — including one from a host that sends no code at all,
+     * false, #1572). The room hands over only a `Reject` that names this joiner's latest Hello
+     * (#3215; see [rejectFlight]). Every other reject — including one from a host that sends no code at all,
      * which decodes as [RejectCode.Unknown] — is recorded and *not* obeyed: it schedules another
      * Hello. Reset at the start of each [runReconnect] episode; discarded if a later retry succeeds.
      * Guarded by [lock].
@@ -314,25 +303,6 @@ internal class JoinerResumeMachine(
     private var reconnectJob: Job? = null
 
     /**
-     * Mints the [resumeToken] (once) from the [roomId] and [secret] carried in the joiner's own
-     * `Welcome`. No-op when already minted, or when either is null — a host that sends no secret
-     * (one that predates #3165) leaves this joiner with no token, so a tear goes straight to
-     * terminal rather than presenting a resume that host could not tell from a forgery.
-     */
-    fun mintTokenIfAbsent(roomId: String?, secret: ResumeSecret?) {
-        lock.withLock {
-            if (resumeToken == null && roomId != null && secret != null) {
-                resumeToken = ResumeToken(
-                    peerId = seam.selfId,
-                    roomId = RoomId(roomId),
-                    issuedAt = clock().toEpochMilliseconds(),
-                    secret = secret,
-                )
-            }
-        }
-    }
-
-    /**
      * Test-visibility (via the room): is a [resume] attempt currently in flight
      * (its reply slot installed)? (#1280)
      */
@@ -343,7 +313,7 @@ internal class JoinerResumeMachine(
 
     /**
      * Test-visibility (via the room): how many resume flights this machine has started — the
-     * witness that tells "a flight began on that generation" from "none did" now that a `Resume`
+     * witness that tells "a flight began on that generation" from "none did" now that a Hello
      * the host is not there to receive is never sent at all (#3165).
      */
     fun flightsStarted(): Int = lock.withLock { flightsStarted }
@@ -406,30 +376,22 @@ internal class JoinerResumeMachine(
      * arrived with no reconnect under way (the initial join), which the room fails loudly as an
      * admission rejection instead (#1178).
      *
-     * **A terminal code counts only from a verified challenger (Amendment C).** [fromChallenger]
-     * says the `Reject` came from a peer whose challenge this joiner answered for its current Hello.
-     * A terminal `Reject` from anyone else is ignored and leaves the flight to its own answer: it
-     * is about some other exchange — an impostor's `KeyConflict` sent to the id it claimed, which is
-     * this one — or forged by a bystander. What is left of the impostor case: a `Reject` the host
-     * sends to this id about an impostor's exchange *after* this joiner answered the host's
-     * challenge cannot be told from one about this joiner's own, since a `Reject` names no
-     * challenge, and still ends the episode.
+     * **The room hands over only a `Reject` that names the latest Hello (#3215).** That is this
+     * flight's own Hello, which went to the host alone, so a refusal of any other exchange — an
+     * impostor's `KeyConflict` sent to the id it claimed, which is this one, or a bystander's
+     * forgery — never reaches here. Called in the room's critical section that checked it.
      *
-     * Any retryable code, from anyone, settles the flight as refused, which only schedules another
-     * Hello: the loop waits an interval and tries again. A host that sends no code decodes as
+     * A retryable code settles the flight as refused, which only schedules another Hello: the loop
+     * waits an interval and tries again. A host that sends no code decodes as
      * [RejectCode.Unknown], which is retryable. The recorded [refusal] refines the terminal label to
      * [FailureReason.Refused] if the window ultimately expires.
      *
      * **The value handed to the caller is [ResumeResult.Refused], not [ResumeResult.WindowClosed]
      * (#2364)**, so a terminal refusal and a transient one stay distinct at the public surface.
      */
-    fun rejectFlight(message: String, code: RejectCode, fromChallenger: Boolean): Boolean = lock.withLock {
+    fun rejectFlight(message: String, code: RejectCode): Boolean = lock.withLock {
         val d = pendingResume
         if (d == null) return reconnecting
-        if (!code.retryable && !fromChallenger) {
-            logger.info { "resume.reject-ignored code=${code.id} reason=$message: not from the peer whose challenge this joiner answered" }
-            return true
-        }
         pendingResume = null
         // Count within the episode, so runReconnect can report each reject exactly once.
         refusal = Refusal(message, code, attempt = (refusal?.attempt ?: 0) + 1)
@@ -464,13 +426,14 @@ internal class JoinerResumeMachine(
                     // Fresh episode: forget any reject recorded by a prior reconnect on this machine,
                     // and the refusal record that described it (attempt numbers are per-episode), and
                     // any earlier Welcome. The latest Hello is forgotten too: until this episode mints
-                    // its own, a leftover Welcome or Reject from an earlier Hello has no challenger to
-                    // come from, so it can neither close this episode nor end it.
+                    // its own, a leftover Welcome or Reject that names an earlier Hello names none the
+                    // room is waiting on, so it can neither close this episode nor end it (#3215).
                     //
                     // In the claiming section, not in [runReconnect]: the guard is set from here on, and
                     // a frame handled before the launched episode first runs would otherwise find a
-                    // claimed episode and the previous Hello's challengers both, and close it before its
-                    // own Partitioned (review round 2 on #3614).
+                    // claimed episode and the previous Hello's nonce both, and close it before its own
+                    // Partitioned (review round 2 on #3614). The nonce check alone does not cover this:
+                    // an answer to the previous Hello names it until a new one is minted.
                     refusal = null
                     lastRefusal = null
                     ackResumed = false
@@ -535,7 +498,7 @@ internal class JoinerResumeMachine(
      */
     private suspend fun runReconnect(at: Instant) {
         val reweaveFn = reweave
-        val (roomId, hostId) = lock.withLock { resumeToken?.roomId?.value to host.hostPeer() }
+        val (roomId, hostId) = lock.withLock { host.roomId() to host.hostPeer() }
         if (reweaveFn == null || hostId == null) {
             // #1618 evidence capture: name which null gate sent this tear straight to terminal
             // HostLost (no WindowOpened). Identities, not sizes — no behavior change.
@@ -670,8 +633,8 @@ internal class JoinerResumeMachine(
                         logger.info { report.render() }
                     }
 
-                    // Fail fast ONLY on a code the challenger declared terminal (#1572; [rejectFlight]
-                    // takes no terminal code from anyone else). Everything else — an unrecognised code,
+                    // Fail fast ONLY on a code the host declared terminal, refusing this episode's own Hello
+                    // (#1572, #3215). Everything else — an unrecognised code,
                     // a host too old to send one, a host that could not consult its window — says
                     // Hello again until the deadline.
                     if (code?.retryable == false) return@withTimeoutOrNull false
@@ -753,19 +716,19 @@ internal class JoinerResumeMachine(
     /**
      * Say Hello to the host again and await its answer (#3159, Task 1.7): a fresh Hello, sent to the
      * host alone ([sendToHost]); the room answers the host's challenge as at the first admission; and
-     * the host's `Welcome` to this member settles the flight — [ResumeResult.Success] when it is
-     * marked `Restored`, [ResumeResult.WindowClosed] when it is a fresh admission because the seat
-     * was gone, which the room keeps ([takeFlightForWelcome]). A `Reject` settles it
+     * the host's `Welcome` to this member, naming that Hello, settles the flight —
+     * [ResumeResult.Success] when it names the membership this room already held,
+     * [ResumeResult.WindowClosed] when it names another, a fresh admission because the seat was gone,
+     * which the room keeps ([takeFlightForWelcome]). A `Reject` naming that Hello settles it
      * [ResumeResult.Refused] ([rejectFlight]).
      *
-     * `Room.resume(token)` reaches here too until Task 1.8 removes it; the token is not presented,
-     * since the key proves the member now.
+     * [runReconnect] is the only production caller since `Room.resume` was retired (#3215). Tests
+     * reach it outside an episode through `SeamRoom.sayHelloAgain`.
      *
      * **Concurrent calls coalesce (#1280).** A room has one host, so all concurrent attempts target
      * the same outcome: when one is already in flight, this call **joins** it — awaiting the same
      * reply — instead of sending a second Hello, whose fresh nonce would orphan the first one's
-     * challenge. It also keeps the internal auto-reconnect ([runReconnect]) and an app-level call
-     * from stealing each other's reply slot. Callers that want a retry after a non-Success result
+     * challenge. Callers that want a retry after a non-Success result
      * simply call again: sequential calls are fresh attempts.
      *
      * State mutation (installing/joining the deferred) is under [lock]; the suspend send is outside.
@@ -784,9 +747,9 @@ internal class JoinerResumeMachine(
                 Triple(inFlight, inFlightSent, false)
             } else {
                 flightsStarted++
-                // Outside an episode — a caller's own `Room.resume` — the flight is the only scope the
-                // latest Hello has: forget it, so a Welcome or Reject for an earlier Hello cannot
-                // settle this flight while it waits to send. Inside one the episode's start already
+                // Outside an episode — a test's own attempt — the flight is the only scope the latest
+                // Hello has: forget it, so a Welcome or Reject for an earlier Hello cannot settle this
+                // flight while it waits to send. Inside one the episode's start already
                 // forgot it, and a Welcome answering an earlier attempt of this episode closes the
                 // episode, as Amendment C says, even after this flight is installed.
                 if (!reconnecting) host.forgetLatestHello()
@@ -887,9 +850,9 @@ internal class JoinerResumeMachine(
      * Both caller kinds route through here — the owner (after sending) and a joined caller
      * (the `!ownsFlight` early return) — so neither can hang. A `Welcome` or `Reject` arriving after
      * the deadline cleared the slot settles no flight. Inside a reconnect episode, the host's
-     * `Welcome` from a verified challenger of the latest Hello still closes the episode
-     * ([takeFlightForWelcome]); outside one it closes nothing, as there is nothing to close. A
-     * `Welcome` from any other sender, or a terminal `Reject` from one, is not taken at all.
+     * `Welcome` naming the latest Hello still closes the episode ([takeFlightForWelcome]); outside
+     * one it closes nothing, as there is nothing to close. A `Welcome` or `Reject` naming any other
+     * Hello is not taken at all.
      *
      * Only [withTimeoutOrNull]'s own deadline yields null here; an *external* cancellation (e.g.
      * the auto-reconnect window elapsing around an internal [resume]) propagates through

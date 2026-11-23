@@ -31,17 +31,16 @@ public data class HeartbeatConfig(
      */
     val reconnectWindow: Duration = 60.seconds,
     /**
-     * Per-call deadline for a single `Room.resume(token)` awaiting the host's
-     * `ResumeAck`/`Reject`. When it elapses with no verdict the call returns
-     * `ResumeResult.TimedOut` instead of parking indefinitely. A call whose seam tears first
-     * returns `TimedOut` at once, without waiting this out: no reply can come back over it.
+     * Deadline for one attempt of a joiner's reconnect: a Hello awaiting the host's `Welcome` or
+     * `Reject`. When it elapses with no verdict the attempt ends as timed out and the reconnect
+     * tries again, instead of parking. An attempt whose seam tears first ends at once, without
+     * waiting this out: no reply can come back over it.
      *
-     * Defaults to [timeout] (15 s): a resume is a single round-trip to the host, so the
-     * same single-RPC deadline that governs heartbeat responsiveness fits it — and it is
-     * deliberately far shorter than [reconnectWindow] (60 s), which budgets the whole
-     * *multi-attempt* auto-reconnect episode, not one reply. Without this bound a direct
-     * `Room.resume` against a host that never replies (host gone, link black-holed, reply
-     * lost) suspends the caller forever.
+     * Defaults to [timeout] (15 s): an attempt is a single exchange with the host, so the same
+     * single-RPC deadline that governs heartbeat responsiveness fits it — and it is deliberately
+     * far shorter than [reconnectWindow] (60 s), which budgets the whole *multi-attempt* reconnect
+     * episode, not one reply. Without this bound an attempt against a host that never replies
+     * (host gone, link black-holed, reply lost) would spend the whole window.
      *
      * Default: 15 seconds.
      */

@@ -1,7 +1,5 @@
 package us.tractat.kuilt.conformance
 
-import kotlinx.coroutines.test.TestScope
-
 /**
  * Verifies the reference [us.tractat.kuilt.session.SeamRoomFactory] over
  * [us.tractat.kuilt.core.InMemoryLoom] satisfies the full [RoomConformanceSuite].
@@ -13,10 +11,6 @@ import kotlinx.coroutines.test.TestScope
  *
  * The default [newHarness] implementation from [RoomConformanceSuite] is used:
  * a [us.tractat.kuilt.test.FaultyLoom]-wrapped [us.tractat.kuilt.core.InMemoryLoom]
- * with [fastHeartbeatConfig] and an injected clock. Resume mapping properties use an observed
- * real reconnect controller so each property proves which host verdict reached the mapper.
+ * with [fastHeartbeatConfig] and an injected clock.
  */
-class InMemoryRoomConformanceTest : RoomConformanceSuite() {
-    override fun newResumeHarness(scope: TestScope): ResumeHarness =
-        referenceResumeHarness(scope, fastHeartbeatConfig)
-}
+class InMemoryRoomConformanceTest : RoomConformanceSuite()

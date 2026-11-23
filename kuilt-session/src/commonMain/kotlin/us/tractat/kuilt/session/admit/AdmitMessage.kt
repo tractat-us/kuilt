@@ -11,7 +11,6 @@ import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.IdentityInternalApi
 import us.tractat.kuilt.session.RoomFramePrefix
 import us.tractat.kuilt.identity.Challenge as ChallengeStatement
-import us.tractat.kuilt.session.partition.ResumeSecret
 
 /**
  * Wire messages that implement the admit/identify handshake.
@@ -41,6 +40,14 @@ import us.tractat.kuilt.session.partition.ResumeSecret
  * Host   → Joiner : Challenge(signed by the host's key, echoing joinerNonce)
  * Joiner → Host   : Proof(signed by the joiner's key, over the challenge's hostNonce)
  * Host   → Joiner : Welcome(…)   or   Reject(BadProof)
+ * ```
+ *
+ * Since v7 (#3215) a joiner's return after a dropped link is the same exchange: it says Hello again,
+ * and there is no separate resume frame. The direct Welcome and every Reject name the Hello they
+ * answer ([Welcome.answers], [Reject.answers]), and the direct Welcome names the membership it
+ * admits ([Welcome.membership]):
+ * ```
+ * Host   → Joiner : Welcome(…, answers = joinerNonce, membership)   or   Reject(code, answers = joinerNonce)
  * ```
  */
 @Serializable
@@ -132,27 +139,38 @@ public sealed interface AdmitMessage {
     /**
      * Sent by the host to confirm admission.
      *
-     * Also broadcast to all other already-admitted members so they can update their rosters.
+     * Also broadcast to all other already-admitted members so they can update their rosters. Four
+     * shapes, all minted by the host:
+     * - the **direct** Welcome, to the member it names, the one that answers that member's [Hello];
+     * - its **roster copy**, to every other member;
+     * - a **bootstrap** Welcome per existing member, to the new member;
+     * - the host's own **intro**, to the new member.
      *
-     * [assignedPeerId] — the new member's [us.tractat.kuilt.core.PeerId] value.
-     * [identity] — the identity the new member declared in their [Hello].
-     * [roomId] — the host's stable room identifier; null in bootstrap welcomes for existing members.
-     *   Joiners use this to mint their [us.tractat.kuilt.session.partition.ResumeToken].
-     * [resumeSecret] — the secret the host minted for [assignedPeerId], present **only** on the
-     *   direct Welcome to that member (#3165). The roster copy every other member receives, and the
-     *   bootstrap and host-intro Welcomes, carry `null`: a bystander holding it could resume as that
-     *   member. Additive — nullable and defaulted, so an older joiner ignores it and a secretless
-     *   Welcome encodes byte-identically to the pre-#3165 form.
-     * [key] — the device key of the member [assignedPeerId] names (v3, #3210), on all three shapes:
+     * [assignedPeerId] — the [us.tractat.kuilt.core.PeerId] value of the member this Welcome names.
+     * [displayName], [sessionId], [deviceId] — the identity that member was admitted with.
+     * [roomId] — the host's stable room identifier, on the direct Welcome and its roster copy; null
+     *   on bootstrap Welcomes and the host intro. A joiner learns `Room.roomId` from it.
+     * [key] — the device key of the member [assignedPeerId] names (v3, #3210), on all four shapes:
      *   the direct Welcome and its roster copy carry the joiner's key from its [Hello]; a bootstrap
      *   Welcome carries an existing member's key as the host recorded it; the host intro carries the
      *   host's own key. Every one is the host's assertion. **Required on the wire**, unlike
      *   [Hello.key]: a v2 host, the only sender of a keyless Welcome, refuses a v3 Hello before it
      *   admits anyone, so a v3 joiner never receives one.
-     * [returnKind] — set only on the direct Welcome, to the member it names, when the host restored
-     *   a seat it was holding rather than admitting a new member (v5, #3212), under the same peer id
-     *   or, taking over a partitioned seat of the same key, under a new one (v6, #3213). `null` is an
-     *   ordinary admission. The roster copy, the bootstrap Welcomes and the host intro never carry it.
+     * [returnKind] — set only on the direct Welcome, when the host restored a seat it was holding
+     *   rather than admitting a new member (v5, #3212): under the same peer id, or, taking over a
+     *   partitioned seat of the same key, under a new one (v6, #3213). `null` is an ordinary
+     *   admission. It describes the host's decision; a joiner reads a restore from [membership]
+     *   instead, since only that names *which* membership came back.
+     * [answers] — the [Hello.joinerNonce] of the Hello this Welcome answers (v7, #3215), on the direct
+     *   Welcome only. A joiner takes a direct Welcome as the answer to its Hello only when this equals
+     *   the nonce of the latest Hello it sent, so a Welcome that answers an older Hello — the one
+     *   before a reconnect, say — never closes the reconnect that followed it. Width
+     *   [Hello.JOINER_NONCE_SIZE], checked in the constructor.
+     * [membership] — an opaque id the host minted when it admitted this membership (v7, #3215), on
+     *   the direct Welcome only. A restored seat keeps the id it had, and every new admission gets a
+     *   new one. So a joiner that compares the id on the Welcome answering its reconnect with the one
+     *   it already holds knows whether it came back to its own seat (the same id) or was admitted
+     *   afresh because the seat was gone (any other id).
      */
     @Serializable
     @SerialName("welcome")
@@ -163,69 +181,91 @@ public sealed interface AdmitMessage {
         val key: DidKey,
         val deviceId: String? = null,
         val roomId: String? = null,
-        val resumeSecret: ResumeSecret? = null,
         val returnKind: ReturnKind? = null,
-    ) : AdmitMessage
+        val answers: ByteArray? = null,
+        val membership: String? = null,
+    ) : AdmitMessage {
+        init {
+            require(answers == null || answers.size == Hello.JOINER_NONCE_SIZE) {
+                "a Welcome answers a ${Hello.JOINER_NONCE_SIZE}-byte joiner nonce, not ${answers?.size} bytes"
+            }
+        }
+
+        /** Compares [answers] by content: a decoded Welcome equals the one that was encoded. */
+        override fun equals(other: Any?): Boolean =
+            other is Welcome &&
+                assignedPeerId == other.assignedPeerId &&
+                displayName == other.displayName &&
+                sessionId == other.sessionId &&
+                key == other.key &&
+                deviceId == other.deviceId &&
+                roomId == other.roomId &&
+                returnKind == other.returnKind &&
+                answers.contentEquals(other.answers) &&
+                membership == other.membership
+
+        override fun hashCode(): Int {
+            var result = assignedPeerId.hashCode()
+            result = 31 * result + displayName.hashCode()
+            result = 31 * result + sessionId.hashCode()
+            result = 31 * result + key.hashCode()
+            result = 31 * result + (deviceId?.hashCode() ?: 0)
+            result = 31 * result + (roomId?.hashCode() ?: 0)
+            result = 31 * result + (returnKind?.hashCode() ?: 0)
+            result = 31 * result + answers.contentHashCode()
+            result = 31 * result + (membership?.hashCode() ?: 0)
+            return result
+        }
+    }
 
     /**
-     * Sent by the host to reject a joiner's [Hello] or [Resume].
+     * Sent by the host to refuse a joiner's [Hello], at the Hello gate or once its [Proof] was checked.
      *
      * [reason] is a human-readable rejection cause for debugging; [code] is its structured
      * counterpart, which is what a consumer should branch on (#1572).
      *
-     * [codeId] is the wire form of [code] and is **additive**: nullable and defaulted, so a peer
-     * that predates typed codes decodes as [RejectCode.Unspecified], and a `Reject` carrying no
-     * code encodes to byte-identical output (kotlinx defaults are omitted from the encoding).
-     * Old↔new interop therefore degrades — an unrecognised code is retryable, the pre-#1572
-     * behaviour — rather than breaking.
+     * [codeId] is the wire form of [code]: nullable and defaulted, so a `Reject` carrying no code
+     * decodes as [RejectCode.Unspecified], which is retryable.
      *
-     * Construct with the typed secondary constructor: `Reject(reason, RejectCode.RoomMismatch)`.
+     * [answers] — the [Hello.joinerNonce] of the Hello this refuses (v7, #3215). A joiner acts on a
+     * `Reject` only when this equals the nonce of the latest Hello it sent, so a refusal of some other
+     * exchange — an impostor's, sent to the id it claimed, or a forgery — never ends this joiner's
+     * admission or its reconnect. `null` only where the refused Hello carried no nonce: one that
+     * predates v3, refused by the version gate. Width [Hello.JOINER_NONCE_SIZE], checked in the
+     * constructor.
+     *
+     * Construct with the typed secondary constructor: `Reject(reason, RejectCode.RoomMismatch, nonce)`.
      */
     @Serializable
     @SerialName("reject")
     public data class Reject(
         val reason: String,
         @SerialName("code") val codeId: String? = null,
+        val answers: ByteArray? = null,
     ) : AdmitMessage {
-        public constructor(reason: String, code: RejectCode) : this(reason, code.id)
+        init {
+            require(answers == null || answers.size == Hello.JOINER_NONCE_SIZE) {
+                "a Reject answers a ${Hello.JOINER_NONCE_SIZE}-byte joiner nonce, not ${answers?.size} bytes"
+            }
+        }
+
+        /** A refusal for [code] of the Hello whose nonce is [answers]. */
+        public constructor(reason: String, code: RejectCode, answers: ByteArray?) : this(reason, code.id, answers)
 
         /** The structured cause, or [RejectCode.Unknown] when the sender named one this build does not know. */
         public val code: RejectCode get() = RejectCode.fromId(codeId)
+
+        /** Compares [answers] by content: a decoded Reject equals the one that was encoded. */
+        override fun equals(other: Any?): Boolean =
+            other is Reject && reason == other.reason && codeId == other.codeId && answers.contentEquals(other.answers)
+
+        override fun hashCode(): Int {
+            var result = reason.hashCode()
+            result = 31 * result + (codeId?.hashCode() ?: 0)
+            result = 31 * result + answers.contentHashCode()
+            return result
+        }
     }
-
-    /**
-     * Sent by a joiner to the host to resume a partitioned session.
-     *
-     * The host validates [tokenPeerId] + [tokenRoomId] against its
-     * [us.tractat.kuilt.session.partition.JoinerReconnectController]. On success the host
-     * replies with [ResumeAck]; on failure it replies with [Reject].
-     *
-     * [tokenPeerId] — the joiner's [us.tractat.kuilt.core.PeerId] from the original admit.
-     * [tokenRoomId] — the room's stable identifier from the host's [Welcome.roomId].
-     * [issuedAt] — epoch-millis when the token was issued (from the injected clock).
-     * [resumeSecret] — the secret from the joiner's own [Welcome.resumeSecret] (#3165). Nullable on
-     *   the wire only so a frame from an older joiner still decodes: a host refuses a `Resume`
-     *   without one as [RejectCode.ResumeTokenInvalid]. That code is not retryable, so that joiner's
-     *   reconnect ends in `HostLost(Refused)`; it joins again only if its consumer reacts to that.
-     */
-    @Serializable
-    @SerialName("resume")
-    public data class Resume(
-        val tokenPeerId: String,
-        val tokenRoomId: String,
-        val issuedAt: Long,
-        val resumeSecret: ResumeSecret? = null,
-    ) : AdmitMessage
-
-    /**
-     * Sent by the host to confirm that a joiner's [Resume] was accepted.
-     *
-     * The joiner's [Room.resume] awaits this as confirmation that the
-     * reconnect window was open and the token was valid.
-     */
-    @Serializable
-    @SerialName("resume-ack")
-    public data object ResumeAck : AdmitMessage
 
     /**
      * Sent by a joiner to the host on a deliberate [us.tractat.kuilt.session.Room.leave].
@@ -430,10 +470,15 @@ public sealed interface AdmitMessage {
 @Serializable
 public enum class ReturnKind {
     /**
-     * The host was still holding a seat under the key this joiner proved: the same membership is
-     * back. Under the same peer id nobody else is told anything new. Under a new one (v6, #3213) the
+     * The host was still holding a seat under the key this joiner proved, and gave it back rather
+     * than admitting a new member. Under the same peer id nobody else is told anything new, and the
+     * direct Welcome carries the membership id the seat already had. Under a new one (v6, #3213) the
      * joiner took over a partitioned seat of its device, keeping that seat's identity, and every
      * other member was told the old id left, superseded, before it heard the new id join.
+     *
+     * It describes what the host decided, and **closes nothing on the joiner** (v7, #3215). A
+     * returning joiner tells its own seat from a fresh admission by [AdmitMessage.Welcome.membership]:
+     * the id it already holds means the seat came back, and any other means it is a new member.
      */
     @SerialName("restored")
     Restored,

@@ -22,7 +22,7 @@ import us.tractat.kuilt.core.PeerId
  * another peer's window.
  *
  * @param roomId The Room this controller guards. A [ProvenResume] for a different
- *   Room is rejected as [ResumeResult.TokenInvalid]; a room never builds one.
+ *   Room holds no window here, so it is answered [ResumeResult.WindowClosed]; a room never builds one.
  * @param reconnectWindowMs Duration of the reconnect window in millis. Defaults to
  *   [DEFAULT_RECONNECT_WINDOW_MS] (60 s).
  * @param clock Injected clock returning epoch-millis. Must never be wired to
@@ -60,7 +60,7 @@ public class DefaultJoinerReconnectController(
         // Unreachable through a room, which builds every ProvenResume from its own id; kept for a
         // controller driven directly (see JoinerReconnectController.tryResume).
         if (resume.roomId != roomId) {
-            return ResumeResult.TokenInvalid("session-mismatch")
+            return ResumeResult.WindowClosed
         }
         val result: ResumeResult.HostVerdict =
             mutex.withLock {

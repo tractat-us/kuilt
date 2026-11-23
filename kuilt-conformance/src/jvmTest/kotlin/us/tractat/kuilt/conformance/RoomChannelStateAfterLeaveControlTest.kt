@@ -6,7 +6,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
@@ -40,9 +39,6 @@ class RoomChannelStateAfterLeaveControlTest {
 
     private fun stuckOpen(): RoomConformanceSuite =
         object : RoomConformanceSuite() {
-            override fun newResumeHarness(scope: TestScope): ResumeHarness =
-                referenceResumeHarness(scope, fastHeartbeatConfig)
-
             override fun newHarness(scope: CoroutineScope): RoomHarness {
                 val loom = InMemoryLoom()
                 var clockMs = 0L

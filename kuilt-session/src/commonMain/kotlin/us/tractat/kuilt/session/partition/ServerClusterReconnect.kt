@@ -10,11 +10,9 @@ import us.tractat.kuilt.core.Tag
  * Reconnect helper for a joiner that faces a static cluster of server endpoints.
  *
  * Connects to one endpoint at a time. On transport tear, advances to the next
- * endpoint per the [selector] (default: deterministic round-robin). On reconnect,
- * the caller presents the [pendingToken]. The token survives an endpoint change as a value —
- * it names the [RoomId], not a server — but only the server that admitted the joiner can accept
- * it: another server holds neither the joiner's [ResumeSecret] nor its window and refuses it, so
- * a resume against a different endpoint degrades to a fresh join.
+ * endpoint per the [selector] (default: deterministic round-robin). Only the server that admitted
+ * the joiner holds a seat for its device key, so joining a different endpoint is a fresh admission
+ * there.
  *
  * ## Usage
  *
@@ -25,16 +23,10 @@ import us.tractat.kuilt.core.Tag
  *
  * // Initial connection:
  * val seam = reconnect.connect(loom)
- * // ... admit handshake; on success, register the token:
- * reconnect.setToken(room.resumeToken!!)
  *
  * // On transport tear:
  * reconnect.onTransportTear()
  * val newSeam = reconnect.connect(loom)
- * // Present the token for resume on the new endpoint:
- * room.resume(reconnect.pendingToken()!!)
- * // On success, clear the token (it has been consumed):
- * reconnect.clearToken()
  * ```
  *
  * ## Thread safety
@@ -43,8 +35,8 @@ import us.tractat.kuilt.core.Tag
  * ([connect]) are issued *outside* the locked section to comply with the
  * lock-discipline rule: no suspending code inside a locked region.
  *
- * This helper is caller-orchestrated: it tracks the current endpoint and the
- * pending [ResumeToken], and [connect] delegates straight to [Loom.join] on the
+ * This helper is caller-orchestrated: it tracks the current endpoint, and [connect] delegates
+ * straight to [Loom.join] on the
  * calling coroutine. It launches no background work, so it owns no
  * [kotlinx.coroutines.CoroutineScope]. If a future iteration makes it manage the
  * connect → tear → reconnect loop itself, a required scope parameter is
@@ -66,9 +58,6 @@ public class ServerClusterReconnect(
 
     // Index of the current endpoint within [endpoints].
     private var currentIndex: Int = selector.next(endpoints.size)
-
-    // The resume token set after a successful admit handshake.
-    private var token: ResumeToken? = null
 
     /**
      * The endpoint this helper is currently targeting.
@@ -107,36 +96,5 @@ public class ServerClusterReconnect(
     public suspend fun connect(loom: Loom): Seam {
         val endpoint = currentEndpoint()
         return loom.join(endpoint)
-    }
-
-    /**
-     * Register a [ResumeToken] acquired after a successful admit handshake.
-     *
-     * The token is keyed on [ResumeToken.roomId] and survives endpoint changes:
-     * a subsequent [onTransportTear] + [connect] to a different endpoint still
-     * returns this token via [pendingToken], allowing the caller to present it
-     * to the new server for session resumption.
-     */
-    public fun setToken(resumeToken: ResumeToken) {
-        lock.withLock { token = resumeToken }
-    }
-
-    /**
-     * Returns the [ResumeToken] set by [setToken], or null if none is registered.
-     *
-     * Returns the same token regardless of how many endpoint changes have occurred
-     * since the token was set — the token outlives endpoint rotation.
-     */
-    public fun pendingToken(): ResumeToken? = lock.withLock { token }
-
-    /**
-     * Clear the pending token after a successful resume.
-     *
-     * A token is consumed by a single successful [us.tractat.kuilt.session.Room.resume]
-     * call. After that call succeeds, the caller must invoke [clearToken] so that
-     * a subsequent tear does not re-present a stale token.
-     */
-    public fun clearToken() {
-        lock.withLock { token = null }
     }
 }
