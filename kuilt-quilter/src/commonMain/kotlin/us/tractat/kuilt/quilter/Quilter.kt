@@ -1488,8 +1488,16 @@ public class Quilter<S : Quilted<S>>(
      * - **The sender has deltas of its own we have not received.** They are asked for by
      *   [QuiltMessage.Resend], which the sender answers from its delta buffer, and with a whole
      *   state only once it has GC'd the range.
-     * - **Anything else**: equal vectors with different roots, or a third party's deltas we lack.
-     *   The whole state is asked for, through the same bounds as a root-digest mismatch.
+     * - **Anything else**: equal vectors with different roots, a third party's deltas we lack, or
+     *   a gap of the sender's that a [QuiltMessage.Resend] is already open for. The whole state is
+     *   asked for, through the same bounds as a root-digest mismatch.
+     *
+     * The last of those is the backstop for the Resend. The sender answers one by **broadcast**,
+     * so where the broadcast path to us is what lost the delta, the answer is lost the same way,
+     * every time. A digest arriving while the gap is still open, whatever opened it, therefore
+     * falls back to the whole state rather than asking by Resend again. On a link that lags more
+     * than the interval this can cost one whole state per lost delta, where the Resend alone
+     * would have done.
      *
      * Latches [everSentUsVector], and [everSentUsDigest] with it, since a build that writes one
      * reads both.
@@ -1519,7 +1527,7 @@ public class Quilter<S : Quilted<S>>(
                 if (clock.now() - since < config.dominatedDigestBackstop.inWholeMilliseconds) return
                 requestFullStateIfAllowed(sender, msg.sender, firstOnThisLink)
             }
-            seen[msg.sender] > ours[msg.sender] -> {
+            seen[msg.sender] > ours[msg.sender] && msg.sender !in pendingResendJobs -> {
                 dominatedSince.remove(sender)
                 val from = expectedReceiveSeq[msg.sender] ?: 1L
                 requestResend(sender, msg.sender, fromSeq = from, toSeq = seen[msg.sender])
