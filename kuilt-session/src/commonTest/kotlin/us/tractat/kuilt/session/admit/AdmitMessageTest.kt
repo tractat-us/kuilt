@@ -158,6 +158,21 @@ class AdmitMessageTest {
         assertEquals(AdmitMessage.Farewell("peer-7", expired = false), AdmitMessage.decode(cleanLeave))
     }
 
+    /**
+     * #3213 added [AdmitMessage.Farewell.supersededBy]: it round-trips, and a Farewell without it
+     * writes no such field, so every other Farewell keeps its bytes.
+     */
+    @Test
+    fun `Farewell supersededBy round-trips and is absent when unset`() {
+        val superseded = AdmitMessage.Farewell(peerId = "bob-1", supersededBy = "bob-2")
+        val plain = AdmitMessage.encode(AdmitMessage.Farewell(peerId = "bob-1"))
+        assertAll(
+            { assertEquals(superseded, AdmitMessage.decode(AdmitMessage.encode(superseded))) },
+            { assertFalse(plain.decodeToString().contains("supersededBy"), "an unset successor is not written") },
+            { assertEquals(AdmitMessage.Farewell("bob-1", supersededBy = null), AdmitMessage.decode(plain)) },
+        )
+    }
+
     @Test
     fun `Paused and Unpaused round-trip`() {
         val paused = AdmitMessage.Paused(peerId = "peer-7", expiresAt = 1_234_567L)

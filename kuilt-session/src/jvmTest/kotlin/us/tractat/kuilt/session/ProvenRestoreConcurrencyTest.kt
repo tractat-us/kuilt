@@ -3,6 +3,7 @@
 package us.tractat.kuilt.session
 
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineDispatcher
@@ -355,6 +356,324 @@ class ProvenRestoreConcurrencyTest {
         }
 
     /**
+     * Bob's device says Hello under its other fabric id while its old seat's window expires (#3213).
+     * The hold policy refuses, because the window has just closed, and the expiry evicts on the
+     * reconnect loop's thread while the Proof decides on another.
+     *
+     * Either order ends the same way: the old id leaves as an expiry, never superseded, and the new
+     * id is a new member, seated, watched, and the last thing carol hears about it is its Welcome.
+     * The seat moves between [bob] and [bobPrime] from one round to the next.
+     */
+    @Test
+    fun anExpiryRacingANewIdsProofLeavesTheNewMemberSeated() =
+        runConcurrencyStress(cap = ARM_CAP) { stage ->
+            Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
+                val rig = Rig(dispatcher, interval = 1.seconds, RoomDevice.of(fakeKeyStore(0)))
+                var completed = 0
+                var expiryFirst = 0
+                var proofFirst = 0
+                var wrongEdges = 0
+                var wrongRoster = 0
+                var noDetector = 0
+                var carolWrongLast = 0
+                val failures = mutableListOf<String>()
+                try {
+                    rig.start(stage)
+                    var holder = bob
+                    for (round in 0 until SUPERSEDE_ROUNDS) {
+                        val old = holder
+                        val new = seatIds.single { it != old }
+                        val episode = rig.partition(stage, round, old)
+                        val recoveredBefore = rig.controller.recovered.get()
+                        val spinNanos = jitter.nextLong(0, MAX_SPIN_NANOS)
+                        rig.controller.onAsk = { resume, at ->
+                            val expiry = JoinerReconnectEvent.WindowExpired(resume.peerId, at, episode)
+                            when (round % 3) {
+                                0 -> rig.controller.flow.emit(expiry)
+                                else -> {
+                                    rig.pendingExpiry = rig.scope.launch { rig.controller.flow.emit(expiry) }
+                                    if (round % 3 == 2) spin(spinNanos)
+                                }
+                            }
+                            ResumeResult.WindowClosed
+                        }
+                        val introsBefore = rig.hostIntrosTo(new)
+                        rig.prove(new, TEST_DEVICE_A, TEST_KEY_A)
+                        stage.at("round $round: awaiting the new member") { rig.snapshot() }
+                        rig.awaitEdge(new)
+                        rig.awaitIntros(new, introsBefore + 1)
+                        rig.quiesce(stage, round)
+
+                        val released = rig.controller.recovered.get() > recoveredBefore
+                        if (released) proofFirst++ else expiryFirst++
+                        val oldLeft = rig.events.value.filterIsInstance<MembershipEvent.Left>().filter { it.peerId == old }
+                        val edgesGood = oldLeft.map { it.reason } == listOf<LeaveReason>(LeaveReason.PartitionExpired) &&
+                            rig.edgesOf(old) == listOf("Left") && rig.edgesOf(new) == listOf("Joined")
+                        val rosterGood = rig.room.isAdmitted(new) && !rig.room.isAdmitted(old)
+                        val watched = rig.room.hasDetector(new)
+                        val carolGood = rig.framesToCarolNaming(old).lastOrNull() is AdmitMessage.Farewell &&
+                            rig.framesToCarolNaming(new).lastOrNull() is AdmitMessage.Welcome
+                        if (!edgesGood) wrongEdges++
+                        if (!rosterGood) wrongRoster++
+                        if (!watched) noDetector++
+                        if (!carolGood) carolWrongLast++
+                        if (!(edgesGood && rosterGood && watched && carolGood) && failures.size < 5) {
+                            failures += "round $round released=$released old=${old.value} edges=${rig.edgesOf(old)}/${rig.edgesOf(new)} " +
+                                "left=$oldLeft toCarol=${rig.framesToCarolNaming(old).map { it::class.simpleName }}/" +
+                                "${rig.framesToCarolNaming(new).map { it::class.simpleName }} roster=$rosterGood watched=$watched"
+                        }
+                        completed++
+                        if (!rig.room.isAdmitted(new)) break
+                        holder = new
+                    }
+                    println(
+                        "proven-restore supersede-expiry: completed=$completed expiryFirst=$expiryFirst proofFirst=$proofFirst " +
+                            "wrongEdges=$wrongEdges wrongRoster=$wrongRoster noDetector=$noDetector carolWrongLast=$carolWrongLast " +
+                            "retries=${rig.retries.get()} failures=$failures",
+                    )
+                    assertAll(
+                        { assertEquals(SUPERSEDE_ROUNDS, completed, "every round ran") },
+                        { assertEquals(0, wrongEdges, "the old id expired and the new one joined: $failures") },
+                        { assertEquals(0, wrongRoster, "only the new id is seated: $failures") },
+                        { assertEquals(0, noDetector, "the new member is watched: $failures") },
+                        { assertEquals(0, carolWrongLast, "carol last heard Farewell(old) and Welcome(new): $failures") },
+                        { assertTrue(expiryFirst > 0, "the expiry's section ran first in some round") },
+                        { assertTrue(proofFirst > 0, "the Proof's release ran first in some round") },
+                    )
+                } finally {
+                    rig.close()
+                }
+            }
+        }
+
+    /**
+     * Bob's old link heals while the host takes his seat over for his device's other fabric id
+     * (#3213). The window answers `Success`, and a pong from the old id lands on another thread, so
+     * the old detector's recovery races the supersession.
+     *
+     * Either the heal wins, and the old seat is connected again, so the new id gets a seat of its own
+     * beside it (Decided 30: a connected seat is never superseded), or the supersession wins, and the
+     * old id leaves `Superseded(by = new)`. Never both, and carol is never told `Unpaused` for a
+     * member it is then told left, nor told the new member joined before the old one left.
+     */
+    @Test
+    fun aHealRacingASupersessionKeepsBothSeatsOrMovesOne() =
+        runConcurrencyStress(cap = ARM_CAP) { stage ->
+            Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
+                val rig = Rig(dispatcher, interval = 2.milliseconds, RoomDevice.of(fakeKeyStore(0)))
+                var completed = 0
+                var healFirst = 0
+                var supersedeFirst = 0
+                var disallowed = 0
+                var wrongRoster = 0
+                var noDetector = 0
+                var carolMisordered = 0
+                val failures = mutableListOf<String>()
+                try {
+                    rig.start(stage)
+                    var holder = bob
+                    for (round in 0 until SUPERSEDE_ROUNDS) {
+                        val old = holder
+                        val new = seatIds.single { it != old }
+                        rig.partition(stage, round, old)
+                        rig.controller.onAsk = { resume, at ->
+                            // As the default controller does: a Success is echoed on the reconnect loop.
+                            rig.scope.launch { rig.controller.flow.emit(JoinerReconnectEvent.Resumed(resume.peerId, at)) }
+                            ResumeResult.Success
+                        }
+                        val introsBefore = rig.hostIntrosTo(new)
+                        rig.prove(new, TEST_DEVICE_A, TEST_KEY_A) {
+                            rig.scope.launch { rig.inbound.send(Swatch(PONG, sender = old)) }
+                            delay(jitter.nextLong(0, HEAL_PROOF_DELAY_MS))
+                        }
+                        stage.at("round $round: awaiting the new member") { rig.snapshot() }
+                        rig.awaitEdge(new)
+                        rig.awaitIntros(new, introsBefore + 1)
+                        rig.quiesce(stage, round)
+
+                        val oldEdges = rig.edgesOf(old)
+                        val oldLeft = rig.events.value.filterIsInstance<MembershipEvent.Left>().filter { it.peerId == old }
+                        val newEdges = rig.edgesOf(new)
+                        val toCarol = rig.sent.value.filter { (to, m) -> to == carol && (m.names(old) || m.names(new)) }.map { it.second }
+                        val farewellAt = toCarol.indexOfFirst { it is AdmitMessage.Farewell && it.peerId == old.value }
+                        val welcomeAt = toCarol.indexOfFirst { it is AdmitMessage.Welcome && it.assignedPeerId == new.value }
+                        val unpausedAt = toCarol.indexOfFirst { it is AdmitMessage.Unpaused && it.peerId == old.value }
+                        val kept = oldEdges == listOf("Recovered") && newEdges == listOf("Joined")
+                        val moved = oldEdges == listOf("Left") && newEdges == listOf("Joined") &&
+                            oldLeft.single().reason == LeaveReason.Superseded(by = new)
+                        val rosterGood = when {
+                            kept -> rig.room.isAdmitted(old) && rig.room.isAdmitted(new)
+                            moved -> !rig.room.isAdmitted(old) && rig.room.isAdmitted(new)
+                            else -> false
+                        }
+                        val watched = rig.room.hasDetector(new) && (!kept || rig.room.hasDetector(old))
+                        val carolGood = when {
+                            kept -> farewellAt < 0 && unpausedAt >= 0 && welcomeAt >= 0
+                            moved -> farewellAt >= 0 && welcomeAt > farewellAt &&
+                                (toCarol[farewellAt] as AdmitMessage.Farewell).supersededBy == new.value &&
+                                unpausedAt < 0
+                            else -> false
+                        }
+                        when {
+                            kept -> healFirst++
+                            moved -> supersedeFirst++
+                            else -> disallowed++
+                        }
+                        if (!rosterGood) wrongRoster++
+                        if (!watched) noDetector++
+                        if (!carolGood) carolMisordered++
+                        if (!(rosterGood && watched && carolGood) && failures.size < 5) {
+                            failures += "round $round old=${old.value} edges=$oldEdges/$newEdges left=$oldLeft " +
+                                "toCarol=${toCarol.map { it::class.simpleName }} roster=$rosterGood watched=$watched"
+                        }
+                        completed++
+                        if (!rig.room.isAdmitted(new)) break
+                        if (kept) {
+                            // Back to one seat for the key: the new id says Goodbye, and the old one stays.
+                            rig.inbound.send(Swatch(AdmitMessage.encode(AdmitMessage.Goodbye), sender = new))
+                            stage.at("round $round: the extra seat leaves") { rig.snapshot() }
+                            rig.events.first { events -> events.any { it is MembershipEvent.Left && it.peerId == new } }
+                        } else {
+                            holder = new
+                        }
+                    }
+                    println(
+                        "proven-restore supersede-heal: completed=$completed healFirst=$healFirst supersedeFirst=$supersedeFirst " +
+                            "disallowed=$disallowed wrongRoster=$wrongRoster noDetector=$noDetector carolMisordered=$carolMisordered " +
+                            "retries=${rig.retries.get()} failures=$failures",
+                    )
+                    assertAll(
+                        { assertEquals(SUPERSEDE_ROUNDS, completed, "every round ran") },
+                        { assertEquals(0, disallowed, "each round keeps both seats or moves one, never both: $failures") },
+                        { assertEquals(0, wrongRoster, "the host's roster matches the outcome: $failures") },
+                        { assertEquals(0, noDetector, "every seated member is watched: $failures") },
+                        { assertEquals(0, carolMisordered, "carol hears the outcome in order: $failures") },
+                        { assertTrue(healFirst > 0, "the heal ran first in some round") },
+                        { assertTrue(supersedeFirst > 0, "the supersession ran first in some round") },
+                    )
+                } finally {
+                    rig.close()
+                }
+            }
+        }
+
+    /**
+     * Two tabs of bob's device come back under his two other fabric ids at once, against his one
+     * partitioned seat (#3213). The window answers `Success` once and refuses after, as the default
+     * controller does once a window is spent, and echoes the `Success` on the reconnect loop.
+     *
+     * Only one exchange may ask about the seat. Either way round, exactly one new id takes the seat
+     * over and the other gets a seat of its own beside it (Decided 30); nobody sees a `Resumed` or is
+     * sent an `Unpaused` or a `ResumeAck`; and carol last heard `Farewell(old, supersededBy = winner)`
+     * and each new id's `Welcome`. Without one asker per seat the refused ask releases the seat the
+     * other was given, or lets the echo restore the member who left. The round ends with the extra
+     * seat saying Goodbye, so the next round starts from one seat again.
+     */
+    @Test
+    fun twoNewIdsRacingForOneSeatTakeItOverOnce() =
+        runConcurrencyStress(cap = ARM_CAP) { stage ->
+            Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
+                val rig = Rig(dispatcher, interval = 1.seconds, RoomDevice.of(fakeKeyStore(0)))
+                var completed = 0
+                var lowerIdWon = 0
+                var higherIdWon = 0
+                var twoAsks = 0
+                var wrongEdges = 0
+                var wrongRoster = 0
+                var strayResume = 0
+                var carolWrongLast = 0
+                val failures = mutableListOf<String>()
+                try {
+                    rig.start(stage)
+                    var holder = bob
+                    for (round in 0 until SUPERSEDE_ROUNDS) {
+                        val old = holder
+                        val (low, high) = (raceIds - old).sortedBy { it.value }
+                        rig.partition(stage, round, old)
+                        val spent = AtomicBoolean(false)
+                        val asks = AtomicInteger(0)
+                        val spinNanos = jitter.nextLong(0, MAX_SPIN_NANOS)
+                        rig.controller.onAsk = { resume, at ->
+                            asks.incrementAndGet()
+                            if (resume.peerId == old && spent.compareAndSet(false, true)) {
+                                rig.scope.launch { rig.controller.flow.emit(JoinerReconnectEvent.Resumed(resume.peerId, at)) }
+                                // Hold the Success a moment, so a second ask lands before it is acted on.
+                                spin(spinNanos)
+                                ResumeResult.Success
+                            } else {
+                                ResumeResult.WindowClosed
+                            }
+                        }
+                        val introsLow = rig.hostIntrosTo(low)
+                        val introsHigh = rig.hostIntrosTo(high)
+                        val proofs = listOf(low, high).shuffled(jitter).map { peer ->
+                            rig.scope.launch { rig.prove(peer, TEST_DEVICE_A, TEST_KEY_A) }
+                        }
+                        proofs.forEach { it.join() }
+                        stage.at("round $round: awaiting both new members") { rig.snapshot() }
+                        rig.awaitEdge(low)
+                        rig.awaitEdge(high)
+                        rig.awaitIntros(low, introsLow + 1)
+                        rig.awaitIntros(high, introsHigh + 1)
+                        rig.quiesce(stage, round)
+
+                        val oldLeft = rig.events.value.filterIsInstance<MembershipEvent.Left>().filter { it.peerId == old }
+                        val winner = (oldLeft.singleOrNull()?.reason as? LeaveReason.Superseded)?.by
+                        val loser = if (winner == low) high else low
+                        val edgesGood = winner != null && rig.edgesOf(old) == listOf("Left") &&
+                            rig.edgesOf(low) == listOf("Joined") && rig.edgesOf(high) == listOf("Joined")
+                        val rosterGood = !rig.room.isAdmitted(old) && rig.room.isAdmitted(low) && rig.room.isAdmitted(high) &&
+                            rig.room.hasDetector(low) && rig.room.hasDetector(high)
+                        val stray = rig.events.value.any { it is MembershipEvent.Resumed || it is MembershipEvent.Recovered } ||
+                            rig.sent.value.any { (_, m) -> m is AdmitMessage.ResumeAck || m is AdmitMessage.Unpaused }
+                        val lastAboutOld = rig.framesToCarolNaming(old).lastOrNull()
+                        val carolGood = lastAboutOld is AdmitMessage.Farewell && lastAboutOld.supersededBy == winner?.value &&
+                            rig.framesToCarolNaming(low).lastOrNull() is AdmitMessage.Welcome &&
+                            rig.framesToCarolNaming(high).lastOrNull() is AdmitMessage.Welcome
+                        when (winner) {
+                            low -> lowerIdWon++
+                            high -> higherIdWon++
+                        }
+                        if (asks.get() > 1) twoAsks++
+                        if (!edgesGood) wrongEdges++
+                        if (!rosterGood) wrongRoster++
+                        if (stray) strayResume++
+                        if (!carolGood) carolWrongLast++
+                        if (!(edgesGood && rosterGood && !stray && carolGood) && failures.size < 5) {
+                            failures += "round $round old=${old.value} winner=${winner?.value} asks=${asks.get()} " +
+                                "edges=${rig.edgesOf(old)}/${rig.edgesOf(low)}/${rig.edgesOf(high)} left=$oldLeft " +
+                                "toCarol=${rig.framesToCarolNaming(old).map { it::class.simpleName }} roster=$rosterGood stray=$stray"
+                        }
+                        completed++
+                        if (winner == null || !rig.room.isAdmitted(winner) || !rig.room.isAdmitted(loser)) break
+                        // Back to one seat for the key: the extra seat says Goodbye.
+                        rig.inbound.send(Swatch(AdmitMessage.encode(AdmitMessage.Goodbye), sender = loser))
+                        stage.at("round $round: the extra seat leaves") { rig.snapshot() }
+                        rig.events.first { events -> events.any { it is MembershipEvent.Left && it.peerId == loser } }
+                        holder = winner
+                    }
+                    println(
+                        "proven-restore supersede-race: completed=$completed lowerIdWon=$lowerIdWon higherIdWon=$higherIdWon " +
+                            "twoAsks=$twoAsks wrongEdges=$wrongEdges wrongRoster=$wrongRoster strayResume=$strayResume " +
+                            "carolWrongLast=$carolWrongLast retries=${rig.retries.get()} failures=$failures",
+                    )
+                    assertAll(
+                        { assertEquals(SUPERSEDE_ROUNDS, completed, "every round ran") },
+                        { assertEquals(0, wrongEdges, "one takeover and one additional seat: $failures") },
+                        { assertEquals(0, wrongRoster, "both new ids are seated and watched, the old one is not: $failures") },
+                        { assertEquals(0, strayResume, "no Resumed, Unpaused or ResumeAck for the seat that left: $failures") },
+                        { assertEquals(0, carolWrongLast, "carol last heard the supersession and both Welcomes: $failures") },
+                        { assertEquals(0, twoAsks, "one exchange asks about the seat: $failures") },
+                        { assertTrue(lowerIdWon > 0, "the lower id took the seat over in some round") },
+                        { assertTrue(higherIdWon > 0, "the higher id took the seat over in some round") },
+                    )
+                } finally {
+                    rig.close()
+                }
+            }
+        }
+
+    /**
      * The window controller this probe drives the room with. A partition is announced at once, with
      * a deadline that differs from the room's own estimate, so the room records the episode's
      * `WindowOpened` and a refusal is acted on. [flow] has no buffer: an emit returns only once the
@@ -374,7 +693,7 @@ class ProvenRestoreConcurrencyTest {
         var onAsk: suspend (ProvenResume, Long) -> ResumeResult.HostVerdict = { _, _ -> ResumeResult.WindowClosed }
 
         override fun onPeerUnresponsive(peerId: PeerId, at: Long) {
-            if (peerId != bob) return
+            if (peerId !in raceIds) return
             episode.value = at
             scope.launch { flow.emit(JoinerReconnectEvent.WindowOpened(peerId, deadlineFor(at), at)) }
         }
@@ -384,7 +703,7 @@ class ProvenRestoreConcurrencyTest {
         override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict = onAsk(resume, at)
 
         override fun onPeerRecovered(peerId: PeerId, at: Long) {
-            if (peerId != bob) return
+            if (peerId !in raceIds) return
             recoveredCount.value = recovered.incrementAndGet()
         }
 
@@ -399,11 +718,13 @@ class ProvenRestoreConcurrencyTest {
         detectorWindow: Duration = 100_000.hours,
     ) {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
-        val peers = MutableStateFlow(setOf(host, bob, carol))
+        val peers = MutableStateFlow(setOf(host, bob, bobPrime, bobThird, carol))
         // Bounded, as every Swatch delivery channel is (forbidUnboundedSwatchDelivery): a round sends a few frames.
         val inbound = Channel<Swatch>(capacity = 64)
         private val challenges = mapOf(
             bob to Channel<AdmitMessage.Challenge>(Channel.UNLIMITED),
+            bobPrime to Channel<AdmitMessage.Challenge>(Channel.UNLIMITED),
+            bobThird to Channel<AdmitMessage.Challenge>(Channel.UNLIMITED),
             carol to Channel<AdmitMessage.Challenge>(Channel.UNLIMITED),
         )
 
@@ -490,12 +811,12 @@ class ProvenRestoreConcurrencyTest {
          * fabric can act on bob's drop after he is back and has said Hello. A second exchange makes
          * the first stale, so it seats nobody. A rig retry, counted.
          */
-        suspend fun awaitEdge(): MembershipEvent {
+        suspend fun awaitEdge(peer: PeerId = bob): MembershipEvent {
             while (true) {
-                val seen = withTimeoutOrNull(STALL_GRACE) { events.first { events -> events.any { it.isEdgeOf(bob) } } }
-                if (seen != null) return seen.first { it.isEdgeOf(bob) }
+                val seen = withTimeoutOrNull(STALL_GRACE) { events.first { events -> events.any { it.isEdgeOf(peer) } } }
+                if (seen != null) return seen.first { it.isEdgeOf(peer) }
                 retries.incrementAndGet()
-                prove(bob, TEST_DEVICE_A, TEST_KEY_A)
+                prove(peer, TEST_DEVICE_A, TEST_KEY_A)
             }
         }
 
@@ -512,12 +833,15 @@ class ProvenRestoreConcurrencyTest {
          * the host holds his seat partitioned under the controller's window, and put him back. Returns
          * the episode.
          */
-        suspend fun partitionBob(stage: StageTracker, round: Int): Long {
+        suspend fun partitionBob(stage: StageTracker, round: Int): Long = partition(stage, round, bob)
+
+        /** [partitionBob] for whichever of [seatIds] holds the key's seat this round. */
+        suspend fun partition(stage: StageTracker, round: Int, bob: PeerId): Long {
             sent.value = emptyList()
             events.value = emptyList()
             val previous = controller.episode.value
             peers.update { it - bob }
-            stage.at("round $round: bob partitions") { snapshot() }
+            stage.at("round $round: ${bob.value} partitions") { snapshot() }
             while (withTimeoutOrNull(STALL_GRACE) { events.first { events -> events.any { it.isPartitionOf(bob) } } } == null) {
                 // A detector notices a peer leave only once it has seen the peer listed, and a new one
                 // looks first when it starts: dropped before then, bob is never partitioned. List him
@@ -591,6 +915,19 @@ class ProvenRestoreConcurrencyTest {
         val bob = PeerId("bob")
         val carol = PeerId("carol")
         val sentinel = PeerId("sentinel")
+
+        /** Bob's device under a second fabric id: the new id a supersession round says Hello from. */
+        val bobPrime = PeerId("bob-prime")
+
+        /** The ids the key's seat moves between, one round to the next. */
+        val seatIds = setOf(bob, bobPrime)
+
+        /** Bob's device under a third fabric id, so two new ids can race for one seat. */
+        val bobThird = PeerId("bob-third")
+
+        /** The ids a race round's seat moves between: whichever holds it, and the two that race for it. */
+        val raceIds = setOf(bob, bobPrime, bobThird)
+        const val SUPERSEDE_ROUNDS = 5_000
         val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
         /** Each arm takes under 40 s on a dev Mac; the cap is a wedge backstop with room for a slower runner. */
         val ARM_CAP = 3.minutes

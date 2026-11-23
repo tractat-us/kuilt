@@ -1,5 +1,7 @@
 package us.tractat.kuilt.session
 
+import us.tractat.kuilt.core.PeerId
+
 /** Why a peer is leaving a room. */
 public sealed interface LeaveReason {
     /** Normal, intentional departure. */
@@ -23,4 +25,16 @@ public sealed interface LeaveReason {
      * all of them evict promptly with [Normal] (#1292).
      */
     public data object PartitionExpired : LeaveReason
+
+    /**
+     * The same device came back under a new peer id, [by], and took this member's held seat over
+     * (#3159). The old member's link was down: a seat whose member is connected is never superseded,
+     * so live tabs of one browser keep a seat each.
+     *
+     * Everyone in the room sees one `Left(old, Superseded(by))` followed by one `Joined(by)`, and the
+     * new member keeps the old one's identity and device key. The superseded room itself, if it is
+     * still running, sees `Left(self, Superseded(by))` and then ends: it never says Hello again, so
+     * two processes of one device cannot take a seat back and forth.
+     */
+    public data class Superseded(val by: PeerId) : LeaveReason
 }

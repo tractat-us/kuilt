@@ -92,6 +92,18 @@ internal class ObservedHold(
     val calls = mutableListOf<ProvenResume>()
     val verdicts = mutableListOf<ResumeResult.HostVerdict>()
 
+    /** When set, every `tryResume` runs this after [gate] and before the window is consulted. */
+    var beforeAnswer: (suspend (ProvenResume) -> Unit)? = null
+
+    /**
+     * When set, every `tryResume` suspends here once its verdict is decided and recorded, before
+     * returning it: the window is already spent on a `Success`, and the room has not acted on it.
+     */
+    var holdAnswer: CompletableDeferred<Unit>? = null
+
+    /** As [holdAnswer], for the `tryResume` call with this index (from 0) alone. */
+    val holdCall = mutableMapOf<Int, CompletableDeferred<Unit>>()
+
     /**
      * When set, a partition the room reports reaches the real controller only once this completes: a
      * controller that lags in opening the window. The default one lags too — it opens it on a launched
@@ -126,9 +138,14 @@ internal class ObservedHold(
             }
 
             override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict {
+                val index = calls.size
                 calls += resume
                 gate?.await()
-                return (verdict?.invoke(resume) ?: controller.tryResume(resume, at)).also { verdicts += it }
+                beforeAnswer?.invoke(resume)
+                val answer = (verdict?.invoke(resume) ?: controller.tryResume(resume, at)).also { verdicts += it }
+                holdAnswer?.await()
+                holdCall[index]?.await()
+                return answer
             }
         }
     }
@@ -204,6 +221,22 @@ internal class RawHost(
         sentTo(peer).filterIsInstance<AdmitMessage.Challenge>().map { assertNotNull(Challenge.decode(it.statement)) }
 
     fun rejectsTo(peer: PeerId): List<AdmitMessage.Reject> = sentTo(peer).filterIsInstance<AdmitMessage.Reject>()
+
+    /**
+     * The roster a joiner at [peer] would hold from what the host sent it: every `Welcome` adds the
+     * member it names, every `Farewell` removes one. A star bystander has no other source, so a
+     * member still here after its seat is gone is a ghost on that bystander (#1557).
+     */
+    fun rosterHeardBy(peer: PeerId): Set<PeerId> = sentTo(peer).fold(emptySet()) { roster, message ->
+        when (message) {
+            is AdmitMessage.Welcome -> roster + PeerId(message.assignedPeerId)
+            is AdmitMessage.Farewell -> roster - PeerId(message.peerId)
+            else -> roster
+        }
+    }
+
+    /** Every admit frame the room sent, to anyone, decoded. */
+    fun sentToAnyone(): List<AdmitMessage> = seam.directed.mapNotNull { AdmitMessage.decode(it.second) }
 
     fun member(peer: PeerId): Member? = room.roster.value.firstOrNull { it.id == peer }
 
