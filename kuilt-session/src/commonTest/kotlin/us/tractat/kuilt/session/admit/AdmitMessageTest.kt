@@ -107,7 +107,7 @@ class AdmitMessageTest {
      * Welcome with neither — writes neither key.
      */
     @Test
-    fun `Welcome round-trips its answer and membership, and the roster copy writes neither`() = runTest {
+    fun `Welcome round-trips its answer and membership and the roster copy writes neither`() = runTest {
         val nonce = ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE) { it.toByte() }
         val welcome = AdmitMessage.Welcome(
             "peer-1", "Bob", "s-1", DidKey.parse(KEY_A), roomId = "room-9",
