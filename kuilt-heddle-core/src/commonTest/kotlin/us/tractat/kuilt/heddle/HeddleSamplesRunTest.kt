@@ -40,6 +40,12 @@ class HeddleSamplesRunTest {
     fun topologyDraftHolds() = sampleTopologyDraft()
 
     @Test
+    fun topologyToDocumentHolds() = sampleTopologyToDocument()
+
+    @Test
+    fun topologyChangesHold() = sampleTopologyChanges()
+
+    @Test
     fun topologyDiffHolds() = sampleTopologyDiff()
 
     @Test
