@@ -1125,25 +1125,25 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     }
 
     final class ResumeHarness { // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness|null[0]
-        constructor <init>(us.tractat.kuilt.session/RoomFactory, us.tractat.kuilt.session/RoomFactory, kotlin.coroutines/SuspendFunction2<us.tractat.kuilt.session.partition/ResumeToken, us.tractat.kuilt.session.partition/ResumeResult.HostVerdict, us.tractat.kuilt.session.partition/ResumeToken>, kotlin/Function0<kotlin.collections/List<us.tractat.kuilt.session.partition/ResumeResult.HostVerdict>>, kotlin/Function0<kotlin/Int>) // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.<init>|<init>(us.tractat.kuilt.session.RoomFactory;us.tractat.kuilt.session.RoomFactory;kotlin.coroutines.SuspendFunction2<us.tractat.kuilt.session.partition.ResumeToken,us.tractat.kuilt.session.partition.ResumeResult.HostVerdict,us.tractat.kuilt.session.partition.ResumeToken>;kotlin.Function0<kotlin.collections.List<us.tractat.kuilt.session.partition.ResumeResult.HostVerdict>>;kotlin.Function0<kotlin.Int>){}[0]
+        constructor <init>(us.tractat.kuilt.session/RoomFactory, us.tractat.kuilt.session/RoomFactory, kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.core/PeerId, kotlin/Unit>, kotlin/Function0<kotlin/Int>, kotlin/Function0<kotlin/Int>) // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.<init>|<init>(us.tractat.kuilt.session.RoomFactory;us.tractat.kuilt.session.RoomFactory;kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.core.PeerId,kotlin.Unit>;kotlin.Function0<kotlin.Int>;kotlin.Function0<kotlin.Int>){}[0]
 
+        final val helloRequests // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.helloRequests|{}helloRequests[0]
+            final fun <get-helloRequests>(): kotlin/Function0<kotlin/Int> // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.helloRequests.<get-helloRequests>|<get-helloRequests>(){}[0]
         final val hostFactory // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.hostFactory|{}hostFactory[0]
             final fun <get-hostFactory>(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.hostFactory.<get-hostFactory>|<get-hostFactory>(){}[0]
-        final val hostVerdicts // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.hostVerdicts|{}hostVerdicts[0]
-            final fun <get-hostVerdicts>(): kotlin/Function0<kotlin.collections/List<us.tractat.kuilt.session.partition/ResumeResult.HostVerdict>> // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.hostVerdicts.<get-hostVerdicts>|<get-hostVerdicts>(){}[0]
         final val joinerFactory // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.joinerFactory|{}joinerFactory[0]
             final fun <get-joinerFactory>(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.joinerFactory.<get-joinerFactory>|<get-joinerFactory>(){}[0]
-        final val prepare // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.prepare|{}prepare[0]
-            final fun <get-prepare>(): kotlin.coroutines/SuspendFunction2<us.tractat.kuilt.session.partition/ResumeToken, us.tractat.kuilt.session.partition/ResumeResult.HostVerdict, us.tractat.kuilt.session.partition/ResumeToken> // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.prepare.<get-prepare>|<get-prepare>(){}[0]
+        final val releaseSeat // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.releaseSeat|{}releaseSeat[0]
+            final fun <get-releaseSeat>(): kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.core/PeerId, kotlin/Unit> // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.releaseSeat.<get-releaseSeat>|<get-releaseSeat>(){}[0]
         final val resumeRequests // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.resumeRequests|{}resumeRequests[0]
             final fun <get-resumeRequests>(): kotlin/Function0<kotlin/Int> // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.resumeRequests.<get-resumeRequests>|<get-resumeRequests>(){}[0]
 
         final fun component1(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.component1|component1(){}[0]
         final fun component2(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.component2|component2(){}[0]
-        final fun component3(): kotlin.coroutines/SuspendFunction2<us.tractat.kuilt.session.partition/ResumeToken, us.tractat.kuilt.session.partition/ResumeResult.HostVerdict, us.tractat.kuilt.session.partition/ResumeToken> // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.component3|component3(){}[0]
-        final fun component4(): kotlin/Function0<kotlin.collections/List<us.tractat.kuilt.session.partition/ResumeResult.HostVerdict>> // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.component4|component4(){}[0]
+        final fun component3(): kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.core/PeerId, kotlin/Unit> // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.component3|component3(){}[0]
+        final fun component4(): kotlin/Function0<kotlin/Int> // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.component4|component4(){}[0]
         final fun component5(): kotlin/Function0<kotlin/Int> // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.component5|component5(){}[0]
-        final fun copy(us.tractat.kuilt.session/RoomFactory = ..., us.tractat.kuilt.session/RoomFactory = ..., kotlin.coroutines/SuspendFunction2<us.tractat.kuilt.session.partition/ResumeToken, us.tractat.kuilt.session.partition/ResumeResult.HostVerdict, us.tractat.kuilt.session.partition/ResumeToken> = ..., kotlin/Function0<kotlin.collections/List<us.tractat.kuilt.session.partition/ResumeResult.HostVerdict>> = ..., kotlin/Function0<kotlin/Int> = ...): us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.copy|copy(us.tractat.kuilt.session.RoomFactory;us.tractat.kuilt.session.RoomFactory;kotlin.coroutines.SuspendFunction2<us.tractat.kuilt.session.partition.ResumeToken,us.tractat.kuilt.session.partition.ResumeResult.HostVerdict,us.tractat.kuilt.session.partition.ResumeToken>;kotlin.Function0<kotlin.collections.List<us.tractat.kuilt.session.partition.ResumeResult.HostVerdict>>;kotlin.Function0<kotlin.Int>){}[0]
+        final fun copy(us.tractat.kuilt.session/RoomFactory = ..., us.tractat.kuilt.session/RoomFactory = ..., kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.core/PeerId, kotlin/Unit> = ..., kotlin/Function0<kotlin/Int> = ..., kotlin/Function0<kotlin/Int> = ...): us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.copy|copy(us.tractat.kuilt.session.RoomFactory;us.tractat.kuilt.session.RoomFactory;kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.core.PeerId,kotlin.Unit>;kotlin.Function0<kotlin.Int>;kotlin.Function0<kotlin.Int>){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.conformance/RoomConformanceSuite.ResumeHarness.toString|toString(){}[0]
@@ -1175,10 +1175,10 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     }
 
     // Targets: [apple]
-    final fun aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen() // us.tractat.kuilt.conformance/RoomConformanceSuite.aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen|aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen(){}[0]
+    final fun aReturnAfterTheSeatWentIsAFreshAdmission() // us.tractat.kuilt.conformance/RoomConformanceSuite.aReturnAfterTheSeatWentIsAFreshAdmission|aReturnAfterTheSeatWentIsAFreshAdmission(){}[0]
 
     // Targets: [apple]
-    final fun aTokenMintedForAnotherRoomIsRefused() // us.tractat.kuilt.conformance/RoomConformanceSuite.aTokenMintedForAnotherRoomIsRefused|aTokenMintedForAnotherRoomIsRefused(){}[0]
+    final fun aReturnRestoresAHeldSeat() // us.tractat.kuilt.conformance/RoomConformanceSuite.aReturnRestoresAHeldSeat|aReturnRestoresAHeldSeat(){}[0]
 
     // Targets: [apple]
     final fun broadcastDeliversRoomFrameTaggedWithSender() // us.tractat.kuilt.conformance/RoomConformanceSuite.broadcastDeliversRoomFrameTaggedWithSender|broadcastDeliversRoomFrameTaggedWithSender(){}[0]
@@ -1274,18 +1274,6 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun resumeAfterLeaveIsLocalWindowClosed() // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeAfterLeaveIsLocalWindowClosed|resumeAfterLeaveIsLocalWindowClosed(){}[0]
 
     // Targets: [apple]
-    final fun resumeExpiredHasExactCode() // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeExpiredHasExactCode|resumeExpiredHasExactCode(){}[0]
-
-    // Targets: [apple]
-    final fun resumeInvalidTokenHasExactCode() // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeInvalidTokenHasExactCode|resumeInvalidTokenHasExactCode(){}[0]
-
-    // Targets: [apple]
-    final fun resumeNotYetOpenHasExactCode() // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeNotYetOpenHasExactCode|resumeNotYetOpenHasExactCode(){}[0]
-
-    // Targets: [apple]
-    final fun resumeSuccessIsAcknowledged() // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeSuccessIsAcknowledged|resumeSuccessIsAcknowledged(){}[0]
-
-    // Targets: [apple]
     final fun resumeWithinWindowFiresResumed() // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeWithinWindowFiresResumed|resumeWithinWindowFiresResumed(){}[0]
 
     // Targets: [apple]
@@ -1295,10 +1283,10 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun theTeardownFaultReallyFires() // us.tractat.kuilt.conformance/RoomConformanceSuite.theTeardownFaultReallyFires|theTeardownFaultReallyFires(){}[0]
 
     // Targets: [wasmJs]
-    final fun aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen|aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen(){}[0]
+    final fun aReturnAfterTheSeatWentIsAFreshAdmission(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aReturnAfterTheSeatWentIsAFreshAdmission|aReturnAfterTheSeatWentIsAFreshAdmission(){}[0]
 
     // Targets: [wasmJs]
-    final fun aTokenMintedForAnotherRoomIsRefused(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aTokenMintedForAnotherRoomIsRefused|aTokenMintedForAnotherRoomIsRefused(){}[0]
+    final fun aReturnRestoresAHeldSeat(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aReturnRestoresAHeldSeat|aReturnRestoresAHeldSeat(){}[0]
 
     // Targets: [wasmJs]
     final fun broadcastDeliversRoomFrameTaggedWithSender(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.broadcastDeliversRoomFrameTaggedWithSender|broadcastDeliversRoomFrameTaggedWithSender(){}[0]
@@ -1392,18 +1380,6 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
 
     // Targets: [wasmJs]
     final fun resumeAfterLeaveIsLocalWindowClosed(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeAfterLeaveIsLocalWindowClosed|resumeAfterLeaveIsLocalWindowClosed(){}[0]
-
-    // Targets: [wasmJs]
-    final fun resumeExpiredHasExactCode(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeExpiredHasExactCode|resumeExpiredHasExactCode(){}[0]
-
-    // Targets: [wasmJs]
-    final fun resumeInvalidTokenHasExactCode(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeInvalidTokenHasExactCode|resumeInvalidTokenHasExactCode(){}[0]
-
-    // Targets: [wasmJs]
-    final fun resumeNotYetOpenHasExactCode(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeNotYetOpenHasExactCode|resumeNotYetOpenHasExactCode(){}[0]
-
-    // Targets: [wasmJs]
-    final fun resumeSuccessIsAcknowledged(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeSuccessIsAcknowledged|resumeSuccessIsAcknowledged(){}[0]
 
     // Targets: [wasmJs]
     final fun resumeWithinWindowFiresResumed(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeWithinWindowFiresResumed|resumeWithinWindowFiresResumed(){}[0]

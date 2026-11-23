@@ -325,43 +325,54 @@ public interface Room {
     public val roomId: StateFlow<RoomId?>
 
     /**
-     * The joiner's reconnect credential, available after the admit handshake completes.
+     * The joiner's resume credential from the admit handshake, which nothing presents any more.
      *
-     * Non-null on a [SessionRole.Joiner] room once the host has sent its [RoomId] via
-     * the Welcome frame. Null on a [SessionRole.Host] room (the host does not reconnect
-     * to itself) and null on a joiner room whose handshake has not yet completed.
+     * A reconnect says Hello again, and the device key proves the member (#3159, Task 1.7), so
+     * neither a [SeamRoomFactory] joiner's automatic reconnect nor [resume] reads this token. Slice
+     * 1.8 removes it with [resume].
      *
-     * [SeamRoomFactory] joiners use this token automatically after a transport tear when the
-     * loom can heal the existing seam. Save it only if you need manual [resume] control; see
-     * that method's same-seam and stable-identity requirements before attempting re-entry.
+     * Non-null on a [SessionRole.Joiner] room once the host's own Welcome to it has carried the
+     * [RoomId] and a secret. Null on a [SessionRole.Host] room (the host does not reconnect to
+     * itself) and null on a joiner room whose handshake has not yet completed.
      */
     public val resumeToken: ResumeToken?
 
     /**
-     * Attempt to resume this room from a [ResumeToken] after a transport drop.
+     * Say Hello to the host again after a transport drop, as the automatic reconnect does. [token]
+     * is not presented: the device key proves the member (#3159, Task 1.7), and slice 1.8 removes
+     * this method with it.
      *
      * Keep this room and its underlying [Seam]. The loom must heal that **same seam instance**
      * with its [Seam.selfId] unchanged; [us.tractat.kuilt.core.MuxClientLoom] provides this stable,
-     * resumable handle, and so does `NwLoom`. The host keys the reconnect window by [ResumeToken.peerId].
+     * resumable handle, and so does `NwLoom`. The host finds the held seat by the key the Hello
+     * proves.
      *
-     * A joiner built by [SeamRoomFactory] attempts resume automatically after a transport tear,
+     * A joiner built by [SeamRoomFactory] says Hello again automatically after a transport tear,
      * within the reconnect window. This explicit call is for manual control once the existing
      * seam is usable again; it does not redial the fabric or replace the room's seam.
      *
+     * **Joiner only.** It sends a fresh Hello to the host alone, answers its challenge, and awaits
+     * the reply:
+     * - The host's `Welcome` to this member marked restored, so the held seat came back →
+     *   [ResumeResult.Success], and [MembershipEvent.Resumed] fires. Unmarked, the seat was gone and
+     *   the host admitted this member afresh, which the room keeps → [ResumeResult.WindowClosed].
+     *   Either way, a room that went terminal before the `Welcome` is handled →
+     *   [ResumeResult.WindowClosed], and no event (#3094).
+     * - The host's `Reject` → [ResumeResult.Refused], carrying its
+     *   [us.tractat.kuilt.session.admit.RejectCode] (#2364).
+     * - No reply within `HeartbeatConfig.resumeTimeout`, or the seam the Hello went out on tears
+     *   first so that no reply can arrive → [ResumeResult.TimedOut].
+     *
+     * Concurrent calls coalesce into one Hello and share its reply (#1280).
+     *
      * If the loom returns a new seam instead of healing the existing one, reconnect ends in
-     * [MembershipEvent.HostLost]. A later call on that terminal room returns
-     * [ResumeResult.WindowClosed] without asking the host. A rebuilt room needs no token: its
-     * `Hello` proves the device key its held seat was admitted under, and a host still holding that
-     * seat under the same peer id restores it (#3212). Whether calling this afterwards can still
-     * succeed depends on how the seat came back. A seat restored through its open window spent that
-     * window, so the call is refused. A seat that came back without spending a window has nothing to
-     * resume; a later drop opens a new window, which a resume can use.
+     * [MembershipEvent.HostLost]. A call on a terminal room, or on the host side, returns
+     * [ResumeResult.WindowClosed] without asking the host.
      *
      * Returns a [ResumeResult.JoinerOutcome], never the whole [ResumeResult] hierarchy: the host's
-     * own verdicts ([ResumeResult.WindowNotYetOpen], [ResumeResult.TokenInvalid]) do not travel as
-     * values — they arrive as the [us.tractat.kuilt.session.admit.RejectCode] on
-     * [ResumeResult.Refused] (#2364). Branching on a value this surface cannot return is therefore
-     * a compile error rather than a dead arm.
+     * own verdicts do not travel as values — they arrive as the
+     * [us.tractat.kuilt.session.admit.RejectCode] on [ResumeResult.Refused] (#2364). Branching on a
+     * value this surface cannot return is therefore a compile error rather than a dead arm.
      *
      * @sample us.tractat.kuilt.session.resumeAfterDropSample
      */

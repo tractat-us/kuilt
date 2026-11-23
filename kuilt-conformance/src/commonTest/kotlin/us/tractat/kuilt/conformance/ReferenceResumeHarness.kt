@@ -3,68 +3,57 @@
 package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
-import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.admit.AdmitMessage
-import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
-import us.tractat.kuilt.session.partition.JoinerReconnectController
-import us.tractat.kuilt.session.partition.ProvenResume
-import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
+import us.tractat.kuilt.test.Direction
+import us.tractat.kuilt.test.FaultProfile
+import us.tractat.kuilt.test.FaultySeam
 import kotlin.test.assertNotNull
 import kotlin.time.Instant
 
 /**
- * Exercises the real controller and room mapping; only window setup and observation are injected.
+ * The reference return rig (#3159, Task 1.7): a host and a joiner on their own devices over one
+ * [InMemoryLoom], with every joiner seam wrapped in a [FaultySeam].
  *
- * A host verdict comes from one of two places, and the rig observes both without asking the room
- * what it decided. The window controller renders the ones it is asked for, recorded at
- * [JoinerReconnectController.tryResume]. The room renders the refusals it can decide from its own
- * state before any controller is asked (#3165) — no secret, another room's id, a peer that is not a
- * member — and those the rig classifies itself from the `Resume` frame as it reaches the host,
- * against the host's own room id and roster.
+ * [RoomConformanceSuite.ResumeHarness.releaseSeat] makes the host give the seat up for real: the
+ * joiner's **outbound** traffic is dropped, so the host's detector hears nothing from it, partitions
+ * the seat and lets its window expire, while the joiner keeps hearing the host and stays in session;
+ * then the path heals. Nothing here touches the host's controller or roster directly, so the
+ * properties' own check of the host roster is an independent observation.
  *
- * [ignoreSecret] is the suite's own positive control, never a fixture: every joiner room it hands
- * out replaces the secret of any token it is asked to present with its own real one — so a forgery
- * arrives at the host indistinguishable from the member, which is what a room that does not check
- * the secret (#3165) amounts to — and a property claiming to catch that room can be shown to red.
+ * The counters read the joiner's sends on its seam, before any fault, so a send that fails still
+ * counts.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal fun referenceResumeHarness(
     scope: TestScope,
     heartbeatConfig: HeartbeatConfig,
-    ignoreSecret: Boolean = false,
 ): RoomConformanceSuite.ResumeHarness {
     val inner = InMemoryLoom()
-    val verdicts = mutableListOf<ResumeResult.HostVerdict>()
-    var requests = 0
-    var controller: DefaultJoinerReconnectController? = null
+    var hellos = 0
+    var resumes = 0
+    val joinerSeams = mutableMapOf<PeerId, FaultySeam>()
     var hostRoom: Room? = null
 
-    /** The refusal the room decides for itself before the controller, or null when it asks it. */
-    fun roomLevelVerdict(resume: AdmitMessage.Resume): ResumeResult.HostVerdict? {
-        val room = hostRoom ?: return null
-        return when {
-            resume.resumeSecret == null -> ResumeResult.TokenInvalid("missing-secret")
-            resume.tokenRoomId != room.roomId.value?.value -> ResumeResult.TokenInvalid("session-mismatch")
-            room.roster.value.none { it.id.value == resume.tokenPeerId } -> ResumeResult.WindowClosed
-            else -> null
+    fun count(payload: ByteArray) {
+        when (AdmitMessage.decode(payload)) {
+            is AdmitMessage.Hello -> hellos++
+            is AdmitMessage.Resume -> resumes++
+            else -> Unit
         }
     }
     val loom = object : Loom {
@@ -72,98 +61,52 @@ internal fun referenceResumeHarness(
 
         override suspend fun weave(rendezvous: Rendezvous): Seam {
             val seam = inner.weave(rendezvous)
-            val isHost = rendezvous is Rendezvous.New
-            return object : Seam by seam {
-                override val incoming: Flow<Swatch> =
-                    if (!isHost) {
-                        seam.incoming
-                    } else {
-                        seam.incoming.onEach { swatch ->
-                            val resume = AdmitMessage.decode(swatch.toByteArray()) as? AdmitMessage.Resume
-                            resume?.let(::roomLevelVerdict)?.let { verdicts.add(it) }
-                        }
-                    }
-
+            if (rendezvous is Rendezvous.New) return seam
+            val counted = object : Seam by seam {
                 override suspend fun broadcast(payload: ByteArray) {
-                    if (AdmitMessage.decode(payload) is AdmitMessage.Resume) requests++
+                    count(payload)
                     seam.broadcast(payload)
                 }
 
                 override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-                    if (AdmitMessage.decode(payload) is AdmitMessage.Resume) requests++
+                    count(payload)
                     seam.sendTo(peer, payload)
                 }
             }
+            return FaultySeam(counted, scope.backgroundScope).also { joinerSeams[it.selfId] = it }
         }
     }
-    val factory = SeamRoomFactory(
-        loom = loom,
-        scope = scope.backgroundScope,
-        clock = { Instant.fromEpochMilliseconds(scope.testScheduler.currentTime) },
-        deviceKeyStore = fakeKeyStore(0),
-        heartbeatConfig = heartbeatConfig,
-        reconnectControllerFactory = { roomId, controllerScope, clock ->
-            val real = DefaultJoinerReconnectController(
-                roomId = roomId,
-                reconnectWindowMs = heartbeatConfig.reconnectWindow.inWholeMilliseconds,
-                clock = { clock().toEpochMilliseconds() },
-                scope = controllerScope,
-            )
-            controller = real
-            object : JoinerReconnectController by real {
-                override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict =
-                    real.tryResume(resume, at).also { verdicts.add(it) }
-            }
-        },
-    )
+    val clock = { Instant.fromEpochMilliseconds(scope.testScheduler.currentTime) }
+    val hostDevice = SeamRoomFactory(loom = loom, scope = scope.backgroundScope, clock = clock, deviceKeyStore = fakeKeyStore(0), heartbeatConfig = heartbeatConfig)
     // The joiner is another device, with a key store of its own: one store shared with the host would
-    // make the two one device, which the host's key-to-seat table reads as one key holding two seats.
-    val joinerDevice = SeamRoomFactory(
-        loom = loom,
-        scope = scope.backgroundScope,
-        clock = { Instant.fromEpochMilliseconds(scope.testScheduler.currentTime) },
-        deviceKeyStore = fakeKeyStore(1),
-        heartbeatConfig = heartbeatConfig,
-    )
+    // make the joiner the host's second tab, which the key-to-seat table gives a seat of its own.
+    val joinerDevice = SeamRoomFactory(loom = loom, scope = scope.backgroundScope, clock = clock, deviceKeyStore = fakeKeyStore(1), heartbeatConfig = heartbeatConfig)
     val hostFactory = object : RoomFactory {
         override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
-            factory.host(pattern, memberName, roomId).also { hostRoom = it }
+            hostDevice.host(pattern, memberName, roomId).also { hostRoom = it }
 
         override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room =
-            joinerDevice.join(tag, memberName, deviceId)
-    }
-    val joinerFactory = if (!ignoreSecret) joinerDevice else object : RoomFactory {
-        override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
-            joinerDevice.host(pattern, memberName, roomId)
-
-        override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room {
-            val room = joinerDevice.join(tag, memberName, deviceId)
-            return object : Room by room {
-                override suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome =
-                    room.resume(room.resumeToken?.let { token.copy(secret = it.secret) } ?: token)
-            }
-        }
+            hostDevice.join(tag, memberName, deviceId)
     }
     return RoomConformanceSuite.ResumeHarness(
         hostFactory = hostFactory,
-        joinerFactory = joinerFactory,
-        prepare = { token, verdict ->
-            val real = assertNotNull(controller, "the host must install the observed controller")
-            when (verdict) {
-                ResumeResult.Success, ResumeResult.WindowClosed -> {
-                    real.onPeerUnresponsive(token.peerId, scope.testScheduler.currentTime)
-                    scope.runCurrent()
-                    if (verdict == ResumeResult.WindowClosed) {
-                        real.expire(token.peerId, scope.testScheduler.currentTime)
-                        scope.runCurrent()
-                    }
-                    token
-                }
-                ResumeResult.WindowNotYetOpen -> token
-                is ResumeResult.TokenInvalid -> token.copy(roomId = RoomId("${token.roomId.value}-foreign"))
+        joinerFactory = joinerDevice,
+        releaseSeat = { joiner ->
+            val host = assertNotNull(hostRoom, "the rig's host must be built before a seat is released")
+            val seam = assertNotNull(joinerSeams[joiner], "the rig built no seam for ${joiner.value}")
+            seam.setFaultProfile(FaultProfile.DropAll(Direction.Outbound))
+            // Past the host's timeout and its whole window, in heartbeat steps, until the seat is gone.
+            val budget = heartbeatConfig.timeout + heartbeatConfig.reconnectWindow + heartbeatConfig.interval * 4
+            var waited = kotlin.time.Duration.ZERO
+            while (waited < budget && host.roster.value.any { it.id == joiner }) {
+                scope.testScheduler.advanceTimeBy(heartbeatConfig.interval)
+                scope.runCurrent()
+                waited += heartbeatConfig.interval
             }
+            seam.heal()
+            scope.runCurrent()
         },
-        hostVerdicts = { verdicts.toList() },
-        resumeRequests = { requests },
+        helloRequests = { hellos },
+        resumeRequests = { resumes },
     )
 }

@@ -192,6 +192,135 @@ class ProvenRestoreTest {
         host.room.leave()
     }
 
+    // ── Resumed fires once per return (Amendment D) ──────────────────────────
+
+    /**
+     * Bob's held seat comes back, and a retry Hello from the same return reaches it: the joiner's
+     * attempt timed out before the host's `Welcome` arrived, so it said Hello again. The retry is
+     * challenged and its proof restores the connected seat, and the joiner gets its `Welcome` again.
+     * The seat came back once, so the host emits one `Resumed` (Amendment D).
+     */
+    @Test
+    fun retryHelloToASeatRestoredForThisReturnEmitsNoSecondResumed() = runTest {
+        val host = rawHost(joiners = setOf(bob, carol))
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+
+        val mark = host.events.mark()
+        val toBob = host.sentTo(bob).size
+        host.admit(bob, bobKey, nonce = 3)
+        assertEquals(Liveness.Connected, host.member(bob)?.liveness, "rig: the first proof restored the seat")
+        host.admit(bob, bobKey, nonce = 4)
+
+        val edges = host.events.edgesSince(mark)
+        assertAll(
+            { assertEquals(listOf(bob), host.hold.calls.map { it.peerId }, "rig: only the first proof asked the controller") },
+            {
+                assertEquals(
+                    listOf(ReturnKind.Restored, ReturnKind.Restored),
+                    host.sentTo(bob).drop(toBob).welcomesFor(bob).map { it.returnKind },
+                    "rig: the retry's proof restored the seat and was answered",
+                )
+            },
+            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(bob)), edges, "one Resumed per return: ${edges.render()}") },
+            { assertEquals(Liveness.Connected, host.member(bob)?.liveness) },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * The same, for a seat the host never partitioned: a restart faster than the host's timeout, and
+     * then a retry from the same return. The host cannot tell this retry from a second quick restart,
+     * since a Hello carries nothing about the return it belongs to. So a return here runs from the
+     * first restore to the seat's next partition.
+     */
+    @Test
+    fun retryHelloToAConnectedSeatAlreadyRestoredEmitsNoSecondResumed() = runTest {
+        val host = rawHost(joiners = setOf(bob, carol))
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+
+        val mark = host.events.mark()
+        val toBob = host.sentTo(bob).size
+        host.admit(bob, bobKey, nonce = 3)
+        host.admit(bob, bobKey, nonce = 4)
+
+        val edges = host.events.edgesSince(mark)
+        assertAll(
+            { assertTrue(host.hold.calls.isEmpty(), "rig: the seat was connected throughout") },
+            {
+                assertEquals(
+                    listOf(ReturnKind.Restored, ReturnKind.Restored),
+                    host.sentTo(bob).drop(toBob).welcomesFor(bob).map { it.returnKind },
+                    "rig: both proofs restored the seat",
+                )
+            },
+            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(bob)), edges, "host: ${edges.render()}") },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * The converse: a return ends when the host loses the seat again. Bob's seat is restored, goes
+     * quiet a second time, and comes back. That is a new return, with its own `Resumed`.
+     */
+    @Test
+    fun aSeatLostAgainAfterItsRestoreHasANewReturnWithItsOwnResumed() = runTest {
+        val host = rawHost(joiners = setOf(bob, carol))
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+
+        val mark = host.events.mark()
+        host.admit(bob, bobKey, nonce = 3)
+        host.admit(bob, bobKey, nonce = 4)
+        host.partition(bob, alive = setOf(carol))
+        host.admit(bob, bobKey, nonce = 5)
+
+        val edges = host.events.edgesSince(mark)
+        assertAll(
+            { assertEquals(listOf(bob, bob), host.hold.calls.map { it.peerId }, "rig: each partition's return asked the controller") },
+            { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.Success, ResumeResult.Success), host.hold.verdicts) },
+            {
+                assertEquals(
+                    listOf<MembershipEvent>(MembershipEvent.Resumed(bob), MembershipEvent.Resumed(bob)),
+                    edges,
+                    "one Resumed for each return: ${edges.render()}",
+                )
+            },
+            { assertEquals(Liveness.Connected, host.member(bob)?.liveness) },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * The other converse: a return ends when its member leaves. Bob's seat is restored, he says
+     * Goodbye, and he is admitted again as a new member. His next restart is that membership's first
+     * return, with its own `Resumed`.
+     */
+    @Test
+    fun aMemberAdmittedAgainAfterLeavingHasANewReturnWithItsOwnResumed() = runTest {
+        val host = rawHost(joiners = setOf(bob, carol))
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+
+        val mark = host.events.mark()
+        host.admit(bob, bobKey, nonce = 3)
+        host.say(bob, AdmitMessage.Goodbye)
+        assertEquals(null, host.member(bob), "rig: Bob's Goodbye ended his membership")
+        host.admit(bob, bobKey, nonce = 4)
+        host.admit(bob, bobKey, nonce = 5)
+
+        val edges = host.events.edgesSince(mark).map { it.describe() }
+        assertEquals(
+            listOf("Resumed(bob)", "Left(bob, ${LeaveReason.Normal})", "Joined(bob)", "Resumed(bob)"),
+            edges,
+            "one Resumed for each membership's return",
+        )
+        host.room.leave()
+    }
+
     // ── Same id, different key ───────────────────────────────────────────────
 
     /**

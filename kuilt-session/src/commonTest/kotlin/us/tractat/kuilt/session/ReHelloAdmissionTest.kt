@@ -1,0 +1,209 @@
+@file:OptIn(
+    us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class,
+    us.tractat.kuilt.identity.IdentityInternalApi::class,
+)
+
+package us.tractat.kuilt.session
+
+import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.test.fakeDeviceKey
+import us.tractat.kuilt.identity.test.fakeDidKey
+import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+/**
+ * The host's half of a joiner saying Hello again (#3159, Task 1.7).
+ *
+ * Once a reconnect is a fresh Hello, a host sees things it never saw from a joiner before: a proof
+ * for a challenge it has already replaced, and a Hello from a peer id whose seat moved to another id
+ * of the same device. Neither may end the joiner, and the second must end the process that sent it.
+ */
+class ReHelloAdmissionTest {
+    private val bob = PeerId("bob")
+    private val bob1 = PeerId("bob-1")
+    private val bob2 = PeerId("bob-2")
+    private val bobDevice = fakeDeviceKey(1)
+
+    /**
+     * Inherited obligation 1: the joiner said Hello twice — a retry — and answered the first
+     * challenge before the second reached it. That proof names a host nonce the host no longer holds
+     * for it. It is dropped, not refused (`BadProof` is terminal), and the proof for the current
+     * challenge still admits, once.
+     */
+    @Test
+    fun aProofForAnOlderChallengeFromTheSameSenderIsDropped() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val h = rawHost(joiners = setOf(bob))
+        val mark = h.events.mark()
+        h.say(bob, h.hello("Bob", bobDevice.id, nonce = 1))
+        h.say(bob, h.hello("Bob", bobDevice.id, nonce = 2))
+        val (older, newer) = h.challengesTo(bob).let { assertEquals(2, it.size, "rig: each Hello drew a challenge"); it[0] to it[1] }
+        h.say(bob, h.proof(older, bobDevice, bob))
+        val rejectsAfterStale = h.rejectsTo(bob)
+        val rosterAfterStale = h.room.roster.value.map { it.id }
+        h.say(bob, h.proof(newer, bobDevice, bob))
+
+        assertAll(
+            { assertEquals(emptyList(), rejectsAfterStale, "the stale proof is not refused") },
+            { assertEquals(emptyList(), rosterAfterStale, "the stale proof admits nobody") },
+            { assertEquals(emptyList(), h.rejectsTo(bob), "nothing is refused") },
+            { assertEquals(listOf(bob), h.events.since(mark).filterIsInstance<MembershipEvent.Joined>().map { it.member.id }) },
+        )
+        h.room.leave()
+    }
+
+    /**
+     * Inherited obligation 2, the cross-path case: the joiner's first Hello went by broadcast and its
+     * re-Hello by `sendTo`, and on a fabric whose two paths do not keep order the broadcast arrives
+     * last. It overwrites the newer challenge, so the joiner's honest proof answers a challenge the
+     * host no longer holds. That proof is dropped, not refused, and the joiner's next Hello admits.
+     */
+    @Test
+    fun aStaleHelloOnTheOtherPathDoesNotRefuseTheNewerProof() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val h = rawHost(joiners = setOf(bob))
+        val mark = h.events.mark()
+        h.say(bob, h.hello("Bob", bobDevice.id, nonce = 2)) // the re-Hello, by sendTo
+        val current = h.challengesTo(bob).single()
+        h.say(bob, h.hello("Bob", bobDevice.id, nonce = 1)) // the first Hello's broadcast, late
+        assertEquals(2, h.challengesTo(bob).size, "rig: the late Hello replaced the challenge")
+        h.say(bob, h.proof(current, bobDevice, bob))
+        val rejectsAfter = h.rejectsTo(bob)
+        val rosterAfter = h.room.roster.value.map { it.id }
+        h.admit(bob, bobDevice, nonce = 3)
+
+        assertAll(
+            { assertEquals(emptyList(), rejectsAfter, "an honest proof whose challenge was overwritten is not refused") },
+            { assertEquals(emptyList(), rosterAfter, "it admits nobody: its challenge is gone") },
+            { assertEquals(emptyList(), h.rejectsTo(bob), "nothing is refused") },
+            { assertEquals(listOf(bob), h.events.since(mark).filterIsInstance<MembershipEvent.Joined>().map { it.member.id }) },
+        )
+        h.room.leave()
+    }
+
+    /**
+     * Inherited obligation 3: the direct `Farewell(supersededBy)` of Decided 19 usually goes into the
+     * dead link it was written for. So the host remembers the superseded id, and when that process's
+     * reconnect says Hello again it is answered with the same `Farewell`, not challenged — or the
+     * process would be admitted to a second seat of its key and the old membership would be back.
+     * A Hello under that id with **another** key is another device, and is challenged as usual.
+     */
+    @Test
+    fun aSupersededIdsHelloIsToldItWasSuperseded() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val h = rawHost(joiners = setOf(bob1, bob2))
+        h.admit(bob1, bobDevice, nonce = 1)
+        h.partition(bob1, alive = emptySet())
+        val mark = h.events.mark()
+        h.admit(bob2, bobDevice, nonce = 2)
+        assertEquals(
+            listOf<MembershipEvent>(MembershipEvent.Left(bob1, LeaveReason.Superseded(bob2))),
+            h.events.since(mark).filterIsInstance<MembershipEvent.Left>(),
+            "rig: bob-2 superseded bob-1",
+        )
+        val challengesToBob1 = h.challengesTo(bob1).size
+        val sentToBob1 = h.sentTo(bob1).size
+
+        h.say(bob1, h.hello("bob-1", bobDevice.id, nonce = 3))
+        val answer = h.sentTo(bob1).drop(sentToBob1)
+        h.say(bob1, h.hello("bob-1", fakeDidKey(2), nonce = 4))
+
+        assertAll(
+            { assertEquals(listOf<AdmitMessage>(AdmitMessage.Farewell(bob1.value, supersededBy = bob2.value)), answer, "the superseded process is told, not challenged") },
+            { assertEquals(challengesToBob1 + 1, h.challengesTo(bob1).size, "another device under that id is challenged as usual") },
+            { assertEquals(listOf(bob2), h.room.roster.value.map { it.id }, "one membership, bob-2's") },
+        )
+        h.room.leave()
+    }
+
+    /**
+     * The same answer for the one Hello that slipped in first: the superseded process said Hello —
+     * and was challenged — before its seat was taken over, and its proof arrives after. The Hello
+     * gate cannot see it; the proof's own check, read under the lock that recorded the takeover, tells
+     * it instead of seating it in an additional seat of its key.
+     */
+    @Test
+    fun aSupersededIdsProofForAChallengeDrawnBeforeTheTakeoverIsTold() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val h = rawHost(joiners = setOf(bob1, bob2))
+        h.admit(bob1, bobDevice, nonce = 1)
+        h.partition(bob1, alive = emptySet())
+        h.say(bob1, h.hello("bob-1", bobDevice.id, nonce = 3))
+        val early = h.challengesTo(bob1).last()
+        val mark = h.events.mark()
+        h.admit(bob2, bobDevice, nonce = 2)
+        assertEquals(
+            listOf<MembershipEvent>(MembershipEvent.Left(bob1, LeaveReason.Superseded(bob2))),
+            h.events.since(mark).filterIsInstance<MembershipEvent.Left>(),
+            "rig: bob-2 superseded bob-1 while bob-1's challenge was open",
+        )
+        val sentToBob1 = h.sentTo(bob1).size
+        h.say(bob1, h.proof(early, bobDevice, bob1))
+
+        assertAll(
+            { assertEquals(listOf<AdmitMessage>(AdmitMessage.Farewell(bob1.value, supersededBy = bob2.value)), h.sentTo(bob1).drop(sentToBob1)) },
+            { assertEquals(listOf(bob2), h.room.roster.value.map { it.id }, "the superseded process is not seated") },
+            { assertTrue(h.events.since(mark).none { it is MembershipEvent.Joined && it.member.id == bob1 }) },
+        )
+        h.room.leave()
+    }
+
+    /**
+     * The superseded id is told only while its successor holds the seat (review round 1 on #3614).
+     * Once bob-2 says Goodbye there is no membership for bob-1's Hello to take back, so the record is
+     * not consulted: bob-1 is challenged as any Hello is. Whether a superseded id may come back while
+     * its successor is still seated is a separate question, and not this one.
+     */
+    @Test
+    fun aSupersededIdIsChallengedOnceItsSuccessorLeft() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val h = rawHost(joiners = setOf(bob1, bob2))
+        h.admit(bob1, bobDevice, nonce = 1)
+        h.partition(bob1, alive = emptySet())
+        h.admit(bob2, bobDevice, nonce = 2)
+        assertEquals(listOf(bob2), h.room.roster.value.map { it.id }, "rig: bob-2 took bob-1's seat over")
+        h.say(bob2, AdmitMessage.Goodbye)
+        assertEquals(emptyList(), h.room.roster.value.map { it.id }, "rig: bob-2 left")
+        val challengesToBob1 = h.challengesTo(bob1).size
+        val sentToBob1 = h.sentTo(bob1).size
+
+        h.say(bob1, h.hello("bob-1", bobDevice.id, nonce = 3))
+
+        assertAll(
+            { assertEquals(challengesToBob1 + 1, h.challengesTo(bob1).size, "bob-1 is challenged") },
+            {
+                assertTrue(
+                    h.sentTo(bob1).drop(sentToBob1).none { it is AdmitMessage.Farewell },
+                    "bob-1 is not told it was superseded by an id that has gone: ${h.sentTo(bob1).drop(sentToBob1)}",
+                )
+            },
+        )
+        h.room.leave()
+    }
+
+    /**
+     * The Proof-time half of the same rule: bob-1's challenge was drawn before the takeover, bob-2 has
+     * since left, and bob-1's proof now seats it rather than telling it about a membership that ended.
+     */
+    @Test
+    fun aSupersededIdsProofIsSeatedOnceItsSuccessorLeft() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val h = rawHost(joiners = setOf(bob1, bob2))
+        h.admit(bob1, bobDevice, nonce = 1)
+        h.partition(bob1, alive = emptySet())
+        h.say(bob1, h.hello("bob-1", bobDevice.id, nonce = 3))
+        val early = h.challengesTo(bob1).last()
+        h.admit(bob2, bobDevice, nonce = 2)
+        assertEquals(listOf(bob2), h.room.roster.value.map { it.id }, "rig: bob-2 took bob-1's seat over while bob-1's challenge was open")
+        h.say(bob2, AdmitMessage.Goodbye)
+        assertEquals(emptyList(), h.room.roster.value.map { it.id }, "rig: bob-2 left")
+        val sentToBob1 = h.sentTo(bob1).size
+
+        h.say(bob1, h.proof(early, bobDevice, bob1))
+
+        assertAll(
+            { assertTrue(h.sentTo(bob1).drop(sentToBob1).none { it is AdmitMessage.Farewell }, "bob-1 is not told: ${h.sentTo(bob1).drop(sentToBob1)}") },
+            { assertEquals(listOf(bob1), h.room.roster.value.map { it.id }, "bob-1 is seated") },
+        )
+        h.room.leave()
+    }
+}

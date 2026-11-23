@@ -247,11 +247,13 @@ public sealed interface ResumeResult {
      * [WindowNotYetOpen], which looks identical from the outside but is transient (#1572).
      *
      * As a [JoinerOutcome] it is a **local** answer: the room is already terminal (it was left, or
-     * the host was lost), or the `Resume` frame could not be sent. A `ResumeAck` handled once the
-     * room is terminal is moot and settles as this (#3094). A host's refusal — including one that
+     * the host was lost), or the Hello could not be sent. A host `Welcome` handled once the
+     * room is terminal is moot and settles as this (#3094). And since #3159 Task 1.7 it is what a
+     * return reports when the seat was gone and the host admitted this member afresh: the room
+     * keeps that admission and stays in session, so there the remedy is none. A host's refusal — including one that
      * says the window elapsed — arrives as [Refused] instead (#2364), so this value never carries a
      * reason the host gave.
-     * Either way the remedy is the same: re-join fresh.
+     * On a terminal room the remedy is to join fresh.
      */
     public data object WindowClosed : HostVerdict, JoinerOutcome
 
@@ -304,9 +306,9 @@ public sealed interface ResumeResult {
     ) : JoinerOutcome
 
     /**
-     * No verdict — neither `ResumeAck` nor `Reject` — arrived within
+     * No verdict — neither the host's `Welcome` nor a `Reject` — arrived within
      * [HeartbeatConfig.resumeTimeout][us.tractat.kuilt.liveness.HeartbeatConfig.resumeTimeout],
-     * or the seam the `Resume` went out on tore first, so that no verdict could arrive (#3151).
+     * or the seam the Hello went out on tore first, so that no verdict could arrive (#3151).
      *
      * The host is unreachable *right now*: it is gone, the link is black-holed, or the reply
      * was lost. **Not** a refusal — deliberately distinct from [WindowClosed], which conflates

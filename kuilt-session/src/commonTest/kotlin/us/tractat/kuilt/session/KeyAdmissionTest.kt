@@ -158,7 +158,7 @@ class KeyAdmissionTest {
     }
 
     @Test
-    fun proofReplayedUnderAnotherNonceIsRejected() = runTest {
+    fun proofReplayedUnderAnotherNonceIsDroppedNotRefused() = runTest {
         val (seam, room) = hostRoom()
         // Attempt 1: Bob is admitted honestly, and the proof he sent is captured.
         say(seam, bob, hello("Bob", bobKey.id, nonce = 1))
@@ -169,16 +169,24 @@ class KeyAdmissionTest {
         say(seam, bob, AdmitMessage.Goodbye)
         assertTrue(room.roster.value.isEmpty(), "rig: Bob left")
 
-        // Attempt 2: a new challenge, answered with attempt 1's proof.
+        // Attempt 2: a new challenge, answered first with attempt 1's proof, then honestly.
         say(seam, bob, hello("Bob", bobKey.id, nonce = 2))
         val second = seam.challengesTo(bob).last()
         say(seam, bob, captured)
+        val afterReplay = room.roster.value.map { it.id }.toSet()
+        val rejectsAfterReplay = seam.rejectsTo(bob).map { it.code }
+        say(seam, bob, proof(second, joiner = bobKey))
 
+        // #3159 Task 1.7: a proof for an older challenge is what a joiner that said Hello again sends
+        // in good faith, so it is dropped, never refused — a BadProof would end that joiner — and the
+        // open challenge stays open for the honest answer.
         assertAll(
             { assertEquals(2, seam.challengesTo(bob).size, "rig: two challenges") },
             { assertTrue(!first.hostNonce.contentEquals(second.hostNonce), "rig: each challenge has its own nonce") },
-            { assertEquals(listOf(RejectCode.BadProof), seam.rejectsTo(bob).map { it.code }, "the replayed proof is refused") },
-            { assertTrue(room.roster.value.isEmpty(), "a replayed proof admits nobody") },
+            { assertEquals(emptyList(), rejectsAfterReplay, "the replayed proof is dropped, not refused") },
+            { assertTrue(afterReplay.isEmpty(), "a replayed proof admits nobody") },
+            { assertEquals(emptyList(), seam.rejectsTo(bob).map { it.code }, "nothing is refused at all") },
+            { assertEquals(setOf(bob), room.roster.value.map { it.id }.toSet(), "the honest answer to the open challenge still admits") },
         )
         room.leave()
     }

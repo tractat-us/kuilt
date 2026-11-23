@@ -1,287 +1,230 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+@file:OptIn(
+    us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class,
+    us.tractat.kuilt.identity.IdentityInternalApi::class,
+)
 
 package us.tractat.kuilt.session.partition
 
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
-import us.tractat.kuilt.core.InMemoryTag
-import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.identity.Challenge
+import us.tractat.kuilt.identity.test.fakeDeviceKey
+import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
-import us.tractat.kuilt.session.Room
+import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.session.FailureReason
+import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SeamRoom
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.RejectCode
-import us.tractat.kuilt.test.Direction
-import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.session.virtualClock
+import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.FlakyLifecycleSeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
-import kotlin.time.Instant
-
-/** One step of the harness: 100 ms of virtual time and 100 ms on the injected clock, in lockstep. */
-private const val REFUSAL_TICK_MS = 100L
-
-/**
- * The step used while *waiting* for a refusal — an order of magnitude under the retry interval, so
- * a single step can never contain two retries and the first record observed is genuinely the first.
- */
-private const val PROBE_STEP_MS = 10L
-
-/** Ticks spent settling the admit handshake and letting both detectors latch "peer was seen". */
-private const val SETTLE_TICKS = 3
-
-/** The joiner-side grace before its own fabric evicts the host and the seam re-forms. */
-private const val GRACE_TICKS = 4
-
-/**
- * How long the path is down: strictly between [GRACE_TICKS] and the host's
- * `HeartbeatConfig.timeout`, which is the #1637 sandwich — the joiner reconnects, the host never
- * noticed, and every `Resume` comes back `ResumeWindowNotYetOpen`.
- */
-private const val OUTAGE_TICKS = 6
 
 /**
  * The joiner's refusal loop must **say so while it is happening**.
  *
- * A joiner whose resume is refused retries every `HeartbeatConfig.interval` for the whole
- * `reconnectWindow`. Before this test the only trace of that was a terminal `HostLost` a minute
- * later — by which point the mechanism that produced it is gone, and a real hardware capture of
- * #1637 was misdiagnosed twice because the refusal loop left no evidence of itself at all.
+ * A joiner whose reconnect is refused retryably says Hello again every `HeartbeatConfig.interval`
+ * for the whole `reconnectWindow`. Before #1637's post-mortem the only trace of that was a terminal
+ * `HostLost` a minute later — by which point the mechanism that produced it is gone, and a real
+ * hardware capture was misdiagnosed twice because the refusal loop left no evidence of itself.
  *
- * [JoinerResumeMachine] now records each refusal as a [ResumeRefusal] and logs it at INFO. The
- * record is what these tests assert: the *identities and state* a diagnosis needs — which host,
- * which [RejectCode], how many attempts in, how far through the reconnect budget, and how far
- * through the dwell that discriminates a blip from a real loss. Asserting the record rather than
- * the rendered text keeps the tests about the data; `:kuilt-session` has no log-capture harness,
- * and inventing one to string-match a format would pin the least interesting half.
+ * [JoinerResumeMachine] records each refusal as a [ResumeRefusal] and logs it at INFO. The record is
+ * what these tests assert: the *identities and state* a diagnosis needs — which host, which
+ * [RejectCode], how many attempts in, how far through the reconnect budget. Asserting the record
+ * rather than the rendered text keeps the tests about the data.
  *
- * The harness is the #1637 blip (see [SubTimeoutBlipResumeTest] for the full derivation of why the
- * three durations must be ordered `grace < outage < hostTimeout`); this file reuses its shape
- * because it is the one scenario that reliably produces a *sustained* refusal loop.
+ * Since #3159 Task 1.7 a reconnect says Hello, and a host that never saw the blip restores the seat
+ * at once, so the #1637 blip no longer produces a refusal loop. A host this class scripts does:
+ * it answers every re-Hello's proof with a retryable `Reject(HostFailed)`, as a host whose window
+ * controller keeps throwing would.
  */
 class ResumeRefusalReportingTest {
+    private val hostId = PeerId("host")
+    private val joinerId = PeerId("joiner")
+    private val roomId = RoomId("room-1")
 
-    private val fastConfig = HeartbeatConfig(
-        interval = REFUSAL_TICK_MS.milliseconds,
+    private val config = HeartbeatConfig(
+        interval = TICK,
         timeout = 1000.milliseconds,
         reconnectWindow = 4.seconds,
     )
 
-    @Test
-    fun `a refused resume records the host the code and how far the episode has got`() =
-        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            var nowMs = 0L
-            val clock = { Instant.fromEpochMilliseconds(nowMs) }
-            fun step(ms: Long) {
-                nowMs += ms
-                advanceTimeBy(ms)
-                runCurrent()
-            }
-            fun tick(count: Int = 1) = repeat(count) { step(REFUSAL_TICK_MS) }
+    /** A joiner over `FlakyLifecycleSeam(FakeSeam)`, admitted by a host this class plays. */
+    private inner class Rig(private val test: TestScope, val fake: FakeSeam, val link: FlakyLifecycleSeam, val room: SeamRoom) {
+        private var answered = 0
 
-            val h = refusalHarness(clock, fastConfig)
-            val joiner = h.joinerRoom as SeamRoom
-            val hostId = joiner.roster.value.single().id
-            val roomId = assertNotNull(joiner.resumeToken, "precondition: the joiner holds a token").roomId
+        private fun hellosToHost(): List<AdmitMessage.Hello> =
+            fake.directed.filter { it.first == hostId }.mapNotNull { AdmitMessage.decode(it.second) as? AdmitMessage.Hello }
 
-            tick(SETTLE_TICKS)
-            h.dropPath()
-            tick(GRACE_TICKS)
-            h.expireGrace()
-            tick(OUTAGE_TICKS - GRACE_TICKS)
-            h.restorePath()
+        private suspend fun fromHost(message: AdmitMessage) {
+            if (fake.state.value is SeamState.Torn) return
+            fake.deliver(hostId, AdmitMessage.encode(message))
+            test.testScheduler.runCurrent()
+        }
 
-            // The joiner is now re-woven and collecting rejects. Wait, bounded, for the first one —
-            // in steps well under the retry interval, so the first record observed really is the
-            // first refusal and not the second one landing inside the same coarse tick.
-            var guard = 0
-            while (joiner.lastResumeRefusal() == null && guard++ < 400) step(PROBE_STEP_MS)
-            val first = assertNotNull(
-                joiner.lastResumeRefusal(),
-                "a refused resume must leave a record while the loop is still running",
+        suspend fun challenge(hello: AdmitMessage.Hello) {
+            val signed = Challenge.sign(
+                fakeDeviceKey(0), roomId.value, hostId.value, joinerId.value,
+                assertNotNull(hello.joinerNonce), ByteArray(Challenge.NONCE_SIZE) { 3 },
             )
+            fromHost(AdmitMessage.Challenge(signed.wire))
+        }
 
-            // Let a few more retries land so the attempt counter is visibly advancing.
-            tick(3)
-            val later = assertNotNull(joiner.lastResumeRefusal(), "the record must survive the retries")
+        suspend fun admit(hello: AdmitMessage.Hello) {
+            challenge(hello)
+            fromHost(AdmitMessage.Welcome(joinerId.value, "Joiner", "s", fakeDidKey(1), roomId = roomId.value, resumeSecret = ResumeSecret.generate()))
+            fromHost(AdmitMessage.Welcome(hostId.value, "Host", hostId.value, fakeDeviceKey(0).id))
+        }
+
+        /** Every re-Hello not yet answered is challenged, then refused retryably. */
+        suspend fun refuseEveryReHello() {
+            val hellos = hellosToHost()
+            while (answered < hellos.size) {
+                challenge(hellos[answered++])
+                fromHost(AdmitMessage.Reject("host-failed: the window controller threw", RejectCode.HostFailed))
+            }
+        }
+
+        /** One [TICK], with the host pinging and every new re-Hello refused. */
+        suspend fun tick(refuse: Boolean = true) {
+            if (fake.state.value !is SeamState.Torn) fake.deliver(hostId, HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray())
+            test.testScheduler.advanceTimeBy(TICK)
+            test.testScheduler.runCurrent()
+            if (refuse) refuseEveryReHello()
+        }
+
+        fun dropAndHeal() {
+            link.enterWeaving()
+            test.testScheduler.advanceTimeBy(TICK * 3)
+            test.testScheduler.runCurrent()
+            link.recover()
+            test.testScheduler.runCurrent()
+        }
+    }
+
+    private suspend fun TestScope.rig(): Rig {
+        val fake = FakeSeam(selfId = joinerId, initialPeers = setOf(joinerId, hostId))
+        val link = FlakyLifecycleSeam(fake, backgroundScope)
+        val room = SeamRoomFactory(
+            loom = InMemoryLoom(),
+            scope = backgroundScope,
+            clock = virtualClock(),
+            deviceKeyStore = fakeKeyStore(1),
+            heartbeatConfig = config,
+            admitTimeout = 1.seconds,
+        ).adopt(link, SessionRole.Joiner, memberName = "Joiner", reweave = { link }) as SeamRoom
+        testScheduler.runCurrent()
+        val rig = Rig(this, fake, link, room)
+        val first = fake.broadcasts.mapNotNull { AdmitMessage.decode(it) as? AdmitMessage.Hello }.single()
+        rig.admit(first)
+        assertTrue(room.roster.value.any { it.id == hostId }, "rig: the joiner was admitted")
+        repeat(3) { rig.tick(refuse = false) }
+        return rig
+    }
+
+    @Test
+    fun `a refused reconnect records the host the code and how far the episode has got`() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = rig()
+            rig.dropAndHeal()
+            rig.refuseEveryReHello()
+            val first = assertNotNull(rig.room.lastResumeRefusal(), "a refused reconnect must leave a record while the loop is still running")
+            repeat(5) { rig.tick() }
+            val later = assertNotNull(rig.room.lastResumeRefusal(), "the record must survive the retries")
 
             assertAll(
                 { assertEquals(hostId, first.host, "the record must name the host that refused us") },
-                { assertEquals(roomId.value, first.roomId, "the record must name the room being resumed") },
-                {
-                    assertEquals(
-                        RejectCode.ResumeWindowNotYetOpen,
-                        first.code,
-                        "a blip the host never observed is refused ResumeWindowNotYetOpen",
-                    )
-                },
+                { assertEquals(roomId.value, first.roomId, "the record must name the room being returned to") },
+                { assertEquals(RejectCode.HostFailed, first.code, "the record carries the refusal's own code") },
                 { assertEquals(1, first.attempt, "the first refusal of an episode is attempt 1") },
+                { assertTrue(later.attempt > first.attempt, "each refusal is reported, not just the first (first=${first.attempt} later=${later.attempt})") },
+                { assertEquals(config.reconnectWindow, first.budget, "the record carries the budget the elapsed time is measured against") },
                 {
                     assertTrue(
-                        later.attempt > first.attempt,
-                        "the retry loop must report each refusal, not just the first " +
-                            "(first=${first.attempt} later=${later.attempt})",
+                        first.elapsed > Duration.ZERO && first.elapsed < config.reconnectWindow,
+                        "elapsed places the refusal inside the reconnect budget (was ${first.elapsed})",
                     )
                 },
-                {
-                    assertEquals(
-                        fastConfig.reconnectWindow,
-                        first.budget,
-                        "the record must carry the budget the elapsed time is measured against",
-                    )
-                },
-                {
-                    assertTrue(
-                        first.elapsed > Duration.ZERO && first.elapsed < fastConfig.reconnectWindow,
-                        "elapsed must place the refusal inside the reconnect budget (was ${first.elapsed})",
-                    )
-                },
-                {
-                    assertEquals(
-                        fastConfig.timeout,
-                        first.dwellTarget,
-                        "the dwell target is the host's own liveness timeout",
-                    )
-                },
-                {
-                    assertEquals(
-                        Duration.ZERO,
-                        first.dwell,
-                        "the first ResumeWindowNotYetOpen starts the dwell, so no time has elapsed in it yet",
-                    )
-                },
-                {
-                    assertTrue(
-                        (later.dwell ?: Duration.ZERO) > Duration.ZERO,
-                        "a sustained refusal must show the dwell advancing (was ${later.dwell})",
-                    )
-                },
+            )
+            rig.room.leave()
+        }
+
+    /**
+     * The volume bound. The loop says Hello once per [HeartbeatConfig.interval], so an episode can emit
+     * at most one record per interval of its budget. A regression that logged per frame, or per
+     * re-weave attempt, blows this.
+     */
+    @Test
+    fun `the refusal record advances once per retry and not once per frame`() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = rig()
+            rig.dropAndHeal()
+            repeat((config.reconnectWindow / TICK).toInt() + 10) { rig.tick() }
+
+            val ceiling = (config.reconnectWindow / config.interval).toInt()
+            val record = assertNotNull(rig.room.lastResumeRefusal(), "the episode must have been refused")
+            assertTrue(
+                record.attempt in 2..ceiling,
+                "an episode reports at most one refusal per retry interval (attempts=${record.attempt}, ceiling=$ceiling)",
             )
         }
 
     /**
-     * The volume bound. The loop retries once per [HeartbeatConfig.interval], so an episode can
-     * emit at most one record per interval of its budget — and the #1637 dwell cuts it far shorter
-     * than that. A regression that logged per frame, or per re-weave attempt, blows this.
+     * A window lost to retryable refusals ends `HostLost(Refused)`, carrying the last refusal's code,
+     * not `WindowExpired`: the consumer can tell a host that kept refusing from one that never answered.
      */
     @Test
-    fun `the refusal record advances once per retry and not once per frame`() =
-        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            var nowMs = 0L
-            val clock = { Instant.fromEpochMilliseconds(nowMs) }
-            fun tick(count: Int = 1) = repeat(count) {
-                nowMs += REFUSAL_TICK_MS
-                advanceTimeBy(REFUSAL_TICK_MS)
-                runCurrent()
-            }
+    fun `a window lost to retryable refusals ends HostLost Refused with their code`() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = rig()
+            val events = mutableListOf<MembershipEvent>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { rig.room.events.collect { events += it } }
+            rig.dropAndHeal()
+            repeat((config.reconnectWindow / TICK).toInt() + 10) { rig.tick() }
 
-            val h = refusalHarness(clock, fastConfig)
-            val joiner = h.joinerRoom as SeamRoom
-
-            tick(SETTLE_TICKS)
-            h.dropPath()
-            tick(GRACE_TICKS)
-            h.expireGrace()
-            tick(OUTAGE_TICKS - GRACE_TICKS)
-            h.restorePath()
-            tick(40)
-
-            val ceiling = (fastConfig.reconnectWindow / fastConfig.interval).toInt()
-            val record = assertNotNull(joiner.lastResumeRefusal(), "the episode must have been refused")
-            assertTrue(
-                record.attempt in 1..ceiling,
-                "an episode may report at most one refusal per retry interval " +
-                    "(attempts=${record.attempt}, ceiling=$ceiling)",
+            val lost = events.filterIsInstance<MembershipEvent.HostLost>()
+            assertAll(
+                { assertTrue(assertNotNull(rig.room.lastResumeRefusal(), "precondition: the episode was refused").attempt >= 2) },
+                { assertEquals(1, lost.size, "the window was lost (events: $events)") },
+                {
+                    val reason = lost.singleOrNull()?.reason
+                    assertIs<FailureReason.Refused>(reason, "a window lost to refusals says so (reason: $reason)")
+                    assertEquals(RejectCode.HostFailed, reason.code)
+                },
             )
         }
 
     /** A healthy session is never refused, so it must add no refusal record — and no log line. */
     @Test
     fun `a session that is never refused records nothing`() =
-        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            var nowMs = 0L
-            val clock = { Instant.fromEpochMilliseconds(nowMs) }
-            fun tick(count: Int = 1) = repeat(count) {
-                nowMs += REFUSAL_TICK_MS
-                advanceTimeBy(REFUSAL_TICK_MS)
-                runCurrent()
-            }
-
-            val h = refusalHarness(clock, fastConfig)
-            tick(SETTLE_TICKS + GRACE_TICKS + OUTAGE_TICKS + 20)
-
-            assertNull(
-                (h.joinerRoom as SeamRoom).lastResumeRefusal(),
-                "a session that never dropped must not report a refusal",
-            )
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = rig()
+            repeat(20) { rig.tick() }
+            assertNull(rig.room.lastResumeRefusal(), "a session that never dropped must not report a refusal")
+            rig.room.leave()
         }
-}
 
-/** The pieces of a #1637 refusal scenario a test drives: two rooms and the joiner's two fault layers. */
-private class RefusalHarness(
-    val joinerRoom: Room,
-    private val joinerPath: FaultySeam,
-    private val joinerLink: FlakyLifecycleSeam,
-) {
-    /** The device path goes away: frames stop both ways, but the seam is still `Woven`. */
-    fun dropPath() = joinerPath.partition(Direction.Both)
-
-    /** The fabric's grace expires: the joiner evicts the host and the seam re-forms. */
-    fun expireGrace() = joinerLink.enterWeaving()
-
-    /** The path returns: the seam re-forms in place and frames flow again. */
-    fun restorePath() {
-        joinerLink.recover()
-        joinerPath.heal()
+    private companion object {
+        val TICK = 100.milliseconds
     }
-}
-
-/**
- * Two adopted rooms over one [InMemoryLoom], with the **joiner's** seam wrapped
- * `FlakyLifecycleSeam(FaultySeam(base))` so a test can drop the path and expire the grace
- * independently. The host's seam is untouched — that is what makes every `Resume` come back
- * `ResumeWindowNotYetOpen`.
- */
-private suspend fun TestScope.refusalHarness(
-    clock: () -> Instant,
-    config: HeartbeatConfig,
-): RefusalHarness {
-    val base = InMemoryLoom()
-    val hostLink = base.weave(Rendezvous.New(Pattern("refusal")))
-    val joinerPath = FaultySeam(base.weave(Rendezvous.Existing(InMemoryTag("refusal"))), backgroundScope)
-    val joinerLink = FlakyLifecycleSeam(joinerPath, backgroundScope)
-    // One factory per device: the host and the joiner each have their own key.
-    fun device(index: Int) = SeamRoomFactory(
-        loom = base,
-        scope = backgroundScope,
-        clock = clock,
-        deviceKeyStore = fakeKeyStore(index),
-        heartbeatConfig = config,
-    )
-    val hostRoom = device(0).adopt(hostLink, SessionRole.Host, memberName = "Host")
-    val joinerRoom = device(1).adopt(
-        joinerLink,
-        SessionRole.Joiner,
-        memberName = "Joiner",
-        reweave = { joinerLink },
-    )
-    hostRoom.roster.first { it.size == 1 }
-    joinerRoom.roster.first { it.isNotEmpty() }
-    return RefusalHarness(joinerRoom, joinerPath, joinerLink)
 }

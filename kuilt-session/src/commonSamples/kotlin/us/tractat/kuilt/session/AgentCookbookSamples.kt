@@ -130,21 +130,20 @@ public suspend fun callerSuppliedRoomIdSample(
  * compile error rather than dead code.
  */
 public suspend fun resumeAfterDropSample(room: Room): Boolean {
-    // After the admit handshake the joiner holds a reconnect credential — save it.
+    // resume() still takes the room's token, but no longer presents it: it says Hello again,
+    // and the device key proves the member.
     val token: ResumeToken = room.resumeToken ?: return false
     // Keep this room: its loom must heal the SAME seam with the SAME selfId (e.g. MuxClientLoom).
-    // SeamRoomFactory joiners attempt resume automatically after a tear; this is manual control.
-    // Once that seam is usable again, present the token within the host's reconnect window.
+    // SeamRoomFactory joiners say Hello again automatically after a tear; this is manual control.
     return when (val outcome = room.resume(token)) {
-        ResumeResult.Success -> false // back in the room; state resync follows
-        // The host answered, and said no. WHY is in the code, never in the message: an elapsed
-        // window and a token for another room are terminal, a window the host has not opened
-        // yet is not. See classifyRejectCodeSample.
+        ResumeResult.Success -> false // the held seat is back; state resync follows
+        // The host answered, and said no. WHY is in the code, never in the message.
+        // See classifyRejectCodeSample.
         is ResumeResult.Refused -> outcome.code.retryable
-        // No reply within resumeTimeout, or the seam tore under the Resume: the host is unreachable now.
+        // No reply within resumeTimeout, or the seam tore under the Hello: the host is unreachable now.
         ResumeResult.TimedOut -> true
-        // We never asked: this room is already over (left, or the host was lost), or the frame
-        // could not be sent. Re-join fresh.
+        // The seat was gone and the host admitted this room afresh, which it keeps — or this room
+        // is already over (left, or the host was lost), and only a fresh join helps.
         ResumeResult.WindowClosed -> false
     }
 }

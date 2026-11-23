@@ -14,7 +14,6 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.SeamRoomFactory
-import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoundRobinEndpointSelector
 import us.tractat.kuilt.session.partition.ServerClusterReconnect
@@ -46,20 +45,17 @@ import kotlin.time.Duration.Companion.seconds
  *   [us.tractat.kuilt.session.partition.RoomId] is minted per room, so server-B does not even
  *   recognise the room server-A's token names.
  *
- * [Room.resume] therefore returns [ResumeResult.Refused] carrying
- * [RejectCode.ResumeTokenInvalid] — a **terminal** code — when the client presents the token
- * from server-A to server-B. This is the characterisation this test proves.
- *
- * **The room-id mismatch is the operative reason, and it was invisible until #2364.** This KDoc
- * used to say the token was "structurally valid (correct RoomId)" and that the refusal came from a
- * missing window entry. It never did: server-B rejects on the room id, *before* it looks at any
- * window. Nothing here could tell, because every reject reached the joiner as one
- * `ResumeResult.WindowClosed`. The measured code now says which check fired.
+ * Until #3159 Task 1.7 [Room.resume] presented the token, and server-B refused it with the
+ * terminal `ResumeTokenInvalid` on the room id it did not mint (#2364 made that code visible).
+ * Since Task 1.7 [Room.resume] says Hello again and presents no token, so on server-B it simply
+ * restores the seat the client's fresh join there already holds: [ResumeResult.Success], whatever
+ * token the client carries. This is the characterisation the test now proves: **the fresh join is
+ * the return**, and the token from server-A buys nothing on server-B. Task 1.8 removes the token.
  *
  * ## Implication for S3 ClusterClient
  *
- * The `ClusterClient.connect`-on-failover code path must treat a terminal `ResumeResult.Refused`
- * as a signal to fall back to a fresh join (re-admit handshake), not as an error. Resume
+ * The `ClusterClient.connect`-on-failover code path must make a fresh join on the new server
+ * (the re-admit handshake); nothing it carries from the old one restores anything. Resume
  * is a **best-effort optimisation** that succeeds only when the reconnect stays on the
  * same entry server within its reconnect window. Cross-endpoint failover always requires
  * a full re-join.
@@ -84,7 +80,7 @@ class ResumeTokenFailoverTest {
     private val roomPattern = Pattern("failover-test-room")
 
     @Test
-    fun `resume token from server-A is terminally refused by server-B — fresh join required`() =
+    fun `a token from server-A buys nothing on server-B — the fresh join is the return`() =
         testApplication {
             val hostA = KtorRoomHost(
                 application = application,
@@ -210,21 +206,14 @@ class ResumeTokenFailoverTest {
 
                 // ── Step 6: assert the design finding ────────────────────────────
 
-                // The resume DEGRADES to WindowClosed: the token is structurally valid
-                // (correct RoomId) but server-B's JoinerReconnectController has no window
-                // state for this peer's PeerId. Fresh join (the admit handshake above) is
-                // the correct fallback path.
+                // The fresh join (the admit handshake above) is the return. resume() says Hello
+                // again and presents no token, so server-B restores the seat that join holds there,
+                // and the token from server-A — a room server-B never minted — plays no part.
                 assertEquals(
-                    ResumeResult.Refused(
-                        "resume-token-invalid: session-mismatch",
-                        RejectCode.ResumeTokenInvalid,
-                    ),
+                    ResumeResult.Success,
                     resumeResult,
-                    "ResumeToken from server-A must be REFUSED by server-B with a TERMINAL code: " +
-                        "each server mints its own RoomId and keeps its reconnect windows in memory, " +
-                        "so re-presenting this token can never work and " +
-                        "ClusterClient.connect-on-failover must fall back to a fresh join. A " +
-                        "retryable code here would send the client into a doomed retry loop.",
+                    "after failover the fresh join on server-B is the membership; a re-Hello restores " +
+                        "its seat, and the token from server-A is not presented at all",
                 )
 
                 // ── Teardown ──────────────────────────────────────────────────────
