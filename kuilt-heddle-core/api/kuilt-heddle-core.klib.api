@@ -562,6 +562,207 @@ sealed interface us.tractat.kuilt.heddle/StepRefusal { // us.tractat.kuilt.heddl
     }
 }
 
+sealed interface us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.heddle/TopologyChange|null[0]
+    abstract val names // us.tractat.kuilt.heddle/TopologyChange.names|{}names[0]
+        abstract fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.names.<get-names>|<get-names>(){}[0]
+    abstract val path // us.tractat.kuilt.heddle/TopologyChange.path|{}path[0]
+        abstract fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.path.<get-path>|<get-path>(){}[0]
+
+    final class Added : us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.heddle/TopologyChange.Added|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>, us.tractat.kuilt.heddle/Topology.Node) // us.tractat.kuilt.heddle/TopologyChange.Added.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Topology.Node){}[0]
+
+        final val names // us.tractat.kuilt.heddle/TopologyChange.Added.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.Added.names.<get-names>|<get-names>(){}[0]
+        final val node // us.tractat.kuilt.heddle/TopologyChange.Added.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.heddle/Topology.Node // us.tractat.kuilt.heddle/TopologyChange.Added.node.<get-node>|<get-node>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyChange.Added.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.Added.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.Added.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.Added.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.heddle/Topology.Node // us.tractat.kuilt.heddle/TopologyChange.Added.component3|component3(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/String> = ..., us.tractat.kuilt.heddle/Topology.Node = ...): us.tractat.kuilt.heddle/TopologyChange.Added // us.tractat.kuilt.heddle/TopologyChange.Added.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Topology.Node){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyChange.Added.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyChange.Added.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.Added.toString|toString(){}[0]
+    }
+
+    final class CeilingChanged : us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>, kotlin/Long?, kotlin/Long?) // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;kotlin.Long?;kotlin.Long?){}[0]
+
+        final val after // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.after|{}after[0]
+            final fun <get-after>(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.after.<get-after>|<get-after>(){}[0]
+        final val before // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.before|{}before[0]
+            final fun <get-before>(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.before.<get-before>|<get-before>(){}[0]
+        final val names // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.names.<get-names>|<get-names>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.component2|component2(){}[0]
+        final fun component3(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.component3|component3(){}[0]
+        final fun component4(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.component4|component4(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/String> = ..., kotlin/Long? = ..., kotlin/Long? = ...): us.tractat.kuilt.heddle/TopologyChange.CeilingChanged // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;kotlin.Long?;kotlin.Long?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.CeilingChanged.toString|toString(){}[0]
+    }
+
+    final class GroupBecameLane : us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>) // us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>){}[0]
+
+        final val names // us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane.names.<get-names>|<get-names>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane.component2|component2(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/String> = ...): us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane // us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.GroupBecameLane.toString|toString(){}[0]
+    }
+
+    final class LaneBecameGroup : us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>) // us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>){}[0]
+
+        final val names // us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup.names.<get-names>|<get-names>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup.component2|component2(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/String> = ...): us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup // us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.LaneBecameGroup.toString|toString(){}[0]
+    }
+
+    final class Removed : us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.heddle/TopologyChange.Removed|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>, us.tractat.kuilt.heddle/Topology.Node) // us.tractat.kuilt.heddle/TopologyChange.Removed.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Topology.Node){}[0]
+
+        final val names // us.tractat.kuilt.heddle/TopologyChange.Removed.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.Removed.names.<get-names>|<get-names>(){}[0]
+        final val node // us.tractat.kuilt.heddle/TopologyChange.Removed.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.heddle/Topology.Node // us.tractat.kuilt.heddle/TopologyChange.Removed.node.<get-node>|<get-node>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyChange.Removed.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.Removed.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.Removed.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.Removed.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.heddle/Topology.Node // us.tractat.kuilt.heddle/TopologyChange.Removed.component3|component3(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/String> = ..., us.tractat.kuilt.heddle/Topology.Node = ...): us.tractat.kuilt.heddle/TopologyChange.Removed // us.tractat.kuilt.heddle/TopologyChange.Removed.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Topology.Node){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyChange.Removed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyChange.Removed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.Removed.toString|toString(){}[0]
+    }
+
+    final class RootRenamed : us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.heddle/TopologyChange.RootRenamed|null[0]
+        constructor <init>(kotlin/String, kotlin/String) // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.<init>|<init>(kotlin.String;kotlin.String){}[0]
+
+        final val after // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.after|{}after[0]
+            final fun <get-after>(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.after.<get-after>|<get-after>(){}[0]
+        final val before // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.before|{}before[0]
+            final fun <get-before>(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.before.<get-before>|<get-before>(){}[0]
+        final val names // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.names.<get-names>|<get-names>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.component1|component1(){}[0]
+        final fun component2(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.heddle/TopologyChange.RootRenamed // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.copy|copy(kotlin.String;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.RootRenamed.toString|toString(){}[0]
+    }
+
+    final class TemplateAdded : us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>, us.tractat.kuilt.heddle/Topology.ChildTemplate) // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Topology.ChildTemplate){}[0]
+
+        final val names // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.names.<get-names>|<get-names>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.path.<get-path>|<get-path>(){}[0]
+        final val template // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.template|{}template[0]
+            final fun <get-template>(): us.tractat.kuilt.heddle/Topology.ChildTemplate // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.template.<get-template>|<get-template>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.heddle/Topology.ChildTemplate // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.component3|component3(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/String> = ..., us.tractat.kuilt.heddle/Topology.ChildTemplate = ...): us.tractat.kuilt.heddle/TopologyChange.TemplateAdded // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Topology.ChildTemplate){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.TemplateAdded.toString|toString(){}[0]
+    }
+
+    final class TemplateChanged : us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>, us.tractat.kuilt.heddle/Topology.ChildTemplate, us.tractat.kuilt.heddle/Topology.ChildTemplate) // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Topology.ChildTemplate;us.tractat.kuilt.heddle.Topology.ChildTemplate){}[0]
+
+        final val after // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.after|{}after[0]
+            final fun <get-after>(): us.tractat.kuilt.heddle/Topology.ChildTemplate // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.after.<get-after>|<get-after>(){}[0]
+        final val before // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.before|{}before[0]
+            final fun <get-before>(): us.tractat.kuilt.heddle/Topology.ChildTemplate // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.before.<get-before>|<get-before>(){}[0]
+        final val names // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.names.<get-names>|<get-names>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.heddle/Topology.ChildTemplate // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.component3|component3(){}[0]
+        final fun component4(): us.tractat.kuilt.heddle/Topology.ChildTemplate // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.component4|component4(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/String> = ..., us.tractat.kuilt.heddle/Topology.ChildTemplate = ..., us.tractat.kuilt.heddle/Topology.ChildTemplate = ...): us.tractat.kuilt.heddle/TopologyChange.TemplateChanged // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Topology.ChildTemplate;us.tractat.kuilt.heddle.Topology.ChildTemplate){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.TemplateChanged.toString|toString(){}[0]
+    }
+
+    final class TemplateRemoved : us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>, us.tractat.kuilt.heddle/Topology.ChildTemplate) // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Topology.ChildTemplate){}[0]
+
+        final val names // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.names.<get-names>|<get-names>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.path.<get-path>|<get-path>(){}[0]
+        final val template // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.template|{}template[0]
+            final fun <get-template>(): us.tractat.kuilt.heddle/Topology.ChildTemplate // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.template.<get-template>|<get-template>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.heddle/Topology.ChildTemplate // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.component3|component3(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/String> = ..., us.tractat.kuilt.heddle/Topology.ChildTemplate = ...): us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Topology.ChildTemplate){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.TemplateRemoved.toString|toString(){}[0]
+    }
+
+    final class WeightChanged : us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.heddle/TopologyChange.WeightChanged|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>, us.tractat.kuilt.heddle/Weight, us.tractat.kuilt.heddle/Weight) // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Weight;us.tractat.kuilt.heddle.Weight){}[0]
+
+        final val after // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.after|{}after[0]
+            final fun <get-after>(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.after.<get-after>|<get-after>(){}[0]
+        final val before // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.before|{}before[0]
+            final fun <get-before>(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.before.<get-before>|<get-before>(){}[0]
+        final val names // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.names.<get-names>|<get-names>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.component3|component3(){}[0]
+        final fun component4(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.component4|component4(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/String> = ..., us.tractat.kuilt.heddle/Weight = ..., us.tractat.kuilt.heddle/Weight = ...): us.tractat.kuilt.heddle/TopologyChange.WeightChanged // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Weight;us.tractat.kuilt.heddle.Weight){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyChange.WeightChanged.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.heddle/TopologyParse { // us.tractat.kuilt.heddle/TopologyParse|null[0]
     final class Invalid : us.tractat.kuilt.heddle/TopologyParse { // us.tractat.kuilt.heddle/TopologyParse.Invalid|null[0]
         constructor <init>(kotlin.collections/List<us.tractat.kuilt.heddle/TopologyProblem>) // us.tractat.kuilt.heddle/TopologyParse.Invalid.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.heddle.TopologyProblem>){}[0]
@@ -1515,6 +1716,7 @@ final class us.tractat.kuilt.heddle/Topology { // us.tractat.kuilt.heddle/Topolo
     final fun copy(kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> = ...): us.tractat.kuilt.heddle/Topology // us.tractat.kuilt.heddle/Topology.copy|copy(kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Topology.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Topology.hashCode|hashCode(){}[0]
+    final fun toDocument(): us.tractat.kuilt.heddle/TopologyDocument // us.tractat.kuilt.heddle/Topology.toDocument|toDocument(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Topology.toString|toString(){}[0]
 
     sealed interface Node { // us.tractat.kuilt.heddle/Topology.Node|null[0]
@@ -2045,6 +2247,7 @@ final object us.tractat.kuilt.heddle/WeightSerializer : kotlinx.serialization/KS
 final fun (us.tractat.kuilt.heddle/EntitlementLedger).us.tractat.kuilt.heddle/activationFitsTheBudget(us.tractat.kuilt.heddle/AttachmentId): kotlin/Boolean // us.tractat.kuilt.heddle/activationFitsTheBudget|activationFitsTheBudget@us.tractat.kuilt.heddle.EntitlementLedger(us.tractat.kuilt.heddle.AttachmentId){}[0]
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/attach(kotlin.collections/List<kotlin/String>, kotlin/String, us.tractat.kuilt.heddle/EntitlementLedger, kotlin/Long): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyStep> // us.tractat.kuilt.heddle/attach|attach@us.tractat.kuilt.heddle.Topology(kotlin.collections.List<kotlin.String>;kotlin.String;us.tractat.kuilt.heddle.EntitlementLedger;kotlin.Long){}[0]
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/attachedChildId(kotlin.collections/List<kotlin/String>, kotlin/String): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/attachedChildId|attachedChildId@us.tractat.kuilt.heddle.Topology(kotlin.collections.List<kotlin.String>;kotlin.String){}[0]
+final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/changesTo(us.tractat.kuilt.heddle/Topology): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyChange> // us.tractat.kuilt.heddle/changesTo|changesTo@us.tractat.kuilt.heddle.Topology(us.tractat.kuilt.heddle.Topology){}[0]
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/detach(kotlin.collections/List<kotlin/String>, kotlin/String, us.tractat.kuilt.heddle/EntitlementLedger): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyStep> // us.tractat.kuilt.heddle/detach|detach@us.tractat.kuilt.heddle.Topology(kotlin.collections.List<kotlin.String>;kotlin.String;us.tractat.kuilt.heddle.EntitlementLedger){}[0]
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/findGroupId(us.tractat.kuilt.heddle/GroupPath): us.tractat.kuilt.heddle/GroupId? // us.tractat.kuilt.heddle/findGroupId|findGroupId@us.tractat.kuilt.heddle.Topology(us.tractat.kuilt.heddle.GroupPath){}[0]
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/findPath(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/GroupPath? // us.tractat.kuilt.heddle/findPath|findPath@us.tractat.kuilt.heddle.Topology(us.tractat.kuilt.heddle.GroupId){}[0]
