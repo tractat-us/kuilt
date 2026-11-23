@@ -226,11 +226,18 @@ class TransportCloseWindowTest {
 
             val hostResumed = async { hostRoom.events.filterIsInstance<MembershipEvent.Resumed>().first() }
 
+            // The rebuilt room's Hello is enough (#3212): it proves the key the held seat was admitted
+            // under, and the host restores that seat through the window. No `resume` call — and one
+            // made now finds the window already spent on this restore.
             joinerRoom2.roster.first { it.isNotEmpty() }
-            val result = joinerRoom2.resume(token)
+            val resumed = hostResumed.await()
 
-            assertIs<us.tractat.kuilt.session.partition.ResumeResult.Success>(result)
-            assertIs<MembershipEvent.Resumed>(hostResumed.await())
+            assertAll(
+                { assertEquals(client, resumed.peerId) },
+                { assertEquals(listOf(client), hostRoom.roster.value.map { it.id }, "one seat, restored") },
+                { assertEquals(Liveness.Connected, hostRoom.roster.value.single().liveness) },
+                { assertEquals(token.peerId, client, "rig: the first room held a token for this id") },
+            )
         }
 
     @Test

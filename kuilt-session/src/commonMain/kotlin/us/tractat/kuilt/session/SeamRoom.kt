@@ -60,6 +60,11 @@ import us.tractat.kuilt.session.admit.PendingChallenges
 import us.tractat.kuilt.session.admit.keyed
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.admit.RejectCode
+import us.tractat.kuilt.session.admit.ReturnKind
+import us.tractat.kuilt.session.admit.Seat
+import us.tractat.kuilt.session.admit.SeatDecision
+import us.tractat.kuilt.session.admit.SeatLiveness
+import us.tractat.kuilt.session.admit.decideSeat
 import us.tractat.kuilt.session.election.ElectionLobby
 import us.tractat.kuilt.session.election.LobbyMessage
 import us.tractat.kuilt.session.election.SeamElectionLobby
@@ -71,6 +76,7 @@ import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.JoinerResumeHost
 import us.tractat.kuilt.session.partition.JoinerResumeMachine
+import us.tractat.kuilt.session.partition.ProvenResume
 import us.tractat.kuilt.session.partition.ResumeRefusal
 import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeResult
@@ -596,18 +602,33 @@ private sealed interface RefineVerdict {
 }
 
 /**
+ * A membership `SeamRoom.detachMember` removed, whose inbox is closed once the caller has released the
+ * room lock: closing can resume a collector inline, which may call back into the room. A re-admission
+ * owns a different inbox. Closed after the departure is published.
+ */
+private class DetachedMember(private val inbox: MemberInbox?) {
+    fun close() {
+        inbox?.close()
+    }
+}
+
+/**
  * What `SeamRoom.handleWindowExpired` decided about one [JoinerReconnectEvent.WindowExpired].
  *
  * The sibling of [RefineVerdict], and it exists for a stronger reason than that one does: the two
  * things an expiry drives — an authoritative `Farewell` to every other member, and the local
  * eviction — used to be two statements with one guard between them, so a recovery landing in the
  * gap evicted a healthy member everywhere but the host (#2556). Reaching a single verdict under a
- * single acquisition of the lock is what makes them one decision; acting on it outside the lock is
- * what keeps the suspend-free critical section the file's thread-safety note promises.
+ * single acquisition of the lock is what makes them one decision. The section that decides also
+ * evicts and enqueues the `Farewell` on every other member's lane, neither of which suspends; only
+ * the inbox close and the log line follow it.
  */
 private sealed interface ExpiryVerdict {
-    /** The window really did run out for the episode this room holds. Fan out, and evict. */
-    data object Expired : ExpiryVerdict
+    /**
+     * The window really did run out for the episode this room holds, and the seat was [evicted] in
+     * the section that decided so. Fan out.
+     */
+    class Expired(val evicted: DetachedMember) : ExpiryVerdict
 
     /**
      * The member is gone already — normally because the detector's [PartitionEvent.PeerLost] won
@@ -617,10 +638,12 @@ private sealed interface ExpiryVerdict {
     data object AlreadyGone : ExpiryVerdict
 
     /**
-     * The member is [Liveness.Connected] — it came back inside its window and the expiry is stale.
-     * The #2556 case: neither the fan-out nor the eviction may run.
+     * The member is [Liveness.Connected], so the expiry is stale and neither the fan-out nor the
+     * eviction may run. Either the membership the window was opened for came back inside it (#2556),
+     * or, when [readmitted], that membership is over and a newer one holds the id: a Proof released
+     * the seat and seated its joiner afresh before the expiry was handled (#3212).
      */
-    data object Recovered : ExpiryVerdict
+    data class Recovered(val readmitted: Boolean) : ExpiryVerdict
 
     /**
      * The expiry named partition episode [announced] while this room holds [held] (null when it
@@ -776,7 +799,7 @@ internal class SeamRoom(
      * [JoinerResumeMachine] (which is handed this same instance), the joiner-side resume state.
      *
      * Multiple coroutines (`runMainLoop`, `runTornWatcher`, the resume machine's reconnect
-     * attempt, `runReconnectEventLoop`, per-peer detector collectors, `scope.launch { admitPeer }`,
+     * attempt, `runReconnectEventLoop`, per-peer detector collectors, `scope.launch { handleProof }`,
      * `scope.launch { handleResume }`) may run under a multithreaded dispatcher and all
      * read-modify-write that state. This reentrant lock serialises them.
      *
@@ -794,7 +817,7 @@ internal class SeamRoom(
      * [JoinerReconnectController.onPeerUnresponsive] for each peer (#1781) — the identity of the
      * partition episode a [JoinerReconnectEvent.WindowOpened] must name to be applied. Guarded by
      * [lock] and written in the same critical section as the level itself; reaped with the member in
-     * [removeFromRoster].
+     * [detachMember].
      *
      * **Not "the episode of every partitioned member":** it is written only by [markPartitioned], so
      * on a joiner a member paused by an inbound [AdmitMessage.Paused] ([handlePaused]) is
@@ -827,13 +850,44 @@ internal class SeamRoom(
     private val episodeDetectedAtMs = mutableMapOf<PeerId, Long>()
 
     /**
+     * **Host only.** For each partitioned member, the partition episode whose
+     * [JoinerReconnectEvent.WindowOpened] this room has seen from its controller: the episode the
+     * controller is known to be holding a window for. Written by [refineWindow] when an announcement
+     * names the current episode, reaped with the member, guarded by [lock].
+     *
+     * A Proof's restore reads it ([settleRestore]). Until the controller has announced the current
+     * episode's window it may still hold the previous one, spent or expired — the default controller
+     * opens a window on a launched coroutine after the partition — and a refusal read from that state
+     * is about an episode that is over. The controller's own state cannot be fixed instead: forgetting
+     * a spent or expired window would make it answer `WindowNotYetOpen` where a resume must hear
+     * `WindowClosed` (#1572).
+     */
+    private val windowOpenedEpisodeMs = mutableMapOf<PeerId, Long>()
+
+    /**
+     * **Host only.** Members whose seat a Proof restored through [JoinerReconnectController.tryResume]
+     * whose [JoinerReconnectEvent.Resumed] the reconnect event loop has not handled yet (#3212).
+     * Guarded by [lock].
+     *
+     * The Proof path restores the seat itself, in order with the Welcome burst it sends, so the event
+     * that the controller emits for the same restore must not do it a second time: a second
+     * `Resumed`, and a `ResumeAck` for a flight the joiner never started. [handleReconnectResumed]
+     * takes the entry and does nothing. A controller that answers `Success` without emitting the
+     * event (a consumer hold policy breaking its contract) leaves an entry behind; the member's next
+     * partition ([markPartitioned]) or departure ([detachMember]) clears it, and the old `Resume`
+     * path needs a partition before it can reach the controller, so the leftover can never swallow
+     * that path's own event.
+     */
+    private val proofResumes = mutableSetOf<PeerId>()
+
+    /**
      * **Host only.** Each current member's [ResumeSecret] — the proof that a `Resume` naming that
      * member is the member's own (#3165). Guarded by [lock].
      *
      * The invariant: on a host with a [reconnectController], `resumeSecrets.keys` equals
-     * `admittedById.keys` whenever [lock] is free. [admitPeer] mints an entry in the critical
+     * `admittedById.keys` whenever [lock] is free. [admitNewMember] mints an entry in the critical
      * section that admits the member (and none on a closed room, which admits nobody),
-     * [removeFromRoster] drops it in the one that removes it, [leave] clears it with the roster, and
+     * [detachMember] drops it in the one that removes it, [leave] clears it with the roster, and
      * nothing else writes it. Two consequences the resume path leans on:
      *
      * - **Stable while the member stays.** A same-`PeerId` re-admission (a fresh transport, a fresh
@@ -865,7 +919,7 @@ internal class SeamRoom(
     /**
      * Admitted roster as a [StateFlow] of [PeerId]s, including self.
      *
-     * Updated with [_roster] under [lock] by [addToRoster], [removeFromRoster] and [leave].
+     * Updated with [_roster] under [lock] by [addToRoster], [detachMember] and [leave].
      * Used by [RoomChannelSeam.peers] to provide the admit-gated peer set to consumers such as
      * [us.tractat.kuilt.quilter.Quilter].
      */
@@ -953,7 +1007,7 @@ internal class SeamRoom(
      * Empty throughout on a room built with `memberInboxCapacity = 0`, which holds nothing and whose
      * [incomingFrom] refuses rather than hands back an empty stream.
      *
-     * An entry is created in [addToRoster] and removed in [removeFromRoster], each in the critical section
+     * An entry is created in [addToRoster] and removed in [detachMember], each in the critical section
      * that changes [admittedById]. Routing is gated on [isAdmittedPeer], so no frame from a member can be
      * routed before its inbox exists; that pairing is the whole "held from admission" guarantee. A removed
      * inbox is [MemberInbox.close]d last: after [lock] is released, because closing can resume its
@@ -1069,7 +1123,7 @@ internal class SeamRoom(
 
     /**
      * **Host only.** The challenges this host has sent and not yet seen answered, one per fabric
-     * sender, each open for [admitTimeout]. Thread-safe on its own lock; [admitPeer] retires an entry
+     * sender, each open for [admitTimeout]. Thread-safe on its own lock; [seatProvenJoiner] retires an entry
      * under [lock] as well, in the same critical section that admits, so a `Goodbye` (which drops the
      * entry under [lock]) lands either before the admission — and stops it — or after it.
      */
@@ -1395,9 +1449,9 @@ internal class SeamRoom(
      *   joiner has no controller at all, so it never got a window (#1724).
      * - [JoinerReconnectEvent.Resumed] → [MembershipEvent.Resumed] (host events; liveness reset).
      * - [JoinerReconnectEvent.WindowExpired] → [handleWindowExpired], which decides *once* whether
-     *   this expiry is one to act on and then both propagates the authoritative
-     *   [AdmitMessage.Farewell] (#1557) and back-stops the local eviction (#1618 Track C). No extra
-     *   *local* event is emitted here: the [MembershipEvent.Left] comes out of [removeFromRoster],
+     *   this expiry is one to act on and, in the same section, back-stops the local eviction
+     *   (#1618 Track C) and enqueues the authoritative [AdmitMessage.Farewell] (#1557). No extra
+     *   *local* event is emitted here: the [MembershipEvent.Left] comes out of [detachMember],
      *   whether this arm or the [HeartbeatPartitionDetector]'s [PartitionEvent.PeerLost] gets there
      *   first.
      */
@@ -1426,14 +1480,19 @@ internal class SeamRoom(
      * Announces the release to the other members only when this call is what ended the pause (#2908).
      * The `Resume` frame and the detector's [PartitionEvent.PeerRecovered] race: whichever arrives
      * first restores [Liveness.Connected], and the loser finds nothing to do. [markRecovered] gates
-     * its own [propagateUnpaused] on the same transition, so exactly one of those two sends it. Those
-     * two are all this covers: a same-`PeerId` `Hello` re-admits as [Liveness.Connected] through
-     * [addToRoster] with no transition, and then neither of them announces anything (#3026).
+     * its own [propagateUnpaused] on the same transition, so exactly one of those two sends it. A
+     * third path ends a pause too: a same-`PeerId` `Hello` proving the seat's key restores the seat
+     * through [seatProvenJoiner] (#3212). Its restore is the same transition, taken under the same
+     * lock, so the three send one `Unpaused` between them, and this call swallows the controller's
+     * echo of that restore ([proofResumes]).
      *
      * State mutation under lock; suspend send outside lock.
      */
     private suspend fun handleReconnectResumed(peerId: PeerId) {
         val (wasPartitioned, updated) = lock.withLock {
+            // A Proof restored this seat and announced it in order with its Welcome burst (#3212); the
+            // event is the controller's echo of that restore, not a second one.
+            if (proofResumes.remove(peerId)) return
             val wasPartitioned = admittedById[peerId]?.liveness is Liveness.Partitioned
             wasPartitioned to (updateMemberLiveness(peerId, Liveness.Connected) ?: return)
         }
@@ -1683,7 +1742,7 @@ internal class SeamRoom(
             }
             is AdmitMessage.Goodbye -> {
                 if (_role.value == SessionRole.Host) {
-                    // Under the room lock, so it orders against [admitPeer]'s retire-and-admit: a
+                    // Under the room lock, so it orders against [settleSeat]'s retire-and-admit: a
                     // Goodbye between a Challenge and its Proof leaves nothing to admit (#3211).
                     lock.withLock {
                         pendingChallenges.drop(sender)
@@ -1727,101 +1786,370 @@ internal class SeamRoom(
     }
 
     /**
-     * Host-side: admit a peer that sent [AdmitMessage.Hello].
+     * **Host only.** Seat a joiner that has just proved its device key: consult the key → seat table
+     * and act on it (#3159, Task 1.5).
      *
-     * Steps:
-     * 1. Add peer to roster (under lock).
-     * 2. Send [AdmitMessage.Welcome] back to the joiner with their [PeerId].
-     * 3. Broadcast the welcome to all other admitted members (roster sync).
-     * 4. Send each already-known member's welcome to the new joiner (bootstrap their view).
-     * 5. Send self-introduction (host identity) to the new joiner.
+     * [keyed] is the Hello the gate let through, whose joiner has since proved [KeyedHello.key]
+     * ([handleProof]); [generation] is the pending challenge that proof answered.
      *
-     * State mutation is under lock; all seam sends happen outside the lock.
+     * The table is read under [lock] **at Proof time**, never at Challenge time, because a `Goodbye`
+     * or a window expiry can land between the two. What [decideSeat] answers:
+     * - [SeatDecision.Restore] on a **connected** seat: the same membership, restored without asking
+     *   the window controller, which would answer `WindowNotYetOpen` for a window never opened.
+     * - [SeatDecision.Restore] on a **partitioned** seat: the controller is asked, outside the lock,
+     *   through a [ProvenResume] — built here, after the key check, which is the only place the Proof
+     *   path builds one. `Success` restores the seat. `WindowNotYetOpen` means the window has not
+     *   opened yet, not that it closed: the seat is still held, and it is restored as a connected one
+     *   would be. Any other verdict means the seat is gone: it is released, and the key is decided
+     *   again without it (Decided 23).
+     * - [SeatDecision.KeyConflict]: a terminal `Reject`.
+     * - [SeatDecision.ReleaseAndAdmit]: the partitioned seat is released, then the joiner is admitted
+     *   as the re-decision says (Decided 18, 30).
+     * - every other verdict admits a new member ([admitNewMember]).
      *
-     * [keyed] is the Hello the gate let through, with its key and nonce no longer optional, and whose
-     * joiner has since proved that key ([handleProof]). The key becomes the member's [Member.key] and
-     * rides every Welcome that names the joiner; each bootstrap Welcome carries an existing member's
-     * recorded key, and the host intro carries this host's own (#3210).
+     * A restore emits [MembershipEvent.Resumed] and sends the joiner the Welcome burst with its direct
+     * Welcome marked [ReturnKind.Restored]. It tells the other members nothing new, except the
+     * `Unpaused` that ends a partitioned seat's hold. A release is a [LeaveReason.PartitionExpired]
+     * `Left` and an expired `Farewell` to the others, ahead of the new member's `Joined` and roster
+     * Welcome on the same lanes.
      *
-     * [generation] is the pending challenge the proof answered. It is retired in the same critical
-     * section that admits, and a challenge no longer current — a `Goodbye`, a newer `Hello` from the
-     * same sender, its deadline — admits nobody: the seat is read at proof time, not challenge time.
+     * **Every decision is acted on in the critical section that took it** ([settleSeat]); only what
+     * cannot run under [lock] — asking the controller, closing an inbox, sending — runs between
+     * passes, and the next pass decides again from the seats as they are then. A release removes the
+     * seat in the same section that chose to, so a heartbeat that heals the seat a moment later finds
+     * nothing to heal, and one that healed it a moment earlier is seen by the decision (Decided 18,
+     * 30). A challenge no longer current (a `Goodbye`, a newer `Hello` from the same sender, its
+     * deadline) seats nobody.
+     *
+     * The loop ends: a release leaves the claimed id holding no seat, so it releases at most once, and
+     * the controller is asked again only about a partition episode it was not asked about before.
      */
-    private suspend fun admitPeer(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long) {
-        val hello = keyed.hello
-        val key = keyed.key
-        val hostKey = device.key.id
-        val identity = MemberIdentity(
-            displayName = hello.displayName,
-            sessionId = hello.sessionId,
-            deviceId = hello.deviceId,
+    private suspend fun seatProvenJoiner(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long) {
+        var asked: AskedWindow? = null
+        var released: PeerId? = null
+        while (true) {
+            when (val seating = settleSeat(joinerPeerId, keyed, generation, asked, released)) {
+                SeatOutcome.Stale -> return logStaleAdmission(joinerPeerId)
+                is SeatOutcome.AskWindow -> {
+                    val answer = askWindow(joinerPeerId, keyed.key)
+                    if (answer == WindowAnswer.Failed) {
+                        if (pendingChallenges.retire(joinerPeerId, generation)) {
+                            val reject = AdmitMessage.Reject("host-failed: the host could not consult its reconnect window", RejectCode.HostFailed)
+                            runCatchingCancellable { seam.sendTo(joinerPeerId, AdmitMessage.encode(reject)) }
+                        }
+                        return
+                    }
+                    asked = AskedWindow(seating.episode, answer)
+                }
+                is SeatOutcome.Released -> {
+                    seating.detached.close()
+                    // Its window is disarmed, since its expiry has nothing left to evict.
+                    reconnectController?.onPeerRecovered(seating.peerId, clock().toEpochMilliseconds())
+                    released = seating.peerId
+                    asked = null
+                }
+                is SeatOutcome.Refused -> {
+                    runCatchingCancellable { seam.sendTo(joinerPeerId, AdmitMessage.encode(seating.reject)) }
+                    return
+                }
+                is SeatOutcome.Restored -> {
+                    if (seating.endedPause) {
+                        propagateUnpaused(joinerPeerId)
+                        // The window this partition opened, or is about to open, is not needed any
+                        // more. A window `Success` spent needs nothing.
+                        if (asked?.answer != WindowAnswer.Restored) {
+                            reconnectController?.onPeerRecovered(joinerPeerId, clock().toEpochMilliseconds())
+                        }
+                    }
+                    seating.burst?.let { sendAdmissionBurst(it, ReturnKind.Restored, announce = false) }
+                    return
+                }
+                is SeatOutcome.Admitted -> {
+                    sendAdmissionBurst(seating.burst, returnKind = null, announce = true)
+                    return
+                }
+            }
+        }
+    }
+
+    private fun logStaleAdmission(joinerPeerId: PeerId) {
+        logger.debug { "room.admit.stale peer=${joinerPeerId.value}: its challenge is no longer current" }
+    }
+
+    /** What the window controller said about a partitioned seat a proof asked to restore. */
+    private enum class WindowAnswer {
+        /** The window was open, and is spent on this restore. */
+        Restored,
+
+        /** No window has opened yet: the seat is held, and the controller is merely behind. */
+        NotYetOpen,
+
+        /** The window refused: the seat is gone, if the refusal is about this partition episode. */
+        Refused,
+
+        /** The controller threw. */
+        Failed,
+    }
+
+    /** The controller's [answer] about the seat's partition episode [episode]. */
+    private class AskedWindow(val episode: Long, val answer: WindowAnswer)
+
+    /**
+     * Ask the window controller to restore [peerId]'s partitioned seat for a joiner that proved [key].
+     * The controller may be the consumer's own hold policy (#1614), so it is asked outside [lock], and
+     * a throw is caught here: on Kotlin/Native an escape from this launched coroutine aborts the
+     * process. The [ProvenResume] names this room's own id, so the controller's own room check can
+     * never refuse it; the proof already named this room ([KeyAdmission.checkProof]).
+     */
+    private suspend fun askWindow(peerId: PeerId, key: DidKey): WindowAnswer {
+        // Only a host holds seats, and a host always has both.
+        val ctrl = checkNotNull(reconnectController) { "only a host restores a seat, and a host has a reconnect controller" }
+        val roomId = checkNotNull(constructedRoomId) { "only a host restores a seat" }
+        lock.withLock { proofResumes += peerId }
+        val verdict = try {
+            ctrl.tryResume(ProvenResume(peerId, roomId, key), at = clock().toEpochMilliseconds())
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            logger.warn(failure) { "room.restore.window-failed peer=${peerId.value}" }
+            null
+        }
+        val answer = when (verdict) {
+            ResumeResult.Success -> WindowAnswer.Restored
+            ResumeResult.WindowNotYetOpen -> WindowAnswer.NotYetOpen
+            ResumeResult.WindowClosed, is ResumeResult.TokenInvalid -> WindowAnswer.Refused
+            null -> WindowAnswer.Failed
+        }
+        // Only a Success emits an event for the reconnect loop to swallow.
+        if (answer != WindowAnswer.Restored) lock.withLock { proofResumes -= peerId }
+        return answer
+    }
+
+    /** What [settleSeat] decided, for [seatProvenJoiner] to act on outside [lock]. */
+    private sealed interface SeatOutcome {
+        /** The challenge is no longer current: seat nobody. */
+        data object Stale : SeatOutcome
+
+        /** Ask the window controller about the claimed seat's partition [episode], then decide again. */
+        class AskWindow(val episode: Long) : SeatOutcome
+
+        /**
+         * [peerId]'s held seat was released, and the other members' `Farewell` enqueued, in the deciding
+         * critical section: close its inbox, then decide again.
+         */
+        class Released(val peerId: PeerId, val detached: DetachedMember) : SeatOutcome
+
+        class Refused(val reject: AdmitMessage.Reject) : SeatOutcome
+
+        /**
+         * The held seat came back. [endedPause]: the seat was partitioned until now. [burst] is null
+         * when the challenge stopped being current, so a newer exchange owes the joiner its Welcomes.
+         */
+        class Restored(val burst: AdmissionBurst?, val endedPause: Boolean) : SeatOutcome
+
+        /** A new member was added. */
+        class Admitted(val burst: AdmissionBurst) : SeatOutcome
+    }
+
+    /**
+     * What a joiner is sent once it is seated: its [member] entry, the members it did not know
+     * ([existing]), and the resume secret the host holds for it (#3165), if any.
+     */
+    private class AdmissionBurst(val member: Member, val existing: List<Member>, val secret: ResumeSecret?)
+
+    /**
+     * **Host only; the critical section of [seatProvenJoiner].** Decide against the seats as they are
+     * now and act on the decision, all under one acquisition of [lock]: retire the challenge and
+     * change the roster to match, release a seat, or say what must happen outside the lock first.
+     *
+     * [asked] is the controller's answer, when it was asked, and the partition episode it was asked
+     * about. [released] is the seat an earlier pass released, if any.
+     */
+    private fun settleSeat(
+        joinerPeerId: PeerId,
+        keyed: KeyedHello,
+        generation: Long,
+        asked: AskedWindow?,
+        released: PeerId?,
+    ): SeatOutcome = lock.withLock {
+        val current = pendingChallenges.isCurrent(joinerPeerId, generation)
+        // 2.6: host-side grant verification feeds this (plan amendment bf12e0ffc); revocation is checked from 2.4.
+        when (val decision = decideSeat(joinerPeerId, keyed.key, heldSeats(), holdsValidGrant = false)) {
+            is SeatDecision.Restore -> settleRestore(joinerPeerId, generation, current, asked)
+            is SeatDecision.ReleaseAndAdmit ->
+                if (current) SeatOutcome.Released(decision.released, releaseHeldSeat(decision.released)) else SeatOutcome.Stale
+            SeatDecision.KeyConflict -> if (retire(joinerPeerId, generation)) {
+                SeatOutcome.Refused(
+                    AdmitMessage.Reject("key-conflict: ${joinerPeerId.value} is held by another device", RejectCode.KeyConflict),
+                )
+            } else {
+                SeatOutcome.Stale
+            }
+            // RestoreUnderNewId is Task 1.6's. Until it lands, the new id is seated beside the old
+            // seat, as it was before the table was consulted, and the old seat is left as it is.
+            is SeatDecision.RestoreUnderNewId, SeatDecision.AdditionalSeat, SeatDecision.Returning, SeatDecision.Ordinary ->
+                if (retire(joinerPeerId, generation)) admitNewMember(joinerPeerId, keyed) else SeatOutcome.Stale
+        }.also { outcome ->
+            if (released != null && outcome is SeatOutcome.Admitted) {
+                logger.info { "room.seat.released peer=${released.value} readmitted=${joinerPeerId.value}" }
+            }
+        }
+    }
+
+    /**
+     * **Under [lock].** [SeatDecision.Restore] for [peerId], against its seat as it is now.
+     *
+     * - A `Success` restores the seat even when the challenge has stopped being current: the window is
+     *   spent, and a newer exchange from the same joiner must find the seat connected rather than ask
+     *   for it again. Only a current challenge is sent its burst.
+     * - A **connected** seat — never partitioned, or healed by a heartbeat since the controller was
+     *   asked — is restored without the controller: there is no window to consult, and a refusal about
+     *   a partition that is over does not release a member who is here (Decided 18, 30).
+     * - A **partitioned** seat needs the controller's answer about its current partition episode, and
+     *   is asked again if the answer it has was about an earlier one.
+     * - `WindowNotYetOpen` restores: the seat is held, and the controller is behind.
+     * - A refusal releases the seat, but only once this room has seen the controller's `WindowOpened`
+     *   for the episode ([windowOpenedEpisodeMs]). Before that the controller may still hold the
+     *   previous episode's window, spent or expired, and its refusal is about that one: the default
+     *   controller opens a window on a launched coroutine after the partition, so a Proof can land in
+     *   between. Read as "not open yet", it restores.
+     */
+    private fun settleRestore(peerId: PeerId, generation: Long, current: Boolean, asked: AskedWindow?): SeatOutcome {
+        val held = checkNotNull(admittedById[peerId]) { "a Restore names a held seat" }
+        if (asked?.answer == WindowAnswer.Restored) return restoreSeat(held, owesBurst = retire(peerId, generation))
+        if (!current) return SeatOutcome.Stale
+        if (held.liveness !is Liveness.Partitioned) return restoreSeat(held, owesBurst = retire(peerId, generation))
+        val episode = checkNotNull(episodeDetectedAtMs[peerId]) { "a host records the episode of every seat it partitions" }
+        if (asked == null || asked.episode != episode) return SeatOutcome.AskWindow(episode)
+        return when (asked.answer) {
+            WindowAnswer.Refused -> if (windowOpenedEpisodeMs[peerId] == episode) {
+                SeatOutcome.Released(peerId, releaseHeldSeat(peerId))
+            } else {
+                logger.debug { "room.restore.refusal-before-window peer=${peerId.value} episode=$episode: read as not open yet" }
+                restoreSeat(held, owesBurst = retire(peerId, generation))
+            }
+            WindowAnswer.NotYetOpen -> restoreSeat(held, owesBurst = retire(peerId, generation))
+            // Handled before either can reach here: a Success above, a throw by [seatProvenJoiner].
+            WindowAnswer.Restored, WindowAnswer.Failed -> error("window answer ${asked.answer} is settled before the seat is")
+        }
+    }
+
+    /** [PendingChallenges.retire], read as "this exchange still owes its joiner an answer". */
+    private fun retire(joinerPeerId: PeerId, generation: Long): Boolean = pendingChallenges.retire(joinerPeerId, generation)
+
+    /**
+     * **Under [lock].** The seats the host holds for its joiners, as [decideSeat] reads them. The host's
+     * own seat is never among them: [admittedById] holds other peers only.
+     */
+    private fun heldSeats(): Map<PeerId, Seat> = admittedById.mapValues { (_, member) ->
+        Seat(
+            key = member.key,
+            liveness = if (member.liveness is Liveness.Partitioned) SeatLiveness.Partitioned else SeatLiveness.Connected,
+            // 1.6: record when each member was last heard from and pass it here. Until then every seat
+            // ties, so `decideSeat` falls to the lowest peer id; nothing in 1.5 acts on a
+            // `RestoreUnderNewId`. 1.6 adds the room-side test that a key holding two partitioned
+            // seats restores the one heard from most recently (Decided 30), not the lowest id.
+            lastContact = Instant.DISTANT_PAST,
         )
+    }
+
+    /**
+     * **Under [lock].** Bring [held] — the seat the decision just read, under this same acquisition —
+     * back as [Liveness.Connected], with the member it was admitted as: its identity, key and
+     * principal belong to the membership, not to this Hello. So a restore keeps the held member's
+     * identity, and a rebuilt process's new `displayName` and `deviceId` are dropped.
+     * [owesBurst]: this exchange still owes the joiner its Welcome burst.
+     */
+    private fun restoreSeat(held: Member, owesBurst: Boolean): SeatOutcome {
+        val member = checkNotNull(updateMemberLiveness(held.id, Liveness.Connected)) { "the seat was read under this lock" }
+        // In the section that restored the seat, like [markRecovered]'s `Recovered`, so a heal the
+        // decision saw is announced before this restore and never after it.
+        emitEvent(MembershipEvent.Resumed(held.id))
+        val burst = if (owesBurst) AdmissionBurst(member, admittedById.values.filter { it.id != held.id }, resumeSecrets[held.id]) else null
+        return SeatOutcome.Restored(burst, endedPause = held.liveness is Liveness.Partitioned)
+    }
+
+    /**
+     * **Under [lock].** Release a held seat the key → seat table gave up on, in the critical section
+     * that decided to, so the joiner's new membership is a `Joined` rather than a silent re-admission
+     * of the same id: its `Left` carries [LeaveReason.PartitionExpired], since the hold ended without
+     * its member coming back. The expired `Farewell` to every other member is enqueued in this section
+     * too, so it precedes on each lane whatever a later section enqueues about the id, the new
+     * member's roster `Welcome` included (#1781). Enqueued after the lock, a second Proof's admission
+     * could slip its `Welcome` in first. The caller closes the inbox.
+     */
+    private fun releaseHeldSeat(peerId: PeerId): DetachedMember {
+        val detached = checkNotNull(detachMember(peerId, LeaveReason.PartitionExpired)) { "the released seat was read under this lock" }
+        propagateFarewell(peerId, expired = true)
+        return detached
+    }
+
+    /**
+     * **Under [lock].** Add a new member for [joinerPeerId], from [keyed]: the Hello its joiner sent,
+     * and the key it proved, which becomes [Member.key] and rides every Welcome that names the joiner.
+     */
+    private fun admitNewMember(joinerPeerId: PeerId, keyed: KeyedHello): SeatOutcome {
+        val hello = keyed.hello
         val member = Member(
             id = joinerPeerId,
-            identity = identity,
-            key = key,
+            identity = MemberIdentity(
+                displayName = hello.displayName,
+                sessionId = hello.sessionId,
+                deviceId = hello.deviceId,
+            ),
+            key = keyed.key,
             liveness = Liveness.Connected,
             // Prefer the map-keyed roster (hub path: RoomHubSeam / Mesh keys a principal per peer),
             // falling back to the single-value marker (2-peer relay path: Seam.withPrincipal).
             principal = (seam as? PrincipalRoster)?.attestedPrincipals?.value?.get(joinerPeerId)
                 ?: (seam as? PrincipalAttested)?.principal,
         )
+        val existing = admittedById.values.toList()
+        addToRoster(member)
+        // The resume secret is minted in the SAME critical section that admits the member — see
+        // [resumeSecrets] for the invariant this keeps, and for why only a host that can answer a
+        // resume holds one. `closed`: addToRoster admitted nobody, so there is no member to hold a
+        // secret for.
+        val secret = reconnectController?.takeIf { !closed }
+            ?.let { resumeSecrets.getOrPut(joinerPeerId) { ResumeSecret.generate() } }
+        return SeatOutcome.Admitted(AdmissionBurst(member, existing, secret))
+    }
 
-        // Snapshot current members and mutate roster under lock; no I/O inside.
-        // The resume secret is minted (or, on a same-id re-admission, reused) in the SAME critical
-        // section that admits the member — see [resumeSecrets] for the invariant this keeps, and
-        // for why only a host that can answer a resume holds one. A joiner told nothing simply
-        // holds no token.
-        val (existingMembers, resumeSecret) = lock.withLock {
-            if (!pendingChallenges.retire(joinerPeerId, generation)) {
-                logger.debug { "room.admit.stale peer=${joinerPeerId.value}: its challenge is no longer current" }
-                return
-            }
-            val existing = admittedById.values.toList()
-            addToRoster(member)
-            // `closed`: addToRoster admitted nobody, so there is no member to hold a secret for.
-            val secret = reconnectController?.takeIf { !closed }
-                ?.let { resumeSecrets.getOrPut(joinerPeerId) { ResumeSecret.generate() } }
-            existing to secret
-        }
-
-        // The roster copy: what every OTHER member is told about the joiner. It carries no secret.
+    /**
+     * Send a seated joiner what it needs, outside [lock]: its direct Welcome (marked [returnKind]),
+     * then, when [announce], the roster copy to every other member, then a Welcome for each member it
+     * did not know, then the host's own intro.
+     *
+     * The direct Welcome is the ONE frame that carries the joiner's secret. It and the two
+     * joiner-directed loops stay INLINE: they address the joiner, not the bystanders, so they share no
+     * recipient with any queued fan-out and have no order to keep against one.
+     *
+     * The roster copy goes through the per-recipient fan-out lanes (#1781/#2048), not a loop of direct
+     * sends. It is a host-authoritative membership announcement to bystanders, structurally identical
+     * to [propagateFarewell], so it needs the same ordering: a slow bystander link could leave
+     * `Welcome(X)` in flight while X drops and its window expires, and the `Farewell(X)` queued behind
+     * it on THAT bystander's lane would then arrive FIRST. [handleFarewell] removes a peer that
+     * bystander does not hold yet — a no-op — and the late Welcome then ADDS X to its roster. On a star
+     * that bystander has no heartbeat edge to X, so it holds a ghost member forever with no
+     * anti-entropy to correct it. The roster copy carries no secret: a bystander holding the joiner's
+     * secret could resume as the joiner and spend its window (#3165). A restored seat sends no roster
+     * copy at all, since every other member already holds it.
+     */
+    private suspend fun sendAdmissionBurst(burst: AdmissionBurst, returnKind: ReturnKind?, announce: Boolean) {
+        val member = burst.member
         val welcome = AdmitMessage.Welcome(
-            assignedPeerId = joinerPeerId.value,
-            displayName = hello.displayName,
-            sessionId = hello.sessionId,
-            key = key,
-            deviceId = hello.deviceId,
+            assignedPeerId = member.id.value,
+            displayName = member.identity.displayName,
+            sessionId = member.identity.sessionId,
+            key = member.key,
+            deviceId = member.identity.deviceId,
             roomId = _roomId.value?.value,
         )
+        val direct = AdmitMessage.encode(welcome.copy(resumeSecret = burst.secret, returnKind = returnKind))
+        runCatchingCancellable { seam.sendTo(member.id, direct) }
 
-        // All sends below are outside the lock — they are suspend calls.
+        if (announce) fanOutToOtherMembers(member.id, welcome)
 
-        // Send welcome directly to the joiner — the ONE frame that carries its secret. Stays
-        // INLINE — it addresses the joiner, not the bystanders, so it shares no recipient with any
-        // queued fan-out and has no order to keep against one. Same for the two joiner-directed
-        // loops below.
-        val directWelcomeBytes = AdmitMessage.encode(welcome.copy(resumeSecret = resumeSecret))
-        runCatchingCancellable { seam.sendTo(joinerPeerId, directWelcomeBytes) }
-
-        // Tell the existing members about the joiner (roster sync) — through the per-recipient
-        // fan-out lanes (#1781/#2048), not a loop of direct sends. This is a host-authoritative
-        // membership announcement to bystanders, structurally identical to propagateFarewell, so it
-        // needs the same ordering: a slow bystander link could leave `Welcome(X)` in flight while X
-        // drops and its window expires, and the `Farewell(X)` queued behind it on THAT bystander's
-        // lane would then arrive FIRST. handleFarewell removes a peer that bystander does not hold
-        // yet — a no-op — and the late Welcome then ADDS X to its roster. On a
-        // star that bystander has no heartbeat edge to X, so it holds a ghost member forever with no
-        // anti-entropy to correct it. `fanOutToOtherMembers` re-snapshots the same recipient set
-        // (`existingMembers` is `admittedById` minus the joiner, taken moments earlier under the same
-        // lock) and adds the terminal-room gate, so this is a strict improvement, not a trade.
-        //
-        // `welcome`, NOT the direct copy above: a bystander holding the joiner's secret could
-        // resume as the joiner and spend its window (#3165).
-        fanOutToOtherMembers(joinerPeerId, welcome)
-
-        // Bootstrap the joiner's view: send welcomes for all pre-existing members
-        for (existing in existingMembers) {
+        for (existing in burst.existing) {
             val existingWelcome = AdmitMessage.encode(
                 AdmitMessage.Welcome(
                     assignedPeerId = existing.id.value,
@@ -1831,19 +2159,18 @@ internal class SeamRoom(
                     deviceId = existing.identity.deviceId,
                 ),
             )
-            runCatchingCancellable { seam.sendTo(joinerPeerId, existingWelcome) }
+            runCatchingCancellable { seam.sendTo(member.id, existingWelcome) }
         }
 
-        // Send self-introduction (host introduces itself to the new joiner)
         val hostIntro = AdmitMessage.encode(
             AdmitMessage.Welcome(
                 assignedPeerId = selfId.value,
                 displayName = resolvedMemberName,
                 sessionId = selfId.value,
-                key = hostKey,
+                key = device.key.id,
             ),
         )
-        runCatchingCancellable { seam.sendTo(joinerPeerId, hostIntro) }
+        runCatchingCancellable { seam.sendTo(member.id, hostIntro) }
     }
 
     private suspend fun sendHello() {
@@ -1948,7 +2275,7 @@ internal class SeamRoom(
             }
             return
         }
-        admitPeer(sender, pending.keyed, pending.generation)
+        seatProvenJoiner(sender, pending.keyed, pending.generation)
     }
 
     /**
@@ -2009,21 +2336,15 @@ internal class SeamRoom(
         // - a member whose secret does not match.
         val peer = PeerId(msg.tokenPeerId)
         val presented = msg.resumeSecret
-        val (thisRoom, expected) = lock.withLock { _roomId.value to resumeSecrets[peer] }
+        val (thisRoom, expected, key) = lock.withLock { Triple(_roomId.value, resumeSecrets[peer], admittedById[peer]?.key) }
         val verdict = when {
             presented == null -> ResumeResult.TokenInvalid("missing-secret")
             msg.tokenRoomId != thisRoom?.value -> ResumeResult.TokenInvalid("session-mismatch")
-            expected == null -> ResumeResult.WindowClosed
+            expected == null || key == null -> ResumeResult.WindowClosed
             !expected.matches(presented) -> ResumeResult.TokenInvalid("secret-mismatch")
-            else -> ctrl.tryResume(
-                ResumeToken(
-                    peerId = peer,
-                    roomId = RoomId(msg.tokenRoomId),
-                    issuedAt = msg.issuedAt,
-                    secret = presented,
-                ),
-                at = clock().toEpochMilliseconds(),
-            )
+            // The secret proved the member (#3165), so this is a ProvenResume too, under the key the
+            // room holds for it. This path goes with the `Resume` frame (Task 1.8).
+            else -> ctrl.tryResume(ProvenResume(peer, RoomId(msg.tokenRoomId), key), at = clock().toEpochMilliseconds())
         }
         val reject = when (val result = verdict) {
             // handleReconnectResumed fires via the controller event stream.
@@ -2092,7 +2413,7 @@ internal class SeamRoom(
             //
             // Any Welcome is by definition minted by the host, so the sender of the first one IS
             // the host. Keying on the self-introduction instead (`assignedId == sender`) left
-            // `hostPeerId` null across `admitPeer`'s whole K+1-send burst — the roster-sync
+            // `hostPeerId` null across `sendAdmissionBurst`'s whole K+1-send burst — the roster-sync
             // Welcome, one bootstrap Welcome per pre-existing member, and only THEN the host
             // intro (`SeamRoom.kt:1250-1270`) — while `addToRoster` had already run under lock
             // before the first of those sends (`:1215-1219`). Across that window a joiner holds
@@ -2113,7 +2434,7 @@ internal class SeamRoom(
             // [Room.roomId] and [ResumeToken.roomId] can never name different rooms (#1594). Placed
             // above the self-admission branch to cover every Welcome shape a joiner accepts.
             //
-            // TWO shapes carry a roomId, not one: `admitPeer` builds one `welcome` with
+            // TWO shapes carry a roomId, not one: `sendAdmissionBurst` builds one `welcome` with
             // `roomId = _roomId.value?.value`, sends a copy of it with the joiner's secret added to
             // the joiner itself (the self-admission Welcome), and hands the secretless original to
             // `fanOutToOtherMembers`, which re-encodes it to every other admitted member (the
@@ -2211,7 +2532,7 @@ internal class SeamRoom(
      * on a topology where members have no heartbeat edge to each other).
      *
      * The eviction counterpart of the [AdmitMessage.Welcome] roster-sync broadcast in
-     * [admitPeer]: the host is the membership authority for joins *and* leaves. Best-effort —
+     * [sendAdmissionBurst]: the host is the membership authority for joins *and* leaves. Best-effort —
      * a lost Farewell degrades to that member's heartbeat-window eviction *where such a window
      * exists* (a mesh; on a star it does not, which is why the expiry fan-out matters).
      *
@@ -2385,7 +2706,7 @@ internal class SeamRoom(
                         "detector-collector.received PeerLost peer=${member.id.value} role=${_role.value} at=${event.at}"
                     }
                 }
-                handlePartitionEvent(event)
+                handlePartitionEvent(event, detectorJob)
             }
         }
         detectorJobs[member.id] = detectorJob
@@ -2446,11 +2767,11 @@ internal class SeamRoom(
      */
     internal fun lastResumeRefusal(): ResumeRefusal? = resumeMachine?.lastRefusal()
 
-    private suspend fun handlePartitionEvent(event: PartitionEvent) {
+    private suspend fun handlePartitionEvent(event: PartitionEvent, detector: Job) {
         when (event) {
             is PartitionEvent.PeerUnresponsive -> handleUnresponsive(event)
             is PartitionEvent.PeerRecovered -> markRecovered(event.peerId, event.at)
-            is PartitionEvent.PeerLost -> handlePeerLost(event.peerId, event.at)
+            is PartitionEvent.PeerLost -> handlePeerLost(event.peerId, event.at, detector)
         }
     }
 
@@ -2546,6 +2867,8 @@ internal class SeamRoom(
             // re-arms from the new `at`. Keying the gate on `since` would rest on those two
             // happening to coincide rather than on either one's promise. See [episodeDetectedAtMs].
             episodeDetectedAtMs[peerId] = at.toEpochMilliseconds()
+            // A new episode: whatever restore an earlier Proof left unechoed is over (see [proofResumes]).
+            proofResumes.remove(peerId)
             // Null only for a peer that is not admitted, already excluded above.
             updateMemberLiveness(peerId, level) ?: return
             (existing != null) to level
@@ -2700,6 +3023,9 @@ internal class SeamRoom(
                 WindowEpisode.Unidentified -> null
             }
             if (stale != null) return@withLock stale
+            // The controller now holds this episode's window, whatever its deadline: a refusal it
+            // gives from here on is about this partition (see [windowOpenedEpisodeMs]).
+            if (episode is WindowEpisode.Detected) windowOpenedEpisodeMs[peerId] = episode.atMs
             if (current.windowExpiresAt == expiresAt) return@withLock RefineVerdict.Unchanged
             updateMemberLiveness(peerId, current.copy(windowExpiresAt = expiresAt))
                 ?: return@withLock RefineVerdict.NotPartitioned
@@ -2757,13 +3083,17 @@ internal class SeamRoom(
      * separate obligations; this is the first.
      */
     private fun markRecovered(peerId: PeerId, at: Instant) {
-        val (wasPartitioned, updated) = lock.withLock {
+        val wasPartitioned = lock.withLock {
             val current = admittedById[peerId] ?: return
             val wasPartitioned = current.liveness is Liveness.Partitioned
-            wasPartitioned to (updateMemberLiveness(peerId, Liveness.Connected) ?: return)
+            updateMemberLiveness(peerId, Liveness.Connected) ?: return
+            // Emitted in the section that healed the seat: a Proof restoring it next decides in a
+            // later section and emits its `Resumed` there, so the two are seen in the order they
+            // happened. Emitted after the lock, `Recovered` could follow that `Resumed`.
+            if (wasPartitioned) emitEvent(MembershipEvent.Recovered(peerId, at))
+            wasPartitioned
         }
         if (!wasPartitioned) return
-        emitEvent(MembershipEvent.Recovered(updated.id, at))
         if (_role.value == SessionRole.Host) propagateUnpaused(peerId)
         reconnectController?.onPeerRecovered(peerId, at.toEpochMilliseconds())
     }
@@ -3176,9 +3506,9 @@ internal class SeamRoom(
      * [handleRelayFrame] resolves its recipients under one acquisition ([resolveRecipients]), drops
      * the lock, and [enqueueRelayForward] takes it again to get here — so on a multi-threaded scope an
      * eviction can land in the gap, and without this line `getOrPut` would mint a lane, and a writer,
-     * for a peer [removeFromRoster] has already reaped. Nothing would ever collect it: the eviction
+     * for a peer [detachMember] has already reaped. Nothing would ever collect it: the eviction
      * that would have called [discardLanes] has been and gone, and a later duplicate eviction returns
-     * early at `removed ?: return`. That is a leaked writer plus a 64-slot channel per departed peer
+     * early when it removes nothing. That is a leaked writer plus a 64-slot channel per departed peer
      * on a long-lived host, and — worse — a re-admit of the same [PeerId] would be handed the *stale*
      * lane, defeating exactly the fresh-lane property [discardLanes] exists to provide. This is not
      * reachable under a single-threaded test dispatcher (no suspension point separates the two
@@ -3373,7 +3703,7 @@ internal class SeamRoom(
      * - `Welcome(X)` overtaken by `Farewell(X)` leaves a **departed** member in a bystander's roster
      *   forever: the `Farewell` removes a peer that bystander does not hold yet (a no-op) and the late
      *   `Welcome` then adds it. On a star that bystander has no heartbeat edge to X, so nothing
-     *   evicts the ghost. This one is why the welcome fan-out is enqueued here too — see [admitPeer].
+     *   evicts the ghost. This one is why the welcome fan-out is enqueued here too — see [sendAdmissionBurst].
      *
      * This is the dedicated-writer-draining-a-[Channel] pattern (`:kuilt-core`'s
      * `CompositeSeam.capabilityWriter` is the sibling), **not** a `limitedParallelism(1)` confinement
@@ -3448,9 +3778,11 @@ internal class SeamRoom(
      * [admitLanes] for why that separation is the fix and not an indirection.
      *
      * The roster snapshot and the lane resolution are taken under [lock] and the enqueues happen
-     * after it is released, so the pre-existing invariant that nothing suspend-capable sits inside a
-     * critical section is preserved (a [Channel.trySend] into an unbounded channel cannot suspend
-     * either way).
+     * after this function's own acquisition is released. A caller already holding [lock] keeps them
+     * inside its section — [handleWindowExpired] and [releaseHeldSeat] do, so their `Farewell` is
+     * ordered against every later section's enqueues. The lock is reentrant, and a
+     * [Channel.trySend] into an unbounded channel cannot suspend, so nothing suspend-capable sits
+     * inside a critical section either way.
      *
      * The frame is encoded **once** and the same [ByteArray] is shared by every lane, so keying by
      * recipient costs one small queue item per recipient rather than a copy of the frame.
@@ -3587,7 +3919,7 @@ internal class SeamRoom(
 
     /**
      * Tear down both of [recipient]'s lanes — its queue and its writer — because it has left the
-     * roster. Callers must hold [lock]; the sole caller is [removeFromRoster], which is the sole
+     * roster. Callers must hold [lock]; the sole caller is [detachMember], which is the sole
      * place a peer is removed from [admittedById].
      *
      * **Cancelled, not closed, and that difference is load-bearing.** [leave] closes its lanes so each
@@ -3702,26 +4034,74 @@ internal class SeamRoom(
         emitEvent(MembershipEvent.Recovered(updated.id, clock()))
     }
 
-    private suspend fun handlePeerLost(peerId: PeerId, at: Instant) {
+    /**
+     * [detector], the job of the detector that reported the loss, names the membership the loss is
+     * about. A member's detector is stopped when the member is removed ([detachMember]), so a loss
+     * from a detector no longer registered for [peerId] is about a membership that is over — and
+     * evicting by peer id would remove a newer member admitted under the same id. The check and the
+     * eviction share one critical section.
+     */
+    private suspend fun handlePeerLost(peerId: PeerId, at: Instant, detector: Job) {
         logger.info { "handlePeerLost peer=${peerId.value} role=${_role.value} at=$at" }
-        val isHostPeer = lock.withLock {
-            stopDetector(peerId)
-            _role.value == SessionRole.Joiner && peerId == hostPeerId
+        val loss = lock.withLock {
+            when {
+                _role.value == SessionRole.Joiner && peerId == hostPeerId -> {
+                    stopDetector(peerId)
+                    PeerLoss.HostLost
+                }
+                detectorJobs[peerId] !== detector -> PeerLoss.StaleDetector
+                else -> {
+                    stopDetector(peerId)
+                    PeerLoss.Evicted(detachMember(peerId, LeaveReason.PartitionExpired))
+                }
+            }
         }
-        if (isHostPeer) {
-            logger.info { "handlePeerLost.markHostLost peer=${peerId.value}" }
-            markHostLost(at, FailureReason.WindowExpired)
-        } else {
-            logger.info { "handlePeerLost.evict peer=${peerId.value} reason=PartitionExpired" }
-            removeFromRoster(peerId, LeaveReason.PartitionExpired)
+        when (loss) {
+            PeerLoss.HostLost -> {
+                logger.info { "handlePeerLost.markHostLost peer=${peerId.value}" }
+                markHostLost(at, FailureReason.WindowExpired)
+            }
+            PeerLoss.StaleDetector ->
+                logger.debug { "handlePeerLost.stale-detector peer=${peerId.value}: its membership has ended" }
+            is PeerLoss.Evicted -> {
+                logger.info { "handlePeerLost.evict peer=${peerId.value} reason=PartitionExpired" }
+                loss.detached?.close()
+            }
         }
+    }
+
+    /** What [handlePeerLost] decided under [lock]. */
+    private sealed interface PeerLoss {
+        data object HostLost : PeerLoss
+
+        data object StaleDetector : PeerLoss
+
+        /** [detached] is null when the member was gone already and only its detector was left. */
+        class Evicted(val detached: DetachedMember?) : PeerLoss
     }
 
     /**
      * A reconnect window expired. Decide **once**, under one acquisition of [lock], whether this
-     * expiry is one to act on — and only then do the two things acting on it means: fan out the
-     * authoritative [AdmitMessage.Farewell] (#1557) and back-stop the local eviction (#1618
-     * Track C).
+     * expiry is one to act on, and in that same section evict (#1618 Track C) and enqueue the
+     * authoritative [AdmitMessage.Farewell] (#1557) on every other member's lane.
+     *
+     * **Why the eviction is not a later step (#3212).** It was: the decision, then the `Farewell`,
+     * then [removeFromRoster] by peer id, in sections of their own. A Proof that releases the seat
+     * and admits a new member under the same id can land between the decision and the removal — with
+     * the default controller it lines up exactly, since the Proof's ask is refused once the window
+     * has closed — and the removal then evicted the *new* member, after its Welcome, leaking its
+     * detector. Evicted where it was decided, the expiry removes the membership it read, and a Proof
+     * landing after finds no seat and admits afresh. Only an eviction fans out, or an absence.
+     *
+     * **Why the `Farewell` is enqueued in the section too (#3212).** A lane keeps enqueue order, and
+     * nothing orders enqueues made from two coroutines after each has released the lock. Enqueued
+     * after this section, the `Farewell` could follow the roster `Welcome` a Proof on another thread
+     * enqueues for the member it admits next, and a bystander told `Welcome`, then `Farewell`, drops
+     * the new member for good (the #2556 split). The same holds for [ExpiryVerdict.AlreadyGone] when
+     * this section falls between a Proof's release and its admission. Enqueued here, the `Farewell`
+     * precedes every frame a later section enqueues. [fanOutToOtherMembers] takes [lock] again, which
+     * is reentrant, and only calls `trySend` on unlimited channels, so nothing suspends under it.
+     * `ProvenRestoreConcurrencyTest` pins the order on real threads.
      *
      * **Why one decision and not two (#2556).** These were two statements, and only the second was
      * guarded — on *"is this peer partitioned right now?"*. The fan-out ran first and unguarded, so
@@ -3730,8 +4110,8 @@ internal class SeamRoom(
      * [handleFarewell] stops the departed peer's detector and there is no re-admit path behind an
      * admit fan-out. Two guards would have been the same bug one level down — the fan-out reading
      * the level, then the eviction re-reading it, with the recovery free to land between them. The
-     * decision has to be atomic with respect to the state it is about, so it is taken here and the
-     * actions follow it outside the lock.
+     * decision has to be atomic with respect to the state it is about, so it is taken here, and
+     * everything it drives but the inbox close is done in the same section.
      *
      * **Why liveness alone is not the guard.** [ExpiryVerdict.StaleEpisode] is the other half. The
      * partition guard rejects an expiry for a member that is not partitioned *now*, which covers
@@ -3750,49 +4130,70 @@ internal class SeamRoom(
      * whole guarantee a race — a star topology's bystander would evict, or not, depending on
      * coroutine order. There is nothing left to evict, so only the fan-out runs.
      *
-     * Idempotent throughout: [removeFromRoster] guards a duplicate [MembershipEvent.Left], so a
-     * late `PeerLost` after this arm emits nothing. Host-only, since [reconnectController] is null
+     * Idempotent throughout: [detachMember] guards a duplicate [MembershipEvent.Left], so a late
+     * `PeerLost` after this arm emits nothing. Host-only, since [reconnectController] is null
      * on a joiner — it never pre-empts a joiner's terminal `HostLost` path.
      */
     private fun handleWindowExpired(event: JoinerReconnectEvent.WindowExpired) {
         val peerId = event.peerId
         val verdict = lock.withLock {
-            val current = admittedById[peerId] ?: return@withLock ExpiryVerdict.AlreadyGone
-            if (current.liveness !is Liveness.Partitioned) return@withLock ExpiryVerdict.Recovered
+            val current = admittedById[peerId]
+            if (current == null) {
+                // In this section, like the eviction's: see the KDoc.
+                propagateFarewell(peerId, expired = true)
+                return@withLock ExpiryVerdict.AlreadyGone
+            }
+            if (current.liveness !is Liveness.Partitioned) {
+                // Absent from [episodeDetectedAtMs]: [detachMember] reaped this id's entry, so the
+                // member here is a newer admission, connected since it was seated.
+                return@withLock ExpiryVerdict.Recovered(readmitted = peerId !in episodeDetectedAtMs)
+            }
             val held = episodeDetectedAtMs[peerId]
             // A null `held` is stale too, for [refineWindow]'s reason: an expiry naming an episode
             // this room recorded no detection for is as unusable as one naming a superseded
             // episode. Unreachable on a host today — `markPartitioned` is the only writer of
             // `Liveness.Partitioned` here and it writes the map in the same critical section, and
-            // `removeFromRoster` reaps the two together — so the log line below is how a reader
+            // `detachMember` reaps the two together — so the log line below is how a reader
             // would find out that stopped being true.
             if (held != event.detectedAt) return@withLock ExpiryVerdict.StaleEpisode(held, event.detectedAt)
-            stopDetector(peerId)
-            ExpiryVerdict.Expired
+            // Evicted in the section that decided to, so the eviction is of the membership just read.
+            // Acted on in a later section, a Proof could release that seat and admit a new member
+            // under the same id in between, and this would then evict the new one.
+            val evicted = checkNotNull(detachMember(peerId, LeaveReason.PartitionExpired)) { "the seat was read under this lock" }
+            propagateFarewell(peerId, expired = true)
+            ExpiryVerdict.Expired(evicted)
         }
         when (verdict) {
-            ExpiryVerdict.Expired -> {
+            is ExpiryVerdict.Expired -> {
                 logger.info {
                     "windowExpired.evict peer=${peerId.value} reason=PartitionExpired episode=${event.detectedAt}"
                 }
-                propagateFarewell(peerId, expired = true)
-                removeFromRoster(peerId, LeaveReason.PartitionExpired)
+                verdict.evicted.close()
             }
-            ExpiryVerdict.AlreadyGone -> {
+            ExpiryVerdict.AlreadyGone ->
                 logger.info { "windowExpired.farewellOnly peer=${peerId.value} episode=${event.detectedAt}" }
-                propagateFarewell(peerId, expired = true)
-            }
-            ExpiryVerdict.Recovered ->
-                // `info`, unlike [refineWindow]'s sibling drop: this one suppressed an
-                // **irreversible** action against a healthy member, and with the shipped
-                // [DefaultJoinerReconnectController] it should now be unreachable — `markRecovered`
-                // disarms the timer through [JoinerReconnectController.onPeerRecovered]. Reaching
-                // it names a hold policy (#1614) that does not honour that call, which is a
-                // contract breach nothing can check at compile time and which this line is the
-                // only way to see.
-                logger.info {
-                    "windowExpired.suppressed peer=${peerId.value} reason=recovered " +
-                        "episode=${event.detectedAt} at=${event.at}"
+            is ExpiryVerdict.Recovered ->
+                if (verdict.readmitted) {
+                    // `debug`: the expected end of a race the default controller runs. A Proof whose
+                    // ask was refused because this window had just closed released the seat and
+                    // admitted its joiner afresh before this expiry was handled, so the expiry is
+                    // about a membership that is over.
+                    logger.debug {
+                        "windowExpired.suppressed peer=${peerId.value} reason=readmitted " +
+                            "episode=${event.detectedAt} at=${event.at}"
+                    }
+                } else {
+                    // `info`, unlike [refineWindow]'s sibling drop: this one suppressed an
+                    // **irreversible** action against a healthy member whose membership is the one
+                    // the window was opened for. With the shipped [DefaultJoinerReconnectController]
+                    // it should be unreachable — `markRecovered` disarms the timer through
+                    // [JoinerReconnectController.onPeerRecovered]. Reaching it names a hold policy
+                    // (#1614) that does not honour that call, which is a contract breach nothing can
+                    // check at compile time and which this line is the only way to see.
+                    logger.info {
+                        "windowExpired.suppressed peer=${peerId.value} reason=recovered " +
+                            "episode=${event.detectedAt} at=${event.at}"
+                    }
                 }
             is ExpiryVerdict.StaleEpisode ->
                 // `debug`, matching `room.window.stale-episode`: a genuine late expiry racing a
@@ -3853,9 +4254,9 @@ internal class SeamRoom(
      */
     private fun addToRoster(member: Member) {
         // Terminal-latch check, folded into the SAME lock critical section that mutates the roster.
-        // Both callers ([admitPeer], [handleWelcome]) hold [lock] across this, and [leave] flips
+        // Both callers ([admitNewMember], [handleWelcome]) hold [lock] across this, and [leave] flips
         // `closed` under the same lock — so a `closed == true` here is authoritative. Without this,
-        // an in-flight admit (host: `scope.launch { admitPeer }`, which [leave] does NOT cancel —
+        // an in-flight admit (host: `scope.launch { handleProof }`, which [leave] does NOT cancel —
         // it is not the inbound-collect job) can re-register a peer AFTER the room went terminal,
         // resurrecting `_roster`/`_rosterPeers` and leaking a fresh detector (#1368; the
         // RoomHubSeam.deliver resurrection, #1364, one module over).
@@ -3878,7 +4279,22 @@ internal class SeamRoom(
         }
     }
 
+    /**
+     * Remove [peerId]'s membership, if it has one. For a caller whose decision to remove was taken
+     * in an earlier critical section, and so may remove a newer membership under the same id: a
+     * caller deciding on one membership in particular uses [detachMember] under its deciding lock.
+     */
     private fun removeFromRoster(peerId: PeerId, reason: LeaveReason) {
+        lock.withLock { detachMember(peerId, reason) }?.close()
+    }
+
+    /**
+     * **Under [lock].** Remove [peerId]'s membership and stop its detector, in the caller's critical
+     * section, so the removal acts on the membership the caller's decision read and not on one
+     * admitted after it under the same id. Null when [peerId] holds none: no duplicate `Left`.
+     * The caller closes the returned inbox once it has released [lock].
+     */
+    private fun detachMember(peerId: PeerId, reason: LeaveReason): DetachedMember? {
         // The fan-out lanes are torn down in the SAME critical section that removes the member. That
         // reaps every lane minted while the peer WAS a member; what stops a new one appearing after
         // is the membership re-check in [admitLaneFor]/[relayLaneFor], not this line — the relay path
@@ -3886,28 +4302,28 @@ internal class SeamRoom(
         // the two and a check keyed only on `closed` would mint a lane for a peer already gone. The
         // two together give the invariant `lanes.keys ⊆ admittedById.keys` at every point the lock is
         // not held. If no admission is removed, no lane is discarded. See [discardLanes].
-        val endedInbox = lock.withLock {
-            if (admittedById.remove(peerId) == null) return // already removed, avoid duplicate Left events
-            discardLanes(peerId)
-            // Reaped with the member so a long-lived room does not accumulate an entry per peer
-            // that ever left. refineWindow's Partitioned gate rejects an announcement for a gone member.
-            episodeDetectedAtMs.remove(peerId)
-            // Pruned with the member, keeping `resumeSecrets.keys == admittedById.keys` (#3165).
-            resumeSecrets.remove(peerId)
-            // A later admission gets a fresh inbox; close this admission's inbox outside the lock.
-            val inbox = memberInboxes.remove(peerId)
-            // Keep removal in the same critical section as admission and liveness updates. Otherwise
-            // a Hello can re-admit this peer after the map removal, and these late publications erase
-            // the new admission from both roster views while the frame gate still accepts it.
-            _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
-            _rosterPeers.update { current -> current - peerId }
-            emitEvent(MembershipEvent.Left(peerId, reason))
-            inbox
-        }
-        // Close after publishing the departure, outside the lock: closing can resume a collector
-        // inline, which may call back into this room. A re-admission owns a different inbox.
-        endedInbox?.close()
+        if (admittedById.remove(peerId) == null) return null
+        // A member's detector goes with it, so none outlives the membership it watches.
+        stopDetector(peerId)
+        discardLanes(peerId)
+        // Reaped with the member so a long-lived room does not accumulate an entry per peer
+        // that ever left. refineWindow's Partitioned gate rejects an announcement for a gone member.
+        episodeDetectedAtMs.remove(peerId)
+        windowOpenedEpisodeMs.remove(peerId)
+        proofResumes.remove(peerId)
+        // Pruned with the member, keeping `resumeSecrets.keys == admittedById.keys` (#3165).
+        resumeSecrets.remove(peerId)
+        // A later admission gets a fresh inbox; close this admission's inbox outside the lock.
+        val inbox = memberInboxes.remove(peerId)
+        // Keep removal in the same critical section as admission and liveness updates. Otherwise
+        // a Hello can re-admit this peer after the map removal, and these late publications erase
+        // the new admission from both roster views while the frame gate still accepts it.
+        _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
+        _rosterPeers.update { current -> current - peerId }
+        emitEvent(MembershipEvent.Left(peerId, reason))
+        return DetachedMember(inbox)
     }
+
 
     private fun isAdmittedPeer(peerId: PeerId): Boolean = lock.withLock { admittedById.containsKey(peerId) }
 
@@ -4354,12 +4770,13 @@ internal class SeamRoom(
         lanesToDrain.forEach { it.close() }
         // A terminal room has ended every admission, so it lists nobody, and it says so BEFORE it
         // completes the incomingFrom readers: "reader completed, peer still listed" means a newer
-        // admission and nothing else, exactly as in [removeFromRoster], and a reader resumed by the
+        // admission and nothing else, exactly as in [detachMember], and a reader resumed by the
         // close below reads the roster at that instant (#2822). `closed` is already set, so
         // addToRoster cannot open another inbox or relist anyone behind this. No Left: nobody left.
         lock.withLock {
             admittedById.clear()
             episodeDetectedAtMs.clear()
+            windowOpenedEpisodeMs.clear()
             // With the members it belongs to, keeping `resumeSecrets.keys == admittedById.keys`.
             resumeSecrets.clear()
             _roster.value = emptySet()

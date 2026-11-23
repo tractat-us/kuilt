@@ -37,6 +37,13 @@ package us.tractat.kuilt.session.admit
  * named. A v3 joiner sends no proof, so a v3 joiner admitted by a v4 host would wait out its deadline
  * instead of hearing why; the gate refuses it with [RejectCode.ProtocolMismatch] instead.
  *
+ * ## Version 5 — a proven key restores its held seat (#3212)
+ *
+ * Version 5 decides every verified proof against the seats the host holds: the same peer id under
+ * the same key gets its seat back, marked on the direct Welcome as [ReturnKind.Restored], and the
+ * same peer id under a different key is refused [RejectCode.KeyConflict] while that seat's member
+ * is connected. A v4 joiner reads neither, so the gate refuses it.
+ *
  * Every later change to what a joiner must send to be admitted bumps this line again.
  *
  * ## The limit of this gate, stated plainly
@@ -47,13 +54,13 @@ package us.tractat.kuilt.session.admit
  */
 public object ProtocolVersion {
     /** The protocol version this build stamps into every [AdmitMessage.Hello] it sends. */
-    public const val CURRENT: Int = 4
+    public const val CURRENT: Int = 5
 
     /** Oldest declared version this build will admit. */
-    public const val MIN_SUPPORTED: Int = 4
+    public const val MIN_SUPPORTED: Int = 5
 
     /** Newest declared version this build will admit. */
-    public const val MAX_SUPPORTED: Int = 4
+    public const val MAX_SUPPORTED: Int = 5
 
     /**
      * Whether a joiner's declared [version] is one this host can admit.
