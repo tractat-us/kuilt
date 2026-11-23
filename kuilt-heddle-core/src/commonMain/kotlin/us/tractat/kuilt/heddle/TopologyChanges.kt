@@ -21,7 +21,8 @@ package us.tractat.kuilt.heddle
  *    moves: the old child's history stays with the old child, and the new one starts with none.
  *  - a [WeightChanged] keeps the child but restarts its share: it rejoins its parent's front.
  *  - [LaneBecameGroup], [GroupBecameLane], [CeilingChanged] and every template change keep the
- *    child and its history.
+ *    child and its own history. What a template change does to the children the app attached
+ *    under it is on [TemplateRemoved] and [TemplateChanged].
  *  - a [RootRenamed] changes every name below it, so it is followed by every old child [Removed]
  *    and every new child [Added]. [Topology.diff] refuses a change of root: it is a new tree, not
  *    an edit of the running one.
