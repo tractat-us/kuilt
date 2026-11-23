@@ -5,6 +5,7 @@ package us.tractat.kuilt.session
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -77,6 +78,9 @@ import kotlin.time.Duration.Companion.seconds
  * test is in `peers` while its detector must declare it unresponsive, and out of it before its
  * readmission, so a second detector does not pause it again.
  *
+ * A third arm covers the `Unpaused` a Proof sends when it restores a partitioned seat. Its gap has no
+ * consumer code in it to park on, so that arm pins where the enqueue sits instead; see its KDoc.
+ *
  * A `*ConcurrencyTest`: excluded from the normal `jvmTest`, runs under `-Pconcurrency.stress.tests=true`.
  */
 class PausedFanOutOrderConcurrencyTest {
@@ -112,8 +116,44 @@ class PausedFanOutOrderConcurrencyTest {
         }
     }
 
-    private suspend fun withRig(body: suspend (Rig) -> Unit) {
-        val rig = Rig(RoomDevice.of(fakeKeyStore(0)))
+    /**
+     * The member proves its key again while its seat is held partitioned, and the hold policy
+     * answers `WindowNotYetOpen`, so the Proof restores the seat. That restore ends the pause, and its
+     * `Unpaused` must be enqueued inside the section that decided the restore, as `markRecovered`'s
+     * is. Enqueued after it, a re-detection deciding in between would enqueue its `Paused` first, and
+     * this `Unpaused` would then release, on every bystander, a member the host holds `Partitioned`.
+     *
+     * **What this arm pins, and what it cannot.** That gap runs from the end of `settleSeat`'s section
+     * to `fanOutToOtherMembers`, on the same thread, with no consumer code in it, so nothing outside
+     * the room can park a thread there and no test can force the inverted wire order without a
+     * production hook. What a test can see is the section itself: the restore announces `Resumed`
+     * under the lock, so parking that announcement holds the restoring thread INSIDE its section. The
+     * bystander's lane is drained by its own writer, which takes no lock, so an `Unpaused` enqueued in
+     * the section reaches the wire while the thread is parked, and one enqueued after the section
+     * cannot. The arm therefore reds when the enqueue leaves the section, and also when it moves
+     * after `Resumed` within it, which would still be correct; that second red is the price of having
+     * no later point in the section to park on.
+     *
+     * The rig's heartbeat polls once a [SLOW_POLL] interval and holds a peer healthy only on a frame
+     * from the last 100 ms, so the member's Hello and Proof, sent straight after its detection, are
+     * more than a timeout old at the next poll: no heal by the detector ends the pause first. The
+     * rig asserts that, since a heal would leave the restore with no pause to end.
+     */
+    @Test
+    fun aRestoredSeatsUnpausedIsEnqueuedInTheSectionThatRestoredIt() = runConcurrencyStress(cap = 60.seconds) { stage ->
+        withRig(SLOW_POLL) { rig ->
+            rig.admitBystanderAndMember(stage)
+            rig.awaitDetection(stage)
+            rig.awaitPausedOnTheBystandersWire(stage)
+            rig.parkOn { it is MembershipEvent.Resumed && it.peerId == MEMBER }
+            // From its own coroutine: the Proof's coroutine parks inside the restore's section.
+            rig.scope.launch { rig.exchange(MEMBER) }
+            rig.assertUnpausedReachedTheBystanderWhileParked(stage)
+        }
+    }
+
+    private suspend fun withRig(heartbeat: HeartbeatConfig = FAST_POLL, body: suspend (Rig) -> Unit) {
+        val rig = Rig(RoomDevice.of(fakeKeyStore(0)), heartbeat)
         try {
             body(rig)
         } finally {
@@ -121,7 +161,7 @@ class PausedFanOutOrderConcurrencyTest {
         }
     }
 
-    private class Rig(device: RoomDevice) {
+    private class Rig(device: RoomDevice, heartbeat: HeartbeatConfig) {
         private val executor = Executors.newFixedThreadPool(4)
         val scope = CoroutineScope(SupervisorJob() + executor.asCoroutineDispatcher())
         // Bounded: at most a few admit frames are ever in flight here.
@@ -156,12 +196,7 @@ class PausedFanOutOrderConcurrencyTest {
             scope = scope,
             clock = { Clock.System.now() },
             device = device,
-            heartbeatConfig = HeartbeatConfig(
-                interval = 20.milliseconds,
-                timeout = 100.milliseconds,
-                // Far past the probe: no PeerLost or expiry may enter it.
-                reconnectWindow = 600.seconds,
-            ),
+            heartbeatConfig = heartbeat,
             roomId = RoomId("room-3625"),
             reconnectControllerFactory = { _, _, _ -> policy },
         )
@@ -190,7 +225,11 @@ class PausedFanOutOrderConcurrencyTest {
             }
         }
 
+        /** Every membership event the host emitted, in order. */
+        private val events = MutableStateFlow<List<MembershipEvent>>(emptyList())
+
         suspend fun admitBystanderAndMember(stage: StageTracker) {
+            scope.launch(start = CoroutineStart.UNDISPATCHED) { room.events.collect { event -> events.update { it + event } } }
             room.start()
             stage.at("bystander admitted", ::snapshot)
             admit(BYSTANDER) { room.roster.value.any { it.id == BYSTANDER } }
@@ -208,16 +247,72 @@ class PausedFanOutOrderConcurrencyTest {
          * forgotten challenge seats nobody.
          */
         suspend fun admit(peer: PeerId, admitted: () -> Boolean) {
-            val (device, key) = credentialsOf(peer)
             while (true) {
-                val hello = currentHello(peer.value, sessionId = peer.value, key = key)
-                inbound.send(Swatch(AdmitMessage.encode(hello), sender = peer))
-                val challenge = challenges.getValue(peer).receive()
-                inbound.send(Swatch(AdmitMessage.encode(handProof(challenge, HOST, device)), sender = peer))
+                exchange(peer)
                 val done = withTimeoutOrNull(EXCHANGE_GRACE) { merge(bystanderFrames, room.roster).first { admitted() } }
                 if (done != null) return
                 retries++
             }
+        }
+
+        /** One admission exchange for [peer]: its Hello, the host's challenge, and the Proof answering it. */
+        suspend fun exchange(peer: PeerId) {
+            val (device, key) = credentialsOf(peer)
+            val hello = currentHello(peer.value, sessionId = peer.value, key = key)
+            inbound.send(Swatch(AdmitMessage.encode(hello), sender = peer))
+            val challenge = challenges.getValue(peer).receive()
+            inbound.send(Swatch(AdmitMessage.encode(handProof(challenge, HOST, device)), sender = peer))
+        }
+
+        suspend fun awaitPausedOnTheBystandersWire(stage: StageTracker) {
+            stage.at("member's Paused reaches the bystander", ::snapshot)
+            bystanderFrames.first { frames -> frames.any { it is AdmitMessage.Paused && it.peerId == MEMBER.value } }
+        }
+
+        /** The restore arm's verdict: see [aRestoredSeatsUnpausedIsEnqueuedInTheSectionThatRestoredIt]. */
+        suspend fun assertUnpausedReachedTheBystanderWhileParked(stage: StageTracker) {
+            stage.at("restoring thread parked in its section", ::snapshot)
+            parked.await()
+            stage.at("member's Unpaused reaches the bystander while parked", ::snapshot)
+            val whileParked = withTimeoutOrNull(PARKED_GRACE) {
+                bystanderFrames.first { frames -> frames.any { it is AdmitMessage.Unpaused && it.peerId == MEMBER.value } }
+            } != null
+            release.countDown()
+            stage.at("latecomer's Welcome reaches the bystander (lane drained)", ::snapshot)
+            admit(LATECOMER) { bystanderFrames.value.any { it.isWelcomeOf(LATECOMER) } }
+            val naming = bystanderFrames.value.filter { it.names(MEMBER) }
+            val edges = events.value.filter { it.peerId() == MEMBER }.map { it::class.simpleName }
+            println("paused-fanout-order restore: whileParked=$whileParked asked=${policy.asked.get()} edges=$edges frames naming member=$naming")
+            assertAll(
+                { assertTrue(releasedInTime, "rig: the parked thread must have been released by the probe, not by its timeout") },
+                { assertTrue(policy.asked.get() >= 1, "rig: the Proof must have asked the hold policy about the partitioned seat") },
+                {
+                    assertTrue(
+                        "Recovered" !in edges && "Resumed" in edges,
+                        "rig: the Proof's restore must be what ended the pause, not a heal by the detector — edges: $edges",
+                    )
+                },
+                {
+                    assertIs<Liveness.Connected>(
+                        room.roster.value.single { it.id == MEMBER }.liveness,
+                        "rig: the host must hold the restored member Connected",
+                    )
+                },
+                {
+                    assertEquals(
+                        1,
+                        naming.count { it is AdmitMessage.Unpaused },
+                        "rig: the restore must send the bystander exactly one Unpaused — frames naming the member: $naming",
+                    )
+                },
+                {
+                    assertTrue(
+                        whileParked,
+                        "#3625: the restore's Unpaused must be enqueued inside the section that restored the seat; " +
+                            "enqueued after it, a re-detection's Paused can reach the bystander first. Frames naming the member: $naming",
+                    )
+                },
+            )
         }
 
         suspend fun awaitDetection(stage: StageTracker): Long {
@@ -313,8 +408,13 @@ class PausedFanOutOrderConcurrencyTest {
             _events.emit(JoinerReconnectEvent.WindowOpened(peerId, expiresAt = expiresAt, detectedAt = detectedAt))
         }
 
-        override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict =
-            ResumeResult.WindowNotYetOpen
+        /** How many times a Proof asked about a partitioned seat. */
+        val asked = AtomicInteger(0)
+
+        override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict {
+            asked.incrementAndGet()
+            return ResumeResult.WindowNotYetOpen
+        }
 
         override fun onPeerRecovered(peerId: PeerId, at: Long) = Unit
 
@@ -329,6 +429,34 @@ class PausedFanOutOrderConcurrencyTest {
 
         /** A deadline no HeartbeatConfig estimate can equal, so the refinement is Applied. */
         const val REFINED = 4_000_000_000_000L
+
+        /** The first two arms' heartbeat: a member that stops answering is paused within a few polls. */
+        val FAST_POLL = HeartbeatConfig(
+            interval = 20.milliseconds,
+            timeout = 100.milliseconds,
+            // Far past the probe: no PeerLost or expiry may enter it.
+            reconnectWindow = 600.seconds,
+        )
+
+        /**
+         * The restore arm's heartbeat. A detector holds a partitioned peer healthy again only on a
+         * frame from the last [HeartbeatConfig.timeout] at one of its polls, and it polls once an
+         * [HeartbeatConfig.interval]: frames sent straight after a detection are 900 ms stale at the
+         * next poll, so they heal nothing.
+         */
+        val SLOW_POLL = FAST_POLL.copy(interval = 1.seconds)
+
+        /** How long the restore arm waits for an `Unpaused` while the restoring thread is parked. */
+        val PARKED_GRACE = 3.seconds
+
+        fun MembershipEvent.peerId(): PeerId? = when (this) {
+            is MembershipEvent.Joined -> member.id
+            is MembershipEvent.Resumed -> peerId
+            is MembershipEvent.Recovered -> peerId
+            is MembershipEvent.Partitioned -> peerId
+            is MembershipEvent.Left -> peerId
+            else -> null
+        }
 
         /** How long one admission exchange may take before the rig sends it again. */
         val EXCHANGE_GRACE = 3.seconds
