@@ -114,7 +114,8 @@ class PausedFanOutOrderConcurrencyTest {
     private class Rig {
         private val executor = Executors.newFixedThreadPool(4)
         val scope = CoroutineScope(SupervisorJob() + executor.asCoroutineDispatcher())
-        private val inbound = Channel<Swatch>(Channel.UNLIMITED)
+        // Bounded: at most a few admit frames are ever in flight here.
+        private val inbound = Channel<Swatch>(capacity = 8)
         private val peers = MutableStateFlow(setOf(HOST, MEMBER))
         private val bystanderFrames = MutableStateFlow<List<AdmitMessage>>(emptyList())
         val policy = HoldPolicy()
