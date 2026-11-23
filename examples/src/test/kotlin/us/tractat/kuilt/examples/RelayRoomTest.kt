@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.InMemoryRaftStorage
@@ -95,6 +96,7 @@ class RelayRoomTest {
                 path = serverPath,
                 serverPeerId = serverPeerId,
                 pattern = roomPattern,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
             )
 
             // Carries the learner ClusterConfig from the server's onRoom callback to the
@@ -164,7 +166,11 @@ class RelayRoomTest {
                 // scope terminates room background coroutines (runMainLoop, runPeersWatcher, etc.)
                 // and the node's actor loop, so the outer coroutineScope can complete cleanly.
                 val clientScope = CoroutineScope(coroutineContext + Job())
-                val clientRoom = SeamRoomFactory.systemClock(loom = clientLoom, scope = clientScope)
+                val clientRoom = SeamRoomFactory.systemClock(
+                    loom = clientLoom,
+                    scope = clientScope,
+                    deviceKeyStore = InMemoryDeviceKeyStore(),
+                )
                     .join(
                         WebSocketAdvertisement(
                             url = "ws://localhost$serverPath",

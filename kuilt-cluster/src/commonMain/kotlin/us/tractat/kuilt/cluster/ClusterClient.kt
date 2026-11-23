@@ -27,6 +27,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.ClusterConfig
@@ -239,6 +240,9 @@ public data class ClusterEndpoints(
  * @param clientNodeId Stable [NodeId] for this client — must be in [ClusterConfig.learners].
  * @param clusterConfig Full cluster membership (voters + this learner).
  * @param raftConfig Raft timing and dedup configuration.
+ * @param deviceKeyStore This client's device key store. **Required**: see
+ *   [us.tractat.kuilt.session.SeamRoomFactory] for why, and what to pass. Every room the reconnect
+ *   loop joins, on any endpoint, is this one device, so they all share it.
  * @param identity How this client obtains its Raft §8 dedup id. [ClientIdentity.Auto] (default)
  *   mints a per-incarnation id; pass [ClientIdentity.Durable] with a stable [ClientId] and its
  *   persisted floor for cross-crash exactly-once. **The floor is what makes a restart survivable:**
@@ -262,6 +266,7 @@ public fun CoroutineScope.clusterClient(
     clientNodeId: NodeId,
     clusterConfig: ClusterConfig,
     raftConfig: RaftConfig,
+    deviceKeyStore: DeviceKeyStore,
     identity: ClientIdentity = ClientIdentity.Auto,
     clock: () -> Instant,
 ): ClusterClient {
@@ -273,6 +278,7 @@ public fun CoroutineScope.clusterClient(
         clientNodeId = clientNodeId,
         clusterConfig = clusterConfig,
         raftConfig = raftConfig,
+        deviceKeyStore = deviceKeyStore,
         identity = identity,
         clock = clock,
     )
@@ -325,6 +331,7 @@ internal fun buildClusterClient(
     clientNodeId: NodeId,
     clusterConfig: ClusterConfig,
     raftConfig: RaftConfig,
+    deviceKeyStore: DeviceKeyStore,
     identity: ClientIdentity,
     clock: () -> Instant,
 ): ClusterClient {
@@ -353,7 +360,7 @@ internal fun buildClusterClient(
     // Reconnect loop: join (Room) → swap channel → await tear → leave → rotate → re-join → repeat.
     // It is the only owner of the room it joined, so every way it can end leaves that room.
     val reconnectLoop = scope.launch {
-        val factory = SeamRoomFactory(loom = loom, scope = scope, clock = clock)
+        val factory = SeamRoomFactory(loom = loom, scope = scope, clock = clock, deviceKeyStore = deviceKeyStore)
         var room: Room? = null
         try {
             while (true) {

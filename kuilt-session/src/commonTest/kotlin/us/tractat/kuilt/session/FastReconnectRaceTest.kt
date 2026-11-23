@@ -31,6 +31,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.RoomId
@@ -254,6 +255,7 @@ class FastReconnectRaceTest {
             memberName = "table-7",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = hostConfig,
             roomId = RoomId("room-1"),
         ).also { it.start() }
@@ -276,6 +278,7 @@ class FastReconnectRaceTest {
             memberName = "client",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = joinerConfig,
             roomId = null,
             reweave = {

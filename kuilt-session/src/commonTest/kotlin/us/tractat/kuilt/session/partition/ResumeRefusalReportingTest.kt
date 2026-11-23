@@ -12,6 +12,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoom
@@ -269,6 +270,7 @@ private suspend fun TestScope.refusalHarness(
         loom = base,
         scope = backgroundScope,
         clock = clock,
+        deviceKeyStore = InMemoryDeviceKeyStore(),
         heartbeatConfig = config,
     )
     val hostRoom = factory.adopt(hostLink, SessionRole.Host, memberName = "Host")

@@ -16,6 +16,7 @@ import us.tractat.kuilt.cluster.playerRelayTransport
 import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.InMemoryRaftStorage
@@ -102,6 +103,7 @@ class ServerClusterE2ETest {
                 path = serverPath,
                 serverPeerId = serverPeerId,
                 pattern = roomPattern,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
             )
 
             val clientLoom = KtorClientLoom(createClient { install(WebSockets) })
@@ -148,7 +150,11 @@ class ServerClusterE2ETest {
                 //      AppendEntries (which happens after ServerCluster applies changeMembership)
 
                 val clientScope = CoroutineScope(coroutineContext + Job())
-                val clientRoom = SeamRoomFactory.systemClock(loom = clientLoom, scope = clientScope)
+                val clientRoom = SeamRoomFactory.systemClock(
+                    loom = clientLoom,
+                    scope = clientScope,
+                    deviceKeyStore = InMemoryDeviceKeyStore(),
+                )
                     .join(
                         WebSocketAdvertisement(
                             url = "ws://localhost$serverPath",

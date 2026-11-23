@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -33,6 +34,7 @@ class JoinerAdmitFailureTest {
         loom,
         scope,
         clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) },
+        deviceKeyStore = InMemoryDeviceKeyStore(),
         admitTimeout = admitTimeout,
     )
 
