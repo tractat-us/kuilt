@@ -106,7 +106,6 @@ class SupersededMembershipTest {
                     "the superseded peer is told directly (Decided 19), here into a dead link",
                 )
             },
-            { assertTrue(board.sent(from = KEY_SEAT_HOST).none { it is AdmitMessage.ResumeAck }, "no stray ResumeAck") },
             { assertEquals(setOf(second, carol), host.roster.value.map { it.id }.toSet()) },
             { assertEquals(bobsKey, host.roster.value.single { it.id == second }.key, "the new seat inherits the key") },
             {
@@ -284,7 +283,7 @@ class SupersededMembershipTest {
         aLink.recover()
         testScheduler.advanceTimeBy(KEY_SEAT_ADMIT_TIMEOUT * 10)
         testScheduler.runCurrent()
-        val comebacks = board.sent(from = a).drop(sentByA).filter { it is AdmitMessage.Hello || it is AdmitMessage.Resume }
+        val comebacks = board.sent(from = a).drop(sentByA).filterIsInstance<AdmitMessage.Hello>()
 
         assertAll(
             { assertEquals(1, farewellsToA, "rig: A was told, directly, that B superseded it") },
@@ -528,7 +527,6 @@ class SupersededMembershipTest {
             { assertTrue(first !in raw.rosterHeardBy(carol), "no ghost on the bystander: ${raw.rosterHeardBy(carol)}") },
             { assertEquals(null, raw.member(first), "the host holds no seat for the old id") },
             { assertEquals(0, welcomedSecond, "the stale exchange seated nobody") },
-            { assertTrue(raw.sentToAnyone().none { it is AdmitMessage.ResumeAck }, "no stray ResumeAck") },
             { assertEquals(1, hold.calls.size, "the later Hello asks no window: the seat is gone") },
             { assertEquals(second, (readmitted.singleOrNull() as? MembershipEvent.Joined)?.member?.id, readmitted.render()) },
             { assertEquals(null, raw.sentTo(second).welcomesFor(second).lastOrNull()?.returnKind, "an ordinary admission") },
@@ -737,7 +735,6 @@ class SupersededMembershipTest {
             { assertEquals(listOf(superseded(first, by = second)), edges.filterIsInstance<MembershipEvent.Left>(), edges.render()) },
             { assertEquals(listOf(second, third), edges.filterIsInstance<MembershipEvent.Joined>().map { it.member.id }, edges.render()) },
             { assertTrue(events.none { it is MembershipEvent.Resumed || it is MembershipEvent.Recovered }, events.render()) },
-            { assertTrue(raw.sentToAnyone().none { it is AdmitMessage.ResumeAck }, "no stray ResumeAck") },
             { assertTrue(raw.sentToAnyone().none { it is AdmitMessage.Unpaused }, "no stray Unpaused") },
             { assertEquals(setOf(second, third, carol), raw.room.roster.value.map { it.id }.toSet()) },
             { assertEquals(listOf(AdmitMessage.Farewell(first.value, supersededBy = second.value)), heard.farewellsFor(first)) },

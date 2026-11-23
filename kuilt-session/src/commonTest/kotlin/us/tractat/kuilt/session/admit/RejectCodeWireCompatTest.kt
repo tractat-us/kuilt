@@ -42,17 +42,17 @@ class RejectCodeWireCompatTest {
     @Test
     fun `a typed reject round-trips its code`() {
         val encoded = AdmitMessage.encode(
-            AdmitMessage.Reject("resume-window-expired", RejectCode.ResumeWindowExpired),
+            AdmitMessage.Reject("room-mismatch: elsewhere", RejectCode.RoomMismatch, answers = null),
         )
 
         val decoded = AdmitMessage.decode(encoded)
-        assertEquals(AdmitMessage.Reject("resume-window-expired", RejectCode.ResumeWindowExpired), decoded)
-        assertEquals(RejectCode.ResumeWindowExpired, (decoded as AdmitMessage.Reject).code)
+        assertEquals(AdmitMessage.Reject("room-mismatch: elsewhere", RejectCode.RoomMismatch, answers = null), decoded)
+        assertEquals(RejectCode.RoomMismatch, (decoded as AdmitMessage.Reject).code)
     }
 
     @Test
     fun `a code this build does not know decodes as Unknown and stays retryable`() {
-        val fromTheFuture = AdmitMessage.Reject("nope", RejectCode.Unknown("quota-exceeded"))
+        val fromTheFuture = AdmitMessage.Reject("nope", RejectCode.Unknown("quota-exceeded"), answers = null)
 
         val decoded = AdmitMessage.decode(AdmitMessage.encode(fromTheFuture)) as AdmitMessage.Reject
 
@@ -65,12 +65,22 @@ class RejectCodeWireCompatTest {
 
     @Test
     fun `terminality is declared per code`() {
-        assertFalse(RejectCode.ResumeWindowExpired.retryable)
-        assertFalse(RejectCode.ResumeTokenInvalid.retryable)
         assertFalse(RejectCode.RoomMismatch.retryable)
         assertFalse(RejectCode.ProtocolMismatch.retryable)
-        assertTrue(RejectCode.ResumeWindowNotYetOpen.retryable)
+        assertTrue(RejectCode.HostFailed.retryable)
         assertTrue(RejectCode.Unknown("").retryable)
+    }
+
+    /**
+     * The resume codes went with the `Resume` frame (#3215; Decided 20). A peer that still sends one
+     * reaches this build as [RejectCode.Unknown], retryable, like any code it does not know.
+     */
+    @Test
+    fun `a retired resume code decodes as Unknown and stays retryable`() {
+        for (id in listOf("resume-window-not-yet-open", "resume-window-expired", "resume-token-invalid")) {
+            assertEquals(RejectCode.Unknown(id), RejectCode.fromId(id))
+            assertTrue(RejectCode.fromId(id).retryable, id)
+        }
     }
 
     /**
@@ -80,7 +90,7 @@ class RejectCodeWireCompatTest {
     @Test
     fun `the key-proof codes round-trip as themselves and are terminal`() {
         for (code in listOf(RejectCode.BadProof, RejectCode.KeyConflict)) {
-            val decoded = AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Reject(code.id, code))) as AdmitMessage.Reject
+            val decoded = AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Reject(code.id, code, answers = null))) as AdmitMessage.Reject
             assertEquals(code, decoded.code)
             assertFalse(decoded.code.retryable)
         }
@@ -93,7 +103,7 @@ class RejectCodeWireCompatTest {
     @Test
     fun `the host failure code round-trips as itself and is retryable`() {
         val code = RejectCode.HostFailed
-        val decoded = AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Reject(code.id, code))) as AdmitMessage.Reject
+        val decoded = AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Reject(code.id, code, answers = null))) as AdmitMessage.Reject
         assertAll(
             { assertEquals("host-failed", code.id, "the wire id is fixed once shipped") },
             { assertEquals(code, decoded.code) },

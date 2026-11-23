@@ -154,15 +154,19 @@ class SubTimeoutBlipResumeTest {
             assertAll(
                 {
                     // #3159 Task 1.7: the host still held the seat as connected, so the re-Hello's
-                    // Welcome is marked Restored and the joiner closes the arc as a real resume does.
-                    // The old dwell closed it with Recovered(hostId); there is no dwell any more.
+                    // Welcome names the membership the joiner held (#3215) and the joiner closes the
+                    // arc as a real resume does. The old dwell closed it with Recovered(hostId); there
+                    // is no dwell any more.
                     assertEquals(
                         h.joinerRoom.selfId,
                         resumed.takeIf { it.isCompleted }?.getCompleted()?.peerId,
                         "a blip the host never observed is restored by the re-Hello",
                     )
                 },
-                { assertTrue(hostResumed.isCompleted, "the host restored the connected seat, without a window") },
+                {
+                    // #3215: Resumed is once per partition, and the host saw none, so it says nothing.
+                    assertFalse(hostResumed.isCompleted, "the host restored a connected seat, which it does not announce")
+                },
                 {
                     // The level, not just the edge: onReconnectStarted pinned the host Partitioned,
                     // and a roster left saying that about a demonstrably reachable host is exactly

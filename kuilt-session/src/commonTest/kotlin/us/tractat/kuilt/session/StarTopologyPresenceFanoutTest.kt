@@ -26,7 +26,6 @@ import us.tractat.kuilt.session.partition.ProvenResume
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -329,10 +328,10 @@ class StarTopologyPresenceFanoutTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = star()
             val seen = star.watchEvents(this)
-            val token = star.partitionUntilPaused(this)
+            star.partitionUntilPaused(this)
 
             star.droppedLink.heal()
-            val resume = async { star.dropped.resume(token) }
+            val resume = async { (star.dropped as SeamRoom).sayHelloAgain() }
             testScheduler.runCurrent()
 
             assertAll(
@@ -362,7 +361,7 @@ class StarTopologyPresenceFanoutTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val star = star()
             val seen = star.watchEvents(this)
-            val token = star.partitionUntilPaused(this)
+            star.partitionUntilPaused(this)
 
             // One interval for the detector's next ping to draw a pong, one for its next poll to see it.
             star.droppedLink.heal()
@@ -374,7 +373,7 @@ class StarTopologyPresenceFanoutTest {
                 { assertEquals(1, star.unpausedSeenByBystander(), "rig: markRecovered announced it") },
             )
 
-            val resume = async { star.dropped.resume(token) }
+            val resume = async { (star.dropped as SeamRoom).sayHelloAgain() }
             testScheduler.runCurrent()
             assertIs<ResumeResult.Success>(resume.getCompleted(), "rig: a healed window still answers Success")
 
@@ -383,7 +382,9 @@ class StarTopologyPresenceFanoutTest {
 
             star.assertOneRecoveryReachedBystander(
                 seen,
-                hostEvents = listOf(MembershipEvent.Recovered::class, MembershipEvent.Resumed::class),
+                // The pong ended the partition; the Hello then restored a connected seat, which is
+                // silent (#3215: Resumed is once per partition).
+                hostEvents = listOf(MembershipEvent.Recovered::class),
             )
         }
 
@@ -432,8 +433,8 @@ class StarTopologyPresenceFanoutTest {
      * the host detector's polls, which fall on multiples of [HeartbeatConfig.interval]: a frame sent
      * at this instant reaches the host before the detector can conclude anything from it.
      */
-    private fun Star.partitionUntilPaused(test: kotlinx.coroutines.test.TestScope): ResumeToken {
-        val token = assertNotNull(dropped.resumeToken, "the joiner must hold a resume token after admit")
+    private fun Star.partitionUntilPaused(test: kotlinx.coroutines.test.TestScope) {
+        assertNotNull(dropped.roomId.value, "the joiner must be admitted")
         droppedLink.partition()
         test.testScheduler.advanceTimeBy(hostConfig.timeout + hostConfig.interval * 2 + hostConfig.interval / 2)
         test.testScheduler.runCurrent()
@@ -441,7 +442,6 @@ class StarTopologyPresenceFanoutTest {
             bystander.roster.value.first { it.id == droppedId }.liveness,
             "rig: the bystander must hold the dropped member as paused before it comes back",
         )
-        return token
     }
 
     private fun Star.unpausedSeenByBystander(): Int =

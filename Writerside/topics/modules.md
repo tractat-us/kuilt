@@ -24,7 +24,7 @@ module.
 | `kuilt-raft` | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer |
 | `kuilt-cluster` | Server-cluster overlay: `ServerCluster` (voter mesh + relay accept loop) + `ClusterClient` (propose + observe) |
 | `kuilt-liveness` | Peer-liveness detection: `HeartbeatPartitionDetector` emits `PartitionEvent` (Unresponsive/Recovered/Lost) |
-| `kuilt-session` | Membership-aware `Room`: admit/identify handshake, roster, reconnect tokens |
+| `kuilt-session` | Membership-aware `Room`: admit/identify handshake, roster, key-bound return |
 | `kuilt-heddle` | Fair shares of one pooled resource, with nobody in charge: each group gets the slice it was promised, an idle group lends its share to a busy one, and it keeps working through a network split — see [Fair Share](heddle.md) and [Scheduling](scheduling.md) |
 | `kuilt-heddle-core` | The same fair share in one program, with no network (`LocalHeddle`): lease a slot, charge its real cost, preview and explain the next picks, and survive a restart — see [Scheduling](scheduling.md) |
 | `kuilt-heddle-coroutines` | Wait your turn for a slot (`FairSharePool.withSlot`): a caller waits until its group's fair share comes round, then runs, and is charged the time the job took, even if it failed. A caller that gives up just as its turn comes never leaves a slot lost |

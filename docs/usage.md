@@ -142,12 +142,11 @@ the host drops permanently, the room emits `MembershipEvent.HostLost` and
 the consumer decides what to do (tear down, start a new session, etc.).
 
 **Reconnect/resume.** Keep the existing room after a transport tear. A
-`SeamRoomFactory` joiner attempts resume automatically within the host's reconnect
-window, using its `room.resumeToken` (non-null once admitted). The loom must heal
-the same seam instance with the same `selfId`; `MuxClientLoom` and `NwLoom` provide this.
-`room.resume(token)` is for manual control once that seam is usable again.
-A loom that returns a new seam leaves the old room torn and reconnect ends in
-`HostLost`; a later resume on that room returns `WindowClosed`. A rebuilt room needs
+`SeamRoomFactory` joiner says Hello again automatically within the host's reconnect
+window, and the device key its Hello proves restores the held seat; there is no
+token and nothing to call. The loom must heal the same seam instance with the same
+`selfId`; `MuxClientLoom` and `NwLoom` provide this. A loom that returns a new seam
+leaves the old room torn and reconnect ends in `HostLost`. A rebuilt room needs
 no token: its `Hello` proves the device key, and a host still holding the seat under
 the same peer id restores it. Under a new peer id it takes over a held seat of its
 key whose member is partitioned, and the old member leaves with
@@ -627,10 +626,9 @@ client.close()
 
 On transport tear, `ServerClusterReconnect` advances to the next endpoint from
 the ordered `ClusterEndpoints` list and reconnects. Cross-server resume always
-degrades to fresh-join (see #532): each server's reconnect-window registry is
-in-memory and per-room-instance, so a `ResumeToken` from server-A is unknown to
-server-B. `ClusterClient` treats this as a fall-back-to-fresh-join signal, not
-an error — reconnect is correct, it costs a re-snapshot on the learner's log.
+degrades to fresh-join (see #532): each server keeps its seats and reconnect
+windows in memory, per room instance, so server-B holds no seat for the client's
+device key. Reconnect is correct, and it costs a re-snapshot on the learner's log.
 
 ### Exactly-once proposals
 

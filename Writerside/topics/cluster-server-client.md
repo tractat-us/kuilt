@@ -172,10 +172,9 @@ one: retry a lower one after that and the call succeeds, but the command is drop
 
 When the client's link to its entry server tears, it round-robins to the next
 endpoint from the `ClusterEndpoints` list. Cross-server resume always degrades
-to fresh-join: each server's reconnect-window registry is in-memory and
-per-room-instance, so a `ResumeToken` from server-A is unknown to server-B.
-`ClusterClient` treats this as a fall-back-to-fresh-join signal — reconnect is
-correct and costs a re-snapshot on the learner's log, never wrong state.
+to fresh-join: each server keeps its seats in memory, per room instance, so
+server-B holds no seat for the client's device key. Reconnect is correct and
+costs a re-snapshot on the learner's log, never wrong state.
 
 ## Current limitations
 

@@ -53,19 +53,19 @@ class RoomResumeTimeoutTest {
     )
 
     /**
-     * A single direct `resume(token)` against a black-holed link (host never sees the Resume,
+     * A single direct attempt (`sayHelloAgain`) against a black-holed link (host never sees the Hello,
      * so never replies) returns [ResumeResult.TimedOut] after `resumeTimeout`, rather than
      * hanging.
      */
     @Test
     fun `direct resume against a silent host times out instead of hanging`() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
-        val (joinerRoom, token, joinerSeam) = admittedJoiner()
+        val (joinerRoom, joinerSeam) = admittedJoiner()
 
-        // Black-hole the joiner's link: the Resume broadcast is dropped (the host never sees it)
-        // and no ResumeAck/Reject can arrive. The room stays Woven (not terminal).
+        // Black-hole the joiner's link: the Hello is dropped (the host never sees it)
+        // and no Welcome or Reject can arrive. The room stays Woven (not terminal).
         joinerSeam.setFaultProfile(FaultProfile.DropAll(Direction.Both))
 
-        val direct = async { joinerRoom.resume(token) }
+        val direct = async { joinerRoom.sayHelloAgain() }
         advanceTimeBy(config.resumeTimeout + 100.milliseconds)
         runCurrent()
 
@@ -80,15 +80,15 @@ class RoomResumeTimeoutTest {
      */
     @Test
     fun `a joined concurrent resume also times out`() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
-        val (joinerRoom, token, joinerSeam) = admittedJoiner()
+        val (joinerRoom, joinerSeam) = admittedJoiner()
         joinerSeam.setFaultProfile(FaultProfile.DropAll(Direction.Both))
 
-        val owner = async { joinerRoom.resume(token) }
+        val owner = async { joinerRoom.sayHelloAgain() }
         runCurrent() // owner installs the flight and broadcasts (dropped)
         assertTrue(joinerRoom.hasPendingResume(), "precondition: the owner's resume flight is in flight")
 
-        val joined = async { joinerRoom.resume(token) }
-        runCurrent() // joined coalesces onto the same flight instead of sending a second Resume
+        val joined = async { joinerRoom.sayHelloAgain() }
+        runCurrent() // joined coalesces onto the same flight instead of sending a second Hello
 
         advanceTimeBy(config.resumeTimeout + 100.milliseconds)
         runCurrent()
@@ -105,8 +105,8 @@ class RoomResumeTimeoutTest {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /** Admitted joiner room + its resume token + its (fault-injectable) seam. */
-    private suspend fun TestScope.admittedJoiner(): Triple<SeamRoom, us.tractat.kuilt.session.partition.ResumeToken, FaultySeam> {
+    /** Admitted joiner room + its (fault-injectable) seam. */
+    private suspend fun TestScope.admittedJoiner(): Pair<SeamRoom, FaultySeam> {
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
         val loom = InMemoryLoom()
         val hostSeam = FaultySeam(loom.host(Pattern("Alice")), backgroundScope, FaultProfile.Healthy)
@@ -115,8 +115,8 @@ class RoomResumeTimeoutTest {
         val joinerRoom = makeSeamRoom(joinerSeam, SessionRole.Joiner, "Bob", clock)
 
         joinerRoom.roster.first { it.isNotEmpty() }
-        val token = assertNotNull(joinerRoom.resumeToken, "joiner must hold a resume token after admit")
-        return Triple(joinerRoom, token, joinerSeam)
+        assertNotNull(joinerRoom.roomId.value, "joiner must be admitted")
+        return joinerRoom to joinerSeam
     }
 
     private suspend fun TestScope.makeSeamRoom(

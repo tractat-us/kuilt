@@ -204,7 +204,7 @@ class AdmissionPolicyTest {
             {
                 // The joiner's view of the refusal is the wire's: the id alone, rebuilt as Unknown, retryable.
                 val code = assertIs<AdmissionDecision.Reject>(refused).code
-                val seenByJoiner = AdmitMessage.Reject("not welcome", code).code
+                val seenByJoiner = AdmitMessage.Reject("not welcome", code, answers = null).code
                 assertEquals("not-welcome", code.id)
                 assertEquals(RejectCode.Unknown("not-welcome"), seenByJoiner)
                 assertEquals(true, seenByJoiner.retryable)

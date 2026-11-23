@@ -144,7 +144,7 @@ class JoinerHostTimeoutRecoveryTest {
             val h = timeoutHarness(clock)
 
             h.joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(h.joinerRoom.resumeToken, "joiner must hold a resume token after admit")
+            assertNotNull(h.joinerRoom.roomId.value, "joiner must be admitted")
 
             val partitioned =
                 async { h.joinerRoom.events.filterIsInstance<MembershipEvent.Partitioned>().first() }
@@ -191,7 +191,7 @@ class JoinerHostTimeoutRecoveryTest {
             val h = timeoutHarness(clock)
 
             h.joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(h.joinerRoom.resumeToken)
+            assertNotNull(h.joinerRoom.roomId.value)
 
             val hostLost =
                 async { h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }

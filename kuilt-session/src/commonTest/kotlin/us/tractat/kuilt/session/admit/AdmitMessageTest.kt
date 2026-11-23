@@ -1,11 +1,15 @@
 package us.tractat.kuilt.session.admit
 
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.cbor.Cbor
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.identity.DidKey
-import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertFalse
@@ -97,38 +101,74 @@ class AdmitMessageTest {
         assertTrue(decoded is AdmitMessage.Hello)
     }
 
+    /**
+     * #3215: the direct Welcome names the Hello it answers and the membership it admits. Both
+     * round-trip, `answers` by content, and the roster copy every other member receives — the same
+     * Welcome with neither — writes neither key.
+     */
     @Test
-    fun `Resume round-trips`() {
-        val original = AdmitMessage.Resume(tokenPeerId = "peer-1", tokenRoomId = "room-9", issuedAt = 1_700_000_000_000L)
-        assertEquals(original, AdmitMessage.decode(AdmitMessage.encode(original)))
+    fun `Welcome round-trips its answer and membership, and the roster copy writes neither`() = runTest {
+        val nonce = ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE) { it.toByte() }
+        val welcome = AdmitMessage.Welcome(
+            "peer-1", "Bob", "s-1", DidKey.parse(KEY_A), roomId = "room-9",
+            returnKind = ReturnKind.Restored, answers = nonce, membership = "membership-1",
+        )
+        val decoded = AdmitMessage.decode(AdmitMessage.encode(welcome))
+        val rosterCopy = AdmitMessage.encode(welcome.copy(returnKind = null, answers = null, membership = null)).decodeToString()
+        assertAll(
+            { assertEquals(welcome, decoded) },
+            { assertNotEquals(welcome, welcome.copy(answers = ByteArray(nonce.size))) },
+            // Positive control for the two absences below: the keys ARE visible when written.
+            { assertTrue(AdmitMessage.encode(welcome).decodeToString().let { "answers" in it && "membership" in it }) },
+            { assertFalse("answers" in rosterCopy, "the roster copy wrote answers") },
+            { assertFalse("membership" in rosterCopy, "the roster copy wrote membership") },
+        )
+    }
+
+    /** #3215: a Reject names the Hello it refuses, by content; one refusing a nonce-less Hello names none. */
+    @Test
+    fun `Reject round-trips the Hello it answers`() {
+        val nonce = ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE) { (it * 3).toByte() }
+        val reject = AdmitMessage.Reject("key-conflict: held", RejectCode.KeyConflict, nonce)
+        val unnamed = AdmitMessage.Reject("protocol-mismatch: v2", RejectCode.ProtocolMismatch, answers = null)
+        assertAll(
+            { assertEquals(reject, AdmitMessage.decode(AdmitMessage.encode(reject))) },
+            { assertEquals(unnamed, AdmitMessage.decode(AdmitMessage.encode(unnamed))) },
+            { assertNotEquals(reject, reject.copy(answers = ByteArray(nonce.size))) },
+            { assertEquals(reject.hashCode(), reject.copy(answers = nonce.copyOf()).hashCode()) },
+        )
+    }
+
+    /** An answer is a joiner nonce, so a wrong width is refused in the constructor, on every path. */
+    @Test
+    fun `a wrong-width answer is refused`() = runTest {
+        val short = ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE - 1)
+        val key = DidKey.parse(KEY_A)
+        assertAll(
+            { assertFailsWith<IllegalArgumentException>("Reject") { AdmitMessage.Reject("r", RejectCode.BadProof, short) } },
+            { assertFailsWith<IllegalArgumentException>("Welcome") { AdmitMessage.Welcome("p", "n", "s", key, answers = short) } },
+        )
     }
 
     /**
-     * #3165 added the resume secret to [AdmitMessage.Welcome] and [AdmitMessage.Resume]. Both
-     * round-trip with it; and a frame without one — the roster copy a bystander receives, or a
-     * resume from an older joiner — writes no `resumeSecret` key at all, so its bytes are the
-     * pre-#3165 bytes and an older peer decodes it unchanged.
+     * #3215 retired the `Resume` and `ResumeAck` frames. A frame still tagged with either decodes to
+     * nothing, so an older peer's is dropped like any malformed frame. The frames are built from
+     * [LegacyAdmit], a surrogate carrying the retired serial names; its `Goodbye` encodes byte for
+     * byte as the real one does, which is what shows the surrogate writes the real frame shape.
      */
     @Test
-    fun `Welcome and Resume round-trip their secret and a secretless frame keeps the old wire`() = runTest {
-        val secret = ResumeSecret.generate()
-        val welcome = AdmitMessage.Welcome("peer-1", "Bob", "s-1", DidKey.parse(KEY_A), roomId = "room-9", resumeSecret = secret)
-        val resume = AdmitMessage.Resume("peer-1", "room-9", issuedAt = 5L, resumeSecret = secret)
-        val rosterCopy = AdmitMessage.encode(welcome.copy(resumeSecret = null))
-        val legacyResume = AdmitMessage.encode(resume.copy(resumeSecret = null))
+    fun `a frame tagged as a retired Resume or ResumeAck decodes to nothing`() {
+        fun legacy(message: LegacyAdmit): ByteArray = byteArrayOf(AdmitMessage.PREFIX_BYTE) + legacyCbor.encodeToByteArray(LegacyAdmit.serializer(), message)
         assertAll(
-            { assertEquals(welcome, AdmitMessage.decode(AdmitMessage.encode(welcome))) },
-            { assertEquals(resume, AdmitMessage.decode(AdmitMessage.encode(resume))) },
-            // Positive control for the two absences below: the key IS visible when written.
-            { assertTrue(AdmitMessage.encode(welcome).decodeToString().contains("resumeSecret")) },
-            { assertFalse(rosterCopy.decodeToString().contains("resumeSecret"), "roster copy wrote the key") },
-            { assertFalse(legacyResume.decodeToString().contains("resumeSecret"), "legacy resume wrote the key") },
+            { assertTrue(legacy(LegacyAdmit.Goodbye).contentEquals(AdmitMessage.encode(AdmitMessage.Goodbye)), "the surrogate writes the real shape") },
+            { assertEquals(AdmitMessage.Goodbye, AdmitMessage.decode(legacy(LegacyAdmit.Goodbye)), "and it decodes") },
+            { assertNull(AdmitMessage.decode(legacy(LegacyAdmit.Resume("peer-1", "room-9", 5L))), "a resume frame") },
+            { assertNull(AdmitMessage.decode(legacy(LegacyAdmit.ResumeAck)), "a resume-ack frame") },
         )
     }
 
     @Test
-    fun `ResumeAck and Goodbye round-trip`() {
-        assertEquals(AdmitMessage.ResumeAck, AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.ResumeAck)))
+    fun `Goodbye round-trips`() {
         assertEquals(AdmitMessage.Goodbye, AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Goodbye)))
     }
 
@@ -393,4 +433,27 @@ class AdmitMessageTest {
             "619f6777656c636f6d65bf6e61737369676e656450656572496466706565722d316b646973706c61794e616d65634164616973657373696f6e496463732d31ffff"
                 .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }
+}
+
+/** The retired admit frames, by their serial names, for the decode test above. */
+@Serializable
+private sealed interface LegacyAdmit {
+    @Serializable
+    @SerialName("resume")
+    data class Resume(val tokenPeerId: String, val tokenRoomId: String, val issuedAt: Long) : LegacyAdmit
+
+    @Serializable
+    @SerialName("resume-ack")
+    data object ResumeAck : LegacyAdmit
+
+    @Serializable
+    @SerialName("goodbye")
+    data object Goodbye : LegacyAdmit
+}
+
+/** The admit codec's settings, so the surrogate writes what the real encoder writes. */
+@OptIn(ExperimentalSerializationApi::class)
+private val legacyCbor = Cbor {
+    ignoreUnknownKeys = true
+    alwaysUseByteString = true
 }

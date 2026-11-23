@@ -9,21 +9,20 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Tag
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 
 /**
  * Unit tests for [ServerClusterReconnect].
  *
- * Tests are structured around four concerns matching the design:
+ * Tests are structured around two concerns matching the design:
  *  - O3: Deterministic round-robin rotation across endpoints.
  *  - O3/failover: On transport tear, the selector advances to the next endpoint.
- *  - O4: Token re-presentation on reconnect (token survives endpoint change).
- *  - O4/cross-endpoint: Resume presented against a *different* endpoint, not the same one.
+ *
+ * Re-presenting a token on reconnect went with the token (#3215): only the server that admitted a
+ * joiner holds a seat for its key, so another endpoint admits it afresh.
  *
  * All tests use [StandardTestDispatcher] (FIFO at each virtual instant) to avoid
  * load-dependent ordering. Fake [InMemoryLoom] looms serve as endpoints.
@@ -35,13 +34,6 @@ class ServerClusterReconnectTest {
     private val endpoint2 = InMemoryTag("server-2")
     private val endpoints: List<Tag> = listOf(endpoint0, endpoint1, endpoint2)
 
-    private val roomId = RoomId("room-abc")
-    private val token = ResumeToken(
-        peerId = PeerId("self"),
-        roomId = roomId,
-        issuedAt = 1_000L,
-        secret = ResumeSecret.generate(),
-    )
 
     // ── O3: Rotation order ────────────────────────────────────────────────────
 
@@ -135,102 +127,6 @@ class ServerClusterReconnectTest {
         assertNotNull(seam)
         // connect does not advance the endpoint index
         assertEquals(endpoint0, reconnect.currentEndpoint())
-    }
-
-    // ── O4: Token re-presentation ─────────────────────────────────────────────
-
-    @Test
-    fun `pendingToken is null before any token is set`() = runTest {
-        val reconnect = ServerClusterReconnect(
-            endpoints = endpoints,
-        )
-        assertNull(reconnect.pendingToken())
-    }
-
-    @Test
-    fun `pendingToken returns the registered token`() = runTest {
-        val reconnect = ServerClusterReconnect(
-            endpoints = endpoints,
-        )
-
-        reconnect.setToken(token)
-        assertEquals(token, reconnect.pendingToken())
-    }
-
-    @Test
-    fun `pendingToken survives endpoint change`() = runTest {
-        val reconnect = ServerClusterReconnect(
-            endpoints = endpoints,
-        )
-
-        reconnect.setToken(token)
-        reconnect.advanceEndpoint()
-
-        // Token must survive an endpoint rotation — keyed on RoomId, not endpoint.
-        assertEquals(token, reconnect.pendingToken())
-    }
-
-    @Test
-    fun `clearToken clears the pending token`() = runTest {
-        val reconnect = ServerClusterReconnect(
-            endpoints = endpoints,
-        )
-
-        reconnect.setToken(token)
-        reconnect.clearToken()
-        assertNull(reconnect.pendingToken())
-    }
-
-    // ── O4: Resume-vs-fresh-join on a different endpoint ─────────────────────
-
-    /**
-     * Central S1a contract: after connecting to endpoint-0 and acquiring a token,
-     * a transport tear advances to endpoint-1. The same token must be retrievable
-     * for re-presentation against the *new* server endpoint — proving that the
-     * [ResumeToken.roomId] survives the endpoint change.
-     */
-    @Test
-    fun `token is re-presented after failover to different endpoint`() = runTest {
-        val loom0 = InMemoryLoom()
-        val loom1 = InMemoryLoom()
-        loom0.host(Pattern("server-0"))
-        loom1.host(Pattern("server-1"))
-
-        val reconnect = ServerClusterReconnect(
-            endpoints = listOf(endpoint0, endpoint1),
-        )
-
-        // Connect to endpoint-0 and register a token (simulates post-admit state).
-        val seam0 = reconnect.connect(loom0)
-        assertNotNull(seam0)
-        reconnect.setToken(token)
-
-        // Simulate transport tear: advance to endpoint-1.
-        reconnect.onTransportTear()
-        assertEquals(endpoint1, reconnect.currentEndpoint())
-
-        // Token still available — re-present to endpoint-1's room.
-        val tokenForResume = reconnect.pendingToken()
-        assertEquals(token, tokenForResume, "Token must survive failover to endpoint-1")
-        assertEquals(roomId, tokenForResume?.roomId, "RoomId must match across endpoints")
-    }
-
-    /**
-     * After a successful resume, [clearToken] removes the token.
-     * A subsequent tear rotates the endpoint and leaves no stale token.
-     */
-    @Test
-    fun `after clearToken second tear leaves no stale token`() = runTest {
-        val reconnect = ServerClusterReconnect(
-            endpoints = endpoints,
-        )
-
-        reconnect.setToken(token)
-        reconnect.clearToken() // successful resume consumed the token
-
-        reconnect.onTransportTear()
-
-        assertNull(reconnect.pendingToken(), "No token should remain after clear + tear")
     }
 
     // ── Single-endpoint degenerate case ──────────────────────────────────────

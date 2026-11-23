@@ -705,13 +705,10 @@ the room roster — no explicit client identification step is needed.
 - **M=3 voter mesh is proven under simulation; M=1 is proven over real sockets
   (`ServerClusterE2ETest`).** Real-socket M>1 E2E is a follow-up (see #545).
 - **Cross-server resume is a fresh join** (see #532). Each server keeps its
-  seats in memory, per room instance, and mints its own `RoomId`, so nothing a
-  client carries from server-A restores anything on server-B. After failover
-  the client fresh-joins server-B, and that join is the membership: a later
-  `Room.resume` says Hello again, presents no token, and restores the seat the
-  join holds there, answering `ResumeResult.Success` whatever token the client
-  carries (`ResumeTokenFailoverTest`). This is correct and fast; it costs a
-  re-snapshot on the client's Raft log.
+  seats in memory, per room instance, and mints its own `RoomId`, so server-B
+  holds no seat for the client's device key. After failover the client
+  fresh-joins server-B, and that join is the membership. This is correct and
+  fast; it costs a re-snapshot on the client's Raft log.
 - **The `CoroutineScope.clusterClient()` production path** (relay-room, full
   reconnect wiring) requires a stable client identity derived from the `Loom`'s
   `Seam.selfId`. The current production entry point is `clusterClientWithNode()`

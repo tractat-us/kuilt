@@ -23,7 +23,6 @@ import us.tractat.kuilt.session.election.ElectionOutcome
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.random.Random
 import kotlin.time.Duration
@@ -118,33 +117,26 @@ public suspend fun callerSuppliedRoomIdSample(
 }
 
 /**
- * Manually resume the existing room after its loom heals the same seam with an unchanged selfId.
- * [us.tractat.kuilt.core.MuxClientLoom] provides this; [SeamRoomFactory] joiners attempt resume
- * automatically after a tear. A rebuilt room needs no token: its Hello proves the device key, and
- * a host still holding the seat under the same peer id restores it. Under a new peer id it takes
- * over a seat of its key whose member is partitioned, and that member leaves superseded; beside a
- * connected seat it gets a seat of its own. Presenting a saved token at join time is #1593.
- *
- * The four arms below are the whole of [ResumeResult.JoinerOutcome] — the host's own verdicts are
- * a different half of the hierarchy and never reach a joiner as values, so a branch on one is a
- * compile error rather than dead code.
+ * Watch a joiner come back after a dropped link. There is nothing to call: a joiner built by
+ * [SeamRoomFactory] says Hello again on its own, within the reconnect window, and the device key its
+ * Hello proves restores the seat the host held. Its loom must heal the same seam with the same
+ * selfId (e.g. [us.tractat.kuilt.core.MuxClientLoom]). These events tell the app how it went.
  */
-public suspend fun resumeAfterDropSample(room: Room): Boolean {
-    // resume() still takes the room's token, but no longer presents it: it says Hello again,
-    // and the device key proves the member.
-    val token: ResumeToken = room.resumeToken ?: return false
-    // Keep this room: its loom must heal the SAME seam with the SAME selfId (e.g. MuxClientLoom).
-    // SeamRoomFactory joiners say Hello again automatically after a tear; this is manual control.
-    return when (val outcome = room.resume(token)) {
-        ResumeResult.Success -> false // the held seat is back; state resync follows
-        // The host answered, and said no. WHY is in the code, never in the message.
-        // See classifyRejectCodeSample.
-        is ResumeResult.Refused -> outcome.code.retryable
-        // No reply within resumeTimeout, or the seam tore under the Hello: the host is unreachable now.
-        ResumeResult.TimedOut -> true
-        // The seat was gone and the host admitted this room afresh, which it keeps — or this room
-        // is already over (left, or the host was lost), and only a fresh join helps.
-        ResumeResult.WindowClosed -> false
+public suspend fun watchTheReturnSample(room: Room) {
+    room.events.collect { event ->
+        when (event) {
+            // The link to the host dropped: the room is saying Hello again until the window closes.
+            is MembershipEvent.Partitioned -> Unit
+            // This room's own seat came back; state resync follows.
+            is MembershipEvent.Resumed -> Unit
+            // The host is back: the link healed by itself, or the seat was gone and this room was
+            // admitted afresh. Either way it is still in session.
+            is MembershipEvent.Recovered -> Unit
+            // The window closed, or the host refused the Hello. WHY is in the reason's code.
+            // See classifyRejectCodeSample.
+            is MembershipEvent.HostLost -> Unit
+            else -> Unit
+        }
     }
 }
 
@@ -155,13 +147,13 @@ public suspend fun resumeAfterDropSample(room: Room): Boolean {
  */
 public fun classifyRejectCodeSample(reason: FailureReason.Refused): Boolean =
     when (reason.code) {
-        // Terminal: the window closed, the credential can never validate here, or the two peers
-        // speak incompatible protocol versions (retrying a version you don't support is futile).
-        RejectCode.ResumeWindowExpired, RejectCode.ResumeTokenInvalid,
+        // Terminal: the wrong room, a protocol version the host can't speak, a key proof that
+        // failed, or another device holding this peer id. The same Hello fails the same way.
         RejectCode.RoomMismatch, RejectCode.ProtocolMismatch,
+        RejectCode.BadProof, RejectCode.KeyConflict,
         -> false
-        // Transient: the host hasn't opened the window yet (the fast-reconnect race).
-        RejectCode.ResumeWindowNotYetOpen -> true
+        // Transient: the host could not do its own half of the exchange this time.
+        RejectCode.HostFailed -> true
         // Anything else, including a code this build has never heard of.
         else -> reason.code.retryable
     }

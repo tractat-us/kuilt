@@ -92,7 +92,7 @@ class ResumeRefusalReportingTest {
 
         suspend fun admit(hello: AdmitMessage.Hello) {
             challenge(hello)
-            fromHost(AdmitMessage.Welcome(joinerId.value, "Joiner", "s", fakeDidKey(1), roomId = roomId.value, resumeSecret = ResumeSecret.generate()))
+            fromHost(AdmitMessage.Welcome(joinerId.value, "Joiner", "s", fakeDidKey(1), roomId = roomId.value, answers = hello.joinerNonce, membership = "membership-1"))
             fromHost(AdmitMessage.Welcome(hostId.value, "Host", hostId.value, fakeDeviceKey(0).id))
         }
 
@@ -100,8 +100,9 @@ class ResumeRefusalReportingTest {
         suspend fun refuseEveryReHello() {
             val hellos = hellosToHost()
             while (answered < hellos.size) {
-                challenge(hellos[answered++])
-                fromHost(AdmitMessage.Reject("host-failed: the window controller threw", RejectCode.HostFailed))
+                val hello = hellos[answered++]
+                challenge(hello)
+                fromHost(AdmitMessage.Reject("host-failed: the window controller threw", RejectCode.HostFailed, hello.joinerNonce))
             }
         }
 

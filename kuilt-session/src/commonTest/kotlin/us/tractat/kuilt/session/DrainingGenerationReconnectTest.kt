@@ -95,7 +95,7 @@ class DrainingGenerationReconnectTest {
 
             h.hostRoom.roster.first { it.size == 1 }
             h.joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(h.joinerRoom.resumeToken)
+            assertNotNull(h.joinerRoom.roomId.value)
             assertEquals(1, h.dials(), "precondition: one base dial to join")
 
             val resumed = async {
@@ -147,7 +147,7 @@ class DrainingGenerationReconnectTest {
 
             h.hostRoom.roster.first { it.size == 1 }
             h.joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(h.joinerRoom.resumeToken)
+            assertNotNull(h.joinerRoom.roomId.value)
             assertEquals(1, h.dials(), "precondition: one base dial to join")
 
             val resumed = async {
@@ -192,7 +192,7 @@ class DrainingGenerationReconnectTest {
 
             h.hostRoom.roster.first { it.size == 1 }
             h.joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(h.joinerRoom.resumeToken)
+            assertNotNull(h.joinerRoom.roomId.value)
 
             val resumed = async {
                 h.joinerRoom.events.first { it is MembershipEvent.Resumed || it is MembershipEvent.HostLost }

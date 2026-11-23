@@ -134,7 +134,7 @@ Replace `<version>` with the latest release shown on the Maven Central badge at 
 | `kuilt-deal` | all | Cryptographically fair card dealing (`DealSession`, `SraScheme`) + dealer-less fair-random seed agreement (`FairRandom`). |
 | `kuilt-game` | all | Turn-based game facade over `kuilt-raft`: `TurnSequencer` + `IndexedAction` + `SpeculativeSequencer` (optimistic apply + rollback). |
 | `kuilt-raft` | all | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer. |
-| `kuilt-session` | all | Membership-aware `Room` (`SeamRoom`): handshake, roster, reconnect tokens, partition detection. |
+| `kuilt-session` | all | Membership-aware `Room` (`SeamRoom`): handshake, roster, key-bound return, partition detection. |
 
 **Fabrics**
 

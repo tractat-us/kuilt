@@ -60,7 +60,6 @@ self-contained JVM test (`@Test`), compiled from `examples/src/test/kotlin/`.
 | `ConcurrentAdmissionE2ETest.kt` | Two clients connect simultaneously — both are admitted and each applies the other's command |
 | `ExactlyOnceHappyPathTest.kt` | M=1 exactly-once deduplication — a retry with the same `requestId` coalesces to the original committed entry |
 | `NoDoubleApplyFailoverTest.kt` | Exactly-once under mid-flight leader change + entry-server death — round-robin retry, `ClientSessionTable` dedup |
-| `ResumeTokenFailoverTest.kt` | `ResumeToken` behaviour under real relay change — documents degradation to fresh-join when the new relay has no window |
 
 ## Warp — federated learning
 

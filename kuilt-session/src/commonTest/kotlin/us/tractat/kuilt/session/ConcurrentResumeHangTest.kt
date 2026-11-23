@@ -49,7 +49,7 @@ import kotlin.time.Instant
  * silently overwriting the single `pendingResume` reply slot.
  *
  * Two legitimate concurrency shapes:
- * 1. Two app-level `resume()` calls race (the [Room.resumeToken] KDoc invites app-driven
+ * 1. Two app-level `resume()` calls race (the [Room.roomId.value] KDoc invites app-driven
  *    retries). Pre-fix, the second call overwrote the first caller's deferred, so the first
  *    `await()` hung forever.
  * 2. An app-level `resume()` races the internal #1037 auto-reconnect (`runHostReconnect`
@@ -91,7 +91,7 @@ class ConcurrentResumeHangTest {
 
         hostRoom.roster.first { it.size == 1 }
         joinerRoom.roster.first { it.isNotEmpty() }
-        val token = assertNotNull(joinerRoom.resumeToken, "joiner must hold a resume token after admit")
+        assertNotNull(joinerRoom.roomId.value, "joiner must be admitted")
 
         // Partition both links past the heartbeat timeout, within the reconnect window.
         faultyHostSeam.setFaultProfile(FaultProfile.DropAll(Direction.Both))
@@ -103,8 +103,8 @@ class ConcurrentResumeHangTest {
         faultyJoinerSeam.heal()
         advanceTimeBy(50L)
 
-        val first = async { joinerRoom.resume(token) }
-        val second = async { joinerRoom.resume(token) }
+        val first = async { joinerRoom.sayHelloAgain() }
+        val second = async { joinerRoom.sayHelloAgain() }
         advanceTimeBy(100L)
 
         val firstResult = withTimeoutOrNull(5.seconds) { first.await() }
@@ -192,7 +192,7 @@ class ConcurrentResumeHangTest {
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }
-            val token = assertNotNull(joinerRoom.resumeToken, "joiner must hold a resume token after admit")
+            assertNotNull(joinerRoom.roomId.value, "joiner must be admitted")
 
             // Delay every host→joiner frame from here on, so the internal auto-reconnect's
             // ResumeAck is reliably still in flight when the public resume() lands.
@@ -212,7 +212,7 @@ class ConcurrentResumeHangTest {
             )
 
             // Public resume() lands while the internal attempt awaits its (delayed) ResumeAck.
-            val publicResume = async { joinerRoom.resume(token) }
+            val publicResume = async { joinerRoom.sayHelloAgain() }
             runCurrent()
 
             // Let the delayed ack arrive, then advance well past the reconnect window.
