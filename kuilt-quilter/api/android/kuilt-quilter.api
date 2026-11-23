@@ -273,6 +273,29 @@ public final class us/tractat/kuilt/quilter/QuiltMessage$RootDigest$Companion {
 	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
 }
 
+public final class us/tractat/kuilt/quilter/QuiltMessage$VectorDigest : us/tractat/kuilt/quilter/QuiltMessage {
+	public static final field Companion Lus/tractat/kuilt/quilter/QuiltMessage$VectorDigest$Companion;
+	public synthetic fun <init> (Ljava/lang/String;JLus/tractat/kuilt/crdt/VersionVector;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getRoot ()J
+	public final fun getSeen ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun getSender-ffK6qZA ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/quilter/QuiltMessage$VectorDigest$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/quilter/QuiltMessage$VectorDigest;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/quilter/QuiltMessage$VectorDigest;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$VectorDigest$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
 public final class us/tractat/kuilt/quilter/Quilter : us/tractat/kuilt/core/ScopedCloseable {
 	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/crdt/Quilted;Lkotlinx/serialization/KSerializer;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/quilter/MonotonicMillis;Lkotlinx/serialization/BinaryFormat;Lkotlin/jvm/functions/Function1;Lkotlin/random/Random;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/crdt/Quilted;Lkotlinx/serialization/KSerializer;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/quilter/MonotonicMillis;Lkotlinx/serialization/BinaryFormat;Lkotlin/jvm/functions/Function1;Lkotlin/random/Random;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -290,10 +313,11 @@ public final class us/tractat/kuilt/quilter/Quilter : us/tractat/kuilt/core/Scop
 public final class us/tractat/kuilt/quilter/QuilterConfig {
 	public fun <init> ()V
 	public synthetic fun <init> (JJJJIZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public synthetic fun <init> (JJJJIZZJIILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public synthetic fun <init> (JJJJIZZJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (JJJJIZZJIJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (JJJJIZZJIJLkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (JJJJIZZLkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1-UwyO8pc ()J
+	public final fun component10-UwyO8pc ()J
 	public final fun component2-UwyO8pc ()J
 	public final fun component3-UwyO8pc ()J
 	public final fun component4-UwyO8pc ()J
@@ -304,10 +328,11 @@ public final class us/tractat/kuilt/quilter/QuilterConfig {
 	public final fun component9 ()I
 	public final fun copy-C0ewQK0 (JJJJIZZ)Lus/tractat/kuilt/quilter/QuilterConfig;
 	public static synthetic fun copy-C0ewQK0$default (Lus/tractat/kuilt/quilter/QuilterConfig;JJJJIZZILjava/lang/Object;)Lus/tractat/kuilt/quilter/QuilterConfig;
-	public final fun copy-x4zPwkw (JJJJIZZJI)Lus/tractat/kuilt/quilter/QuilterConfig;
-	public static synthetic fun copy-x4zPwkw$default (Lus/tractat/kuilt/quilter/QuilterConfig;JJJJIZZJIILjava/lang/Object;)Lus/tractat/kuilt/quilter/QuilterConfig;
+	public final fun copy-XIkEJ34 (JJJJIZZJIJ)Lus/tractat/kuilt/quilter/QuilterConfig;
+	public static synthetic fun copy-XIkEJ34$default (Lus/tractat/kuilt/quilter/QuilterConfig;JJJJIZZJIJILjava/lang/Object;)Lus/tractat/kuilt/quilter/QuilterConfig;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAntiEntropyInterval-UwyO8pc ()J
+	public final fun getDominatedDigestBackstop-UwyO8pc ()J
 	public final fun getEvictionAfter-UwyO8pc ()J
 	public final fun getExpectVirtualTime ()Z
 	public final fun getFullStateRequestTimeout-UwyO8pc ()J

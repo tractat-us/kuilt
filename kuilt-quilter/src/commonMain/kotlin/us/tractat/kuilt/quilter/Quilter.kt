@@ -118,12 +118,29 @@ public data class QuilterConfig(
      * slow its backstop down.
      */
     @IntroducedAt("0.7.7") val staleDigestSkipLimit: Int = 3,
+    /**
+     * How long this replica goes on asking nothing of one peer whose
+     * [QuiltMessage.VectorDigest]s mismatch while showing nothing we lack (#3622).
+     *
+     * A digest whose vector is at or below ours on every replica is stale or behind: the sender
+     * has not yet seen our latest, and it will ask us, so its whole state is not worth asking for.
+     * But a vector cannot see everything a state holds. Two replicas that started from different
+     * `initial` states differ in a way no vector records, and then the one whose vector dominates
+     * would never ask. So once a run of such digests from one peer has lasted this long, the next
+     * one asks for the whole state anyway, through the same bounds as any other request. A matched
+     * digest, a request sent, or a digest that shows something we lack ends the run. `0` asks
+     * every time, as a [QuiltMessage.RootDigest] mismatch does.
+     */
+    @IntroducedAt("0.7.7") val dominatedDigestBackstop: Duration = 30.seconds,
 ) {
     init {
         require(fullStateRequestTimeout.isPositive()) {
             "fullStateRequestTimeout must be positive, was $fullStateRequestTimeout"
         }
         require(staleDigestSkipLimit >= 0) { "staleDigestSkipLimit must not be negative, was $staleDigestSkipLimit" }
+        require(!dominatedDigestBackstop.isNegative()) {
+            "dominatedDigestBackstop must not be negative, was $dominatedDigestBackstop"
+        }
     }
 }
 
@@ -421,6 +438,30 @@ public class Quilter<S : Quilted<S>>(
      * option, not the last word on it.
      */
     private val everSentUsDigest: MutableSet<PeerId> = mutableSetOf()
+
+    /**
+     * Peers that have sent us a [QuiltMessage.VectorDigest], and so run a build that reads one
+     * (#3622). The same one-directional proof as [everSentUsDigest], one variant later: the tick
+     * sends a proven peer the vector digest alone, and an unproven one the [QuiltMessage.RootDigest]
+     * as well, so a build that drops the unknown variant still gets a digest it can answer. Dropped
+     * on eviction. Under [lock].
+     */
+    private val everSentUsVector: MutableSet<PeerId> = mutableSetOf()
+
+    /**
+     * Since when, per peer, every mismatched [QuiltMessage.VectorDigest] has shown nothing we lack,
+     * read from [clock]. Bounds that run by [QuilterConfig.dominatedDigestBackstop]. Cleared by a
+     * match, by a request sent, by a digest that shows a gap, and by [forgetLink]. Under [lock].
+     */
+    private val dominatedSince: MutableMap<PeerId, Long> = mutableMapOf()
+
+    /**
+     * The [ReplicaId] each peer has named as its own, in a digest or a whole state (#3622). It is
+     * what lets eviction drop the receive cursor of the replica behind an evicted [PeerId], so the
+     * vector a [QuiltMessage.VectorDigest] carries does not grow with every replica that ever
+     * joined. Dropped on eviction. Under [lock].
+     */
+    private val replicaOf: MutableMap<PeerId, ReplicaId> = mutableMapOf()
 
     /**
      * The last [stateRoot] and the state value it was computed from, compared by **identity**
@@ -884,6 +925,11 @@ public class Quilter<S : Quilted<S>>(
         // [everSentUsDigest] from this side's point of view, so withholding it from unproven peers
         // — the shape #2006's discussion first reached for — would wedge every peer unproven
         // forever and revert #1955 outright, in both directions at once.
+        // The vector digest first, so a current peer has latched [everSentUsVector] for us before
+        // the root digest beside it arrives and can ignore that one. A peer that has never sent us
+        // a vector digest also gets the root digest, which an older build can read and answer.
+        sendVectorDigestTo(peer, armGrant = true)
+        if (peer in everSentUsVector) return
         sendRootDigestTo(peer)
         if (peer !in everSentUsDigest) sendUnprovenPeerFullState(peer)
     }
@@ -1010,14 +1056,29 @@ public class Quilter<S : Quilted<S>>(
      *   flag so the peer's [QuiltMessage.FullStateRequest] is answered. The first-contact
      *   announcement passes `false`: see [announceDigestTo].
      */
-    private fun sendRootDigestTo(peer: PeerId, armGrant: Boolean = true) {
-        val bytes = encode(QuiltMessage.RootDigest(sender = replica, root = stateRoot(), upThrough = nextSeq))
+    private fun sendRootDigestTo(peer: PeerId, armGrant: Boolean = true) =
+        sendDigestTo(peer, QuiltMessage.RootDigest(sender = replica, root = stateRoot(), upThrough = nextSeq), armGrant)
+
+    /** Ships a [QuiltMessage.VectorDigest] to [peer]; [armGrant] as for [sendRootDigestTo]. Under [lock]. */
+    private fun sendVectorDigestTo(peer: PeerId, armGrant: Boolean) =
+        sendDigestTo(peer, QuiltMessage.VectorDigest(sender = replica, root = stateRoot(), seen = seenVector()), armGrant)
+
+    private fun sendDigestTo(peer: PeerId, digest: QuiltMessage<S>, armGrant: Boolean) {
+        val bytes = encode(digest)
         if (armGrant) digestOutstanding.add(peer)
         scope.launch {
             runCatchingCancellable { seam.sendTo(peer, bytes) }
-                .onFailure { logger.debug { "rootDigest to $peer failed: ${it.message}" } }
+                .onFailure { logger.debug { "${digest::class.simpleName} to $peer failed: ${it.message}" } }
         }
     }
+
+    /**
+     * What this replica has seen of every replica's deltas, as a [QuiltMessage.VectorDigest]
+     * carries it: our own high-water, and the highest contiguous seq received from each other
+     * replica. Under [lock].
+     */
+    private fun seenVector(): VersionVector =
+        VersionVector.of(expectedReceiveSeq.mapValues { (_, expected) -> expected - 1 } + (replica to nextSeq))
 
     /** Returns the whole-state senders it orphaned, for the caller to cancel outside [lock]. */
     private fun evictStalePeers(): List<Job> {
@@ -1045,11 +1106,34 @@ public class Quilter<S : Quilted<S>>(
             cancelFullStateRetry(peer)
             digestOutstanding.remove(peer)
             everSentUsDigest.remove(peer)
+            everSentUsVector.remove(peer)
+            forgetReplicaOf(peer)
             forgetLink(peer)
         }
         recomputeUniversalAck()
         recomputeCut()
         return orphaned
+    }
+
+    /**
+     * Drops the receive cursor, inbound buffer and resend retry of the replica [peer] named as its
+     * own, unless another known peer still names it (a replica back under a new [PeerId]), so the
+     * vector we send stops carrying it (#3622). Under [lock].
+     *
+     * Safe to forget: if that replica's deltas arrive again, the first one opens a gap from seq 1,
+     * whose [QuiltMessage.Resend] the sender answers with a whole state once it has GC'd the
+     * range, and that state resyncs the cursor. A peer's later digest that still carries the pruned
+     * component reads as one showing something we lack, so it costs one capped whole-state
+     * request, and the next root match restores the component. That ends once every peer that
+     * linked to the replica has evicted it too. A replica we only ever heard of through a relay
+     * names no peer here, and is not pruned.
+     */
+    private fun forgetReplicaOf(peer: PeerId) {
+        val gone = replicaOf.remove(peer) ?: return
+        if (gone in replicaOf.values) return
+        expectedReceiveSeq.remove(gone)
+        pendingInbound.remove(gone)
+        cancelResendRetry(gone)
     }
 
     private fun isStale(peer: PeerId, nowMs: Long): Boolean {
@@ -1082,6 +1166,7 @@ public class Quilter<S : Quilted<S>>(
             knownPeers += currentPeers - seam.selfId
             newPeers.forEach { peer ->
                 sendFullStateTo(peer)
+                announceVectorDigestTo(peer)
                 announceDigestTo(peer)
             }
             // A new peer that has not gossiped contributes EMPTY to `min over live` — but the
@@ -1115,6 +1200,13 @@ public class Quilter<S : Quilted<S>>(
      * Must be called under [lock].
      */
     private fun announceDigestTo(peer: PeerId) = sendRootDigestTo(peer, armGrant = false)
+
+    /**
+     * The [QuiltMessage.VectorDigest] beside [announceDigestTo]'s root digest, grant-free for the
+     * same reason, and sent first so a current peer latches [everSentUsVector] for us before the
+     * root digest reaches it (#3622). An older build drops it. Under [lock].
+     */
+    private fun announceVectorDigestTo(peer: PeerId) = sendVectorDigestTo(peer, armGrant = false)
 
     private fun sendFullStateTo(peer: PeerId) {
         requestFullStateSend(peer)
@@ -1160,6 +1252,7 @@ public class Quilter<S : Quilted<S>>(
             is QuiltMessage.Delivered -> onDelivered(sender, msg)
             is QuiltMessage.RootDigest -> onRootDigest(sender, msg)
             is QuiltMessage.FullStateRequest -> onFullStateRequest(sender, msg)
+            is QuiltMessage.VectorDigest -> onVectorDigest(sender, msg)
         }
     }
 
@@ -1332,6 +1425,7 @@ public class Quilter<S : Quilted<S>>(
      */
     private fun onFullState(sender: PeerId, msg: QuiltMessage.FullState<S>) {
         if (outstandingRequest?.peer == sender) clearOutstandingRequest()
+        replicaOf[sender] = msg.sender
         val current = _state.value
         val merged = current.piece(msg.state)
         if (merged != current) {
@@ -1368,6 +1462,9 @@ public class Quilter<S : Quilted<S>>(
      */
     private fun onRootDigest(sender: PeerId, msg: QuiltMessage.RootDigest<S>) {
         everSentUsDigest.add(sender)
+        replicaOf[sender] = msg.sender
+        // A peer that sends vector digests sends this one only beside one, which says more (#3622).
+        if (sender in everSentUsVector) return
         val firstOnThisLink = digestSeenThisLink.add(sender)
         if (msg.root == stateRoot()) {
             staleDigestSkips.remove(sender)
@@ -1375,12 +1472,87 @@ public class Quilter<S : Quilted<S>>(
             return
         }
         if (!mayRequestFullStateFrom(sender)) return
+        sendFullStateRequest(sender, msg.sender, firstOnThisLink)
+    }
+
+    /**
+     * An inbound [QuiltMessage.VectorDigest] (#3622): a [QuiltMessage.RootDigest] that also says
+     * what its sender has seen, so a mismatch can be told apart from one that needs nothing.
+     *
+     * - **Roots match.** Every receive cursor rises to the sender's vector, since the states are
+     *   equal and so hold the same history, and buffered deltas drain. Only the sender's own
+     *   component is acked: a third party's ack is for that third party to collect.
+     * - **The sender has seen no more than we have, of anyone.** Its digest is stale, or it is
+     *   behind and will ask us. Nothing is asked for, until the run outlasts
+     *   [QuilterConfig.dominatedDigestBackstop].
+     * - **The sender has deltas of its own we have not received.** They are asked for by
+     *   [QuiltMessage.Resend], which the sender answers from its delta buffer, and with a whole
+     *   state only once it has GC'd the range.
+     * - **Anything else**: equal vectors with different roots, a third party's deltas we lack, or
+     *   a gap of the sender's that a [QuiltMessage.Resend] is already open for. The whole state is
+     *   asked for, through the same bounds as a root-digest mismatch.
+     *
+     * The last of those is the backstop for the Resend. The sender answers one by **broadcast**,
+     * so where the broadcast path to us is what lost the delta, the answer is lost the same way,
+     * every time. A digest arriving while the gap is still open, whatever opened it, therefore
+     * falls back to the whole state rather than asking by Resend again. On a link that lags more
+     * than the interval this can cost one whole state per lost delta, where the Resend alone
+     * would have done.
+     *
+     * Latches [everSentUsVector], and [everSentUsDigest] with it, since a build that writes one
+     * reads both.
+     */
+    private fun onVectorDigest(sender: PeerId, msg: QuiltMessage.VectorDigest<S>) {
+        everSentUsVector.add(sender)
+        everSentUsDigest.add(sender)
+        replicaOf[sender] = msg.sender
+        val firstOnThisLink = digestSeenThisLink.add(sender)
+        val seen = msg.seen
+        if (msg.root == stateRoot()) {
+            staleDigestSkips.remove(sender)
+            dominatedSince.remove(sender)
+            seen.entries.forEach { (author, high) ->
+                when (author) {
+                    replica -> Unit
+                    msg.sender -> resyncReceiveCursor(sender, author, high)
+                    else -> raiseReceiveCursor(sender, author, high)
+                }
+            }
+            return
+        }
+        val ours = seenVector()
+        when {
+            ours.dominates(seen) && ours != seen -> {
+                val since = dominatedSince.getOrPut(sender) { clock.now() }
+                if (clock.now() - since < config.dominatedDigestBackstop.inWholeMilliseconds) return
+                requestFullStateIfAllowed(sender, msg.sender, firstOnThisLink)
+            }
+            seen[msg.sender] > ours[msg.sender] && msg.sender !in pendingResendJobs -> {
+                dominatedSince.remove(sender)
+                val from = expectedReceiveSeq[msg.sender] ?: 1L
+                requestResend(sender, msg.sender, fromSeq = from, toSeq = seen[msg.sender])
+            }
+            else -> {
+                dominatedSince.remove(sender)
+                requestFullStateIfAllowed(sender, msg.sender, firstOnThisLink)
+            }
+        }
+    }
+
+    private fun requestFullStateIfAllowed(sender: PeerId, senderReplica: ReplicaId, firstOnThisLink: Boolean) {
+        if (!mayRequestFullStateFrom(sender)) return
+        dominatedSince.remove(sender)
+        sendFullStateRequest(sender, senderReplica, firstOnThisLink)
+    }
+
+    /** Asks [sender] for its whole state, holding the one-in-flight bound unless [firstOnThisLink]. Under [lock]. */
+    private fun sendFullStateRequest(sender: PeerId, senderReplica: ReplicaId, firstOnThisLink: Boolean) {
         // The first digest on a link is normally the peer's grant-free announcement, so the peer
         // will drop this request as unsolicited and no reply is coming: holding the bound for it
         // would shut every request out until the timeout, once per join. If the announcement was
         // lost and this is a real tick, one reply ships outside the bound, once per link.
         if (!firstOnThisLink) armOutstandingRequest(sender)
-        val bytes = encode(QuiltMessage.FullStateRequest<S>(requester = replica, sender = msg.sender))
+        val bytes = encode(QuiltMessage.FullStateRequest<S>(requester = replica, sender = senderReplica))
         scope.launch {
             runCatchingCancellable { seam.sendTo(sender, bytes) }
                 .onFailure { logger.debug { "fullStateRequest to $sender failed: ${it.message}" } }
@@ -1448,6 +1620,7 @@ public class Quilter<S : Quilted<S>>(
     private fun forgetLink(peer: PeerId): Job? {
         if (outstandingRequest?.peer == peer) clearOutstandingRequest()
         staleDigestSkips.remove(peer)
+        dominatedSince.remove(peer)
         digestSeenThisLink.remove(peer)
         return forgetFullStateSlot(peer)
     }
@@ -1492,19 +1665,39 @@ public class Quilter<S : Quilted<S>>(
      */
     private fun resyncReceiveCursor(sender: PeerId, senderReplica: ReplicaId, upThrough: Long) {
         if (upThrough <= 0L) return
-        val expected = expectedReceiveSeq[senderReplica] ?: 1L
-        if (upThrough >= expected) {
-            expectedReceiveSeq[senderReplica] = upThrough + 1
-            pendingInbound[senderReplica]?.let { buffer ->
-                buffer.keys.removeAll { it <= upThrough }
-                if (buffer.isEmpty()) pendingInbound.remove(senderReplica)
-            }
-        }
+        fastForwardReceiveCursor(senderReplica, upThrough)
         // Ack the snapshot's high-water even when no fast-forward was needed: the ack is
         // idempotent at the sender (it keeps the max) and heals a previously-lost ack.
         sendAck(to = sender, originalSender = senderReplica, seq = upThrough)
-        drainPendingInbound(senderReplica, sender)
-        if (senderReplica !in pendingInbound) cancelResendRetry(senderReplica)
+        drainAfterFastForward(senderReplica, sender)
+    }
+
+    /**
+     * [resyncReceiveCursor] for a replica other than the digest's sender (#3622): the same
+     * fast-forward and drain, without the ack, which only [author] can collect. [sender] is where
+     * the drained deltas are acked, as [onDelta] acks a relayed delta to its relay. Under [lock].
+     */
+    private fun raiseReceiveCursor(sender: PeerId, author: ReplicaId, high: Long) {
+        if (high <= 0L) return
+        fastForwardReceiveCursor(author, high)
+        drainAfterFastForward(author, sender)
+    }
+
+    /** Moves [author]'s receive cursor past [high] and drops buffered deltas it covers. Under [lock]. */
+    private fun fastForwardReceiveCursor(author: ReplicaId, high: Long) {
+        val expected = expectedReceiveSeq[author] ?: 1L
+        if (high < expected) return
+        expectedReceiveSeq[author] = high + 1
+        pendingInbound[author]?.let { buffer ->
+            buffer.keys.removeAll { it <= high }
+            if (buffer.isEmpty()) pendingInbound.remove(author)
+        }
+    }
+
+    /** Drains what is now contiguous for [author], acking to [ackTarget], and ends a closed gap's retry. */
+    private fun drainAfterFastForward(author: ReplicaId, ackTarget: PeerId) {
+        drainPendingInbound(author, ackTarget)
+        if (author !in pendingInbound) cancelResendRetry(author)
     }
 
     /**
@@ -1529,7 +1722,10 @@ public class Quilter<S : Quilted<S>>(
         if (msg.sender != replica) return
         val allPresent = (msg.fromSeq..msg.toSeq).all { seq -> seq in pendingDeltas }
         if (!allPresent) {
-            sendFullStateTo(requester)
+            // Through the send slot alone (#3622), like [onFullStateRequest]: the requester just
+            // reached us, so the first-contact retry machine [sendFullStateTo] arms has nothing to
+            // retry, and would stack whole states on a slow link.
+            requestFullStateSend(requester)
             return
         }
         for (seq in msg.fromSeq..msg.toSeq) {

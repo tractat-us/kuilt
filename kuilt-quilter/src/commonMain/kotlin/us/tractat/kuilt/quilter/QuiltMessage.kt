@@ -101,6 +101,33 @@ public sealed class QuiltMessage<S> {
     ) : QuiltMessage<S>()
 
     /**
+     * The anti-entropy digest a current [us.tractat.kuilt.quilter.Quilter] sends (#3622): the
+     * [root] a [RootDigest] carries, plus what [sender] has [seen] of every replica's deltas, so the
+     * recipient can tell a digest that is merely **stale** or **behind** from one that shows
+     * something it is missing.
+     *
+     * [seen] is in the Quilter's own delta-sequence space, not the CRDT's dots, so it is populated
+     * for a dot-less state too. Its [sender] component is the sender's own high-water (the
+     * `upThrough` of a [RootDigest]); every other component is the highest contiguous seq the
+     * sender has received from that replica. On a root match the recipient raises its receive
+     * cursors to [seen] and acks the sender's component. On a mismatch it asks for nothing when
+     * [seen] is at or below its own vector everywhere, for the missing range by [Resend] when the
+     * sender's own component is ahead, and for the whole state otherwise.
+     *
+     * A new variant rather than a field on [RootDigest]: a build that predates it rejects an
+     * unknown key, so the field would make every digest unreadable to it. That build drops this
+     * variant whole instead, which is why the sender keeps sending [RootDigest] to a peer until the
+     * peer has sent it one of these.
+     */
+    @Serializable
+    @SerialName("vectorDigest")
+    public class VectorDigest<S>(
+        public val sender: ReplicaId,
+        public val root: Long,
+        public val seen: VersionVector,
+    ) : QuiltMessage<S>()
+
+    /**
      * Sent by [requester] when a [RootDigest] from [sender] disagreed with its own root: please
      * ship the state. The recipient answers with a [FullState].
      *

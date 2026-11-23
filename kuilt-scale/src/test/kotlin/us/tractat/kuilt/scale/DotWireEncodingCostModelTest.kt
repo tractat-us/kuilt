@@ -1696,8 +1696,13 @@ private const val DELTA_HEADLINE_RATIO = 50.0
  * path to a digest exchange and #1986 confirmed the dot-based types inherited it; part (I) asserts
  * the delta path did not disturb it. Re-record from part (I)'s `round b/node` column if the frame
  * itself changes — but check first that it is the frame and not a full state leaking in.
+ *
+ * Re-recorded at 134 b from 94 b when the tick moved to `QuiltMessage.VectorDigest` (#3622): the
+ * digest now carries one component per replica it has heard from, four in this mesh. So the round
+ * stays flat in state size, which is what part (I) asserts, but grows with room size. [rootDigestBytes]
+ * still models the older frame, which a peer that has never sent us a vector digest receives.
  */
-private const val CONVERGED_ROUND_BYTES = 94.0
+private const val CONVERGED_ROUND_BYTES = 134.0
 
 /** Slack on [CONVERGED_ROUND_BYTES]. A full state leaking into the round window is ~250x this. */
 private const val CONVERGED_ROUND_SLACK = 4.0
