@@ -501,7 +501,57 @@ as one unit, swapped in once. Open leases survive it and are still charged once,
 To preview a reload, `Topology.diff(new, ledger, generation)` lists the `TopologyStep`s from what
 the ledger holds to `new` without applying them. It reads which edges exist from the ledger rather
 than from the old tree, so it works after a restart, and after a partial apply it lists exactly
-the rest. `apply` runs that same list.
+the rest. `apply` runs that same list. Those steps are for an interpreter; to show a person what
+an edit changes, see the next section.
+
+## Showing an admin what an edit changes
+
+**Intent:** an admin page that edits the tree while it runs — start the editor from the tree that
+is running, and before applying an edit, show the admin what it changes in words they recognise,
+each change beside the line it is at.
+**Primitive:** `Topology.toDocument()` and `Topology.changesTo(after)` → `TopologyChange`s
+(`:kuilt-heddle-core`). `toDocument` writes the running tree out as the `TopologyDocument` an
+editor starts from, and `Topology.from` reads the edited one back, an exact round trip:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyToDocument -->
+```kotlin
+    val document = running.toDocument()
+    // Weights are written the way an admin writes them: a whole number, or a ratio.
+    val acme = document.children.single() as TopologyDocument.Group
+    check(acme.weight == "3" && acme.children.first().weight == "3/2")
+    // Reading it back gives the same tree.
+    check(Topology.from(document) == TopologyParse.Valid(running))
+```
+
+`running.changesTo(edited)` then lists the changes in document order, each addressed like a
+`TopologyProblem`: child indices from the root, and the names along them.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyChanges -->
+```kotlin
+    check(
+        running.changesTo(edited) == listOf(
+            TopologyChange.WeightChanged(listOf(0), listOf("pool", "acme"), Weight.of(3), Weight.of(4)),
+            TopologyChange.CeilingChanged(listOf(0, 0), listOf("pool", "acme", "interactive"), null, 2L),
+            // A removed child is addressed where it was, in the running tree.
+            TopologyChange.Removed(listOf(0, 1), listOf("pool", "acme", "batch"), Topology.Lane("batch")),
+            TopologyChange.Added(listOf(1, 1), listOf("pool", "hobby", "nightly"), Topology.Lane("nightly")),
+        ),
+    )
+```
+
+- **There is no "moved".** A group is named by its path, so a move or a rename is a `Removed` and
+  an `Added`: the old child keeps its history and drains, the new one starts with none. Say so in
+  the dialog rather than presenting a move as free.
+- **A `WeightChanged` restarts that child's share**; a change of ceiling, of template ceiling, or
+  of kind (`LaneBecameGroup`, `GroupBecameLane`) keeps its history.
+- **A `Removed` is addressed in the running tree**, since it is not in the edited one; every other
+  change is addressed in the edited tree.
+- **Reordering siblings is not a change**: nothing in heddle reads the order.
+- **A `RootRenamed` replaces every child** and `Topology.diff` refuses it: it is a new tree, not an
+  edit.
+
+To compare two documents, check each with `Topology.from` first: a change is defined only
+between valid trees.
 
 ## Children your app attaches while running
 
