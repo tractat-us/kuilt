@@ -196,11 +196,12 @@ class JoinWindowHostIdentityTest {
     private suspend fun TestScope.flatMesh(coJoiners: Int): Fixture {
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         val loom = InMemoryLoom()
-        val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(2))
-        val hostRoom = factory.host(Pattern(ROOM))
+        // One factory per device, each with its own key store, so every member is its own device.
+        fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index))
+        val hostRoom = device(2).host(Pattern(ROOM))
         return admitSequentially(hostRoom, coJoiners) { index ->
             val seam = loom.join(InMemoryTag("joiner-$index"))
-            factory.adopt(seam, SessionRole.Joiner) to seam
+            device(index + 3).adopt(seam, SessionRole.Joiner) to seam
         }
     }
 

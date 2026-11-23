@@ -103,11 +103,12 @@ class AdoptTearTerminalTest {
             }
 
             val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
-            val factory = SeamRoomFactory(
+            // One factory per device: the host and the joiner each have their own key.
+            fun device(index: Int) = SeamRoomFactory(
                 loom = loom,
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = fakeKeyStore(0),
+                deviceKeyStore = fakeKeyStore(index),
                 heartbeatConfig = fastConfig,
             )
 
@@ -115,8 +116,8 @@ class AdoptTearTerminalTest {
             // current `adopt` overload wires NO reweave.
             val hostSeam = loom.weave(Rendezvous.New(Pattern("s")))
             val joinerSeam = loom.weave(Rendezvous.Existing(InMemoryTag("s")))
-            val hostRoom = factory.adopt(hostSeam, SessionRole.Host, memberName = "Host")
-            val joinerRoom = factory.adopt(joinerSeam, SessionRole.Joiner, memberName = "Joiner")
+            val hostRoom = device(0).adopt(hostSeam, SessionRole.Host, memberName = "Host")
+            val joinerRoom = device(1).adopt(joinerSeam, SessionRole.Joiner, memberName = "Joiner")
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }
@@ -182,20 +183,21 @@ class AdoptTearTerminalTest {
             }
 
             val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
-            val factory = SeamRoomFactory(
+            // One factory per device: the host and the joiner each have their own key.
+            fun device(index: Int) = SeamRoomFactory(
                 loom = loom,
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = fakeKeyStore(1),
+                deviceKeyStore = fakeKeyStore(index),
                 heartbeatConfig = fastConfig,
             )
 
             val hostSeam = loom.weave(Rendezvous.New(Pattern("s")))
             val joinerSeam = loom.weave(Rendezvous.Existing(InMemoryTag("s")))
-            val hostRoom = factory.adopt(hostSeam, SessionRole.Host, memberName = "Host")
+            val hostRoom = device(0).adopt(hostSeam, SessionRole.Host, memberName = "Host")
             // The fix: adopt the self-healing seam WITH reweave = { seam }.
             val joinerRoom =
-                factory.adopt(joinerSeam, SessionRole.Joiner, memberName = "Joiner", reweave = { joinerSeam })
+                device(1).adopt(joinerSeam, SessionRole.Joiner, memberName = "Joiner", reweave = { joinerSeam })
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }
@@ -251,19 +253,20 @@ class AdoptTearTerminalTest {
             }
 
             val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
-            val factory = SeamRoomFactory(
+            // One factory per device: the host and the joiner each have their own key.
+            fun device(index: Int) = SeamRoomFactory(
                 loom = loom,
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = fakeKeyStore(2),
+                deviceKeyStore = fakeKeyStore(index),
                 heartbeatConfig = fastConfig,
             )
 
             val hostSeam = loom.weave(Rendezvous.New(Pattern("s")))
             val joinerSeam = loom.weave(Rendezvous.Existing(InMemoryTag("s")))
-            val hostRoom = factory.adopt(hostSeam, SessionRole.Host, memberName = "Host")
+            val hostRoom = device(0).adopt(hostSeam, SessionRole.Host, memberName = "Host")
             val joinerRoom =
-                factory.adopt(joinerSeam, SessionRole.Joiner, memberName = "Joiner", reweave = { joinerSeam })
+                device(1).adopt(joinerSeam, SessionRole.Joiner, memberName = "Joiner", reweave = { joinerSeam })
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }

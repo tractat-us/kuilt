@@ -841,6 +841,12 @@ public abstract interface class us/tractat/kuilt/session/admit/RejectCode {
 	public fun getRetryable ()Z
 }
 
+public final class us/tractat/kuilt/session/admit/RejectCode$BadProof : us/tractat/kuilt/session/admit/RejectCode {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$BadProof;
+	public fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
+}
+
 public final class us/tractat/kuilt/session/admit/RejectCode$Companion {
 	public final fun fromId (Ljava/lang/String;)Lus/tractat/kuilt/session/admit/RejectCode;
 	public final fun getUnspecified ()Lus/tractat/kuilt/session/admit/RejectCode$Unknown;
@@ -848,6 +854,18 @@ public final class us/tractat/kuilt/session/admit/RejectCode$Companion {
 
 public final class us/tractat/kuilt/session/admit/RejectCode$DefaultImpls {
 	public static fun getRetryable (Lus/tractat/kuilt/session/admit/RejectCode;)Z
+}
+
+public final class us/tractat/kuilt/session/admit/RejectCode$HostFailed : us/tractat/kuilt/session/admit/RejectCode {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$HostFailed;
+	public fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
+}
+
+public final class us/tractat/kuilt/session/admit/RejectCode$KeyConflict : us/tractat/kuilt/session/admit/RejectCode {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$KeyConflict;
+	public fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
 }
 
 public final class us/tractat/kuilt/session/admit/RejectCode$ProtocolMismatch : us/tractat/kuilt/session/admit/RejectCode {

@@ -137,6 +137,9 @@ public interface ElectionLobby {
      * the election settles. A host sends no `Hello`, so a host's room ignores it, as
      * [us.tractat.kuilt.session.SeamRoomFactory.adopt] does.
      *
+     * @throws IllegalArgumentException if [deviceId] could not be signed into a key proof (an
+     *   unpaired surrogate, or UTF-8 longer than 65 535 bytes), before the election runs. Checked
+     *   here too, though a host sends no proof, so a value is refused the same whichever role it lands.
      * @throws NotElectedHostException if this peer is not currently [host].
      * @throws LobbyTornException if the underlying seam tears mid-election, or a member drains away or
      *   goes silent (co-electors permanently gone). Terminal and retryable.
@@ -161,6 +164,9 @@ public interface ElectionLobby {
      * [deviceId] is this device's own stable id. It travels in the joiner's `Hello`, and the host
      * records it as the member's [us.tractat.kuilt.session.MemberIdentity.deviceId], exactly as
      * [us.tractat.kuilt.session.RoomFactory.join] sends it. Null, the default, sends none.
+     *
+     * @throws IllegalArgumentException if [deviceId] could not be signed into a key proof (an
+     *   unpaired surrogate, or UTF-8 longer than 65 535 bytes), before the election runs.
      */
     public suspend fun awaitRoom(memberName: String? = null, deviceId: String? = null): ElectionOutcome
 

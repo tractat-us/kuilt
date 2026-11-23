@@ -81,11 +81,30 @@ abstract interface us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kui
         final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.Unknown.toString|toString(){}[0]
     }
 
+    final object BadProof : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.BadProof|null[0]
+        final val id // us.tractat.kuilt.session.admit/RejectCode.BadProof.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.BadProof.id.<get-id>|<get-id>(){}[0]
+        final val retryable // us.tractat.kuilt.session.admit/RejectCode.BadProof.retryable|{}retryable[0]
+            final fun <get-retryable>(): kotlin/Boolean // us.tractat.kuilt.session.admit/RejectCode.BadProof.retryable.<get-retryable>|<get-retryable>(){}[0]
+    }
+
     final object Companion { // us.tractat.kuilt.session.admit/RejectCode.Companion|null[0]
         final val Unspecified // us.tractat.kuilt.session.admit/RejectCode.Companion.Unspecified|{}Unspecified[0]
             final fun <get-Unspecified>(): us.tractat.kuilt.session.admit/RejectCode.Unknown // us.tractat.kuilt.session.admit/RejectCode.Companion.Unspecified.<get-Unspecified>|<get-Unspecified>(){}[0]
 
         final fun fromId(kotlin/String?): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session.admit/RejectCode.Companion.fromId|fromId(kotlin.String?){}[0]
+    }
+
+    final object HostFailed : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.HostFailed|null[0]
+        final val id // us.tractat.kuilt.session.admit/RejectCode.HostFailed.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.HostFailed.id.<get-id>|<get-id>(){}[0]
+    }
+
+    final object KeyConflict : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.KeyConflict|null[0]
+        final val id // us.tractat.kuilt.session.admit/RejectCode.KeyConflict.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.KeyConflict.id.<get-id>|<get-id>(){}[0]
+        final val retryable // us.tractat.kuilt.session.admit/RejectCode.KeyConflict.retryable|{}retryable[0]
+            final fun <get-retryable>(): kotlin/Boolean // us.tractat.kuilt.session.admit/RejectCode.KeyConflict.retryable.<get-retryable>|<get-retryable>(){}[0]
     }
 
     final object ProtocolMismatch : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.ProtocolMismatch|null[0]

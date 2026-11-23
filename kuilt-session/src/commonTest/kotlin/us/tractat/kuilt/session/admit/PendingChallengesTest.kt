@@ -1,6 +1,7 @@
 package us.tractat.kuilt.session.admit
 
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.session.TEST_KEY_A
 import us.tractat.kuilt.session.admit.AdmitMessage.Hello
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -10,6 +11,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -24,7 +26,11 @@ class PendingChallengesTest {
     private val bob = PeerId("bob")
     private val carol = PeerId("carol")
 
-    private fun hello(name: String) = Hello(displayName = name, sessionId = "session-$name")
+    private fun hello(name: String) = KeyedHello(
+        Hello(displayName = name, sessionId = "session-$name"),
+        TEST_KEY_A,
+        ByteArray(Hello.JOINER_NONCE_SIZE),
+    )
 
     @Test
     fun openThenTakeReturnsTheEntryAndItStaysCurrent() {
@@ -37,7 +43,7 @@ class PendingChallengesTest {
 
         assertNotNull(pending)
         assertAll(
-            { assertEquals(hello, pending.hello) },
+            { assertSame(hello, pending.keyed) },
             { assertContentEquals(nonce, pending.hostNonce) },
             { assertEquals(deadline, pending.deadline) },
             // A taken challenge is a decision in flight, not a finished one: it stays current until a
@@ -94,7 +100,7 @@ class PendingChallengesTest {
 
         assertAll(
             { assertNotEquals(first.generation, second.generation) },
-            { assertEquals(hello("second"), second.hello) },
+            { assertEquals(hello("second").hello, second.keyed.hello) },
             { assertFalse(table.isCurrent(alice, first.generation), "the re-open superseded it") },
             { assertTrue(table.isCurrent(alice, second.generation)) },
             { assertEquals(1, table.retained, "one entry per sender") },
@@ -109,7 +115,7 @@ class PendingChallengesTest {
         val pending = assertNotNull(table.take(alice))
 
         assertAll(
-            { assertEquals(hello("second"), pending.hello) },
+            { assertEquals(hello("second").hello, pending.keyed.hello) },
             { assertContentEquals(byteArrayOf(2), pending.hostNonce) },
         )
     }
@@ -200,7 +206,7 @@ class PendingChallengesTest {
         assertAll(
             { assertFalse(retired) },
             { assertNotNull(second, "generation 2 survives the stale retire") },
-            { assertEquals(hello("second"), second?.hello) },
+            { assertEquals(hello("second").hello, second?.keyed?.hello) },
         )
     }
 

@@ -52,8 +52,11 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.validFirstHop
 import org.kotlincrypto.random.CryptoRand
 import us.tractat.kuilt.identity.DeviceKeyStore
+import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.KeyAdmission
 import us.tractat.kuilt.session.admit.KeyedHello
+import us.tractat.kuilt.session.admit.PendingChallenges
 import us.tractat.kuilt.session.admit.keyed
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.admit.RejectCode
@@ -134,17 +137,26 @@ public typealias JoinerReconnectControllerFactory =
  * is remembered across restarts is the caller's choice, not a default. Pass a platform store to be
  * recognised when the app comes back, or `InMemoryDeviceKeyStore()` to be a new device every run
  * (tests, and apps that choose not to be remembered). Every room this factory makes shares it, since
- * they are all the same device. Its key travels in every `Hello` and on every [Member]; until the
- * key-proving exchange of #3159 lands, that key is a claim nobody checks. [host], [join] and [adopt]
- * each read the key from it once, before the room exists, and throw to their caller when the store
- * cannot produce one; a room never reads the store for its key (see [RoomDevice]).
+ * they are all the same device. Its key travels in every `Hello` and on every [Member]. A host
+ * admits a joiner only once the joiner has signed a proof under that key, so on a host every
+ * member's key is verified; on a joiner the host's own entry is verified (the host signed its
+ * challenge under that key) and every other member's key is host-asserted (#3211; see [Member]).
+ * [host], [join] and [adopt] each read the key from it once, before the room exists, and throw to
+ * their caller when the store cannot produce one; a room never reads the store for its key (see
+ * [RoomDevice]).
+ *
+ * A host signs its room id into every challenge, and a joiner signs its device id into every proof,
+ * so [host], [join] and [adopt] throw [IllegalArgumentException] for a `roomId` or `deviceId` no
+ * statement could carry — one holding an unpaired surrogate, or whose UTF-8 is longer than 65 535
+ * bytes — before they touch the loom. Left to the exchange, it would fail every attempt.
  *
  * [heartbeatConfig] controls partition-detection timing.
  *
  * [admitTimeout] bounds the joiner's admit handshake: if no
  * [AdmitMessage.Welcome] arrives within this window after the joiner's `Hello`,
  * the room surfaces a terminal [MembershipEvent.AdmissionFailed] with
- * [AdmissionFailure.TimedOut] instead of waiting forever (#1178). Hosts ignore it.
+ * [AdmissionFailure.TimedOut] instead of waiting forever (#1178). A host uses it too, as how long
+ * a challenge it sent stays open for the joiner's proof (#3211).
  *
  * @see SeamRoomFactory.systemClock for the production convenience constructor.
  */
@@ -193,6 +205,7 @@ public class SeamRoomFactory(
     }
 
     override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room {
+        KeyAdmission.requireSignable(roomId = roomId)
         val device = RoomDevice.of(deviceKeyStore)
         val seam = loom.host(pattern)
         val resolvedRoomId = roomId ?: mintRoomId(seam)
@@ -219,6 +232,7 @@ public class SeamRoomFactory(
     }
 
     override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room {
+        KeyAdmission.requireSignable(deviceId = deviceId)
         val device = RoomDevice.of(deviceKeyStore)
         val seam = loom.join(tag)
         return SeamRoom(
@@ -281,7 +295,10 @@ public class SeamRoomFactory(
      *
      * @throws IllegalArgumentException if [roomId] is non-null and [role] is [SessionRole.Joiner].
      *   A joiner cannot choose the room's identity, and silently overriding the caller's value with
-     *   a different one would fork its durable records with no signal.
+     *   a different one would fork its durable records with no signal. Also when [roomId] or
+     *   [deviceId] cannot be signed into the key-proving exchange: it holds an unpaired surrogate, or
+     *   its UTF-8 is longer than 65 535 bytes. That is checked whatever the [role], before the seam
+     *   is touched.
      */
     public suspend fun adopt(
         seam: Seam,
@@ -302,6 +319,7 @@ public class SeamRoomFactory(
         require(roomId == null || role == SessionRole.Host) {
             "roomId applies to a host adopt; a joiner learns it from the host's Welcome"
         }
+        KeyAdmission.requireSignable(roomId = roomId, deviceId = deviceId)
         val device = RoomDevice.of(deviceKeyStore)
         val resolvedRoomId = if (role == SessionRole.Host) roomId ?: mintRoomId(seam) else null
         return SeamRoom(
@@ -659,8 +677,9 @@ internal class SeamRoom(
      * Deliberately a plain constructor parameter, not a property: the property of this name is the
      * [Room.roomId] level, which a joiner *moves* on admission. This seeds it.
      *
-     * Defaults to null so existing tests that construct [SeamRoom] directly still compile.
-     * [SeamRoomFactory] always passes the host-generated id explicitly.
+     * Required for a host — construction throws without one — because a host signs it into every
+     * challenge it sends (#3211). Defaults to null for a joiner. [SeamRoomFactory] always passes the
+     * host's minted-or-supplied id.
      */
     roomId: RoomId? = null,
     /**
@@ -746,7 +765,9 @@ internal class SeamRoom(
      * for a joiner. Distinct from [roomId], which a joiner moves on admission; this one never
      * moves, so it is what the host-only [reconnectController] is built from.
      */
-    private val constructedRoomId: RoomId? = _roomId.value
+    private val constructedRoomId: RoomId? = _roomId.value.also { id ->
+        require(id != null || role != SessionRole.Host) { "a host room needs a roomId: it signs it into every challenge" }
+    }
 
     /**
      * Guards every mutation of the plain membership state:
@@ -1043,6 +1064,34 @@ internal class SeamRoom(
      * the host's self-introduction. Null for hosts (hosts don't watch themselves).
      */
     private var hostPeerId: PeerId? = null
+
+    // ── Key-proving exchange (#3211) ───────────────────────────────────────────
+
+    /**
+     * **Host only.** The challenges this host has sent and not yet seen answered, one per fabric
+     * sender, each open for [admitTimeout]. Thread-safe on its own lock; [admitPeer] retires an entry
+     * under [lock] as well, in the same critical section that admits, so a `Goodbye` (which drops the
+     * entry under [lock]) lands either before the admission — and stops it — or after it.
+     */
+    private val pendingChallenges = PendingChallenges(clock)
+
+    /**
+     * **Joiner only.** The nonce of this joiner's latest `Hello`, which a challenge must echo to be
+     * answered. Null before the first `Hello`. Guarded by [lock].
+     */
+    private var latestHelloNonce: ByteArray? = null
+
+    /**
+     * **Joiner only.** Each fabric sender whose challenge this joiner verified, and the key it signed
+     * that challenge with. A `Welcome` is accepted only from a sender here, and a host intro only when
+     * it names this key, so the host's entry on a joiner's roster carries a key the host proved.
+     * Guarded by [lock].
+     *
+     * Several senders can be here on a flat fabric: a co-joiner's stray challenge is answered too, since
+     * it costs nothing, and proves only that the co-joiner holds some key. [hostPeerId] is still the
+     * first sender here whose `Welcome` arrives.
+     */
+    private val verifiedHostKeys = mutableMapOf<PeerId, DidKey>()
 
     // ── Reconnect / resume state ───────────────────────────────────────────────
 
@@ -1594,12 +1643,29 @@ internal class SeamRoom(
                             runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
                         }
                     } else {
-                        scope.launch { admitPeer(sender, keyed) }
+                        challengeJoiner(sender, keyed)
                     }
                 }
             }
-            // The v3 key-proving frames (#3210). Nothing sends them yet, so neither role acts on one.
-            is AdmitMessage.Challenge, is AdmitMessage.Proof -> Unit
+            is AdmitMessage.Challenge -> {
+                if (_role.value == SessionRole.Joiner) {
+                    scope.launch { answerChallenge(sender, msg) }
+                }
+            }
+            is AdmitMessage.Proof -> {
+                if (_role.value == SessionRole.Host) {
+                    // Taken here, in frame order, and only checked on the launched coroutine: a proof
+                    // always answers the challenge that was current when it arrived. Taken inside the
+                    // launch, a proof delayed past its sender's Goodbye and next Hello would take
+                    // that newer challenge and, failing its nonce, refuse the joiner's honest answer.
+                    val pending = pendingChallenges.take(sender)
+                    if (pending == null) {
+                        logger.debug { "room.proof.dropped peer=${sender.value}: no open challenge" }
+                    } else {
+                        scope.launch { handleProof(sender, msg, pending) }
+                    }
+                }
+            }
             is AdmitMessage.Welcome -> {
                 if (_role.value == SessionRole.Joiner) {
                     handleWelcome(sender, msg)
@@ -1617,7 +1683,12 @@ internal class SeamRoom(
             }
             is AdmitMessage.Goodbye -> {
                 if (_role.value == SessionRole.Host) {
-                    lock.withLock { stopDetector(sender) }
+                    // Under the room lock, so it orders against [admitPeer]'s retire-and-admit: a
+                    // Goodbye between a Challenge and its Proof leaves nothing to admit (#3211).
+                    lock.withLock {
+                        pendingChallenges.drop(sender)
+                        stopDetector(sender)
+                    }
                     removeFromRoster(sender, LeaveReason.Normal)
                     propagateFarewell(sender)
                 }
@@ -1667,12 +1738,16 @@ internal class SeamRoom(
      *
      * State mutation is under lock; all seam sends happen outside the lock.
      *
-     * [keyed] is the Hello the gate let through, with its key and nonce no longer optional. The key
-     * becomes the member's [Member.key] and rides every Welcome that names the joiner; each bootstrap
-     * Welcome carries an existing member's recorded key, and the host intro carries this host's own
-     * (#3210).
+     * [keyed] is the Hello the gate let through, with its key and nonce no longer optional, and whose
+     * joiner has since proved that key ([handleProof]). The key becomes the member's [Member.key] and
+     * rides every Welcome that names the joiner; each bootstrap Welcome carries an existing member's
+     * recorded key, and the host intro carries this host's own (#3210).
+     *
+     * [generation] is the pending challenge the proof answered. It is retired in the same critical
+     * section that admits, and a challenge no longer current — a `Goodbye`, a newer `Hello` from the
+     * same sender, its deadline — admits nobody: the seat is read at proof time, not challenge time.
      */
-    private suspend fun admitPeer(joinerPeerId: PeerId, keyed: KeyedHello) {
+    private suspend fun admitPeer(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long) {
         val hello = keyed.hello
         val key = keyed.key
         val hostKey = device.key.id
@@ -1698,6 +1773,10 @@ internal class SeamRoom(
         // for why only a host that can answer a resume holds one. A joiner told nothing simply
         // holds no token.
         val (existingMembers, resumeSecret) = lock.withLock {
+            if (!pendingChallenges.retire(joinerPeerId, generation)) {
+                logger.debug { "room.admit.stale peer=${joinerPeerId.value}: its challenge is no longer current" }
+                return
+            }
             val existing = admittedById.values.toList()
             addToRoster(member)
             // `closed`: addToRoster admitted nobody, so there is no member to hold a secret for.
@@ -1779,7 +1858,123 @@ internal class SeamRoom(
             // single-use only if the nonce is never reused (#3210).
             joinerNonce = CryptoRand.Default.nextBytes(ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE)),
         )
+        // Kept before the Hello goes, so the challenge answering it always finds it (#3211).
+        lock.withLock { latestHelloNonce = hello.joinerNonce }
         runCatchingCancellable { seam.broadcast(AdmitMessage.encode(hello)) }
+    }
+
+    /**
+     * **Host only.** Open a challenge for [sender]'s Hello, then sign it and send it (#3211).
+     *
+     * The entry is opened here, synchronously in frame order, and only the signing runs on a launched
+     * coroutine. Opening inside the launch would let two Hellos from one sender open out of order, so
+     * the table could hold the older nonce while the joiner answers the newer challenge, and its honest
+     * proof would be refused.
+     */
+    private fun challengeJoiner(sender: PeerId, keyed: KeyedHello) {
+        val hostNonce = CryptoRand.Default.nextBytes(ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE))
+        val generation = pendingChallenges.open(sender, keyed, hostNonce, clock() + admitTimeout)
+        scope.launch { sendChallenge(sender, keyed, hostNonce, generation) }
+    }
+
+    /**
+     * Sign and send the challenge [challengeJoiner] opened. A host that cannot sign — a platform key
+     * whose provider fails, a room id a layout cannot carry — refuses the joiner with a retryable
+     * `Reject` and retires the entry. The failure is never let out of this launched coroutine: on
+     * Kotlin/Native an escaped throw aborts the process, and the joiner would hear nothing.
+     */
+    private suspend fun sendChallenge(sender: PeerId, keyed: KeyedHello, hostNonce: ByteArray, generation: Long) {
+        val statement = try {
+            KeyAdmission.signChallenge(device.key, signedRoomId(), selfId, sender, keyed.joinerNonce, hostNonce)
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            logger.warn(failure) { "room.challenge.sign-failed peer=${sender.value}" }
+            if (pendingChallenges.retire(sender, generation)) {
+                val reject = AdmitMessage.Reject("host-failed: the host could not sign its challenge", RejectCode.HostFailed)
+                runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
+            }
+            return
+        }
+        runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(AdmitMessage.Challenge(statement))) }
+            .onFailure { logger.debug { "room.challenge.send-failed peer=${sender.value}: $it" } }
+    }
+
+    /**
+     * The room id a host's challenge names and its proofs must sign: the id it was constructed with,
+     * which construction refuses to leave null for a host. **Host only.**
+     */
+    private fun signedRoomId(): String = checkNotNull(constructedRoomId) { "only a host signs a room id" }.value
+
+    /**
+     * **Host only.** Check [sender]'s proof against [pending], the challenge it answers, and admit on
+     * a valid one (#3211).
+     *
+     * - **Nothing pending** — never opened, expired, dropped, or already taken by a proof whose check
+     *   is in flight — never reaches here: the frame dispatch drops it silently. A refusal would be
+     *   terminal for a joiner whose first proof is about to admit it.
+     * - **A proof that fails any check** is refused with [RejectCode.BadProof], unless a newer Hello
+     *   from the same sender has replaced the challenge meanwhile, which a refusal of the old one must
+     *   not kill.
+     * - **A check that cannot run** (the platform's provider fails) is refused retryably.
+     *
+     * The proof is checked under the key the Hello named, in this room's own scheme, so a room on
+     * P-256 checks with ECDSA whatever a joiner sends.
+     */
+    private suspend fun handleProof(sender: PeerId, msg: AdmitMessage.Proof, pending: PendingChallenges.Pending) {
+        val fault = try {
+            KeyAdmission.checkProof(
+                statement = msg.statement,
+                pending = pending,
+                roomId = signedRoomId(),
+                hostKey = device.key.id,
+                hostPeerId = selfId,
+                sender = sender,
+                scheme = device.scheme,
+            )
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            logger.warn(failure) { "room.proof.check-failed peer=${sender.value}" }
+            if (pendingChallenges.retire(sender, pending.generation)) {
+                val reject = AdmitMessage.Reject("host-failed: the host could not check the proof", RejectCode.HostFailed)
+                runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
+            }
+            return
+        }
+        if (fault != null) {
+            logger.info { "room.proof.refused peer=${sender.value} fault=$fault" }
+            if (pendingChallenges.retire(sender, pending.generation)) {
+                val reject = AdmitMessage.Reject("bad-proof: $fault", RejectCode.BadProof)
+                runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
+            }
+            return
+        }
+        admitPeer(sender, pending.keyed, pending.generation)
+    }
+
+    /**
+     * **Joiner only.** Answer [sender]'s challenge with a proof, if it is one to answer: it echoes this
+     * joiner's latest Hello nonce, names this joiner, and is signed by the key it names (#3211).
+     *
+     * Every challenge is answered on its own, signing [sender] — the fabric sender — as the host's peer
+     * id. A failure to sign or check is logged and the challenge goes unanswered; the admit deadline
+     * then ends the join, which is the honest outcome for a device that cannot use its own key.
+     */
+    private suspend fun answerChallenge(sender: PeerId, msg: AdmitMessage.Challenge) {
+        val nonce = lock.withLock { latestHelloNonce?.copyOf() }
+        val answer = try {
+            KeyAdmission.answerChallenge(msg.statement, nonce, selfId, sender, device.scheme, device.key, deviceId)
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            logger.warn(failure) { "room.challenge.answer-failed from=${sender.value}" }
+            return
+        }
+        if (answer == null) {
+            logger.debug { "room.challenge.ignored from=${sender.value}: not an answerable challenge" }
+            return
+        }
+        lock.withLock { verifiedHostKeys[sender] = answer.hostKey }
+        runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(AdmitMessage.Proof(answer.proof.wire))) }
+            .onFailure { logger.debug { "room.proof.send-failed to=${sender.value}: $it" } }
     }
 
     /**
@@ -1862,7 +2057,8 @@ internal class SeamRoom(
      *
      * The **first** Welcome this member accepts identifies its host: every Welcome is minted by
      * the host, so that first sender is the host, and it is recorded for [HostLost] detection
-     * (#1994). Waiting for the self-introduction shape instead left the host unidentified across
+     * (#1994). Only a sender whose challenge this joiner verified can send one it accepts, and the
+     * host intro must name the key that challenge proved (#3211). Waiting for the self-introduction shape instead left the host unidentified across
      * the whole admit burst — see the comment on the assignment below, which also states what
      * that narrowing costs on a flat loom.
      *
@@ -1883,6 +2079,14 @@ internal class SeamRoom(
             // Complements the #1172 Change A host-side gate that stops foreign Welcomes at the source.
             val establishedHost = hostPeerId
             if (establishedHost != null && sender != establishedHost) return@withLock
+
+            // Key-proving gate (#3211): every Welcome comes from the host, and a host has signed a
+            // challenge before it sends one. So a Welcome from a sender whose challenge this joiner
+            // has not verified is dropped, whatever its shape, and the host's intro (it names its
+            // sender) must carry the very key that challenge was signed with. This is what makes the
+            // host's own entry on this roster a proven key; every other entry is host-asserted.
+            val provenKey = verifiedHostKeys[sender] ?: return@withLock
+            if (assignedId == sender && welcome.key != provenKey) return@withLock
 
             // Identify the host from the FIRST Welcome we accept, whatever its shape (#1994).
             //
@@ -2071,8 +2275,15 @@ internal class SeamRoom(
      * single-collection [Seam.incoming] contract (ADR-034) held by [runMainLoop].
      */
     private suspend fun runDetectorRouteWatcher() {
+        var previous = emptySet<PeerId>()
         seam.peers.collect { reachable ->
             lock.withLock {
+                // A sender still waiting on its challenge is not a member, so no detector reports it
+                // lost. Its leaving the seam is the loss: forget its challenge (#3211). Only a sender
+                // that was reachable and no longer is — a Hello may arrive before a fabric lists its
+                // sender, and dropping on mere absence would forget that challenge at once.
+                for (gone in previous - reachable) pendingChallenges.drop(gone)
+                previous = reachable
                 if (closed) return@withLock
                 for (member in admittedById.values.toList()) {
                     if (member.id in reachable) startDetector(member)

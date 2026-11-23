@@ -115,19 +115,28 @@ internal fun referenceResumeHarness(
             }
         },
     )
+    // The joiner is another device, with a key store of its own: one store shared with the host would
+    // make the two one device, which the host's key-to-seat table reads as one key holding two seats.
+    val joinerDevice = SeamRoomFactory(
+        loom = loom,
+        scope = scope.backgroundScope,
+        clock = { Instant.fromEpochMilliseconds(scope.testScheduler.currentTime) },
+        deviceKeyStore = fakeKeyStore(1),
+        heartbeatConfig = heartbeatConfig,
+    )
     val hostFactory = object : RoomFactory {
         override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
             factory.host(pattern, memberName, roomId).also { hostRoom = it }
 
         override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room =
-            factory.join(tag, memberName, deviceId)
+            joinerDevice.join(tag, memberName, deviceId)
     }
-    val joinerFactory = if (!ignoreSecret) factory else object : RoomFactory {
+    val joinerFactory = if (!ignoreSecret) joinerDevice else object : RoomFactory {
         override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
-            factory.host(pattern, memberName, roomId)
+            joinerDevice.host(pattern, memberName, roomId)
 
         override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room {
-            val room = factory.join(tag, memberName, deviceId)
+            val room = joinerDevice.join(tag, memberName, deviceId)
             return object : Room by room {
                 override suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome =
                     room.resume(room.resumeToken?.let { token.copy(secret = it.secret) } ?: token)

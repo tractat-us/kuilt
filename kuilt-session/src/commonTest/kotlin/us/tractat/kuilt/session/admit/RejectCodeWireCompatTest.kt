@@ -1,8 +1,10 @@
 package us.tractat.kuilt.session.admit
 
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
@@ -69,6 +71,36 @@ class RejectCodeWireCompatTest {
         assertFalse(RejectCode.ProtocolMismatch.retryable)
         assertTrue(RejectCode.ResumeWindowNotYetOpen.retryable)
         assertTrue(RejectCode.Unknown("").retryable)
+    }
+
+    /**
+     * The key-proof codes (#3211) cross the wire as themselves and stay terminal: decoded as
+     * [RejectCode.Unknown] they would be retryable, and a joiner refused for a bad proof would retry it.
+     */
+    @Test
+    fun `the key-proof codes round-trip as themselves and are terminal`() {
+        for (code in listOf(RejectCode.BadProof, RejectCode.KeyConflict)) {
+            val decoded = AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Reject(code.id, code))) as AdmitMessage.Reject
+            assertEquals(code, decoded.code)
+            assertFalse(decoded.code.retryable)
+        }
+    }
+
+    /**
+     * A host's own failure to sign or check (#3211) crosses the wire as itself, retryable, and is not
+     * [RejectCode.Unspecified]: an app must be able to tell it from a `Reject` that carries no code.
+     */
+    @Test
+    fun `the host failure code round-trips as itself and is retryable`() {
+        val code = RejectCode.HostFailed
+        val decoded = AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Reject(code.id, code))) as AdmitMessage.Reject
+        assertAll(
+            { assertEquals("host-failed", code.id, "the wire id is fixed once shipped") },
+            { assertEquals(code, decoded.code) },
+            { assertEquals(code, RejectCode.fromId("host-failed")) },
+            { assertTrue(decoded.code.retryable) },
+            { assertNotEquals<RejectCode>(RejectCode.Unspecified, decoded.code) },
+        )
     }
 
     private fun String.hexToBytes(): ByteArray =

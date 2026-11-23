@@ -14,14 +14,26 @@ import kotlin.time.Instant
  * [identity] is *self-asserted* by the peer in its `Hello`; [principal] is the
  * host's *verified* identity for the connection (when the fabric authenticates it —
  * see [PrincipalAttested]). It is `null` for unauthenticated connections and on the
- * joiner side (a joiner does not verify the host).
+ * joiner side: a joiner has no fabric attestation of the host's principal. That is about the
+ * principal only — the host's [key] is proved to a joiner, as below.
  *
  * [key] is the member's device key: one per device, from its
  * [DeviceKeyStore][us.tractat.kuilt.identity.DeviceKeyStore], the same across every room and peer
  * id that device ever has, so an app can recognise a device again by it. On the host it is the key
- * the member named in its `Hello`; on a joiner it is the key the host's `Welcome` carried. **In this
- * protocol version every key is a claim**: nothing yet checks that a member holds the private half
- * of the key it names, so do not treat it as proof of who sent a frame.
+ * the member named in its `Hello`; on a joiner it is the key the host's `Welcome` carried.
+ *
+ * **What is proved, and by whom (#3211).** The host admits a joiner only once it has signed a proof
+ * under the key its `Hello` named, so on the host every member's key is **verified**. On a joiner the
+ * host's own entry is verified too: the host signed the challenge under that key. Every *other*
+ * member's key on a joiner's roster is **host-asserted** — the host says so in its `Welcome`, and the
+ * joiner has only the host's word for it.
+ *
+ * **The key binds the handshake, not later frames.** On a `Mesh`, a link that later takes a member's
+ * peer id sends frames under that member's key, so do not treat the key as proof of who sent a
+ * frame. A `HostedOverlay` deployment should use a binding `LinkAdmission` until #2387 lands.
+ *
+ * **Not unique.** One device may hold several seats under one key (two tabs of one browser), so a
+ * roster can name a key more than once; never look a member up by its key alone.
  */
 public data class Member(
     val id: PeerId,

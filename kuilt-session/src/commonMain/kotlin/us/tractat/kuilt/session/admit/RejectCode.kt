@@ -66,6 +66,37 @@ public interface RejectCode {
         override val retryable: Boolean = false
     }
 
+    /**
+     * The joiner's proof of its device key failed (#3211): it was not signed by the key its `Hello`
+     * named, or it answered another challenge, room or host. Terminal: the same device answering the
+     * same way fails the same way.
+     */
+    public object BadProof : RejectCode {
+        override val id: String = "bad-proof"
+        override val retryable: Boolean = false
+    }
+
+    /**
+     * The joiner claimed the peer id of a connected member under a different device key (#3159).
+     * Terminal: another device is using that id.
+     */
+    public object KeyConflict : RejectCode {
+        override val id: String = "key-conflict"
+        override val retryable: Boolean = false
+    }
+
+    /**
+     * The host could not do its own half of the key-proving exchange (#3211): signing its challenge,
+     * or checking the joiner's proof, failed on the host's platform. Retryable: the fault is the
+     * host's, and nothing about the joiner's credentials was judged.
+     *
+     * Distinct from [Unspecified], which means a `Reject` carrying no code at all, so an app can tell
+     * a host's passing failure from a peer that predates typed codes.
+     */
+    public object HostFailed : RejectCode {
+        override val id: String = "host-failed"
+    }
+
     /** The token failed structural validation (wrong room). Terminal. */
     public object ResumeTokenInvalid : RejectCode {
         override val id: String = "resume-token-invalid"
@@ -98,6 +129,9 @@ public interface RejectCode {
             ResumeWindowNotYetOpen.id -> ResumeWindowNotYetOpen
             ResumeWindowExpired.id -> ResumeWindowExpired
             ResumeTokenInvalid.id -> ResumeTokenInvalid
+            BadProof.id -> BadProof
+            KeyConflict.id -> KeyConflict
+            HostFailed.id -> HostFailed
             else -> Unknown(id)
         }
     }

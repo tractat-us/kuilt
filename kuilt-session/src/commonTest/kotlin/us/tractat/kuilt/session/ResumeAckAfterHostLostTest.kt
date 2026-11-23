@@ -300,6 +300,9 @@ class ResumeAckAfterHostLostTest {
         ).also { it.start() }
         runCurrent()
 
+        // The host proves its key, as every host does before its first Welcome (#3211).
+        seam.deliver(handChallenge(assertNotNull(seam.hello, "precondition: the joiner said Hello"), joinerId, hostId))
+        runCurrent()
         // The host admits the joiner: its own Welcome identifies the host and mints the token.
         seam.deliver(
             AdmitMessage.Welcome(
@@ -395,7 +398,13 @@ private class ScriptedSeam(
         _state.value = SeamState.Woven
     }
 
-    override suspend fun broadcast(payload: ByteArray) = Unit
+    /** The joiner's latest Hello, which a hand-built challenge must echo (#3211). */
+    var hello: AdmitMessage.Hello? = null
+        private set
+
+    override suspend fun broadcast(payload: ByteArray) {
+        (AdmitMessage.decode(payload) as? AdmitMessage.Hello)?.let { hello = it }
+    }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         if (peer == hostId && AdmitMessage.decode(payload) is AdmitMessage.Resume) resumesSent++
