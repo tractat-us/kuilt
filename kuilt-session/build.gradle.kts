@@ -38,7 +38,12 @@ tasks.withType<Test>().configureEach {
 
 kotlin {
     // The module that declares @SessionInternalApi is the one place it is not a warning sign.
-    compilerOptions { optIn.add("us.tractat.kuilt.session.SessionInternalApi") }
+    compilerOptions {
+        optIn.add("us.tractat.kuilt.session.SessionInternalApi")
+        // The admit exchange signs and checks the identity module's protocol-only statements
+        // (`Challenge`, `AdmissionProof`) in the room's own `KeyScheme` (#3211).
+        optIn.add("us.tractat.kuilt.identity.IdentityInternalApi")
+    }
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-core"))
