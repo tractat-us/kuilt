@@ -185,10 +185,10 @@ class ProvenRestoreConcurrencyTest {
      * Bob's old link heals while the host is asking about his seat, and the hold policy refuses. A
      * pong from bob lands on another thread, so the old detector's recovery races the Proof's release.
      *
-     * Either the heal wins, and the seat is restored (`Recovered`, then `Resumed`), or the release
-     * wins, and bob leaves and is admitted afresh (`Left`, then `Joined`). Never both: a heal that is
-     * then released evicts a member who is here, and carol, told `Unpaused` and then `Farewell`,
-     * drops him.
+     * Either the heal wins, and the seat is restored (`Recovered`, and nothing more: the restore of a
+     * seat the heal already reconnected is silent, #3215), or the release wins, and bob leaves and is
+     * admitted afresh (`Left`, then `Joined`). Never both: a heal that is then released evicts a member
+     * who is here, and carol, told `Unpaused` and then `Farewell`, drops him.
      */
     @Test
     fun aHealRacingAReleaseEitherRestoresOrReadmits() =
@@ -218,22 +218,18 @@ class ProvenRestoreConcurrencyTest {
                             delay(jitter.nextLong(0, HEAL_PROOF_DELAY_MS))
                         }
                         stage.at("round $round: awaiting the restore or readmission") { rig.snapshot() }
-                        val edge = rig.awaitEdge()
-                        rig.awaitIntros(bob, introsBefore + 1)
+                        rig.awaitSeating(bob, introsBefore)
                         // A restore needs the heal, and a release tells the controller; either way
                         // one onPeerRecovered closes the round's window, and it is the last thing
                         // the heal (or the release) does before the room is settled.
                         stage.at("round $round: awaiting the window's close") { rig.snapshot() }
-                        if (edge is MembershipEvent.Resumed) {
-                            rig.events.first { events -> events.any { it is MembershipEvent.Recovered && it.peerId == bob } }
-                        }
                         rig.controller.recoveredCount.first { it > recoveredBefore }
                         rig.quiesce(stage, round)
 
                         val edges = rig.edgesOf(bob)
                         val toCarol = rig.framesToCarolNaming(bob).map { it::class.simpleName }
                         when (edges) {
-                            listOf("Recovered", "Resumed") -> healFirst++
+                            listOf("Recovered") -> healFirst++
                             listOf("Left", "Joined") -> releaseFirst++
                             else -> disallowedEdges++
                         }
@@ -241,7 +237,7 @@ class ProvenRestoreConcurrencyTest {
                         if (unpaused >= 0 && toCarol.drop(unpaused + 1).contains("Farewell")) unpausedThenFarewell++
                         val seated = rig.room.isAdmitted(bob)
                         if (!seated) notSeated++
-                        val good = edges == listOf("Recovered", "Resumed") || edges == listOf("Left", "Joined")
+                        val good = edges == listOf("Recovered") || edges == listOf("Left", "Joined")
                         if (!(good && seated) && failures.size < 5) {
                             failures += "round $round edges=$edges toCarol=$toCarol seated=$seated"
                         }
@@ -306,13 +302,19 @@ class ProvenRestoreConcurrencyTest {
                         val challenge = rig.hello(bob)
                         rig.inbound.send(Swatch(AdmitMessage.encode(handProof(challenge, host, TEST_DEVICE_A)), sender = bob))
                         stage.at("round $round: awaiting the restore or readmission") { rig.snapshot() }
-                        val edge = rig.awaitEdge()
-                        rig.awaitIntros(bob, introsBefore + 1)
+                        rig.awaitSeating(bob, introsBefore)
+                        // The burst is recorded as it is sent, and the events by a collector that can
+                        // lag it: read the outcome once its edge is in — `Joined` for a readmission,
+                        // `Recovered` for the heal a restore needs.
+                        rig.events.first { events ->
+                            events.any { (it is MembershipEvent.Joined && it.member.id == bob) || (it is MembershipEvent.Recovered && it.peerId == bob) }
+                        }
+                        val readmitted = "Joined" in rig.edgesOf(bob)
                         rig.slowPingNanos = 0
                         stage.at("round $round: awaiting the heal's window close") { rig.snapshot() }
                         // A restore needs the heal, whose last step closes the window; a release
                         // closes it before the Proof decides again, so before the Joined.
-                        if (edge is MembershipEvent.Resumed) rig.controller.recoveredCount.first { it > recoveredBefore }
+                        if (!readmitted) rig.controller.recoveredCount.first { it > recoveredBefore }
                         rig.quiesce(stage, round)
                         // A loss the old detector already handed over is handled on its own thread;
                         // give it two of its intervals to land before the round is read.
@@ -322,18 +324,18 @@ class ProvenRestoreConcurrencyTest {
                         val edges = rig.edgesOf(bob)
                         val toCarol = rig.framesToCarolNaming(bob)
                         when {
-                            edges == listOf("Recovered", "Resumed") -> healFirst++
+                            edges == listOf("Recovered") -> healFirst++
                             edges == listOf("Left", "Joined") && released -> releaseFirst++
                             edges == listOf("Left", "Joined") -> lossFirst++
                             else -> disallowedEdges++
                         }
                         val seated = rig.room.isAdmitted(bob)
                         val watched = rig.room.hasDetector(bob)
-                        val carolLastIsWelcome = edge !is MembershipEvent.Joined || toCarol.lastOrNull() is AdmitMessage.Welcome
+                        val carolLastIsWelcome = !readmitted || toCarol.lastOrNull() is AdmitMessage.Welcome
                         if (!seated) notSeated++
                         if (!watched) noDetector++
                         if (!carolLastIsWelcome) carolLastNotWelcome++
-                        val good = edges == listOf("Recovered", "Resumed") || edges == listOf("Left", "Joined")
+                        val good = edges == listOf("Recovered") || edges == listOf("Left", "Joined")
                         if (!(good && seated && watched && carolLastIsWelcome) && failures.size < 5) {
                             failures += "round $round released=$released edges=$edges " +
                                 "toCarol=${toCarol.map { it::class.simpleName }} seated=$seated watched=$watched"
@@ -1249,6 +1251,21 @@ class ProvenRestoreConcurrencyTest {
             while (true) {
                 val seen = withTimeoutOrNull(STALL_GRACE) { events.first { events -> events.any { it.isEdgeOf(peer) } } }
                 if (seen != null) return seen.first { it.isEdgeOf(peer) }
+                retries.incrementAndGet()
+                prove(peer, TEST_DEVICE_A, TEST_KEY_A)
+            }
+        }
+
+        /**
+         * Bob seated this round, by a restore or a readmission: the Proof's burst has ended with a
+         * host intro beyond [introsBefore]. A restore of a seat a heal already reconnected announces
+         * nothing (#3215), so the burst is the one witness both outcomes share. An exchange that draws
+         * nothing is sent again, as [awaitEdge] does. A rig retry, counted.
+         */
+        suspend fun awaitSeating(peer: PeerId, introsBefore: Int) {
+            while (true) {
+                val seated = withTimeoutOrNull(STALL_GRACE) { awaitIntros(peer, introsBefore + 1) }
+                if (seated != null) return
                 retries.incrementAndGet()
                 prove(peer, TEST_DEVICE_A, TEST_KEY_A)
             }
