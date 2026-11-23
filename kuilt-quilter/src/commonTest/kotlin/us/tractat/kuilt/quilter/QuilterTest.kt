@@ -25,6 +25,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 
@@ -200,6 +201,9 @@ class QuilterTest {
         // default A skips a few rounds before asking (#3617). That skip has its own tests, and a
         // partition, where the write is older than the interval, is answered at once
         // (QuilterFullStateBoundTest). This test is about the push-back and wants it on the first round.
+        // dominatedDigestBackstop = ZERO for the same reason: B's vector digest shows nothing A
+        // lacks, so by default A asks nothing and leaves B to ask on A's own tick, which falls
+        // outside this window (#3622, QuilterVectorDigestTest).
         val repA = gcounterReplicator(
             seamA,
             backgroundScope,
@@ -208,6 +212,7 @@ class QuilterTest {
                 fullStateRetryLimit = 0,
                 expectVirtualTime = true,
                 staleDigestSkipLimit = 0,
+                dominatedDigestBackstop = Duration.ZERO,
             ),
         )
         val repB = gcounterReplicator(
