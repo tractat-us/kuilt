@@ -919,8 +919,10 @@ class ProvenRestoreConcurrencyTest {
      * Each ordering is **forced**, half the rounds each, and counted:
      * - **check first** — the stale `Reject` lands first, and [SeamRoom.rejectCheckedForTest] parks the
      *   frame thread between the check and the take while it starts the caller's attempt on the other
-     *   thread and gives it [STALE_REJECT_GAP_NANOS] to install its flight. Under one section the
-     *   caller cannot: it waits on the lock the frame thread holds, which [inGap] counts as zero.
+     *   thread, waits until that caller is running (`reachedGap`, so a caller never scheduled cannot
+     *   pass for one held off), and gives it [STALE_REJECT_GAP_NANOS] to install its flight. Under one
+     *   section the caller cannot: it waits on the lock the frame thread holds, which `inGap` counts as
+     *   zero.
      * - **install first** — the caller's flight is installed before the stale `Reject` is sent, so the
      *   check finds the latest Hello forgotten.
      *
@@ -936,6 +938,7 @@ class ProvenRestoreConcurrencyTest {
                 var installFirst = 0
                 var wrongOrdering = 0
                 var inGap = 0
+                var reachedGap = 0
                 var settledByStale = 0
                 var honest = 0
                 val failures = mutableListOf<String>()
@@ -960,7 +963,16 @@ class ProvenRestoreConcurrencyTest {
                         if (forceCheckFirst) {
                             // The caller starts from inside the section that checked the stale Reject.
                             g.onCheck = {
-                                g.call = rig.scope.async { rig.room.sayHelloAgain() }
+                                // `sayHelloAgain` goes straight to the room's lock with no suspension
+                                // point first, so a caller seen entering is one about to contend for it.
+                                val entered = AtomicBoolean(false)
+                                g.call = rig.scope.async {
+                                    entered.set(true)
+                                    rig.room.sayHelloAgain()
+                                }
+                                val enterBy = System.nanoTime() + STALE_REJECT_ENTER_NANOS
+                                while (!entered.get() && System.nanoTime() < enterBy) Thread.onSpinWait()
+                                g.reachedGap = entered.get()
                                 val deadline = System.nanoTime() + STALE_REJECT_GAP_NANOS
                                 while (!rig.room.hasPendingResume() && System.nanoTime() < deadline) Thread.onSpinWait()
                                 g.installedInGap = rig.room.hasPendingResume()
@@ -984,6 +996,7 @@ class ProvenRestoreConcurrencyTest {
                             else -> wrongOrdering++
                         }
                         if (g.installedInGap) inGap++
+                        if (g.reachedGap) reachedGap++
                         stage.at("round $round: the caller says Hello, or the stale Reject settled it") { rig.snapshot() }
                         coroutineScope {
                             val hello = async { rig.hellos.first { it.size > hellos } }
@@ -1013,12 +1026,13 @@ class ProvenRestoreConcurrencyTest {
                     }
                     println(
                         "proven-restore stale-reject-race: rounds=$STALE_REJECT_ROUNDS checkFirst=$checkFirst " +
-                            "installFirst=$installFirst wrongOrdering=$wrongOrdering inGap=$inGap " +
+                            "installFirst=$installFirst wrongOrdering=$wrongOrdering reachedGap=$reachedGap inGap=$inGap " +
                             "settledByStale=$settledByStale honest=$honest failures=$failures",
                     )
                     assertAll(
                         { assertEquals(STALE_REJECT_ROUNDS / 2, checkFirst, "rig: half the rounds checked the stale Reject first, naming the latest Hello") },
                         { assertEquals(STALE_REJECT_ROUNDS / 2, installFirst, "rig: half installed the flight first, so the check named no latest Hello") },
+                        { assertEquals(STALE_REJECT_ROUNDS / 2, reachedGap, "rig: every check-first caller was running while the gap was held") },
                         { assertEquals(0, inGap, "no caller installs its flight between the check and the take: $failures") },
                         { assertEquals(0, settledByStale, "a stale Reject settles no caller's flight: $failures") },
                         { assertEquals(STALE_REJECT_ROUNDS, honest, "the honest Welcome settled every round's call") },
@@ -1039,6 +1053,8 @@ class ProvenRestoreConcurrencyTest {
         @Volatile var call: Deferred<ResumeResult.JoinerOutcome>? = null
 
         @Volatile var installedInGap = false
+
+        @Volatile var reachedGap = false
     }
 
     /**
@@ -1438,6 +1454,9 @@ class ProvenRestoreConcurrencyTest {
 
         /** How long a check-first round gives the caller to install its flight inside the gap: 20 ms. */
         const val STALE_REJECT_GAP_NANOS = 20_000_000L
+
+        /** How long a check-first round waits for the caller to start running before the gap: 1 s. */
+        const val STALE_REJECT_ENTER_NANOS = 1_000_000_000L
 
         /** Up to about as long as the room takes to handle a frame, so the two arrivals overlap. */
         const val STALE_WELCOME_SPIN_NANOS = 20_000L

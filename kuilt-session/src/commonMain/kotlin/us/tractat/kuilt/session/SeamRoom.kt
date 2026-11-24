@@ -2663,8 +2663,8 @@ internal class SeamRoom(
      * **Test-visibility.** Run on the frame thread inside [handleReject]'s critical section, between
      * the check of the Hello a `Reject` names ([answersLatestHello], whose answer it is given) and the
      * flight take: the one point a concurrency test can park to force a caller's attempt to land
-     * between the two. Null in production. A test that sets it, sets it before the room handles any
-     * `Reject`, and leaves it set.
+     * between the two. Null in production. A test that sets it, sets it before the room handles the
+     * `Reject` it means to park, and may clear it once the room handles no more.
      */
     @Volatile
     internal var rejectCheckedForTest: ((answersLatest: Boolean) -> Unit)? = null

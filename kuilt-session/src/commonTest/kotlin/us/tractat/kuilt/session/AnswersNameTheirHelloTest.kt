@@ -76,10 +76,11 @@ class AnswersNameTheirHelloTest {
         val whileBothAdmitted = room.heldMembershipCount()
         host.say(bob, AdmitMessage.Goodbye)
         val afterGoodbye = room.heldMembershipCount()
+        val bobAfterGoodbye = host.member(bob)
         host.room.leave()
         assertAll(
             { assertEquals(2, whileBothAdmitted, "rig: one id per admitted member") },
-            { assertNull(host.member(bob), "rig: Bob's Goodbye ended his membership") },
+            { assertNull(bobAfterGoodbye, "rig: Bob's Goodbye ended his membership") },
             { assertEquals(1, afterGoodbye, "a Goodbye drops the member's id") },
             { assertEquals(0, room.heldMembershipCount(), "the host's leave drops every id") },
         )

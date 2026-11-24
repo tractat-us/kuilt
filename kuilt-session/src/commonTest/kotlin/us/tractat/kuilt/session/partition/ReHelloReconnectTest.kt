@@ -200,23 +200,13 @@ class ReHelloReconnectTest {
         return s
     }
 
+    /** A joiner room the scripted host has admitted under [FIRST_MEMBERSHIP]. */
     private suspend fun TestScope.scripted(): Scripted {
-        val fake = FakeSeam(selfId = bob, initialPeers = setOf(bob, hostId, eve))
-        val link = FlakyLifecycleSeam(fake, backgroundScope)
-        val joiner = SeamRoomFactory(
-            loom = InMemoryLoom(),
-            scope = backgroundScope,
-            clock = virtualClock(),
-            deviceKeyStore = fakeKeyStore(1),
-            heartbeatConfig = joinerConfig,
-            admitTimeout = 1.seconds,
-        ).adopt(link, SessionRole.Joiner, memberName = "Bob", reweave = { link })
-        val s = Scripted(this, fake, link, joiner)
-        testScheduler.runCurrent()
+        val s = unadmitted()
         val first = s.broadcastHellos().single()
         s.challenge(first)
         s.welcome(first, FIRST_MEMBERSHIP)
-        assertTrue(joiner.roster.value.any { it.id == hostId }, "rig: the joiner was admitted")
+        assertTrue(s.room.roster.value.any { it.id == hostId }, "rig: the joiner was admitted")
         s.advance(TICK * 3)
         return s
     }
