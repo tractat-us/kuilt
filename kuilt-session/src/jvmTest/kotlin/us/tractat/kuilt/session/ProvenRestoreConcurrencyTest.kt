@@ -932,8 +932,13 @@ class ProvenRestoreConcurrencyTest {
     @Test
     fun aStaleRejectRacingACallersResumeSettlesNothing() =
         runConcurrencyStress(cap = ARM_CAP) { stage ->
+            // The check-first caller starts on a thread of its own: the room's two can both be held
+            // while the frame thread parks in the gap (the other waiting on the lock it holds), and a
+            // caller with no thread to start on would pass for one the lock held off.
+            Executors.newCachedThreadPool().asCoroutineDispatcher().use { callers ->
             Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
                 val rig = JoinerRig(dispatcher, RoomDevice.of(fakeKeyStore(0)))
+                val callerScope = CoroutineScope(SupervisorJob() + callers)
                 var checkFirst = 0
                 var installFirst = 0
                 var wrongOrdering = 0
@@ -946,6 +951,10 @@ class ProvenRestoreConcurrencyTest {
                 val gap = AtomicReference<StaleRejectGap?>(null)
                 try {
                     rig.admit(stage)
+                    // Frames this arm has sent the room, the admission's two included. A wait on the
+                    // stale Reject waits for exactly its own handling: the round before's Welcome can
+                    // settle its call before the collector counts that Welcome as handled.
+                    var sent = 2
                     rig.room.rejectCheckedForTest = { answersLatest ->
                         gap.getAndSet(null)?.let { g ->
                             g.answersLatest = answersLatest
@@ -954,7 +963,6 @@ class ProvenRestoreConcurrencyTest {
                     }
                     for (round in 0 until STALE_REJECT_ROUNDS) {
                         val hellos = rig.hellos.value.size
-                        val handled = rig.framesHandled.value
                         val staleHello = rig.hellos.value.last()
                         val stale = AdmitMessage.Reject("key-conflict: stale", RejectCode.KeyConflict, staleHello.joinerNonce)
                         val forceCheckFirst = round % 2 == 0
@@ -966,7 +974,7 @@ class ProvenRestoreConcurrencyTest {
                                 // `sayHelloAgain` goes straight to the room's lock with no suspension
                                 // point first, so a caller seen entering is one about to contend for it.
                                 val entered = AtomicBoolean(false)
-                                g.call = rig.scope.async {
+                                g.call = callerScope.async {
                                     entered.set(true)
                                     rig.room.sayHelloAgain()
                                 }
@@ -979,8 +987,9 @@ class ProvenRestoreConcurrencyTest {
                             }
                             gap.set(g)
                             rig.inbound.send(Swatch(AdmitMessage.encode(stale), sender = host))
+                            sent++
                             stage.at("round $round: the stale Reject is checked first") { rig.snapshot() }
-                            rig.framesHandled.first { it > handled }
+                            rig.framesHandled.first { it >= sent }
                             call = checkNotNull(g.call) { "round $round: the hook did not run" }
                         } else {
                             call = rig.scope.async { rig.room.sayHelloAgain() }
@@ -988,12 +997,16 @@ class ProvenRestoreConcurrencyTest {
                             while (!rig.room.hasPendingResume() && !call.isCompleted) delay(1)
                             gap.set(g)
                             rig.inbound.send(Swatch(AdmitMessage.encode(stale), sender = host))
-                            rig.framesHandled.first { it > handled }
+                            sent++
+                            rig.framesHandled.first { it >= sent }
                         }
                         when {
                             forceCheckFirst && g.answersLatest == true -> checkFirst++
                             !forceCheckFirst && g.answersLatest == false -> installFirst++
-                            else -> wrongOrdering++
+                            else -> {
+                                wrongOrdering++
+                                if (failures.size < 5) failures += "round $round checkFirst=$forceCheckFirst answersLatest=${g.answersLatest}"
+                            }
                         }
                         if (g.installedInGap) inGap++
                         if (g.reachedGap) reachedGap++
@@ -1009,18 +1022,22 @@ class ProvenRestoreConcurrencyTest {
                         val settling = if (call.isCompleted) {
                             settledByStale++
                             if (failures.size < 5) failures += "round $round checkFirst=$forceCheckFirst: ${call.await()} inGap=${g.installedInGap}"
+                            // The settled call may still have sent its Hello: wait for the re-arm's own.
+                            val beforeRearm = rig.hellos.value.size
                             val rearm = rig.scope.async { rig.room.sayHelloAgain() }
                             stage.at("round $round: the re-arming call says Hello") { rig.snapshot() }
-                            rig.hellos.first { it.size > hellos }
+                            rig.hellos.first { it.size > beforeRearm }
                             rearm
                         } else {
                             call
                         }
                         val proofs = rig.proofCount.value
                         rig.inbound.send(Swatch(AdmitMessage.encode(handChallenge(rig.hellos.value.last(), joiner, host)), sender = host))
+                        sent++
                         stage.at("round $round: the joiner answers the challenge") { rig.snapshot() }
                         rig.proofCount.first { it > proofs }
                         rig.inbound.send(Swatch(AdmitMessage.encode(rig.restoredWelcome(rig.hellos.value.last())), sender = host))
+                        sent++
                         stage.at("round $round: the honest Welcome settles the call") { rig.snapshot() }
                         if (settling.await() == ResumeResult.Success) honest++
                     }
@@ -1040,7 +1057,9 @@ class ProvenRestoreConcurrencyTest {
                 } finally {
                     rig.room.rejectCheckedForTest = null
                     rig.close()
+                    callerScope.cancel()
                 }
+            }
             }
         }
 
