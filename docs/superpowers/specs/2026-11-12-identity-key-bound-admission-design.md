@@ -329,7 +329,8 @@ joiner                                        host
   Proof(signed admit-proof, grants whose issuer == host key) ─▶
                                        check signature against Hello.key, grant.subject == Hello.key
                                        consult the key → seat table (below)
-                                       ◀─  Welcome(…, grant)   or   Reject(code)
+                                       ◀─  Welcome(answers = joinerNonce, membership, …, grant)
+                                           or   Reject(answers = joinerNonce, code)
 ```
 
 - **The joiner answers every Challenge independently**, signing the Challenge's *fabric sender* as
@@ -350,7 +351,7 @@ The host keeps, for each member, its key. On a verified Proof:
 
 | Peer id | Key | Seat | Outcome |
 |---|---|---|---|
-| same | same | held (partitioned or still connected) | **Restored**: the same membership, `MembershipEvent.Resumed`; a still-connected seat's old link is superseded |
+| same | same | held (partitioned or still connected) | **Restored**: the same membership (the `Welcome` carries its `membership` id). `MembershipEvent.Resumed` only if the seat was `Partitioned`; a still-connected seat's old link is superseded silently (plan Amendment E) |
 | new | same | held, **partitioned** | **Restored under the new id**: the old member leaves with a dedicated `LeaveReason` (superseded), the new one inherits the membership; one event pair, ordered through `fanOutToOtherMembers`. With several partitioned seats, the most recently connected (Decided 30) |
 | new | same | held, all **connected** (or the host's own key) | **Additional seat**: admitted as a new member under the same key; no seat is superseded (Decided 30) |
 | any | same | gone, grant `Valid` | **Returning**: admitted without calling vetting; the roster Welcome carries a `returning` mark |
@@ -396,6 +397,11 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
 ### Membership and the wire
 
 - `Member.key: DidKey`, non-null. Carried on all three Welcome shapes (direct, bootstrap, host intro).
+- The direct `Welcome` and every `Reject` carry `answers`, the nonce of the Hello they answer; the
+  joiner acts on one only if it names its latest Hello (plan Amendments E and F, including the one
+  pre-admission `ProtocolMismatch` exception). The direct `Welcome` also carries the seat's opaque
+  `membership` id, minted at admission and kept through a restore: a matching id is a restore, any
+  other a fresh admission.
 - The returning mark rides the bystander Welcome through `fanOutToOtherMembers`, keeping #1781's
   ordering against `Farewell`.
 - New refusal codes (bad proof, key conflict) override `retryable = false` and get `fromId` branches.
@@ -415,8 +421,8 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
 ## Consequences
 
 - Breaking: `Member` gains a required field (consumers, `FakeRoom`, `InMemoryRoomFabric`);
-  `JoinerReconnectController.tryResume` changes type (consumer hold policies, #1614); `ResumeToken`
-  loses `secret`; factories gain required parameters. Refresh ABI dumps (`updateKotlinAbi`) and say
+  `JoinerReconnectController.tryResume` changes type (consumer hold policies, #1614); `ResumeToken`,
+  `Room.resume` and `Room.resumeToken` are removed (Decided 31); factories gain required parameters. Refresh ABI dumps (`updateKotlinAbi`) and say
   which change each records.
 - A held seat now also recovers across a process restart, which changes what a hold policy sees.
 

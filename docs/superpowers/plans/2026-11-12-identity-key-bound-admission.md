@@ -299,6 +299,21 @@ The common root is that the wire correlates only one direction. `Hello.joinerNon
   C1/C2 delete the challenger fix in 1.8. It is still made now, so that `main` has no known race in between.
 - **To rewrite in 1.8:** the `Welcome` KDoc (`AdmitMessage.kt`), the `ReturnKind.Restored` KDoc, and the rejoin docs.
 
+## Amendment F — rulings of 2026-11-23 (during Task 1.8's review, PR #3637)
+
+Iain's ruling, plus corrections the 1.8 reviews showed the text above needs. Where they differ from the tasks or from Amendments A–E, these win.
+
+- **C1 keeps the claim's nonce reset.** Amendment E said `forgetLatestHello` is deleted. Its own round-3 bullet says why it cannot be: after C1 the nonce is the only thing that decides whether an answer counts, and a stale `Welcome` matches it until a new Hello is minted. So `forgetLatestHello` stays, reduced to clearing the latest nonce, and the episode claim in `attemptReconnect` calls it. What C1 deletes is `latestHelloChallengers` and the sender proxy. 1.8 pins this with a mutation (4 stale-answer tests red without the reset).
+- **An old host's refusal is still a refusal (Iain, 2026-11-23).** Before the joiner's first admission, a `Reject(ProtocolMismatch)` that names no Hello is accepted. A host older than version 7 cannot name one, and ignoring it would turn Decided 10's refusal into an admit timeout. The exception adds no attack surface: the first Hello is broadcast, so any bystander already holds its nonce and could forge a named `Reject`. It is closed on reconnect, and for every other code. The `ProtocolVersion` KDoc records it, and joiner tests pin all three bounds.
+- **The TCK has no return property between 1.8 and 1.9.** Decided 31 removes `Room.resume`, which all four return properties drove (`aReturnAfterTheSeatWentIsAFreshAdmission`, `aReturnRestoresAHeldSeat`, `resumeAfterLeaveIsLocalWindowClosed`, `resumeWithinWindowFiresResumed`). `aReturnRestoresAHeldSeat` also asserted a `Resumed` on a connected seat, which Amendment E silences. 1.8 retires all four, with `ResumeHarness`, `ReferenceResumeHarness` and `RoomResumeHarnessTest`. `:kuilt-session`'s own tests (`ReHelloReconnectTest`, `ProvenRestoreTest`) keep the coverage meanwhile.
+- **So Task 1.9 builds the return harness; it does not reshape one.** Amendment A § 1.7's "move the `ResumeHarness` reshape here" no longer has a harness to reshape. 1.9's Files line should read: `RoomConformanceSuite.kt` (new cases on a new return harness), `InMemoryRoomConformanceTest.kt`, the skill's rejoin row if it still needs it, and the cookbook. Split by what each row needs:
+  - `processRebuiltInsideWindowRestores` and `processRebuiltWithFreshIdRestores` need only a rebuilt room on the same `DeviceKeyStore`, which the existing `RoomHarness` supplies.
+  - `returnRestoresHeldSeatSameId`, `returnRestoresHeldSeatNewId` and a re-homed `resumeWithinWindowFiresResumed` (once per partition) need a fabric that can tear one link and heal it. That harness is 1.9's to design.
+- **The spike #1637 probe is 1.9's.** After 1.8 its `"resume-window-not-yet-open"` arm can never fire: a pre-1.8 host refuses a v7 Hello with `ProtocolMismatch` first. Rewrite it per census P13; do not leave the dead arm.
+- **`ForgedResumeTest` is deleted, not rewritten.** Its wrong-room case lives in `KeyAdmissionTest.proofForAnotherRoomIsRejected`. Its "the victim's window survives a forgery" case is gone on purpose: by Decided 18, a different key claiming a partitioned seat's id releases that seat.
+- **For #3615 and 1.9:** 1.8's cookbook sample `watchTheReturnSample` teaches `Recovered(host)` as "the seat was gone and this room was admitted afresh". That is Amendment D's interim. When #3615 lands its membership-comparison signal, that sample arm changes with it.
+- **Task 1.8's "`ResumeToken.kt`: remove `secret`"** is superseded by Decided 31: the type is deleted.
+
 ## Global Constraints
 
 - **Each task is one PR and one sub-issue of #3159.**
@@ -800,7 +815,7 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 - Delete: `partition/ResumeSecret.kt` and its tests.
 - Modify:
   - `AdmitMessage.kt`: remove `Resume`, `ResumeAck` and `Welcome.resumeSecret`.
-  - `ResumeToken.kt`: remove `secret`.
+  - `ResumeToken.kt`: remove `secret`. *(Superseded by Decided 31: the type is deleted. See Amendment F.)*
   - `SeamRoom.kt`: remove `handleResume`, `handleResumeAck`, `resumeSecrets` and `heldResumeSecretCount`.
   - `RejectCode.kt`: remove `ResumeTokenInvalid` only if nothing produces it any more, and grep for it first.
   - `ProtocolVersion` (to 7).
@@ -811,7 +826,7 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 
 ### Task 1.9: Slice-1 conformance rows and the rejoin route [after 1.8]
 
-> **Amended — read Amendment A § 1.9 first; it overrides this task where they differ.**
+> **Amended — read Amendment F, then Amendment A § 1.9; they override this task where they differ. `ResumeHarness` and `RoomResumeHarnessTest.kt` no longer exist after 1.8.**
 
 **Files:**
 - Modify: `kuilt-conformance/src/commonMain/.../RoomConformanceSuite.kt` (new cases, and `ResumeHarness` reshaped around keys), `InMemoryRoomConformanceTest.kt`, `RoomResumeHarnessTest.kt`, the skill's rejoin row, and `docs/agent-cookbook/session.md` (`## Rejoin & reconnect` and `## Device identity & return`).
