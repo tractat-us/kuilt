@@ -370,6 +370,7 @@ private fun MembershipEvent.arc(names: Map<PeerId, String>): String {
         is MembershipEvent.Recovered -> "Recovered(${name(peerId)})"
         is MembershipEvent.WindowOpened -> "WindowOpened(${name(peerId)})"
         is MembershipEvent.Resumed -> "Resumed(${name(peerId)})"
+        is MembershipEvent.Readmitted -> "Readmitted(${name(peerId)})"
         is MembershipEvent.HostLost -> "HostLost"
         is MembershipEvent.AdmissionFailed -> "AdmissionFailed"
         // Self-attributed: the subject is this peer's own end of the fabric, never another peer.

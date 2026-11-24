@@ -76,6 +76,7 @@ class ReHelloReconnectTest {
     private val hostId = PeerId("host")
     private val bob = PeerId("bob")
     private val eve = PeerId("eve")
+    private val carol = PeerId("carol")
     private val roomId = RoomId("room-1")
     private val hostDevice = fakeDeviceKey(0)
 
@@ -124,10 +125,44 @@ class ReHelloReconnectTest {
         }
 
         /**
-         * The self Welcome and the host intro: the shape of an admission answering [hello], naming
-         * [membership] and marked [returnKind].
+         * The host's Welcome naming [peer] to this joiner, as its admission burst and its roster
+         * fan-out send one: no Hello, no membership.
          */
-        suspend fun welcome(hello: AdmitMessage.Hello, membership: String, returnKind: ReturnKind? = null) {
+        suspend fun rosterWelcome(peer: PeerId) {
+            fromHost(
+                AdmitMessage.Welcome(
+                    assignedPeerId = peer.value,
+                    displayName = peer.value,
+                    sessionId = "session-${peer.value}",
+                    key = fakeDidKey(KEY_INDEX.getValue(peer)),
+                ),
+            )
+        }
+
+        /**
+         * The self Welcome, a Welcome for each of [others], and the host intro: the shape of an
+         * admission burst answering [hello], naming [membership] and marked [returnKind].
+         */
+        suspend fun welcome(hello: AdmitMessage.Hello, membership: String, returnKind: ReturnKind? = null, others: List<PeerId> = emptyList()) {
+            selfWelcome(hello, membership, returnKind)
+            others.forEach { rosterWelcome(it) }
+            hostIntro()
+        }
+
+        /** The host intro, which closes an admission burst. */
+        suspend fun hostIntro() {
+            fromHost(
+                AdmitMessage.Welcome(
+                    assignedPeerId = hostId.value,
+                    displayName = "Host",
+                    sessionId = hostId.value,
+                    key = hostDevice.id,
+                ),
+            )
+        }
+
+        /** The self Welcome alone, the head of an admission burst answering [hello]. */
+        suspend fun selfWelcome(hello: AdmitMessage.Hello, membership: String, returnKind: ReturnKind? = null) {
             fromHost(
                 AdmitMessage.Welcome(
                     assignedPeerId = bob.value,
@@ -138,14 +173,6 @@ class ReHelloReconnectTest {
                     returnKind = returnKind,
                     answers = hello.joinerNonce,
                     membership = membership,
-                ),
-            )
-            fromHost(
-                AdmitMessage.Welcome(
-                    assignedPeerId = hostId.value,
-                    displayName = "Host",
-                    sessionId = hostId.value,
-                    key = hostDevice.id,
                 ),
             )
         }
@@ -200,13 +227,14 @@ class ReHelloReconnectTest {
         return s
     }
 
-    /** A joiner room the scripted host has admitted under [FIRST_MEMBERSHIP]. */
-    private suspend fun TestScope.scripted(): Scripted {
+    /** A joiner room the scripted host has admitted under [FIRST_MEMBERSHIP], alongside [others]. */
+    private suspend fun TestScope.scripted(others: List<PeerId> = emptyList()): Scripted {
         val s = unadmitted()
         val first = s.broadcastHellos().single()
         s.challenge(first)
-        s.welcome(first, FIRST_MEMBERSHIP)
+        s.welcome(first, FIRST_MEMBERSHIP, others = others)
         assertTrue(s.room.roster.value.any { it.id == hostId }, "rig: the joiner was admitted")
+        assertTrue(others.all { o -> s.room.roster.value.any { it.id == o } }, "rig: the joiner holds every member its burst named")
         s.advance(TICK * 3)
         return s
     }
@@ -254,8 +282,130 @@ class ReHelloReconnectTest {
             { assertEquals(hellos, s.allHellos(), "no Hello after a completed fresh admission") },
             { assertTrue(since.none { it is MembershipEvent.HostLost || it is MembershipEvent.AdmissionFailed }, since.render()) },
             { assertEquals(Liveness.Connected, s.room.roster.value.single { it.id == hostId }.liveness, "the room is still in session") },
-            { assertTrue(since.any { it is MembershipEvent.Recovered && it.peerId == hostId }, "the arc closes on the host: ${since.render()}") },
+            {
+                assertEquals(
+                    listOf<MembershipEvent>(MembershipEvent.Readmitted(bob)),
+                    since.filterIsInstance<MembershipEvent.Readmitted>(),
+                    "the arc closes on a readmission, once (#3615): ${since.render()}",
+                )
+            },
+            { assertTrue(since.none { it is MembershipEvent.Recovered }, "a fresh admission is never Recovered: ${since.render()}") },
             { assertTrue(since.none { it is MembershipEvent.Resumed }, "nothing was resumed: ${since.render()}") },
+        )
+        s.room.leave()
+    }
+
+    // ── A fresh admission rebuilds the roster (#3615) ────────────────────────
+
+    /**
+     * Eve left while Bob's link was down, so her `Farewell` went to a seat that was no longer Bob's.
+     * The host's admission burst, which its own intro closes, names every member it holds, and Eve is
+     * not among them: Bob drops her rather than keep a ghost.
+     */
+    @Test
+    fun aFreshAdmissionDropsAPeerWhoLeftDuringTheOutage() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = scripted(others = listOf(eve))
+        val mark = s.log.mark()
+        val reHello = assertNotNull(s.dropAndHeal(), "the reconnect says Hello again")
+        s.challenge(reHello)
+        s.welcome(reHello, SECOND_MEMBERSHIP)
+        s.advance(TICK)
+
+        val since = s.log.since(mark)
+        assertAll(
+            { assertEquals(setOf(hostId), s.room.roster.value.map { it.id }.toSet(), "Eve is not a ghost: ${since.render()}") },
+            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Left(eve, LeaveReason.Normal)), since.filterIsInstance<MembershipEvent.Left>(), since.render()) },
+            { assertEquals(1, since.count { it is MembershipEvent.Readmitted }, since.render()) },
+        )
+        s.room.leave()
+    }
+
+    /** The burst is the roster: a member it names stays with no event, and one Bob did not hold joins. */
+    @Test
+    fun aFreshAdmissionKeepsThePeersItsBurstNames() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = scripted(others = listOf(eve))
+        val mark = s.log.mark()
+        val reHello = assertNotNull(s.dropAndHeal(), "the reconnect says Hello again")
+        s.challenge(reHello)
+        s.welcome(reHello, SECOND_MEMBERSHIP, others = listOf(eve, carol))
+        s.advance(TICK)
+
+        val since = s.log.since(mark)
+        assertAll(
+            { assertEquals(setOf(hostId, eve, carol), s.room.roster.value.map { it.id }.toSet(), since.render()) },
+            { assertTrue(since.none { it is MembershipEvent.Left }, "nobody left: ${since.render()}") },
+            { assertEquals(listOf(carol), since.filterIsInstance<MembershipEvent.Joined>().map { it.member.id }, since.render()) },
+        )
+        s.room.leave()
+    }
+
+    /**
+     * Carol was admitted after the host built Bob's burst, so the burst does not name her, and her
+     * roster `Welcome` came down Bob's fan-out lane ahead of Bob's own. She is a member, and the
+     * rebuild keeps her: it counts every member the host named since the Hello it answers, not only
+     * the burst's.
+     */
+    @Test
+    fun aMemberTheHostNamedBeforeTheAnswerIsKept() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = scripted(others = listOf(eve))
+        val mark = s.log.mark()
+        val reHello = assertNotNull(s.dropAndHeal(), "the reconnect says Hello again")
+        s.challenge(reHello)
+        s.rosterWelcome(carol)
+        val heldCarol = s.room.roster.value.any { it.id == carol }
+        s.welcome(reHello, SECOND_MEMBERSHIP, others = listOf(eve))
+        s.advance(TICK)
+
+        val since = s.log.since(mark)
+        assertAll(
+            { assertTrue(heldCarol, "rig: Carol's Welcome added her before Bob's answer") },
+            { assertEquals(setOf(hostId, eve, carol), s.room.roster.value.map { it.id }.toSet(), since.render()) },
+            { assertTrue(since.none { it is MembershipEvent.Left }, since.render()) },
+        )
+        s.room.leave()
+    }
+
+    /**
+     * A restore's burst names every member too, and a `Farewell` sent while the seat was held
+     * partitioned went down a torn link just the same, so the restore rebuilds the roster as well.
+     */
+    @Test
+    fun aRestoreAlsoDropsAPeerWhoLeftDuringTheOutage() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = scripted(others = listOf(eve))
+        val mark = s.log.mark()
+        val reHello = assertNotNull(s.dropAndHeal(), "the reconnect says Hello again")
+        s.challenge(reHello)
+        s.welcome(reHello, FIRST_MEMBERSHIP, ReturnKind.Restored)
+        s.advance(TICK)
+
+        val since = s.log.since(mark)
+        assertAll(
+            { assertEquals(1, since.count { it is MembershipEvent.Resumed && it.peerId == bob }, "rig: the seat came back: ${since.render()}") },
+            { assertTrue(since.none { it is MembershipEvent.Readmitted }, "a restore is not a readmission: ${since.render()}") },
+            { assertEquals(setOf(hostId), s.room.roster.value.map { it.id }.toSet(), since.render()) },
+            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Left(eve, LeaveReason.Normal)), since.filterIsInstance<MembershipEvent.Left>(), since.render()) },
+        )
+        s.room.leave()
+    }
+
+    /**
+     * The burst never finished: the host's intro, which closes it, did not arrive. Bob cannot tell a
+     * member the burst left out from one whose Welcome is still on its way, so he drops nobody.
+     */
+    @Test
+    fun aBurstCutShortDropsNobody() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = scripted(others = listOf(eve))
+        val mark = s.log.mark()
+        val reHello = assertNotNull(s.dropAndHeal(), "the reconnect says Hello again")
+        s.challenge(reHello)
+        s.selfWelcome(reHello, SECOND_MEMBERSHIP)
+        s.advance(TICK)
+
+        val since = s.log.since(mark)
+        assertAll(
+            { assertEquals(1, since.count { it is MembershipEvent.Readmitted }, "rig: the episode closed: ${since.render()}") },
+            { assertTrue(s.room.roster.value.any { it.id == eve }, since.render()) },
+            { assertTrue(since.none { it is MembershipEvent.Left }, since.render()) },
         )
         s.room.leave()
     }
@@ -404,8 +554,10 @@ class ReHelloReconnectTest {
 
         assertAll(
             { assertTrue(first.none { it is MembershipEvent.Resumed }, "marked Restored, another membership: fresh: ${first.render()}") },
-            { assertTrue(first.any { it is MembershipEvent.Recovered && it.peerId == hostId }, "the first arc closed: ${first.render()}") },
+            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Readmitted(bob)), first.filterIsInstance<MembershipEvent.Readmitted>(), "the first arc closed: ${first.render()}") },
+            { assertTrue(first.none { it is MembershipEvent.Recovered }, "a fresh admission is never Recovered: ${first.render()}") },
             { assertEquals(1, second.count { it is MembershipEvent.Resumed && it.peerId == bob }, "unmarked, the membership it now holds: restored: ${second.render()}") },
+            { assertTrue(second.none { it is MembershipEvent.Readmitted }, "a restore is not a readmission: ${second.render()}") },
             { assertTrue((first + second).none { it is MembershipEvent.HostLost }) },
         )
         s.room.leave()
@@ -712,5 +864,8 @@ class ReHelloReconnectTest {
 
         /** A nonce no Hello of Bob's carries: what an answer to someone else's Hello names. */
         val OTHER_NONCE = ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE) { 7 }
+
+        /** The fake key index each scripted bystander was admitted with. */
+        val KEY_INDEX = mapOf(PeerId("eve") to 2, PeerId("carol") to 3)
     }
 }

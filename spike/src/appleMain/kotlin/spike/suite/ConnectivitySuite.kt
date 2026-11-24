@@ -1851,6 +1851,7 @@ public class ConnectivitySuite {
         is MembershipEvent.Recovered -> "Recovered(${peerId.value.take(8)})"
         is MembershipEvent.WindowOpened -> "WindowOpened(${peerId.value.take(8)},expires=$expiresAt)"
         is MembershipEvent.Resumed -> "Resumed(${peerId.value.take(8)})"
+        is MembershipEvent.Readmitted -> "Readmitted(${peerId.value.take(8)})"
         is MembershipEvent.HostLost -> "HostLost(${reason::class.simpleName},mine=${localFabric.short()},at=$at)"
         is MembershipEvent.LocalFabricLost -> "LocalFabricLost($reason,at=$at)"
         is MembershipEvent.LocalFabricRestored -> "LocalFabricRestored(at=$at)"

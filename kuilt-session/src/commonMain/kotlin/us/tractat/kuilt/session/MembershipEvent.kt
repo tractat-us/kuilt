@@ -123,6 +123,26 @@ public sealed interface MembershipEvent {
     public data class Resumed(val peerId: PeerId) : MembershipEvent
 
     /**
+     * This room's seat was gone when it came back, and the host admitted it afresh (joiner
+     * perspective only; [peerId] is this room's own id).
+     *
+     * The reconnect that [WindowOpened] began has ended in a **new membership**: the host had let the
+     * old seat go — its window expired, or the seat was released to a fresh decision — so it admitted
+     * this room as a new member under the same id. The host and every other member see that as
+     * `Left(peerId, PartitionExpired)` followed by `Joined(peerId)`. Whatever an app tied to the old
+     * membership — a game seat, a turn in progress, a replica's view of what this peer had sent — is
+     * not carried over: treat it the way you treat a first admission. Where the old seat came back,
+     * the event is [Resumed] instead, and [Recovered] is never the answer to a return.
+     *
+     * The room keeps the new membership; it is still in session. Its roster is rebuilt from the
+     * host's admission burst, which follows this event and which the host's own `Welcome` closes: a
+     * member that joined meanwhile arrives as [Joined], and a member that left while this room was
+     * away, whose departure it never heard, leaves as [Left] with [LeaveReason.Normal]. Read
+     * [Room.roster] once those have arrived, not on this event.
+     */
+    public data class Readmitted(val peerId: PeerId) : MembershipEvent
+
+    /**
      * The host's transport link was permanently lost (joiner perspective only).
      *
      * Terminal state. [Room.broadcast] and [Room.sendTo] become silent no-ops after this event.
