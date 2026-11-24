@@ -119,4 +119,13 @@ class HeddleSamplesRunTest {
 
     @Test
     fun runningTopologyHolds() = sampleRunningTopology()
+
+    @Test
+    fun previewApplyHolds() = samplePreviewApply()
+
+    @Test
+    fun previewApplyFromSnapshotHolds() = samplePreviewApplyFromSnapshot()
+
+    @Test
+    fun sharesOverACandidateHold() = sampleSharesOverACandidate()
 }
