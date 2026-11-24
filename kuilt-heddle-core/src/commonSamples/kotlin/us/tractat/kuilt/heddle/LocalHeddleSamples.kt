@@ -889,8 +889,8 @@ internal fun sampleRunningTopology() {
     check(heddle.topology != startedFrom)
     check(
         heddle.topology.changesTo(second) == listOf(
-            TopologyChange.Removed(listOf(2), listOf("pool", "batch"), Topology.Lane("batch")),
             TopologyChange.Added(listOf(2), listOf("pool", "nightly"), Topology.Lane("nightly")),
+            TopologyChange.Removed(listOf(2), listOf("pool", "batch"), Topology.Lane("batch")),
         ),
     )
 }
