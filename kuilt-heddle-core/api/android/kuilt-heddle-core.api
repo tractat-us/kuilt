@@ -822,6 +822,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public final fun getRoot-urUY4Jo ()Ljava/lang/String;
 	public final fun getTopology ()Lus/tractat/kuilt/heddle/Topology;
 	public final fun persist ()Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;
+	public final fun previewApply (Lus/tractat/kuilt/heddle/Topology;J)Lus/tractat/kuilt/heddle/TopologyPreview;
 	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;J)Ljava/util/List;
 	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;Ljava/util/List;)Ljava/util/List;
 	public static synthetic fun previewPicks$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/util/Map;Ljava/util/Set;JILjava/lang/Object;)Ljava/util/List;
@@ -877,6 +878,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddleSnapshot {
 	public final fun getRoot-urUY4Jo ()Ljava/lang/String;
 	public final fun getTotalSlots ()J
 	public fun hashCode ()I
+	public final fun previewApply (Lus/tractat/kuilt/heddle/LocalPolicy;Lus/tractat/kuilt/heddle/Topology;J)Lus/tractat/kuilt/heddle/TopologyPreview;
 	public fun toString ()Ljava/lang/String;
 	public final fun view (Lus/tractat/kuilt/heddle/LocalPolicy;)Lus/tractat/kuilt/heddle/LocalHeddleView;
 }
@@ -1804,6 +1806,13 @@ public final class us/tractat/kuilt/heddle/TopologyParse$Valid : us/tractat/kuil
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getTopology ()Lus/tractat/kuilt/heddle/Topology;
 	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyPreview {
+	public final fun getAfter ()Lus/tractat/kuilt/heddle/LocalHeddleView;
+	public final fun getBasis ()Lus/tractat/kuilt/heddle/LocalHeddleRevision;
+	public final fun getResult ()Lus/tractat/kuilt/heddle/ApplyResult;
 	public fun toString ()Ljava/lang/String;
 }
 

@@ -498,11 +498,12 @@ as one unit, swapped in once. Open leases survive it and are still charged once,
 - **A change the ledger will not take** is a `StepRefusal.Refused`, and that child is left as it
   was while its siblings land; see [Refusals and limits](#refusals-and-limits).
 
-To preview a reload, `Topology.diff(new, ledger, generation)` lists the `TopologyStep`s from what
-the ledger holds to `new` without applying them. It reads which edges exist from the ledger rather
+For a reload's raw steps, `Topology.diff(new, ledger, generation)` lists the `TopologyStep`s from
+what the ledger holds to `new` without applying them. It reads which edges exist from the ledger rather
 than from the old tree, so it works after a restart, and after a partial apply it lists exactly
 the rest. `apply` runs that same list. Those steps are for an interpreter; to show a person what
-an edit changes, see the next section.
+an edit changes, see the next section, and to see what applying it would do to the running
+engine, see [Previewing a change to the tree](#previewing-a-change-to-the-tree).
 
 ## Showing an admin what an edit changes
 
@@ -583,6 +584,82 @@ undo their change too, so list the changes again from the running tree:
 `heddle.revision` is the wrong guard here: every `acquire` moves it, so on a busy engine it would
 refuse every confirm. Reading `heddle.topology` moves nothing. It is the tree last asked for, so a
 group a reload left out is still in it; `ApplyResult` says what landed.
+
+## Previewing a change to the tree
+
+**Intent:** an admin edits the tree and wants to see what the edit would do before confirming it:
+which change waits on which running job, and what each group's share is straight after. Do not
+hand-roll a copy of the engine. Restoring a snapshot and applying on the copy gives the right
+answer, but `restore` needs a fresh epoch above the snapshot's, and the copy has no `basis` to say
+whether the engine has moved since. `previewApply` does the same with neither cost.
+**Primitive:** `LocalHeddle.previewApply(new, generation)` → `TopologyPreview`. Its `result` is
+exactly the `ApplyResult` that `apply` would return, and `after` is a `LocalHeddleView` of the
+engine straight after it, to ask `entitlement`, `explain` and `previewPicks`. It is a read: the
+engine, its `revision` and what it persists are unchanged.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#samplePreviewApply -->
+```kotlin
+    // The edit: heavy goes to weight 3 and spare is removed, while spare still runs a job.
+    val edited = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(3)), Topology.Lane("light")))
+    val seen = heddle.revision
+    val preview = heddle.previewApply(edited, generation = 1L)
+
+    // Spare would close at once and wait for its job; nothing else waits.
+    val waits = preview.result.refusals.single()
+    check(waits is StepRefusal.Draining && waits.child == spare && waits.blockingLeases == listOf(running))
+    // Straight after, spare is owed nothing, and heavy and light share the slots 3 : 1.
+    val queued = setOf(heavy, light, spare)
+    check(preview.after.entitlement(heavy, queued, totalSlots = 4L) == Rational.of(3L))
+    check(preview.after.entitlement(light, queued, totalSlots = 4L) == Rational.ONE)
+    check(preview.after.entitlement(spare, queued, totalSlots = 4L) == Rational.ZERO)
+    // The engine itself has not moved: spare keeps its share until the apply.
+    check(heddle.revision == seen && preview.basis == seen)
+    check(heddle.entitlement(spare, queued, totalSlots = 4L) == Rational.ONE)
+
+    // The admin confirms. Nothing happened in between, so the apply does what the preview said.
+    check(heddle.revision == preview.basis)
+    check(heddle.apply(edited, generation = 1L) == preview.result)
+```
+
+- **It answers for straight after, not once things settle.** The two differ only where `result`
+  says so, and no refused change lands by itself: `complete` and `cancel` never re-run a reload. A
+  `StepRefusal.Draining` lands on a later `apply` of the same topology, once its `blockingLeases`
+  have settled. A `StepRefusal.Refused` is for a reason that waiting on the engine's leases does
+  not cure, save one: a reweight whose lease cannot move within `Long` is refused until that lease
+  settles, and then lands on a later `apply` too. A removed lane is owed nothing at once; ceilings,
+  lanes and moved leases are already in `after`.
+- **Preview and apply with the same `generation`.** It names the edges a reload adds, so a
+  different one gives different edge ids in `applied`.
+- **`basis` is the `revision` it was worked out at.** While `heddle.revision == preview.basis`, the
+  apply does what the preview said. A revision moves on every `acquire`, so on a busy engine it
+  will have moved by the time a person confirms: preview again rather than refuse the edit.
+  `apply` still diffs against the ledger it applies to, so applying anyway is correct, just not
+  necessarily what was shown.
+- **A page with no engine previews a stored snapshot** the same way, with the policy the engine
+  ran with. `basis` is then `null`.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#samplePreviewApplyFromSnapshot -->
+```kotlin
+    // On the admin screen: decode what was stored, and preview the edit with the engine's policy.
+    val decoded = LocalHeddle.decode(stored, Json)
+    check(decoded is RestoreResult.Restored)
+    val edited = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(3)), Topology.Lane("light")))
+    val preview = decoded.snapshot.previewApply(policy, edited, generation = 1L)
+```
+
+- **Shares under a tree with nothing running yet need no preview.** Boot a throwaway engine from
+  the candidate with `LocalHeddle.fromTopology` and ask it `entitlement`:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleSharesOverACandidate -->
+```kotlin
+    val (scratch, booted) = LocalHeddle.fromTopology(candidate, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    check(booted.refusals.isEmpty())
+
+    // Eight agents, both teams busy: web is owed six, mobile two.
+    val busy = setOf(web, mobile)
+    check(scratch.entitlement(web, busy, totalSlots = 8L) == Rational.of(6L))
+    check(scratch.entitlement(mobile, busy, totalSlots = 8L) == Rational.of(2L))
+```
 
 ## Children your app attaches while running
 

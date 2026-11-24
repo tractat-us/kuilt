@@ -153,6 +153,24 @@ public class LocalHeddleSnapshot internal constructor(
         )
     }
 
+    /**
+     * What [LocalHeddle.apply] of [new] at [generation] would do to the engine that took this
+     * snapshot, with no engine: the same [TopologyPreview] as [LocalHeddle.previewApply] on that
+     * engine as it stood, but with no [TopologyPreview.basis], since a snapshot keeps no revision.
+     * Changes nothing, here or anywhere. The leases it holds move as that engine's would, whatever
+     * epoch opened them.
+     *
+     * [policy] is required because a snapshot does not keep one: pass the policy the engine ran
+     * with. Pass the [generation] the apply will use (see [LocalHeddle.previewApply]).
+     *
+     * @throws IllegalArgumentException when [policy] cannot size [totalSlots] (see
+     *   [LocalHeddle.reconcileCapacity]), or as [LocalHeddle.apply] does: [new]'s root is not
+     *   [root], or [generation] is negative.
+     * @sample us.tractat.kuilt.heddle.samplePreviewApplyFromSnapshot
+     */
+    public fun previewApply(policy: LocalPolicy, new: Topology, generation: Long): TopologyPreview =
+        LocalHeddle.previewOf(this, policy, new, generation)
+
     override fun equals(other: Any?): Boolean =
         other is LocalHeddleSnapshot &&
             epoch == other.epoch &&

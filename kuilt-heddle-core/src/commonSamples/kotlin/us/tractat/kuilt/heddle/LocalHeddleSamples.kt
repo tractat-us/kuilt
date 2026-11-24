@@ -894,3 +894,87 @@ internal fun sampleRunningTopology() {
         ),
     )
 }
+
+/**
+ * An admin edits the tree on a running engine and sees what the edit would do before it lands:
+ * which change waits on which lease, and the shares straight after. Nothing moves until the apply.
+ */
+@Suppress("unused")
+internal fun samplePreviewApply() {
+    val before = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(2)), Topology.Lane("light"), Topology.Lane("spare")))
+    val (heddle, _) = LocalHeddle.fromTopology(before, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 4L)
+    val heavy = before.groupId("heavy")
+    val light = before.groupId("light")
+    val spare = before.groupId("spare")
+    val running = (heddle.acquire(setOf(spare), setOf(spare), startedAt = 0L) as AcquireOutcome.Acquired).lease
+
+    // The edit: heavy goes to weight 3 and spare is removed, while spare still runs a job.
+    val edited = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(3)), Topology.Lane("light")))
+    val seen = heddle.revision
+    val preview = heddle.previewApply(edited, generation = 1L)
+
+    // Spare would close at once and wait for its job; nothing else waits.
+    val waits = preview.result.refusals.single()
+    check(waits is StepRefusal.Draining && waits.child == spare && waits.blockingLeases == listOf(running))
+    // Straight after, spare is owed nothing, and heavy and light share the slots 3 : 1.
+    val queued = setOf(heavy, light, spare)
+    check(preview.after.entitlement(heavy, queued, totalSlots = 4L) == Rational.of(3L))
+    check(preview.after.entitlement(light, queued, totalSlots = 4L) == Rational.ONE)
+    check(preview.after.entitlement(spare, queued, totalSlots = 4L) == Rational.ZERO)
+    // The engine itself has not moved: spare keeps its share until the apply.
+    check(heddle.revision == seen && preview.basis == seen)
+    check(heddle.entitlement(spare, queued, totalSlots = 4L) == Rational.ONE)
+
+    // The admin confirms. Nothing happened in between, so the apply does what the preview said.
+    check(heddle.revision == preview.basis)
+    check(heddle.apply(edited, generation = 1L) == preview.result)
+}
+
+/**
+ * The same question asked of a stored snapshot, by a page that has no engine: an admin screen that
+ * reads what the scheduler last persisted.
+ */
+@Suppress("unused")
+internal fun samplePreviewApplyFromSnapshot() {
+    val before = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(2)), Topology.Lane("light"), Topology.Lane("spare")))
+    val policy = LocalPolicy(defaultReservation = 3L)
+    val (heddle, _) = LocalHeddle.fromTopology(before, policy, epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 4L)
+    val spare = before.groupId("spare")
+    val running = (heddle.acquire(setOf(spare), setOf(spare), startedAt = 0L) as AcquireOutcome.Acquired).lease
+    val stored = Json.encodeToString(LocalHeddleSnapshot.serializer(), heddle.persist())
+
+    // On the admin screen: decode what was stored, and preview the edit with the engine's policy.
+    val decoded = LocalHeddle.decode(stored, Json)
+    check(decoded is RestoreResult.Restored)
+    val edited = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(3)), Topology.Lane("light")))
+    val preview = decoded.snapshot.previewApply(policy, edited, generation = 1L)
+
+    // The answer the engine gives, with no revision to compare against.
+    val waits = preview.result.refusals.single()
+    check(waits is StepRefusal.Draining && waits.child == spare && waits.blockingLeases == listOf(running))
+    check(preview.basis == null)
+    check(preview.result == heddle.previewApply(edited, generation = 1L).result)
+}
+
+/**
+ * The shares a tree would give, with no engine running yet: boot a throwaway one from the candidate
+ * and ask it. No preview is needed when there is nothing to carry over.
+ */
+@Suppress("unused")
+internal fun sampleSharesOverACandidate() {
+    val candidate = draft("farm") {
+        group("web", Weight.of(3)) { lane("builds") }
+        group("mobile") { lane("builds") }
+    }
+    val web = candidate.groupId("web", "builds")
+    val mobile = candidate.groupId("mobile", "builds")
+    val (scratch, booted) = LocalHeddle.fromTopology(candidate, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    check(booted.refusals.isEmpty())
+
+    // Eight agents, both teams busy: web is owed six, mobile two.
+    val busy = setOf(web, mobile)
+    check(scratch.entitlement(web, busy, totalSlots = 8L) == Rational.of(6L))
+    check(scratch.entitlement(mobile, busy, totalSlots = 8L) == Rational.of(2L))
+}

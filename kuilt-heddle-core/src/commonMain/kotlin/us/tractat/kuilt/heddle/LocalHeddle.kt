@@ -641,9 +641,9 @@ public class LocalHeddle private constructor(
      * How far this engine has come: moved by every call that can change it, [acquire], [admit],
      * [extend], [complete], [cancel], [reconcileCapacity], [apply], [attach] and [detach], whatever
      * the call returns, since a refused [acquire] may still move the wake memory. Never moved by a
-     * read ([topology], [snapshot], [persist], [previewPicks], [explain], [entitlement],
-     * [reconcileLeases]), nor by a call that throws, which changes nothing. Costs one field read:
-     * compare it with the revision the last pass saw before copying anything.
+     * read ([topology], [snapshot], [persist], [previewPicks], [previewApply], [explain],
+     * [entitlement], [reconcileLeases]), nor by a call that throws, which changes nothing. Costs one
+     * field read: compare it with the revision the last pass saw before copying anything.
      *
      * Read it as you read the rest of the engine, under the caller's scheduling lock. It is not
      * persisted: see [LocalHeddleRevision] for why a revision held across a restart still compares
@@ -1188,6 +1188,44 @@ public class LocalHeddle private constructor(
     }
 
     /**
+     * What [apply] of [new] at [generation] would do, worked out on a copy of this engine: the
+     * [ApplyResult] it would return, and the engine straight after it as a [LocalHeddleView]. A read:
+     * it changes nothing here, the wake memory and [revision] included, and [persist] returns the
+     * same snapshot after it as before.
+     *
+     * **Pass the generation you will apply with.** The edges a reload adds are named by it, so a
+     * preview at one generation and an apply at another name different edges in
+     * [ApplyResult.applied]. Whether anything else can differ between the two is not established, so
+     * do not rely on it.
+     *
+     * The preview holds for the engine at [TopologyPreview.basis]. Compare that with [revision]
+     * before acting on it: a lease, a charge or a reload since then can change the answer. A revision
+     * moves on every [acquire], refused ones included, so on a busy engine it will have moved by the
+     * time a person confirms; preview again then rather than refuse the apply. [apply] takes its diff
+     * on the ledger it applies to, so applying after the engine moved on is still correct, just not
+     * necessarily what was previewed.
+     *
+     * Shares over a candidate tree with no engine behind it need no preview: boot one with
+     * [fromTopology] and ask it [entitlement].
+     *
+     * @param generation as [apply]'s, and the same one.
+     * @throws IllegalArgumentException as [apply] does: [new]'s root is not [root], or [generation]
+     *   is negative.
+     * @sample us.tractat.kuilt.heddle.samplePreviewApply
+     * @sample us.tractat.kuilt.heddle.sampleSharesOverACandidate
+     */
+    public fun previewApply(new: Topology, generation: Long): TopologyPreview =
+        copyOf(afterPick, forgets).previewedApply(new, generation, basis = revision)
+
+    /**
+     * [apply] [new] to this engine and answer for it straight after: the one fork both
+     * [previewApply]s run on, so the engine's preview and a snapshot's cannot drift apart. Call it
+     * only on a throwaway copy, since it applies for real.
+     */
+    private fun previewedApply(new: Topology, generation: Long, basis: LocalHeddleRevision?): TopologyPreview =
+        TopologyPreview(apply(new, generation), view(), basis)
+
+    /**
      * Attach the child [name] to the group at [group], read from the root down, with the weight and
      * ceiling that group's template in the topology gives ([Topology.attach]). Applied as
      * one unit, like [apply]. Attaching a child that is already attached does nothing; attaching one
@@ -1540,16 +1578,22 @@ public class LocalHeddle private constructor(
      * A copy of this engine, its whole [Core] included, that calls [hook] after each level's pick:
      * see [afterPick]. The copy shares nothing mutable with this engine.
      */
-    internal fun withAfterPickForTest(hook: (GroupId) -> Unit): LocalHeddle = copyForTest(hook, forgets)
+    internal fun withAfterPickForTest(hook: (GroupId) -> Unit): LocalHeddle = copyOf(hook, forgets)
 
     /**
      * A copy of this engine, its whole [Core] included, whose swaps forget nothing: see [forgets].
      * What this engine has already forgotten stays forgotten, so a copy taken straight after a boot
      * keeps every edge the boot's own swap left. The copy shares nothing mutable with this engine.
      */
-    internal fun keepingEverythingForTest(): LocalHeddle = copyForTest(afterPick, forgets = false)
+    internal fun keepingEverythingForTest(): LocalHeddle = copyOf(afterPick, forgets = false)
 
-    private fun copyForTest(afterPick: ((GroupId) -> Unit)?, forgets: Boolean): LocalHeddle =
+    /**
+     * A copy of this engine, its whole [Core] included at the same [revision], that shares nothing
+     * mutable with it: the leases and the wake memory are copied, the ledger and the topology are
+     * immutable values. Unlike [scratch], it holds the leases themselves, so an [apply] on it moves
+     * them as this engine's would.
+     */
+    private fun copyOf(afterPick: ((GroupId) -> Unit)?, forgets: Boolean): LocalHeddle =
         LocalHeddle(root, policy, epoch, ledger, allocator, leasable, openElsewhere, afterPick, forgets)
             .also { it.core = core.fork(core.revision) }
 
@@ -1976,6 +2020,18 @@ public class LocalHeddle private constructor(
             require(epoch > snapshot.epoch) {
                 "a restore must run under an epoch above the snapshot's ${snapshot.epoch}, was $epoch"
             }
+            return seeded(snapshot, policy, epoch)
+        }
+
+        /**
+         * [LocalHeddleSnapshot.previewApply]: the engine [snapshot] was taken from, rebuilt under
+         * its own epoch, since it issues no lease, and asked as [previewApply] asks a copy.
+         */
+        internal fun previewOf(snapshot: LocalHeddleSnapshot, policy: LocalPolicy, new: Topology, generation: Long): TopologyPreview =
+            seeded(snapshot, policy, snapshot.epoch).previewedApply(new, generation, basis = null)
+
+        /** An engine over [snapshot]'s state under [epoch], with no check that [epoch] is a fresh one: see [restore]. */
+        private fun seeded(snapshot: LocalHeddleSnapshot, policy: LocalPolicy, epoch: Long): LocalHeddle {
             val allocator = FairShareAllocator(SELF, policyConfig(policy), snapshot.allocatorMemory)
             val leasable = Leasable.ByTopology(snapshot.lastApplied)
             return LocalHeddle(snapshot.root, policy, epoch, snapshot.ledger, allocator, leasable).also { engine ->

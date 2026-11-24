@@ -1401,6 +1401,7 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
     final fun explain(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long = ...): us.tractat.kuilt.heddle/WaitExplanation // us.tractat.kuilt.heddle/LocalHeddle.explain|explain(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
     final fun extend(us.tractat.kuilt.heddle/LeaseId, kotlin/Long, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/LocalHeddle.extend|extend(us.tractat.kuilt.heddle.LeaseId;kotlin.Long;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>){}[0]
     final fun persist(): us.tractat.kuilt.heddle/LocalHeddleSnapshot // us.tractat.kuilt.heddle/LocalHeddle.persist|persist(){}[0]
+    final fun previewApply(us.tractat.kuilt.heddle/Topology, kotlin/Long): us.tractat.kuilt.heddle/TopologyPreview // us.tractat.kuilt.heddle/LocalHeddle.previewApply|previewApply(us.tractat.kuilt.heddle.Topology;kotlin.Long){}[0]
     final fun previewPicks(kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin.collections/List<kotlin/Long>>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long = ...): kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/LocalHeddle.previewPicks|previewPicks(kotlin.collections.Map<us.tractat.kuilt.heddle.GroupId,kotlin.collections.List<kotlin.Long>>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
     final fun previewPicks(kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin/Int>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/List<kotlin/Long>): kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/LocalHeddle.previewPicks|previewPicks(kotlin.collections.Map<us.tractat.kuilt.heddle.GroupId,kotlin.Int>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.List<kotlin.Long>){}[0]
     final fun reconcileCapacity(kotlin/Long) // us.tractat.kuilt.heddle/LocalHeddle.reconcileCapacity|reconcileCapacity(kotlin.Long){}[0]
@@ -1473,6 +1474,7 @@ final class us.tractat.kuilt.heddle/LocalHeddleSnapshot { // us.tractat.kuilt.he
 
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LocalHeddleSnapshot.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LocalHeddleSnapshot.hashCode|hashCode(){}[0]
+    final fun previewApply(us.tractat.kuilt.heddle/LocalPolicy, us.tractat.kuilt.heddle/Topology, kotlin/Long): us.tractat.kuilt.heddle/TopologyPreview // us.tractat.kuilt.heddle/LocalHeddleSnapshot.previewApply|previewApply(us.tractat.kuilt.heddle.LocalPolicy;us.tractat.kuilt.heddle.Topology;kotlin.Long){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LocalHeddleSnapshot.toString|toString(){}[0]
     final fun view(us.tractat.kuilt.heddle/LocalPolicy): us.tractat.kuilt.heddle/LocalHeddleView // us.tractat.kuilt.heddle/LocalHeddleSnapshot.view|view(us.tractat.kuilt.heddle.LocalPolicy){}[0]
 
@@ -2009,6 +2011,17 @@ final class us.tractat.kuilt.heddle/TopologyException : kotlin/IllegalArgumentEx
 
     final val problems // us.tractat.kuilt.heddle/TopologyException.problems|{}problems[0]
         final fun <get-problems>(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyProblem> // us.tractat.kuilt.heddle/TopologyException.problems.<get-problems>|<get-problems>(){}[0]
+}
+
+final class us.tractat.kuilt.heddle/TopologyPreview { // us.tractat.kuilt.heddle/TopologyPreview|null[0]
+    final val after // us.tractat.kuilt.heddle/TopologyPreview.after|{}after[0]
+        final fun <get-after>(): us.tractat.kuilt.heddle/LocalHeddleView // us.tractat.kuilt.heddle/TopologyPreview.after.<get-after>|<get-after>(){}[0]
+    final val basis // us.tractat.kuilt.heddle/TopologyPreview.basis|{}basis[0]
+        final fun <get-basis>(): us.tractat.kuilt.heddle/LocalHeddleRevision? // us.tractat.kuilt.heddle/TopologyPreview.basis.<get-basis>|<get-basis>(){}[0]
+    final val result // us.tractat.kuilt.heddle/TopologyPreview.result|{}result[0]
+        final fun <get-result>(): us.tractat.kuilt.heddle/ApplyResult // us.tractat.kuilt.heddle/TopologyPreview.result.<get-result>|<get-result>(){}[0]
+
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyPreview.toString|toString(){}[0]
 }
 
 final class us.tractat.kuilt.heddle/TopologyProblem { // us.tractat.kuilt.heddle/TopologyProblem|null[0]
