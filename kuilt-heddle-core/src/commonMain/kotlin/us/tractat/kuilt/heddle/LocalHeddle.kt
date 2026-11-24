@@ -641,9 +641,9 @@ public class LocalHeddle private constructor(
      * How far this engine has come: moved by every call that can change it, [acquire], [admit],
      * [extend], [complete], [cancel], [reconcileCapacity], [apply], [attach] and [detach], whatever
      * the call returns, since a refused [acquire] may still move the wake memory. Never moved by a
-     * read ([topology], [snapshot], [persist], [previewPicks], [explain], [entitlement],
-     * [reconcileLeases]), nor by a call that throws, which changes nothing. Costs one field read:
-     * compare it with the revision the last pass saw before copying anything.
+     * read ([topology], [snapshot], [persist], [previewPicks], [previewApply], [explain],
+     * [entitlement], [reconcileLeases]), nor by a call that throws, which changes nothing. Costs one
+     * field read: compare it with the revision the last pass saw before copying anything.
      *
      * Read it as you read the rest of the engine, under the caller's scheduling lock. It is not
      * persisted: see [LocalHeddleRevision] for why a revision held across a restart still compares
