@@ -820,6 +820,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public final fun getEpoch ()J
 	public final fun getRevision ()Lus/tractat/kuilt/heddle/LocalHeddleRevision;
 	public final fun getRoot-urUY4Jo ()Ljava/lang/String;
+	public final fun getTopology ()Lus/tractat/kuilt/heddle/Topology;
 	public final fun persist ()Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;
 	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;J)Ljava/util/List;
 	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;Ljava/util/List;)Ljava/util/List;

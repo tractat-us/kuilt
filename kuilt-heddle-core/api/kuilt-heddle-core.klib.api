@@ -1387,6 +1387,8 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
         final fun <get-revision>(): us.tractat.kuilt.heddle/LocalHeddleRevision // us.tractat.kuilt.heddle/LocalHeddle.revision.<get-revision>|<get-revision>(){}[0]
     final val root // us.tractat.kuilt.heddle/LocalHeddle.root|{}root[0]
         final fun <get-root>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LocalHeddle.root.<get-root>|<get-root>(){}[0]
+    final val topology // us.tractat.kuilt.heddle/LocalHeddle.topology|{}topology[0]
+        final fun <get-topology>(): us.tractat.kuilt.heddle/Topology // us.tractat.kuilt.heddle/LocalHeddle.topology.<get-topology>|<get-topology>(){}[0]
 
     final fun acquire(kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long, kotlin/Long = ...): us.tractat.kuilt.heddle/AcquireOutcome // us.tractat.kuilt.heddle/LocalHeddle.acquire|acquire(kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long;kotlin.Long){}[0]
     final fun admit(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long, kotlin/Long = ...): us.tractat.kuilt.heddle/AdmitOutcome // us.tractat.kuilt.heddle/LocalHeddle.admit|admit(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long;kotlin.Long){}[0]
