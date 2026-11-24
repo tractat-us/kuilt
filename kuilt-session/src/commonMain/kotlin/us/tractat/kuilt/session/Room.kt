@@ -9,8 +9,6 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
-import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Duration
 
@@ -310,73 +308,18 @@ public interface Room {
      *   is admitted. Collect it (or read it after the roster becomes non-empty) rather than
      *   sampling it right after [RoomFactory.join] returns.
      *
-     * **This is the id a [ResumeToken] is validated against**, within one live host: a joiner's
-     * token carries this value and the host refuses a token naming any other room.
+     * **A host signs this id into every admission challenge**, so a joiner's proof of its device key
+     * is good only in the room that asked for it.
      *
-     * That does **not** extend across a host restart, and reusing an id will not make it. A
+     * It does **not** carry a seat across a host restart, and reusing an id will not make it. A
      * restarted host has no memory of the peer — an empty roster and an empty reconnect-window
-     * registry — so a resume it accepts on identity grounds still cannot complete. Cold-start
-     * rejoin is tracked separately by #1593 and needs more than a stable id.
+     * registry — so a device that comes back to it is admitted as a new member.
      *
      * Deliberately has **no** interface default. A default would let an implementation — a test
      * double above all — silently answer "this room has no identity" for a room that plainly has
      * one, and a test written against that answer would pass while asserting nothing.
      */
     public val roomId: StateFlow<RoomId?>
-
-    /**
-     * The joiner's resume credential from the admit handshake, which nothing presents any more.
-     *
-     * A reconnect says Hello again, and the device key proves the member (#3159, Task 1.7), so
-     * neither a [SeamRoomFactory] joiner's automatic reconnect nor [resume] reads this token. Slice
-     * 1.8 removes it with [resume].
-     *
-     * Non-null on a [SessionRole.Joiner] room once the host's own Welcome to it has carried the
-     * [RoomId] and a secret. Null on a [SessionRole.Host] room (the host does not reconnect to
-     * itself) and null on a joiner room whose handshake has not yet completed.
-     */
-    public val resumeToken: ResumeToken?
-
-    /**
-     * Say Hello to the host again after a transport drop, as the automatic reconnect does. [token]
-     * is not presented: the device key proves the member (#3159, Task 1.7), and slice 1.8 removes
-     * this method with it.
-     *
-     * Keep this room and its underlying [Seam]. The loom must heal that **same seam instance**
-     * with its [Seam.selfId] unchanged; [us.tractat.kuilt.core.MuxClientLoom] provides this stable,
-     * resumable handle, and so does `NwLoom`. The host finds the held seat by the key the Hello
-     * proves.
-     *
-     * A joiner built by [SeamRoomFactory] says Hello again automatically after a transport tear,
-     * within the reconnect window. This explicit call is for manual control once the existing
-     * seam is usable again; it does not redial the fabric or replace the room's seam.
-     *
-     * **Joiner only.** It sends a fresh Hello to the host alone, answers its challenge, and awaits
-     * the reply:
-     * - The host's `Welcome` to this member marked restored, so the held seat came back →
-     *   [ResumeResult.Success], and [MembershipEvent.Resumed] fires. Unmarked, the seat was gone and
-     *   the host admitted this member afresh, which the room keeps → [ResumeResult.WindowClosed].
-     *   Either way, a room that went terminal before the `Welcome` is handled →
-     *   [ResumeResult.WindowClosed], and no event (#3094).
-     * - The host's `Reject` → [ResumeResult.Refused], carrying its
-     *   [us.tractat.kuilt.session.admit.RejectCode] (#2364).
-     * - No reply within `HeartbeatConfig.resumeTimeout`, or the seam the Hello went out on tears
-     *   first so that no reply can arrive → [ResumeResult.TimedOut].
-     *
-     * Concurrent calls coalesce into one Hello and share its reply (#1280).
-     *
-     * If the loom returns a new seam instead of healing the existing one, reconnect ends in
-     * [MembershipEvent.HostLost]. A call on a terminal room, or on the host side, returns
-     * [ResumeResult.WindowClosed] without asking the host.
-     *
-     * Returns a [ResumeResult.JoinerOutcome], never the whole [ResumeResult] hierarchy: the host's
-     * own verdicts do not travel as values — they arrive as the
-     * [us.tractat.kuilt.session.admit.RejectCode] on [ResumeResult.Refused] (#2364). Branching on a
-     * value this surface cannot return is therefore a compile error rather than a dead arm.
-     *
-     * @sample us.tractat.kuilt.session.resumeAfterDropSample
-     */
-    public suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome
 
     /**
      * Returns a [Seam] view scoped to this channel [id].
@@ -531,8 +474,8 @@ public interface RoomFactory {
      * matchmaking service assigned, or an id a durable record was keyed on before the room could be
      * woven. Every member then reads that exact value off [Room.roomId].
      *
-     * It does **not** make a host restart resumable — see [Room.roomId]; that is #1593's problem,
-     * and reusing an id does not solve it.
+     * It does **not** make a host restart resumable — see [Room.roomId]: a restarted host holds no
+     * seats, and reusing an id does not give it any.
      */
     public suspend fun host(pattern: Pattern, memberName: String? = null, roomId: RoomId? = null): Room
 

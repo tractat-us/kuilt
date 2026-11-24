@@ -629,10 +629,10 @@ class WindowLevelTest {
      * The mid-flight assertion is a vacuity guard, not decoration: without it a run in which the
      * level was never set at all would pass for the wrong reason.
      *
-     * The clearing path is [SeamRoom.handleResumeAck] and nothing else — the detector the resume
+     * The clearing path is `SeamRoom.closeReconnect` and nothing else — the detector the resume
      * restarts is fresh, so it never fires the `PeerRecovered` that [SeamRoom.markRecovered] needs.
-     * An episode that completes **without** a `ResumeAck` therefore leaves this level pinned; see
-     * #1637, whose no-op-resume path must clear it explicitly.
+     * An episode that completes **without** the host's `Welcome` closing it would therefore leave
+     * this level pinned (#1637).
      */
     @Test
     fun aResumedJoinerShowsItsHostConnectedAgain() =

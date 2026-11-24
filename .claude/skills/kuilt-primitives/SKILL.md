@@ -13,7 +13,7 @@ reference file your family names: it lists every route, row by row.
 
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
-|a rejoin/reconnect loop, a resume token, a grace window|`Room.resumeToken` + `Room.resume`|`session.md#rejoin--reconnect`|
+|a rejoin/reconnect loop, a resume token, a grace window|nothing to call: the room says Hello again; `DeviceKeyStore` on the factory|`session.md#rejoin--reconnect`|
 |a last-write-wins register, a set, a shared JSON document; replicating a CRDT by hand|`LWWRegister`/`LWWMap`, `GSet`, `ORSet`/`ORMap`, `JsonCrdt`; `Quilter`|`replication.md#replicated-data`|
 |a `try` inside `onEach { … }.launchIn(scope)`, a pump that dies silently|`Flow.pumpIn` (`PumpFailure.ITEM`/`UPSTREAM`)|`fabrics.md#long-lived-pumps`|
 |a hard-coded chunk size, a `FrameTooLargeException`|`Room`/`Seam.maxPayloadBytes`, then `PayloadTooLarge`|`fabrics.md#payload-limits`|

@@ -7,11 +7,9 @@ import us.tractat.kuilt.identity.DidKey
  * A request to restore [peerId]'s held seat in [roomId], made only once the room has checked that the
  * joiner asking for it is that seat's member (#3159).
  *
- * The room builds one in two places, each after its own check, and nowhere else:
- * - on a verified admission **Proof**, once the key → seat table has found that [peerId]'s seat was
- *   admitted under the very key the proof is signed by, which is [key];
- * - on the older `Resume` frame, once the member's resume secret matched (#3165). [key] is then the
- *   key the room holds for that member. That path goes when the frame does.
+ * The room builds one in one place, after its own check, and nowhere else: on a verified admission
+ * **Proof**, once the key → seat table has found that [peerId]'s seat was admitted under the very
+ * key the proof is signed by, which is [key].
  *
  * The constructor is `internal`, so a [JoinerReconnectController] — a consumer's own hold policy
  * included — can only ever be asked about a seat whose member was proven. That is the #3165 property
@@ -19,7 +17,7 @@ import us.tractat.kuilt.identity.DidKey
  * this module reaches one through a real room, never a factory.
  *
  * [roomId] is always the asking room's own id. A controller may still compare it, but the room has
- * already refused a proof or a token for another room before it builds one.
+ * already refused a proof for another room before it builds one.
  */
 public class ProvenResume internal constructor(
     /** The member whose held seat is asked for. */

@@ -526,8 +526,6 @@ public final class us/tractat/kuilt/conformance/RetirementReAssertion {
 
 public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public fun <init> ()V
-	public final fun aReturnAfterTheSeatWentIsAFreshAdmission ()V
-	public final fun aReturnRestoresAHeldSeat ()V
 	public final fun broadcastDeliversRoomFrameTaggedWithSender ()V
 	public final fun channelStateTornAfterLeave ()V
 	public fun getAwaitBudget-FghU774 ()Lkotlin/time/Duration;
@@ -560,11 +558,8 @@ public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public final fun memberThatLeftNoLongerReceivesFrames ()V
 	public final fun membersAppearUnderTheirOwnMemberName ()V
 	public fun newHarness (Lkotlinx/coroutines/CoroutineScope;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$RoomHarness;
-	public abstract fun newResumeHarness (Lkotlinx/coroutines/test/TestScope;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$ResumeHarness;
 	public final fun partitionedAndRecoveredFireOnLivenessTransitions ()V
 	public final fun rejoinAfterLeaveWorks ()V
-	public final fun resumeAfterLeaveIsLocalWindowClosed ()V
-	public final fun resumeWithinWindowFiresResumed ()V
 	public final fun rosterIsEmptyBeforeAnyHandshake ()V
 	public final fun theTeardownFaultReallyFires ()V
 }
@@ -590,25 +585,6 @@ public final class us/tractat/kuilt/conformance/RoomConformanceSuite$FaultInject
 	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection$Unsupported;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection$Unsupported;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getTrackingUrl ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class us/tractat/kuilt/conformance/RoomConformanceSuite$ResumeHarness {
-	public fun <init> (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/session/RoomFactory;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;)V
-	public final fun component1 ()Lus/tractat/kuilt/session/RoomFactory;
-	public final fun component2 ()Lus/tractat/kuilt/session/RoomFactory;
-	public final fun component3 ()Lkotlin/jvm/functions/Function2;
-	public final fun component4 ()Lkotlin/jvm/functions/Function0;
-	public final fun component5 ()Lkotlin/jvm/functions/Function0;
-	public final fun copy (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/session/RoomFactory;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$ResumeHarness;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/RoomConformanceSuite$ResumeHarness;Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/session/RoomFactory;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$ResumeHarness;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getHelloRequests ()Lkotlin/jvm/functions/Function0;
-	public final fun getHostFactory ()Lus/tractat/kuilt/session/RoomFactory;
-	public final fun getJoinerFactory ()Lus/tractat/kuilt/session/RoomFactory;
-	public final fun getReleaseSeat ()Lkotlin/jvm/functions/Function2;
-	public final fun getResumeRequests ()Lkotlin/jvm/functions/Function0;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

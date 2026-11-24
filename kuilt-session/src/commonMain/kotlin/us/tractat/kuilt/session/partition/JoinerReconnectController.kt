@@ -19,11 +19,10 @@ import us.tractat.kuilt.session.admit.RejectCode
  * observe `events.filterIsInstance<JoinerReconnectEvent.Resumed>()` and push
  * current application state to `event.peerId`.
  *
- * **A resume is good only against the host that admitted the joiner.** That host holds the member's
- * [ResumeSecret] and this controller holds its window, both in memory, so a host that did not mint
- * them — a newly elected leader, another server in a cluster — refuses the resume. The joiner then
- * ends its episode on the refusal, and only a consumer that reacts to it (`ClusterClient` does)
- * joins again.
+ * **A seat is held only by the host that admitted the joiner.** That host holds the seat and this
+ * controller holds its window, both in memory, so a host that did not admit the joiner — a newly
+ * elected leader, another server in a cluster — has no seat for its key, and admits it as a new
+ * member.
  *
  * Partition events ([PartitionEvent]) are produced by the partition-detector layer.
  * Until that wiring lands, callers bridge manually: on transport close, invoke
@@ -67,9 +66,8 @@ public interface JoinerReconnectController {
      * 3. Window not yet spent — a window restores at most once.
      *
      * **Who the joiner is, is not this controller's concern.** A [ProvenResume] has an `internal`
-     * constructor and the room builds one only after its own check (#3159, #3165): the joiner proved
-     * the device key the seat was admitted under, or presented that member's resume secret, and the
-     * seat is a **current member's**. An implementation — a consumer's own hold policy included — is
+     * constructor and the room builds one only after its own check (#3159): the joiner proved the
+     * device key the seat was admitted under, and the seat is a **current member's**. An implementation — a consumer's own hold policy included — is
      * protected from forged resumes without checking anything about the joiner, even one that checks
      * none of steps 1–3. Step 1 cannot fail through a room, which builds every [ProvenResume] from its
      * own id; it stays for a controller driven some other way.
@@ -91,7 +89,7 @@ public interface JoinerReconnectController {
      * [peerId] became responsive again **without resuming** — close its reconnect window, and
      * close it *without expiring it*.
      *
-     * The counterpart of [onPeerUnresponsive] on the lane that has no token in it. A peer whose
+     * The counterpart of [onPeerUnresponsive] on the lane that has no proof in it. A peer whose
      * link merely blipped is restored by the liveness detector alone: it never presents a
      * proof of its seat, so [tryResume] — the only other thing that closes a window — is never reached,
      * and before this method existed the window a blip opened stayed armed for its full duration
@@ -207,83 +205,57 @@ public sealed interface JoinerReconnectEvent {
  * can enforce it (#2364):
  *
  * - [HostVerdict] is what a host's [JoinerReconnectController.tryResume] renders from its own
- *   window state. It never leaves the host as a value — it is encoded as an
- *   [us.tractat.kuilt.session.admit.AdmitMessage.Reject] carrying a
- *   [RejectCode][us.tractat.kuilt.session.admit.RejectCode].
- * - [JoinerOutcome] is what [us.tractat.kuilt.session.Room.resume] answers a joiner, and it
- *   includes outcomes no host can produce: silence ([TimedOut]) and a room that is already over
- *   ([WindowClosed]).
+ *   window state. It never leaves the host as a value: the room acts on it, restoring the seat or
+ *   releasing it.
+ * - [JoinerOutcome] is how one attempt of a joiner's reconnect turned out, and it includes outcomes
+ *   no host can produce: silence ([TimedOut]) and a room that is already over ([WindowClosed]).
  *
- * **Why the split is typed rather than documented.** Both surfaces used to return the whole
- * hierarchy, so a consumer could — and the agent cookbook did — write a `when` over
- * `Room.resume(token)` with arms for [WindowNotYetOpen] and [TokenInvalid], which are host verdicts
- * a joiner can never receive. It compiled, so nothing caught it; `@sample` compilation proves a
- * branch typechecks, never that it is reachable. Narrowing the two return types makes that same
- * `when` a compile error.
+ * **Why the split is typed rather than documented.** Both halves used to be one type, so a `when`
+ * over a joiner's outcome could carry arms for host verdicts it can never receive. It compiled, so
+ * nothing caught it; narrowing the two types makes that same `when` a compile error (#2364).
  */
 public sealed interface ResumeResult {
-    /**
-     * The half a host renders: what [JoinerReconnectController.tryResume] decided about its own
-     * window state. Travels to the joiner as a
-     * [RejectCode][us.tractat.kuilt.session.admit.RejectCode], not as one of these values.
-     */
+    /** The half a host renders: what [JoinerReconnectController.tryResume] decided about its own window state. */
     public sealed interface HostVerdict : ResumeResult
 
     /**
-     * The half a joiner observes from [us.tractat.kuilt.session.Room.resume]: the host's answer
-     * ([Success] / [Refused]), its silence ([TimedOut]), or the local room having nothing left to
-     * resume onto ([WindowClosed]).
+     * The half a joiner's reconnect observes for one Hello: the host's answer ([Success] /
+     * [Refused]), its silence ([TimedOut]), or the local room having nothing left to resume onto
+     * ([WindowClosed]).
      */
     public sealed interface JoinerOutcome : ResumeResult
 
-    /** The token was valid and the window was open. Peer is now resumed. */
+    /** The seat was held and has come back: the same membership. */
     public data object Success : HostVerdict, JoinerOutcome
 
     /**
      * There is **no window to resume onto**, and no host refusal was involved.
      *
-     * As a [HostVerdict]: the window for this peer elapsed, or the token was already spent.
-     * Terminal — no later attempt with these credentials can succeed. Distinct from
-     * [WindowNotYetOpen], which looks identical from the outside but is transient (#1572).
+     * As a [HostVerdict]: the window for this peer elapsed, or was already spent on a restore.
+     * Terminal — no later attempt can restore this seat. Distinct from [WindowNotYetOpen], which
+     * looks identical from the outside but is transient (#1572).
      *
      * As a [JoinerOutcome] it is a **local** answer: the room is already terminal (it was left, or
-     * the host was lost), or the Hello could not be sent. A host `Welcome` handled once the
-     * room is terminal is moot and settles as this (#3094). And since #3159 Task 1.7 it is what a
-     * return reports when the seat was gone and the host admitted this member afresh: the room
-     * keeps that admission and stays in session, so there the remedy is none. A host's refusal — including one that
-     * says the window elapsed — arrives as [Refused] instead (#2364), so this value never carries a
-     * reason the host gave.
-     * On a terminal room the remedy is to join fresh.
+     * the host was lost), or the Hello could not be sent. A host `Welcome` handled once the room is
+     * terminal is moot and settles as this (#3094). It is also what a return reports when the seat
+     * was gone and the host admitted this member afresh — a `Welcome` naming another membership
+     * (#3215): the room keeps that admission and stays in session. A host's refusal arrives as
+     * [Refused] instead (#2364), so this value never carries a reason the host gave.
      */
     public data object WindowClosed : HostVerdict, JoinerOutcome
 
     /**
      * No window has opened for this peer *yet*.
      *
-     * The fast-reconnect race: a joiner whose link dropped silently can re-weave and present its
-     * token before the host's own liveness detector has noticed the drop. **Transient** — a retry
-     * a moment later, once the host opens the window, succeeds. Folding this into [WindowClosed]
-     * is why a joiner had to retry blindly for its whole window before it could surface a
-     * genuinely terminal refusal.
-     *
-     * A joiner never sees this value: it reaches it as
-     * `Refused(code = RejectCode.ResumeWindowNotYetOpen)`.
+     * The fast-reconnect race: a joiner whose link dropped silently can re-weave and say Hello again
+     * before the host's own liveness detector has noticed the drop. **Transient**: the room reads it
+     * as a seat still held, and restores it.
      */
     public data object WindowNotYetOpen : HostVerdict
 
     /**
-     * The token failed structural validation. [reason] describes the failure.
-     *
-     * A joiner never sees this value: it reaches it as
-     * `Refused(code = RejectCode.ResumeTokenInvalid)`.
-     */
-    public data class TokenInvalid(
-        val reason: String,
-    ) : HostVerdict
-
-    /**
      * The host **answered, and said no** — an `AdmitMessage.Reject` carrying its raw [message] and
-     * structured [code] (#2364).
+     * structured [code] (#2364), answering the Hello this attempt sent.
      *
      * The joiner-side counterpart of the host's [HostVerdict], and the same
      * `(message, code)` shape [us.tractat.kuilt.session.FailureReason.Refused] already uses for a

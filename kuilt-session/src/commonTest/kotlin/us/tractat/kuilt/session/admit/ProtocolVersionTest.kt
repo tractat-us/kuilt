@@ -16,31 +16,35 @@ import kotlin.test.assertTrue
  * that Farewell as a clean leave, and a superseded v5 joiner would reconnect. The spec rules out
  * mixed versions (Decided 10), so v5 is refused alongside every older peer.
  *
+ * v7 (#3215) retires the `Resume` frame, and every answer names the Hello it answers, so a v6 joiner,
+ * which reads neither, is refused too.
+ *
  * A version-less peer predates #1569 and stays locked out, as it has been since v2 (#1994).
  */
 class ProtocolVersionTest {
 
     @Test
-    fun `the version line is 6`() {
+    fun `the version line is 7`() {
         assertAll(
-            { assertEquals(6, ProtocolVersion.CURRENT) },
-            { assertEquals(6, ProtocolVersion.MIN_SUPPORTED) },
-            { assertEquals(6, ProtocolVersion.MAX_SUPPORTED) },
+            { assertEquals(7, ProtocolVersion.CURRENT) },
+            { assertEquals(7, ProtocolVersion.MIN_SUPPORTED) },
+            { assertEquals(7, ProtocolVersion.MAX_SUPPORTED) },
         )
     }
 
     @Test
-    fun `only version 6 is admitted`() {
+    fun `only version 7 is admitted`() {
         assertAll(
             // Positive control: a gate that refused everything would satisfy the negatives.
-            { assertTrue(ProtocolVersion.isSupported(6)) },
+            { assertTrue(ProtocolVersion.isSupported(7)) },
             { assertFalse(ProtocolVersion.isSupported(null)) },
             { assertFalse(ProtocolVersion.isSupported(1)) },
             { assertFalse(ProtocolVersion.isSupported(2), "a v2 peer sends no device key") },
             { assertFalse(ProtocolVersion.isSupported(3), "a v3 peer sends no proof of its key") },
             { assertFalse(ProtocolVersion.isSupported(4), "a v4 peer reads no restored seat") },
             { assertFalse(ProtocolVersion.isSupported(5), "a v5 peer reads no supersession") },
-            { assertFalse(ProtocolVersion.isSupported(7)) },
+            { assertFalse(ProtocolVersion.isSupported(6), "a v6 peer checks no answer against its Hello") },
+            { assertFalse(ProtocolVersion.isSupported(8)) },
         )
     }
 }

@@ -26,11 +26,7 @@ Event helpers: `openWindow(peerId, expiresAt)`, `emitResumed(peerId)`, `hostLost
 
 Outgoing inspection: `room.broadcasts: List<ByteArray>`, `room.directed: List<Pair<PeerId, ByteArray>>`.
 
-Resume: `room.resumeResult = ResumeResult.Refused("resume-window-expired", RejectCode.ResumeWindowExpired)`
-  — override the value returned by `resume()`. Typed `ResumeResult.JoinerOutcome`, so a fake cannot
-  hand back a host-side verdict, and a refusal has to name the code it is refusing with.
-
-State helpers: `setRole(role)`, `setResumeToken(token)`.
+State helpers: `setRole(role)`, `setRoomId(roomId)`.
 
 ## fakeRoomPair — wired two-room scenario
 

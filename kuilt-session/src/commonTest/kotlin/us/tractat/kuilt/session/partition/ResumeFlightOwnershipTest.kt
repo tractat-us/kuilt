@@ -142,7 +142,6 @@ class ResumeFlightOwnershipTest {
                 lock = ReentrantLock(),
                 host = FlightResumeHost(hostId),
             )
-            machine.mintTokenIfAbsent("room-1", ResumeSecret.generate())
             val bound = config.resumeTimeout.inWholeMilliseconds
 
             val owner = async { machine.resume() }
@@ -221,7 +220,6 @@ class ResumeFlightOwnershipTest {
             lock = ReentrantLock(),
             host = host,
         )
-        machine.mintTokenIfAbsent("room-1", ResumeSecret.generate())
         return Rig(seam, host, machine, { reweaves }, this)
     }
 }
@@ -243,6 +241,8 @@ private class FlightResumeHost(private val hostPeer: PeerId) : JoinerResumeHost 
     override fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant) = Unit
     override fun prepareReHello(): ByteArray = byteArrayOf(1)
     override fun forgetLatestHello() {}
+
+    override fun roomId(): String? = "room-1"
     override fun claimHostLost(): Boolean = true
     override suspend fun onReconnectFailed(at: Instant, reason: FailureReason) {
         failures += reason

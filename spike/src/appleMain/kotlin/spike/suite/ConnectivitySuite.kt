@@ -1511,8 +1511,10 @@ public class ConnectivitySuite {
                 // over a `HostLost(WindowExpired)` in which the joiner had sent zero Resumes and the host
                 // HAD partitioned it. Every clause of that sentence was false.
                 val reason = closing.reason
+                // The code was retired with the `Resume` frame (#3215): a host of this build never sends it,
+                // so this arm reads only a pre-1.8 host's refusal, by its wire id.
                 val isNotYetOpen = reason is FailureReason.Refused &&
-                    reason.code == RejectCode.ResumeWindowNotYetOpen
+                    reason.code.id == RETIRED_NOT_YET_OPEN_ID
                 if (isNotYetOpen) {
                     ctx.failures.add(
                         "blip: HostLost ${fmtMs(sinceDrop)} after the radio died, on a " +
@@ -1534,7 +1536,7 @@ public class ConnectivitySuite {
                         "reason=${closing.reason.describe()} (mine=${closing.localFabric.short()}), on a " +
                         "${fmtMs(outage.inWholeMilliseconds)} outage inside the ($lo, $hi) band. That is " +
                         "**not** the #1637 signature — #1637 is HostLost(Refused(code=" +
-                        "${RejectCode.ResumeWindowNotYetOpen.id})), a resume that kept being answered. " +
+                        "$RETIRED_NOT_YET_OPEN_ID)), a resume that kept being answered. " +
                         "This run's resume was never answered at all. seam=${seam.state.value.short()} " +
                         "peers=[${seam.peers.value.joinToString(",") { it.value.take(8) }}]" +
                         (if (neverRewove) " — the seam never got back to Woven, so no Resume was ever sent" else "") +
@@ -2183,3 +2185,6 @@ public class ConnectivitySuite {
         val HOST_HOLD_AFTER_PARTITION: Duration = 120.seconds
     }
 }
+
+/** The wire id of the retired `ResumeWindowNotYetOpen` code (#3215): the #1637 probe's signature. */
+private const val RETIRED_NOT_YET_OPEN_ID = "resume-window-not-yet-open"

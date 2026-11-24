@@ -338,7 +338,7 @@ class JoinerReconnectControllerTest {
     // ── Session mismatch ──────────────────────────────────────────────────────
 
     @Test
-    fun `mismatched RoomId returns TokenInvalid with session-mismatch reason`() =
+    fun `mismatched RoomId returns WindowClosed`() =
         runTest {
             val ctrl = controller(backgroundScope)
             ctrl.onPeerUnresponsive(peerA, at = 0L)
@@ -347,8 +347,7 @@ class JoinerReconnectControllerTest {
             val token = ProvenResume(peerId = peerA, roomId = otherSession, key = keyA)
             val result = ctrl.tryResume(token, at = 1L)
 
-            assertIs<ResumeResult.TokenInvalid>(result)
-            assertEquals("session-mismatch", result.reason)
+            assertEquals(ResumeResult.WindowClosed, result)
         }
 
     @Test

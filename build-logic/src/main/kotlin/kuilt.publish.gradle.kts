@@ -223,8 +223,8 @@ fun moduleDescription(module: String): String = when (module) {
     "kuilt-liveness" ->
         "Peer-liveness detection over a kuilt Seam: heartbeats, partition events and reachability."
     "kuilt-session" ->
-        "Membership-aware Room over a kuilt Loom: admit/identify handshake, roster, reconnect " +
-            "tokens and partition detection."
+        "Membership-aware Room over a kuilt Loom: admit/identify handshake, roster, key-bound " +
+            "return and partition detection."
     "kuilt-stream" ->
         "Wraps a byte stream as a kuilt Connection, with length-prefix framing and oversize " +
             "protection."

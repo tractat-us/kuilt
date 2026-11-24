@@ -40,8 +40,6 @@ import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFrame
 import us.tractat.kuilt.session.RoomFramePrefix
 import us.tractat.kuilt.session.SessionRole
-import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
@@ -116,7 +114,6 @@ public class FakeRoom(
     override val selfId: PeerId = PeerId("self"),
     initialRole: SessionRole = SessionRole.Host,
     initialRoster: Set<Member> = emptySet(),
-    initialResumeToken: ResumeToken? = null,
     public val channelPolicy: DeliveryPolicy = DeliveryPolicy.Reliable,
     /**
      * The [RoomId] this room reports, mirroring the shape a real room has: a host is born knowing
@@ -353,9 +350,6 @@ public class FakeRoom(
         _roomId.value = roomId
     }
 
-    private var _resumeToken: ResumeToken? = initialResumeToken
-    override val resumeToken: ResumeToken? get() = _resumeToken
-
     private val _broadcasts = mutableListOf<ByteArray>()
     private val _directed = mutableListOf<Pair<PeerId, ByteArray>>()
     /**
@@ -374,16 +368,6 @@ public class FakeRoom(
 
     /** Accepted raw and channel (peer, payload) pairs, in call order. */
     public val directed: List<Pair<PeerId, ByteArray>> get() = _directed.toList()
-
-    /**
-     * Configurable result returned by [resume]. Defaults to [ResumeResult.Success].
-     *
-     * Typed [ResumeResult.JoinerOutcome], the half of the hierarchy a real `Room.resume` can
-     * produce (#2364) — so a fake cannot hand a consumer a host-side verdict no room would ever
-     * return, and a test that wants a *refusal* has to state the
-     * [us.tractat.kuilt.session.admit.RejectCode] it is refusing with.
-     */
-    public var resumeResult: ResumeResult.JoinerOutcome = ResumeResult.Success
 
     /**
      * Optional hook invoked after [broadcast] is recorded (and the left-check passes).
@@ -422,8 +406,6 @@ public class FakeRoom(
         if (left.value) return
         _directed.add(peer to bytes)
     }
-
-    override suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome = resumeResult
 
     /**
      * What [flush] answers while this room is live. Defaults to [FlushOutcome.Drained], since this fake
@@ -619,11 +601,6 @@ public class FakeRoom(
     /** Transition [role] to [newRole]. */
     public fun setRole(newRole: SessionRole) {
         _role.value = newRole
-    }
-
-    /** Update [resumeToken]. */
-    public fun setResumeToken(token: ResumeToken?) {
-        _resumeToken = token
     }
 
     // ── channel ───────────────────────────────────────────────────────────────

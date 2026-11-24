@@ -203,7 +203,6 @@ class TransportCloseWindowTest {
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom1.roster.first { it.isNotEmpty() }
-            val token = joinerRoom1.resumeToken!!
 
             // Drop, then reconnect a fresh transport with the SAME PeerId.
             clientMesh1.close()
@@ -236,7 +235,6 @@ class TransportCloseWindowTest {
                 { assertEquals(client, resumed.peerId) },
                 { assertEquals(listOf(client), hostRoom.roster.value.map { it.id }, "one seat, restored") },
                 { assertEquals(Liveness.Connected, hostRoom.roster.value.single().liveness) },
-                { assertEquals(token.peerId, client, "rig: the first room held a token for this id") },
             )
         }
 
@@ -289,7 +287,6 @@ class TransportCloseWindowTest {
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom1.roster.first { it.isNotEmpty() }
-            val token = joinerRoom1.resumeToken!!
 
             // Collect ALL host events from this point through the whole reconnect flow.
             val hostEvents = mutableListOf<MembershipEvent>()
@@ -317,7 +314,7 @@ class TransportCloseWindowTest {
             // Fresh SeamRoom re-broadcasts Hello on Woven → host sees Hello from an
             // already-admitted PeerId → re-admit path.
             joinerRoom2.roster.first { it.isNotEmpty() }
-            joinerRoom2.resume(token)
+            joinerRoom2.sayHelloAgain()
 
             // Let the re-admit / resume frames settle.
             repeat(4) { clockMs += 100L; advanceTimeBy(100L) }
@@ -376,7 +373,7 @@ class TransportCloseWindowTest {
             ).also { it.start() }
 
             hostRoom.roster.first { it.size == 1 }
-            val heldWhileAdmitted = hostRoom.heldResumeSecretCount()
+            val heldWhileAdmitted = hostRoom.heldMembershipCount()
 
             val left = async {
                 hostRoom.events.filterIsInstance<MembershipEvent.Left>().first()
@@ -389,11 +386,11 @@ class TransportCloseWindowTest {
             repeat(8) { clockMs += 100L; advanceTimeBy(100L) }
 
             assertEquals(LeaveReason.PartitionExpired, left.await().reason)
-            // The expired member's resume secret goes with it (#3165): the host holds one per
+            // The expired member's membership id goes with it (#3215): the host holds one per
             // current member, so a fabric minting a fresh id per connection cannot grow the map.
             assertAll(
-                { assertEquals(1, heldWhileAdmitted, "precondition: the admitted member's secret is held") },
-                { assertEquals(0, hostRoom.heldResumeSecretCount(), "an expired member's secret must be pruned") },
+                { assertEquals(1, heldWhileAdmitted, "precondition: the admitted member's membership id is held") },
+                { assertEquals(0, hostRoom.heldMembershipCount(), "an expired member's membership id must be pruned") },
             )
         }
 }

@@ -126,7 +126,7 @@ class JoinerReconnectTest {
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(joinerRoom.resumeToken, "joiner must hold a resume token after admit")
+            assertNotNull(joinerRoom.roomId.value, "joiner must be admitted")
 
             val joinerPartitioned = async { joinerRoom.events.filterIsInstance<MembershipEvent.Partitioned>().first() }
             val joinerWindowOpened = async { joinerRoom.events.filterIsInstance<MembershipEvent.WindowOpened>().first() }
@@ -205,7 +205,7 @@ class JoinerReconnectTest {
             ).also { it.start() }
 
             joinerRoom.roster.first { it.isNotEmpty() }
-            val token = assertNotNull(joinerRoom.resumeToken)
+            assertNotNull(joinerRoom.roomId.value)
 
             val hostLost = async { joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
 
@@ -219,7 +219,7 @@ class JoinerReconnectTest {
             assertEquals(FailureReason.WindowExpired, event.reason)
 
             // Terminal after HostLost — a post-hoc resume is rejected.
-            assertIs<ResumeResult.WindowClosed>(joinerRoom.resume(token))
+            assertIs<ResumeResult.WindowClosed>(joinerRoom.sayHelloAgain())
         }
 
     @Test
@@ -288,7 +288,7 @@ class JoinerReconnectTest {
             ).also { it.start() }
 
             joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(joinerRoom.resumeToken, "joiner must hold a resume token after admit")
+            assertNotNull(joinerRoom.roomId.value, "joiner must be admitted")
 
             val joinerLog = EventLog(joinerRoom, backgroundScope)
             val hostLog = EventLog(hostRoom, backgroundScope)
@@ -332,7 +332,7 @@ class JoinerReconnectTest {
             ).also { it.start() }
 
             val hostLost = async { joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
-            assertNull(joinerRoom.resumeToken, "joiner torn before admit has no resume token")
+            assertNull(joinerRoom.roomId.value, "joiner torn before admit has no room id")
 
             // Tear the joiner's transport. HostLost must fire with NO time advancement — the
             // no-token path is immediate, it does not wait out the reconnect window.
@@ -340,7 +340,7 @@ class JoinerReconnectTest {
             runCurrent()
             assertTrue(
                 hostLost.isCompleted,
-                "with no resume token the joiner must go HostLost immediately, not hold the window",
+                "with no host the joiner must go HostLost immediately, not hold the window",
             )
             assertIs<MembershipEvent.HostLost>(hostLost.await())
         }
@@ -369,7 +369,7 @@ class JoinerReconnectTest {
             ).also { it.start() }
 
             val hostLost = async { joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
-            assertNull(joinerRoom.resumeToken, "joiner torn before admit has no resume token")
+            assertNull(joinerRoom.roomId.value, "joiner torn before admit has no room id")
 
             joinerSeam.tear()
             runCurrent()
@@ -386,7 +386,7 @@ class JoinerReconnectTest {
 
             h.hostRoom.roster.first { it.size == 1 }
             h.joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(h.joinerRoom.resumeToken, "joiner must hold a resume token after admit")
+            assertNotNull(h.joinerRoom.roomId.value, "joiner must be admitted")
 
             val resumes = mutableListOf<MembershipEvent.Resumed>()
             backgroundScope.launch {
@@ -427,7 +427,7 @@ class JoinerReconnectTest {
             val hostId = h.hostRoom.selfId
             h.hostRoom.roster.first { it.size == 1 }
             h.joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(h.joinerRoom.resumeToken)
+            assertNotNull(h.joinerRoom.roomId.value)
             assertTrue(h.joinerRoom.hasDetector(hostId), "host detector runs while connected")
 
             val resumed = async { h.joinerRoom.events.filterIsInstance<MembershipEvent.Resumed>().first() }
@@ -469,7 +469,7 @@ class JoinerReconnectTest {
 
             h.hostRoom.roster.first { it.size == 1 }
             h.joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(h.joinerRoom.resumeToken)
+            assertNotNull(h.joinerRoom.roomId.value)
 
             val hostLost = async { h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
 
@@ -529,7 +529,7 @@ class JoinerReconnectTest {
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }
-            assertNotNull(joinerRoom.resumeToken, "joiner must be admitted with a token")
+            assertNotNull(joinerRoom.roomId.value, "joiner must be admitted")
 
             val hostLost = async { joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
             assertFalse(throwaway.state.value is SeamState.Torn, "throwaway starts open")

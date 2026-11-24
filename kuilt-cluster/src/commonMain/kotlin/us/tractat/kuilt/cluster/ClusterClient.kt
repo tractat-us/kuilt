@@ -71,12 +71,9 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ClusterClient")
  * ## Failover model (S3a API contract; S3b wires the production path)
  *
  * On transport tear the underlying [ServerClusterReconnect] advances to the next
- * endpoint. When it presents the previous [us.tractat.kuilt.session.partition.ResumeToken]
- * to the new server, the response is a terminal
- * [us.tractat.kuilt.session.partition.ResumeResult.Refused] (proven by #532; the code is
- * `RejectCode.ResumeTokenInvalid`, since each server mints its own `RoomId` and keeps its
- * reconnect windows in memory), so a cross-server resume always degrades to fresh-join.
- * `ClusterClient` treats that refusal as a fall-back-to-fresh-join signal, **not** an error.
+ * endpoint. The new server holds no seat for the client's device key — each server keeps its seats
+ * and reconnect windows in memory — so it admits the client as a new member: a cross-server
+ * reconnect is always a fresh join, **not** an error.
  *
  * @see clusterClientWithNode for the test / caller-managed-transport construction path.
  */
@@ -224,10 +221,10 @@ public data class ClusterEndpoints(
  *
  * ## Cross-server resume
  *
- * A cross-server failover always requires a fresh join (proven by #532): each server's
- * reconnect-window registry is in-memory and per-room-instance and its `RoomId` is its own, so a
- * terminal `ResumeResult.Refused` is the invariable response. This extension therefore always performs a plain `loom.join()`
- * on every reconnect — there is no optimistic resume attempt at the Seam level.
+ * A cross-server failover is always a fresh join (#532): each server keeps its seats and its
+ * reconnect windows in memory, per room instance, so the next server holds no seat for the client's
+ * device key. This extension therefore always performs a plain `loom.join()` on every reconnect:
+ * there is no attempt to restore a seat at the Seam level.
  *
  * ## Dispatcher injection
  *
@@ -321,8 +318,8 @@ public fun CoroutineScope.clusterClient(
  * room and swaps the [ManagedSeam] — the [RoutedRaftTransport] and [RaftNode] live untouched across
  * failover.
  *
- * Cross-server resume is always a terminal [us.tractat.kuilt.session.partition.ResumeResult.Refused]
- * per #532 so fresh-join (no resume attempt) is used on every reconnect.
+ * A cross-server reconnect is always a fresh join (#532): the next server holds no seat for the
+ * client, so no restore is attempted.
  */
 internal fun buildClusterClient(
     scope: CoroutineScope,

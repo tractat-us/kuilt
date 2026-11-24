@@ -53,6 +53,21 @@ package us.tractat.kuilt.session.admit
  * A v5 member would read that Farewell as a clean leave and, if superseded, reconnect, so the gate
  * refuses it.
  *
+ * ## Version 7 — a return is a Hello, and every answer names its Hello (#3215)
+ *
+ * Version 7 retires the `Resume` and `ResumeAck` frames: a joiner coming back after a dropped link
+ * says Hello again, and its device key proves the seat is its own. The direct Welcome and every
+ * Reject carry the nonce of the Hello they answer, so a joiner acts only on an answer to its latest
+ * Hello, and the direct Welcome carries the id of the membership it admits, so a returning joiner
+ * can tell its own seat from a fresh admission. A v6 joiner reads neither, so it would still take an
+ * answer to an older Hello as the answer to its latest one; the gate refuses it.
+ *
+ * **One answer may name no Hello.** A host older than v7 cannot name one, and what it sends a v7
+ * Hello is [RejectCode.ProtocolMismatch]. So before its first admission a joiner acts on a
+ * `ProtocolMismatch` that names no Hello, and fails the join with it; ignoring it would turn the old
+ * host's answer into an admit timeout. Every other code, and the same code once the joiner has been
+ * admitted (a reconnect included), counts only when it names the latest Hello.
+ *
  * Every later change to what a joiner must send to be admitted bumps this line again.
  *
  * ## The limit of this gate, stated plainly
@@ -63,13 +78,13 @@ package us.tractat.kuilt.session.admit
  */
 public object ProtocolVersion {
     /** The protocol version this build stamps into every [AdmitMessage.Hello] it sends. */
-    public const val CURRENT: Int = 6
+    public const val CURRENT: Int = 7
 
     /** Oldest declared version this build will admit. */
-    public const val MIN_SUPPORTED: Int = 6
+    public const val MIN_SUPPORTED: Int = 7
 
     /** Newest declared version this build will admit. */
-    public const val MAX_SUPPORTED: Int = 6
+    public const val MAX_SUPPORTED: Int = 7
 
     /**
      * Whether a joiner's declared [version] is one this host can admit.

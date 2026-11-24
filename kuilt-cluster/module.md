@@ -144,7 +144,7 @@ cluster.close()
 :kuilt-cluster
   api(:kuilt-core)       ← Loom, Seam, PeerId, Tag
   api(:kuilt-raft)       ← RaftNode, ClusterConfig, ClientSessionTable, Committed
-  api(:kuilt-session)    ← ServerClusterReconnect, SeamRoomFactory, ResumeToken
+  api(:kuilt-session)    ← ServerClusterReconnect, SeamRoomFactory
   impl(:kuilt-websocket) ← KtorRoomHost (jvmAndAndroidMain only)
 ```
 

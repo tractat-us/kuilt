@@ -6,7 +6,7 @@ Rows pair `;`-separated groups in order.
 
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
-|a rejoin/reconnect loop, a resume token, a grace window; why a rejoin was refused; a peer id kept across processes|`Room.resumeToken` + `Room.resume`; `ResumeResult.JoinerOutcome` (`code.retryable`); a new peer id per process — a reused superseded one is told `Farewell(supersededBy)`|`session.md#rejoin--reconnect`|
+|a rejoin/reconnect loop, a resume token, a grace window; why a rejoin was refused; a peer id kept across processes|nothing to call: the room says Hello again, its `DeviceKeyStore` proves the seat; `HostLost.reason` (`FailureReason.Refused` → `code.retryable`); a new peer id per process — a reused superseded one is told `Farewell(supersededBy)`|`session.md#rejoin--reconnect`|
 |a device key/did:key kept across launches, a returning device; signing app bytes with that key; a "remember this device" pass, revoked across restarts; who joins, testing it|`DeviceKeyStore.platform` (`DeviceKeyStoreConformanceSuite`) → `DeviceKey.signApp` + `DidKey.verifyApp` (never the raw `sign`); `Grant` + `GrantTrust`/`RevocationList.open`; `AdmissionPolicy`/`HostAdmission`/`admissionRequest`|`session.md#device-identity--return`|
 |a "why did we drop" classifier; a retry/back-off loop; a per-session id every peer agrees on|`MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`); `ExponentialBackoff`; `Room.roomId`/`RoomFactory.host(…, roomId = …)`|`session.md#rejoin--reconnect`|
 |a heartbeat, an idle reaper, "is this peer alive"; reaping an unjoined room; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|

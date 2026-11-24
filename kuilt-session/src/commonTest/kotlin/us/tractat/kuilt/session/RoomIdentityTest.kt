@@ -129,9 +129,8 @@ class RoomIdentityTest {
      * link, a matchmaker-assigned game id — is adopted by every room told to use it, so two rooms
      * naming one logical game agree rather than each inventing an id.
      *
-     * Deliberately **not** framed as host-restart resume. Reusing an id does not make a restarted
-     * host accept a `ResumeToken`: it has an empty roster, so `handleReconnectResumed` bails at
-     * `updateMemberLiveness(...) ?: return` and never sends `ResumeAck`. That is #1593's problem.
+     * Deliberately **not** framed as host-restart resume. Reusing an id does not give a restarted
+     * host its seats back: it has an empty roster, so a returning device is admitted as a new member.
      */
     @Test
     fun `two rooms told to use one id adopt it rather than minting`() =
@@ -238,15 +237,12 @@ class RoomIdentityTest {
         }
 
     /**
-     * A regression guard on the resume path, not a demonstration of the bug — it holds before and
-     * after the mint changes, and that is the point.
-     *
-     * `DefaultJoinerReconnectController.tryResume` refuses any token whose [RoomId] differs from the
-     * room's own, so this equality is exactly what keeps a joiner able to resume. A mint that moved
-     * the host's id without moving the one the `Welcome` carries would strand every token.
+     * A regression guard, not a demonstration of the bug — it holds before and after the mint
+     * changes, and that is the point: a mint that moved the host's id without moving the one the
+     * `Welcome` carries would leave the joiner naming another room.
      */
     @Test
-    fun `a joiner's resume token names the same room the host holds`() =
+    fun `a joiner learns the same room id the host holds`() =
         runTest {
             val loom = InMemoryLoom()
             val f = factory(loom, backgroundScope)
@@ -256,8 +252,7 @@ class RoomIdentityTest {
 
             joinerRoom.roster.first { it.isNotEmpty() }
 
-            val token = assertNotNull(joinerRoom.resumeToken, "joiner must hold a resume token after admit")
-            assertEquals(hostRoom.roomId.value, token.roomId)
+            assertEquals(hostRoom.roomId.value, assertNotNull(joinerRoom.roomId.value, "joiner must be admitted"))
 
             joinerRoom.leave()
             hostRoom.leave()

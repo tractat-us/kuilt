@@ -34,9 +34,6 @@ import us.tractat.kuilt.session.RoomFramePrefix
 import us.tractat.kuilt.session.ReservedRoomPrefix
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
-import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeSecret
-import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.assertAll
 import kotlin.coroutines.CoroutineContext
@@ -176,12 +173,6 @@ class FakeRoomTest {
         assertTrue(room.roster.value.isEmpty())
     }
 
-    @Test
-    fun `default resumeToken is null`() = runTest {
-        val room = FakeRoom()
-        assertNull(room.resumeToken)
-    }
-
     // ── Room identity (#1594) ────────────────────────────────────────────────
 
     /**
@@ -238,19 +229,16 @@ class FakeRoomTest {
 
     @Test
     fun `custom constructor args are respected`() = runTest {
-        val token = ResumeToken(PeerId("p"), RoomId("r"), issuedAt = 0L, secret = ResumeSecret.generate())
         val alice = member(PeerId("alice"))
         val room = FakeRoom(
             selfId = PeerId("alice"),
             initialRole = SessionRole.Joiner,
             initialRoster = setOf(alice),
-            initialResumeToken = token,
         )
         assertAll(
             { assertEquals(PeerId("alice"), room.selfId) },
             { assertEquals(SessionRole.Joiner, room.role.value) },
             { assertEquals(setOf(alice), room.roster.value) },
-            { assertEquals(token, room.resumeToken) },
         )
     }
 
@@ -480,23 +468,6 @@ class FakeRoomTest {
         )
     }
 
-    // ── resume ────────────────────────────────────────────────────────────────
-
-    @Test
-    fun `resume returns Success by default`() = runTest {
-        val room = FakeRoom()
-        val token = ResumeToken(PeerId("self"), RoomId("r"), issuedAt = 0L, secret = ResumeSecret.generate())
-        assertIs<ResumeResult.Success>(room.resume(token))
-    }
-
-    @Test
-    fun `resume returns overridden result`() = runTest {
-        val room = FakeRoom()
-        room.resumeResult = ResumeResult.WindowClosed
-        val token = ResumeToken(PeerId("self"), RoomId("r"), issuedAt = 0L, secret = ResumeSecret.generate())
-        assertIs<ResumeResult.WindowClosed>(room.resume(token))
-    }
-
     // ── leave ─────────────────────────────────────────────────────────────────
 
     @Test
@@ -596,29 +567,13 @@ class FakeRoomTest {
         assertFailsWith<IllegalArgumentException> { room.addMember(member(PeerId("self"))) }
     }
 
-    // ── role / resumeToken helpers ────────────────────────────────────────────
+    // ── role helpers ────────────────────────────────────────────
 
     @Test
     fun `setRole updates role flow`() = runTest {
         val room = FakeRoom(initialRole = SessionRole.Host)
         room.setRole(SessionRole.Joiner)
         assertEquals(SessionRole.Joiner, room.role.value)
-    }
-
-    @Test
-    fun `setResumeToken updates resumeToken`() = runTest {
-        val room = FakeRoom()
-        val token = ResumeToken(PeerId("self"), RoomId("r"), issuedAt = 42L, secret = ResumeSecret.generate())
-        room.setResumeToken(token)
-        assertEquals(token, room.resumeToken)
-    }
-
-    @Test
-    fun `setResumeToken to null clears resumeToken`() = runTest {
-        val token = ResumeToken(PeerId("self"), RoomId("r"), issuedAt = 0L, secret = ResumeSecret.generate())
-        val room = FakeRoom(initialResumeToken = token)
-        room.setResumeToken(null)
-        assertNull(room.resumeToken)
     }
 
     // ── localFabric ──────────────────────────────────────────────────────────

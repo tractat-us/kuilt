@@ -25,6 +25,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -166,7 +167,9 @@ class ProvenRestoreTest {
     /**
      * Bob says Hello again while his seat is still connected — a restart faster than the host's
      * timeout. The seat is restored without asking the controller, which would answer
-     * `WindowNotYetOpen` for a window never opened (Amendment A § 1.5).
+     * `WindowNotYetOpen` for a window never opened (Amendment A § 1.5). The host never saw Bob go, so
+     * it announces nothing (#3215: `Resumed` is once per partition), and its Welcome names the
+     * membership Bob was admitted under, which is how Bob tells this from a fresh admission.
      */
     @Test
     fun stillConnectedSeatRestoresAndSupersedesOldLink() = runTest {
@@ -174,6 +177,7 @@ class ProvenRestoreTest {
         host.admit(bob, bobKey, nonce = 1)
         host.admit(carol, carolKey, nonce = 2)
         assertEquals(Liveness.Connected, host.member(bob)?.liveness, "rig: Bob's seat is connected when he says Hello again")
+        val admittedAs = host.sentTo(bob).welcomesFor(bob).single().membership
 
         val mark = host.events.mark()
         val toBob = host.sentTo(bob).size
@@ -181,10 +185,13 @@ class ProvenRestoreTest {
         host.admit(bob, bobKey, nonce = 3)
 
         val edges = host.events.edgesSince(mark)
+        val restored = host.sentTo(bob).drop(toBob).welcomesFor(bob)
         assertAll(
             { assertTrue(host.hold.calls.isEmpty(), "a connected seat is restored without tryResume") },
-            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(bob)), edges, "host: ${edges.render()}") },
-            { assertEquals(listOf(ReturnKind.Restored), host.sentTo(bob).drop(toBob).welcomesFor(bob).map { it.returnKind }) },
+            { assertEquals(emptyList(), edges, "a connected seat's restore is silent: ${edges.render()}") },
+            { assertEquals(listOf(ReturnKind.Restored), restored.map { it.returnKind }) },
+            { assertNotNull(admittedAs, "rig: the admission named a membership") },
+            { assertEquals(listOf(admittedAs), restored.map { it.membership }, "the restore names the same membership") },
             { assertTrue(host.sentTo(carol).drop(toCarol).none { it.names(bob) }, "nothing at all reaches a bystander") },
             { assertEquals(bobKey.id, host.member(bob)?.key) },
             { assertEquals(2, host.room.roster.value.size, "still one seat for Bob") },
@@ -192,13 +199,13 @@ class ProvenRestoreTest {
         host.room.leave()
     }
 
-    // ── Resumed fires once per return (Amendment D) ──────────────────────────
+    // ── Resumed fires once per partition (Amendment E, #3215) ────────────────
 
     /**
-     * Bob's held seat comes back, and a retry Hello from the same return reaches it: the joiner's
-     * attempt timed out before the host's `Welcome` arrived, so it said Hello again. The retry is
-     * challenged and its proof restores the connected seat, and the joiner gets its `Welcome` again.
-     * The seat came back once, so the host emits one `Resumed` (Amendment D).
+     * Bob's held seat comes back, and a retry Hello reaches it: the joiner's attempt timed out before
+     * the host's `Welcome` arrived, so it said Hello again. The retry is challenged and its proof
+     * restores the connected seat, and the joiner gets its `Welcome` again. The partition ended once,
+     * so the host emits one `Resumed`.
      */
     @Test
     fun retryHelloToASeatRestoredForThisReturnEmitsNoSecondResumed() = runTest {
@@ -223,7 +230,7 @@ class ProvenRestoreTest {
                     "rig: the retry's proof restored the seat and was answered",
                 )
             },
-            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(bob)), edges, "one Resumed per return: ${edges.render()}") },
+            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(bob)), edges, "one Resumed per partition: ${edges.render()}") },
             { assertEquals(Liveness.Connected, host.member(bob)?.liveness) },
         )
         host.room.leave()
@@ -231,12 +238,12 @@ class ProvenRestoreTest {
 
     /**
      * The same, for a seat the host never partitioned: a restart faster than the host's timeout, and
-     * then a retry from the same return. The host cannot tell this retry from a second quick restart,
-     * since a Hello carries nothing about the return it belongs to. So a return here runs from the
-     * first restore to the seat's next partition.
+     * then a retry. The host saw no partition, so neither restore announces anything (#3215). The
+     * limit Amendment D accepted — a second quick restart that the host could not tell from a retry —
+     * dissolves: the host says nothing, and the joiner reads its restore from the membership.
      */
     @Test
-    fun retryHelloToAConnectedSeatAlreadyRestoredEmitsNoSecondResumed() = runTest {
+    fun aConnectedSeatRestoredTwiceEmitsNoResumed() = runTest {
         val host = rawHost(joiners = setOf(bob, carol))
         host.admit(bob, bobKey, nonce = 1)
         host.admit(carol, carolKey, nonce = 2)
@@ -256,14 +263,14 @@ class ProvenRestoreTest {
                     "rig: both proofs restored the seat",
                 )
             },
-            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(bob)), edges, "host: ${edges.render()}") },
+            { assertEquals(emptyList(), edges, "host: ${edges.render()}") },
         )
         host.room.leave()
     }
 
     /**
-     * The converse: a return ends when the host loses the seat again. Bob's seat is restored, goes
-     * quiet a second time, and comes back. That is a new return, with its own `Resumed`.
+     * The converse: each partition has its own recovery. Bob's seat is restored, goes quiet a second
+     * time, and comes back. That is a new partition ended, with its own `Resumed`.
      */
     @Test
     fun aSeatLostAgainAfterItsRestoreHasANewReturnWithItsOwnResumed() = runTest {
@@ -280,13 +287,13 @@ class ProvenRestoreTest {
 
         val edges = host.events.edgesSince(mark)
         assertAll(
-            { assertEquals(listOf(bob, bob), host.hold.calls.map { it.peerId }, "rig: each partition's return asked the controller") },
+            { assertEquals(listOf(bob, bob), host.hold.calls.map { it.peerId }, "rig: each partition's restore asked the controller") },
             { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.Success, ResumeResult.Success), host.hold.verdicts) },
             {
                 assertEquals(
                     listOf<MembershipEvent>(MembershipEvent.Resumed(bob), MembershipEvent.Resumed(bob)),
                     edges,
-                    "one Resumed for each return: ${edges.render()}",
+                    "one Resumed for each partition: ${edges.render()}",
                 )
             },
             { assertEquals(Liveness.Connected, host.member(bob)?.liveness) },
@@ -295,12 +302,12 @@ class ProvenRestoreTest {
     }
 
     /**
-     * The other converse: a return ends when its member leaves. Bob's seat is restored, he says
-     * Goodbye, and he is admitted again as a new member. His next restart is that membership's first
-     * return, with its own `Resumed`.
+     * A membership id is the membership's (#3215): Bob's seat is restored and keeps its id, he says
+     * Goodbye, and he is admitted again as a new member under a new id, which his next restore keeps.
+     * Neither restore ends a partition, so neither is announced.
      */
     @Test
-    fun aMemberAdmittedAgainAfterLeavingHasANewReturnWithItsOwnResumed() = runTest {
+    fun aMemberAdmittedAgainAfterLeavingHasANewMembership() = runTest {
         val host = rawHost(joiners = setOf(bob, carol))
         host.admit(bob, bobKey, nonce = 1)
         host.admit(carol, carolKey, nonce = 2)
@@ -313,10 +320,14 @@ class ProvenRestoreTest {
         host.admit(bob, bobKey, nonce = 5)
 
         val edges = host.events.edgesSince(mark).map { it.describe() }
-        assertEquals(
-            listOf("Resumed(bob)", "Left(bob, ${LeaveReason.Normal})", "Joined(bob)", "Resumed(bob)"),
-            edges,
-            "one Resumed for each membership's return",
+        val memberships = host.sentTo(bob).welcomesFor(bob).map { it.membership }
+        assertAll(
+            { assertEquals(listOf("Left(bob, ${LeaveReason.Normal})", "Joined(bob)"), edges, "no Resumed for a connected seat") },
+            { assertEquals(4, memberships.size, "rig: four Welcomes to Bob: $memberships") },
+            { assertTrue(memberships.all { it != null }, "every direct Welcome names a membership: $memberships") },
+            { assertEquals(memberships[0], memberships[1], "a restore keeps the membership") },
+            { assertNotEquals(memberships[1], memberships[2], "a new admission is a new membership") },
+            { assertEquals(memberships[2], memberships[3], "and its restore keeps that one") },
         )
         host.room.leave()
     }
@@ -690,7 +701,8 @@ class ProvenRestoreTest {
 
         assertAll(
             { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.WindowClosed), host.hold.verdicts, "rig: the refusal came after the heal") },
-            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(bob)), edges, "restored, not released: ${edges.render()}") },
+            { assertTrue(edges.none { it is MembershipEvent.Left || it is MembershipEvent.Joined }, "restored, not released: ${edges.render()}") },
+            { assertTrue(edges.none { it is MembershipEvent.Resumed }, "the heal ended the partition, so the restore is silent: ${edges.render()}") },
             { assertEquals(listOf(ReturnKind.Restored), host.sentTo(bob).drop(toBob).welcomesFor(bob).map { it.returnKind }) },
             {
                 assertTrue(
@@ -833,7 +845,7 @@ class ProvenRestoreTest {
         val edges = host.events.edgesSince(mark)
 
         assertAll(
-            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(tab)), edges, edges.render()) },
+            { assertEquals(emptyList(), edges, "a connected seat's restore is silent: ${edges.render()}") },
             { assertEquals(listOf(ReturnKind.Restored), host.sentTo(tab).drop(toTab).welcomesFor(tab).map { it.returnKind }) },
             { assertEquals(1, host.room.roster.value.size) },
         )

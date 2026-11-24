@@ -163,7 +163,7 @@ Keep real-network smoke tests in a separate test that is opt-in (e.g. `-Pmy.fabr
 When your product needs room semantics (identified members, host role,
 reconnect behavior), add `kuilt-session`.
 
-`SeamRoomFactory` wraps any `Loom` and produces `Room`s with an admit/identify handshake, a roster of admitted members, reconnect tokens, and partition detection:
+`SeamRoomFactory` wraps any `Loom` and produces `Room`s with an admit/identify handshake, a roster of admitted members, key-bound return, and partition detection:
 
 ```kotlin
 // The store holds this device's key. Every room the factory makes shares it.

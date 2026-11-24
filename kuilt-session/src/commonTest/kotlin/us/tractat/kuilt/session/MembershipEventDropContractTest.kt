@@ -70,7 +70,7 @@ import kotlin.time.Instant
  * One asymmetry remains, pinned deliberately because a consumer that assumes symmetry gets it wrong:
  *
  * 1. **The healed peer emits [MembershipEvent.Recovered], never [MembershipEvent.Resumed].**
- *    `Resumed` is the *resume-handshake* outcome (token presented, `ResumeAck` returned). Nothing
+ *    `Resumed` is the *return* outcome (a Hello again after a torn link, its seat restored). Nothing
  *    tears on this lane, so nothing resumes — the seam simply starts carrying pongs again and both
  *    detectors report `PeerRecovered`. A reducer that waits for `Resumed` to clear a "reconnecting…"
  *    banner will hang on the exact case the banner exists for.

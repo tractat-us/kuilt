@@ -1,7 +1,7 @@
 package us.tractat.kuilt.session.admit
 
 /**
- * Why a host refused a joiner's [AdmitMessage.Hello] or [AdmitMessage.Resume].
+ * Why a host refused a joiner's [AdmitMessage.Hello].
  *
  * The structured companion to [AdmitMessage.Reject.reason], which stays free text for humans
  * reading a log. Before this existed a consumer had to string-match the reason to tell a
@@ -16,8 +16,8 @@ package us.tractat.kuilt.session.admit
  * **[retryable] defaults to `true`, deliberately.** Retrying is what the joiner did before typed
  * codes existed, so an unrecognised code preserves that behaviour exactly; only a code that
  * explicitly declares itself terminal changes it. The dangerous direction is the other one:
- * treating an unknown refusal as terminal would break the fast-reconnect race, where a resume
- * that arrives before the host's detector fires is rejected and a retry a moment later succeeds.
+ * treating an unknown refusal as terminal would end a joiner's reconnect on a refusal its host
+ * meant as passing, such as [HostFailed], and the retry a moment later would have succeeded.
  *
  * @sample us.tractat.kuilt.session.classifyRejectCodeSample
  */
@@ -40,29 +40,13 @@ public interface RejectCode {
     }
 
     /**
-     * No reconnect window is open for this peer *yet* — the fast-reconnect race: the joiner
-     * re-wove and resumed before the host's own liveness detector noticed the drop. Retryable,
-     * and the retry is what recovers the session.
-     */
-    public object ResumeWindowNotYetOpen : RejectCode {
-        override val id: String = "resume-window-not-yet-open"
-    }
-
-    /**
      * The joiner declared an admit-protocol version this host cannot speak — outside
      * [ProtocolVersion.MIN_SUPPORTED]..[ProtocolVersion.MAX_SUPPORTED] (#1569). Terminal: retrying
      * a version you don't support is futile; the peer must upgrade or downgrade its build. A joiner
-     * that sends *no* version (a peer predating the field) is admitted as legacy, so this code
-     * never fires for the additive case.
+     * that sends *no* version (a peer predating the field) is refused with it too.
      */
     public object ProtocolMismatch : RejectCode {
         override val id: String = "protocol-mismatch"
-        override val retryable: Boolean = false
-    }
-
-    /** The reconnect window closed — it elapsed, or the token was already spent. Terminal. */
-    public object ResumeWindowExpired : RejectCode {
-        override val id: String = "resume-window-expired"
         override val retryable: Boolean = false
     }
 
@@ -97,12 +81,6 @@ public interface RejectCode {
         override val id: String = "host-failed"
     }
 
-    /** The token failed structural validation (wrong room). Terminal. */
-    public object ResumeTokenInvalid : RejectCode {
-        override val id: String = "resume-token-invalid"
-        override val retryable: Boolean = false
-    }
-
     /**
      * A code this build does not know: a peer that predates typed codes (empty [id]), a newer
      * build's addition, or another module's own code. Retryable — see the type KDoc.
@@ -126,9 +104,6 @@ public interface RejectCode {
             null -> Unspecified
             RoomMismatch.id -> RoomMismatch
             ProtocolMismatch.id -> ProtocolMismatch
-            ResumeWindowNotYetOpen.id -> ResumeWindowNotYetOpen
-            ResumeWindowExpired.id -> ResumeWindowExpired
-            ResumeTokenInvalid.id -> ResumeTokenInvalid
             BadProof.id -> BadProof
             KeyConflict.id -> KeyConflict
             HostFailed.id -> HostFailed
