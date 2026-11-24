@@ -2818,7 +2818,7 @@ internal class SeamRoom(
 
             namedSinceHello += assignedId
             // The host's own Welcome is the last of its admission burst (sendAdmissionBurst).
-            if (assignedId == sender && rosterRebuildPending) dropped += rebuildRoster(host = sender)
+            if (assignedId == sender && rosterRebuildPending) dropped += rebuildRoster()
 
             if (admittedById.containsKey(assignedId)) return null // already known
             val identity = MemberIdentity(
@@ -2843,11 +2843,11 @@ internal class SeamRoom(
      * A dropped member leaves with [LeaveReason.Normal]: this room did not see it go and cannot say
      * why, and `Normal` claims less than [LeaveReason.PartitionExpired], which asserts the member's
      * link died. Decided and removed in one section, so no `Welcome` naming it lands in between. The
-     * host is never dropped; it sent the burst.
+     * host is never dropped: its own `Welcome`, which calls this, has just been counted as named.
      */
-    private fun rebuildRoster(host: PeerId): List<DetachedMember> {
+    private fun rebuildRoster(): List<DetachedMember> {
         rosterRebuildPending = false
-        val gone = admittedById.keys.filter { it != host && it !in namedSinceHello }
+        val gone = admittedById.keys.filter { it !in namedSinceHello }
         if (gone.isNotEmpty()) logger.info { "room.roster.rebuilt self=${selfId.value} dropped=${gone.map { it.value }}" }
         return gone.mapNotNull { detachMember(it, LeaveReason.Normal) }
     }

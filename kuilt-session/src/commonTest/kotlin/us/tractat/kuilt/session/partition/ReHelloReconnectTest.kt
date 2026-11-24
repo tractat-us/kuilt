@@ -410,6 +410,31 @@ class ReHelloReconnectTest {
         s.room.leave()
     }
 
+    /**
+     * A burst cut short, then another outage: Bob says Hello again, and the first burst's intro
+     * arrives late, before the host answers the new Hello. It closes nothing — a new Hello ends the
+     * old burst's rebuild — so it drops nobody on the strength of a count the new Hello has reset.
+     */
+    @Test
+    fun aLateIntroFromAnEarlierBurstDropsNobody() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = scripted(others = listOf(eve))
+        val firstReHello = assertNotNull(s.dropAndHeal(), "the first reconnect says Hello again")
+        s.challenge(firstReHello)
+        s.selfWelcome(firstReHello, SECOND_MEMBERSHIP)
+        s.advance(TICK)
+        val mark = s.log.mark()
+        assertNotNull(s.dropAndHeal(), "the second reconnect says Hello again")
+        s.hostIntro()
+        s.advance(TICK)
+
+        val since = s.log.since(mark)
+        assertAll(
+            { assertTrue(s.room.roster.value.any { it.id == eve }, since.render()) },
+            { assertTrue(since.none { it is MembershipEvent.Left }, since.render()) },
+        )
+        s.room.leave()
+    }
+
     /** A terminal refusal from the host whose challenge this joiner answered ends the episode with its code. */
     @Test
     fun refusalIsSurfacedWithItsCode() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
