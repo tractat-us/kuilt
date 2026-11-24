@@ -159,7 +159,7 @@ class LocalHeddlePreviewApplyTest {
                 { assertEquals(preview.result, fromSnapshot.result, "seed $seed: the snapshot's preview has the engine's result") },
                 { assertEquals(afterAnswers, questions.map { fromSnapshot.after.answers(it) }, "seed $seed: and answers as the engine's does") },
                 { assertNull(fromSnapshot.basis, "seed $seed: a snapshot's preview has no basis") },
-                { assertEquals(persisted, h.persist(), "seed $seed: the snapshot's preview changed nothing either") },
+                { assertEquals(json, encode(persisted), "seed $seed: the snapshot the preview was handed encodes as it did") },
             )
 
             if (state.leases.any { twin.capturedPath(it.id) != paths[it.id] }) moved++
