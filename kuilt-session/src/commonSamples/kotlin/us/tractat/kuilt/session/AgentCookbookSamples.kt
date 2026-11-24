@@ -128,9 +128,9 @@ public suspend fun watchTheReturnSample(room: Room) {
             is MembershipEvent.Partitioned -> Unit
             // This room's own seat came back; state resync follows.
             is MembershipEvent.Resumed -> Unit
-            // The host is back: the link healed by itself, or the seat was gone and this room was
-            // admitted afresh. Either way it is still in session.
-            is MembershipEvent.Recovered -> Unit
+            // The seat was gone, so the host admitted this room afresh: still in session, but a new
+            // membership. Drop what was tied to the old seat. The roster rebuilds as Joined/Left.
+            is MembershipEvent.Readmitted -> Unit
             // The window closed, or the host refused the Hello. WHY is in the reason's code.
             // See classifyRejectCodeSample.
             is MembershipEvent.HostLost -> Unit

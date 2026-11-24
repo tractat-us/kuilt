@@ -276,6 +276,17 @@ public final class us/tractat/kuilt/session/MembershipEvent$Partitioned : us/tra
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/session/MembershipEvent$Readmitted : us/tractat/kuilt/session/MembershipEvent {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun copy-ngToHgY (Ljava/lang/String;)Lus/tractat/kuilt/session/MembershipEvent$Readmitted;
+	public static synthetic fun copy-ngToHgY$default (Lus/tractat/kuilt/session/MembershipEvent$Readmitted;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/MembershipEvent$Readmitted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/session/MembershipEvent$Recovered : us/tractat/kuilt/session/MembershipEvent {
 	public synthetic fun <init> (Ljava/lang/String;Lkotlin/time/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1-PaHlmAU ()Ljava/lang/String;

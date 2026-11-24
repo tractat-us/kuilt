@@ -1023,6 +1023,19 @@ sealed interface us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.
         final fun toString(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.Partitioned.toString|toString(){}[0]
     }
 
+    final class Readmitted : us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent.Readmitted|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.session/MembershipEvent.Readmitted.<init>|<init>(us.tractat.kuilt.core.PeerId){}[0]
+
+        final val peerId // us.tractat.kuilt.session/MembershipEvent.Readmitted.peerId|{}peerId[0]
+            final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/MembershipEvent.Readmitted.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/MembershipEvent.Readmitted.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ...): us.tractat.kuilt.session/MembershipEvent.Readmitted // us.tractat.kuilt.session/MembershipEvent.Readmitted.copy|copy(us.tractat.kuilt.core.PeerId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MembershipEvent.Readmitted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MembershipEvent.Readmitted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.Readmitted.toString|toString(){}[0]
+    }
+
     final class Recovered : us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent.Recovered|null[0]
         constructor <init>(us.tractat.kuilt.core/PeerId, kotlin.time/Instant) // us.tractat.kuilt.session/MembershipEvent.Recovered.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.time.Instant){}[0]
 
