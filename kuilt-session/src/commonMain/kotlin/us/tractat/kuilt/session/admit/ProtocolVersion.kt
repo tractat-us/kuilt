@@ -62,6 +62,12 @@ package us.tractat.kuilt.session.admit
  * can tell its own seat from a fresh admission. A v6 joiner reads neither, so it would still take an
  * answer to an older Hello as the answer to its latest one; the gate refuses it.
  *
+ * **One answer may name no Hello.** A host older than v7 cannot name one, and what it sends a v7
+ * Hello is [RejectCode.ProtocolMismatch]. So before its first admission a joiner acts on a
+ * `ProtocolMismatch` that names no Hello, and fails the join with it; ignoring it would turn the old
+ * host's answer into an admit timeout. Every other code, and the same code once the joiner has been
+ * admitted (a reconnect included), counts only when it names the latest Hello.
+ *
  * Every later change to what a joiner must send to be admitted bumps this line again.
  *
  * ## The limit of this gate, stated plainly

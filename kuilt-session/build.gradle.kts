@@ -60,8 +60,9 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)
             implementation(libs.kotlinx.serialization.cbor)
-            // The platform CSPRNG behind `ResumeSecret.generate()` (#3165) — the same source
-            // `:kuilt-otel-tap` mints its join codes from.
+            // The platform CSPRNG behind each Hello's joiner nonce, a challenge's host nonce and a
+            // seat's membership id (#3210, #3215) — the same source `:kuilt-otel-tap` mints its join
+            // codes from.
             implementation(libs.kotlincrypto.random.crypto.rand)
         }
         commonTest.dependencies {

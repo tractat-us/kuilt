@@ -129,9 +129,8 @@ class RoomIdentityTest {
      * link, a matchmaker-assigned game id — is adopted by every room told to use it, so two rooms
      * naming one logical game agree rather than each inventing an id.
      *
-     * Deliberately **not** framed as host-restart resume. Reusing an id does not make a restarted
-     * host accept a `ResumeToken`: it has an empty roster, so `handleReconnectResumed` bails at
-     * `updateMemberLiveness(...) ?: return` and never sends `ResumeAck`. That is #1593's problem.
+     * Deliberately **not** framed as host-restart resume. Reusing an id does not give a restarted
+     * host its seats back: it has an empty roster, so a returning device is admitted as a new member.
      */
     @Test
     fun `two rooms told to use one id adopt it rather than minting`() =

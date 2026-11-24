@@ -731,8 +731,8 @@ module over `:kuilt-core`, not part of the transport contract):
 - **Role assignment** (host vs. joiner) — not a `Loom`/`Seam` concern; `Room`
   carries it.
 - **Membership and the full join → active → leave → rejoin lifecycle**, the
-  admit/identify handshake, reconnect, resume tokens, and the host-loss terminal
-  state — all `kuilt-session` (see [usage.md](usage.md#the-membership-layer-kuilt-session)).
+  admit/identify handshake, reconnect and key-bound return, and the host-loss
+  terminal state — all `kuilt-session` (see [usage.md](usage.md#the-membership-layer-kuilt-session)).
 
 Genuinely out of scope for kuilt at every layer:
 

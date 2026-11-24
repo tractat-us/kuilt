@@ -153,8 +153,7 @@ key whose member is partitioned, and the old member leaves with
 `LeaveReason.Superseded`; beside a connected seat it gets a seat of its own. Peer ids
 are per-process: while the successor holds the seat, a Hello under the superseded id,
 from whichever process, is told `Farewell(supersededBy)`, so never reuse one. See the
-[resume recipe](agent-cookbook/session.md#rejoin--reconnect)
-and the [cold-start rejoin gap (#1593)](https://github.com/tractat-us/kuilt/issues/1593).
+[resume recipe](agent-cookbook/session.md#rejoin--reconnect).
 
 `SeamRoomFactory` takes an injectable `clock: () -> Instant` and a
 `HeartbeatConfig`; tests pass virtual time and tight intervals, production uses

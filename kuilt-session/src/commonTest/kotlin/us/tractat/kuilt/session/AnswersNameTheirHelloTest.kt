@@ -62,6 +62,30 @@ class AnswersNameTheirHelloTest {
     }
 
     /**
+     * The host holds one membership id per current member (#3215): a `Goodbye` drops the member's
+     * id with the member, and the host's own `leave` drops them all, so a fabric that mints a fresh
+     * peer id per connection cannot grow the map. (An expiry's pruning is pinned in
+     * `TransportCloseWindowTest`.)
+     */
+    @Test
+    fun aMembershipIdGoesWithItsMember() = runTest {
+        val host = rawHost(joiners = setOf(bob, carol))
+        host.admit(bob, bobKey, nonce = 12)
+        host.admit(carol, carolKey, nonce = 13)
+        val room = host.room as SeamRoom
+        val whileBothAdmitted = room.heldMembershipCount()
+        host.say(bob, AdmitMessage.Goodbye)
+        val afterGoodbye = room.heldMembershipCount()
+        host.room.leave()
+        assertAll(
+            { assertEquals(2, whileBothAdmitted, "rig: one id per admitted member") },
+            { assertNull(host.member(bob), "rig: Bob's Goodbye ended his membership") },
+            { assertEquals(1, afterGoodbye, "a Goodbye drops the member's id") },
+            { assertEquals(0, room.heldMembershipCount(), "the host's leave drops every id") },
+        )
+    }
+
+    /**
      * Refusals at the Hello gate name the Hello too (#3616 item 3), so a joiner the gate refuses
      * hears why rather than waiting out its deadline: a version this host cannot speak, and a v7
      * Hello missing its key.

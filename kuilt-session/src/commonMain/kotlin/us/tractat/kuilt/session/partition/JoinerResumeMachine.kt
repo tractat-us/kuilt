@@ -63,10 +63,13 @@ internal interface JoinerResumeHost {
 
     /**
      * Forget the latest Hello's nonce. Called when an episode is claimed
-     * ([JoinerResumeMachine.attemptReconnect]), and when a flight is installed outside one, before
-     * the attempt's own Hello is minted, so a `Welcome` or `Reject` that names an earlier Hello
+     * ([JoinerResumeMachine.attemptReconnect]), so a `Welcome` or `Reject` that names an earlier Hello
      * closes or ends nothing (review round 1 on #3614; #3215). Until the next [prepareReHello] the
      * room answers no challenge and acts on no answer, since there is no Hello for one to name.
+     *
+     * Also called when a flight is installed outside an episode, before its Hello is minted. Only a
+     * test reaches that, through `SeamRoom.sayHelloAgain`: in production every attempt is an
+     * episode's ([JoinerResumeMachine.runReconnect]).
      */
     fun forgetLatestHello()
 
@@ -747,9 +750,10 @@ internal class JoinerResumeMachine(
                 Triple(inFlight, inFlightSent, false)
             } else {
                 flightsStarted++
-                // Outside an episode — a test's own attempt — the flight is the only scope the latest
-                // Hello has: forget it, so a Welcome or Reject for an earlier Hello cannot settle this
-                // flight while it waits to send. Inside one the episode's start already
+                // Outside an episode the flight is the only scope the latest Hello has: forget it, so a
+                // Welcome or Reject for an earlier Hello cannot settle this flight while it waits to
+                // send. Only a test reaches this, through `SeamRoom.sayHelloAgain`; production attempts
+                // are all an episode's. Inside one the episode's start already
                 // forgot it, and a Welcome answering an earlier attempt of this episode closes the
                 // episode, as Amendment C says, even after this flight is installed.
                 if (!reconnecting) host.forgetLatestHello()

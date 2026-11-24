@@ -82,6 +82,7 @@ import us.tractat.kuilt.session.partition.ProvenResume
 import us.tractat.kuilt.session.partition.ResumeRefusal
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
+import kotlin.concurrent.Volatile
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -293,7 +294,7 @@ public class SeamRoomFactory(
      * per adopt, which is what stops two rooms one device adopts in a row from colliding (#1594).
      * Supply it when the identity is decided outside kuilt (a lobby code, an invite link, a
      * matchmaker-assigned game id) and the room must adopt it. It does **not** make a host restart
-     * resumable — see [Room.roomId] and #1593.
+     * resumable — see [Room.roomId]: a restarted host holds no seats.
      *
      * [deviceId] travels in this peer's `Hello` when it joins, and the host records it as the
      * member's [MemberIdentity.deviceId]. Null, the default, sends none. A host sends no `Hello`, so
@@ -1463,7 +1464,9 @@ internal class SeamRoom(
      *   this loop's `replay = 0` [kotlinx.coroutines.flow.SharedFlow] at an unpredictable later
      *   instant — discarded outright when this loop had not yet subscribed (#1618 Drop B) — and a
      *   joiner has no controller at all, so it never got a window (#1724).
-     * - [JoinerReconnectEvent.Resumed] → [MembershipEvent.Resumed] (host events; liveness reset).
+     * - [JoinerReconnectEvent.Resumed] → logged and nothing more: every restore the controller is
+     *   asked about comes from a Proof, which has already restored the seat and announced it in order
+     *   with its Welcome burst (#3215).
      * - [JoinerReconnectEvent.WindowExpired] → [handleWindowExpired], which decides *once* whether
      *   this expiry is one to act on and, in the same section, back-stops the local eviction
      *   (#1618 Track C) and enqueues the authoritative [AdmitMessage.Farewell] (#1557). No extra
@@ -2640,8 +2643,10 @@ internal class SeamRoom(
      */
     private fun handleReject(sender: PeerId, reject: AdmitMessage.Reject) {
         val failsAdmission = lock.withLock {
+            val answersLatest = answersLatestHello(reject.answers)
+            rejectCheckedForTest?.invoke(answersLatest)
             when {
-                answersLatestHello(reject.answers) -> resumeMachine?.rejectFlight(reject.reason, reject.code) != true
+                answersLatest -> resumeMachine?.rejectFlight(reject.reason, reject.code) != true
                 reject.answers == null && reject.code == RejectCode.ProtocolMismatch && !admitted.isCompleted -> true
                 else -> {
                     logger.info { "room.reject.ignored from=${sender.value} code=${reject.code.id}: it answers no Hello this joiner is waiting on" }
@@ -2653,6 +2658,16 @@ internal class SeamRoom(
             scope.launch { failAdmission(AdmissionFailure.Rejected(reject.reason, reject.code), clock()) }
         }
     }
+
+    /**
+     * **Test-visibility.** Run on the frame thread inside [handleReject]'s critical section, between
+     * the check of the Hello a `Reject` names ([answersLatestHello], whose answer it is given) and the
+     * flight take: the one point a concurrency test can park to force a caller's attempt to land
+     * between the two. Null in production. A test that sets it, sets it before the room handles any
+     * `Reject`, and leaves it set.
+     */
+    @Volatile
+    internal var rejectCheckedForTest: ((answersLatest: Boolean) -> Unit)? = null
 
     /**
      * Joiner-side: handle a [AdmitMessage.Welcome].

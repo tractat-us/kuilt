@@ -106,15 +106,11 @@ import kotlin.time.Instant
  * hatch had therefore fired zero times in its life, and nothing had ever checked that a harness
  * taking one survives the suite at all.
  *
- * They are closed by three different mechanisms, and which one applies is a judgement about *whose*
- * limitation the missing state is:
+ * They were closed by three different mechanisms, chosen by *whose* limitation the missing state
+ * was. Two went with the surface they guarded: a loud precondition on the joiner's resume
+ * credential, retired with it (#3215), and a refusal property for a credential naming another room,
+ * retired when the credential stopped being presented (#3159 Task 1.7). The one left:
  *
- *  - **`resumeToken` — a loud precondition, while there was a token.** `Room.resumeToken` was
- *    documented non-null on an admitted joiner, so a null there was a contract violation by the
- *    room, and `requireResumeToken` failed naming the room. The early return it replaced had been
- *    protecting nobody: `joinerLearnsHostRoomIdOnAdmission` already compared `resumeToken?.roomId`
- *    against a non-null host id, so the same room was failing one test while silently skipping
- *    another. #3215 retired the token, and the precondition with it.
  *  - **Fault injection — a two-armed sealed fixture** ([FaultInjection]). Here the missing state
  *    genuinely belongs to the harness: a room over a fabric whose links the test cannot reach
  *    cannot be partitioned by anyone. A nullable hook was the wrong shape for it — `null` moves the
@@ -122,9 +118,6 @@ import kotlin.time.Instant
  *    declining *representable only together with its declaration*, so the pairing is the compiler's
  *    job rather than a meta-test's, and the arm that declines still ends in an assertion
  *    ([injectorOrDeclaredGap]) rather than in a bare `return`.
- *  - **The refusal branch — a property that needed no hatch at all.**
- *    `aTokenMintedForAnotherRoomIsRefused` was simply never written, until #2306 wrote it. #3159 Task
- *    1.7 retired it with the token's presentation: see the (8a) note.
  *
  * **What the fixture still cannot detect, said plainly.** A harness that *could* fault-inject and
  * declares [FaultInjection.Unsupported] anyway is invisible here — there is no capability on
@@ -140,32 +133,16 @@ import kotlin.time.Instant
  * **rig** = a mutation of this suite itself. The "before" column is the measurement of the hole —
  * what the *pre-#2306* suite did under the same mutation.
  *
- * **The table is a record, not a current claim, where it names a retired property.** M1, M3 and M4
- * were measured before #3159 Task 1.7, which retired `aTokenMintedForAnotherRoomIsRefused` and the
- * token mapping properties along with the token's presentation, and before #3215, which retired the
- * token itself and `resumeWithinWindowFiresResumed`; their rows say what those properties caught
- * then.
+ * Two rows, M1 and M4, are gone: they measured properties of the resume credential, which #3159
+ * Task 1.7 and #3215 retired along with the credential.
  *
  * | # | Mutation | Kind | after | before |
  * |---|----------|------|-------|--------|
- * | M1 | `SeamRoom.resumeToken` returns `null` — a room opting out of resume entirely | real | RED: `resumeWithinWindowFiresResumed` and `aTokenMintedForAnotherRoomIsRefused` on the loud precondition, naming `role=Joiner … roster=1 member(s)` | `joinerLearnsHostRoomIdOnAdmission` RED — but `resumeWithinWindowFiresResumed` **green by absence** |
  * | M2 | [injectorOrDeclaredGap] drops its assertion — i.e. the pre-#2306 silent `?: return@runTest`, exactly | rig | RED: all four `blankTrackingUrl*` **as measured — the set was seven from #2501, six since #3159 Task 1.7, five since #3215** | all green; the four gated obligations passed under a gap declaring nothing |
  * | M3 | delete the `proof.roomId != roomId` check in `KeyAdmission.checkProof` — a proof for another room admits | real | **re-pointed (#3212):** RED in `:kuilt-session`'s `KeyAdmissionTest.proofForAnotherRoomIsRejected`, 1 of 23, 2 of its assertions. The controller's own guard, this row's old subject, reds nothing in this suite (40 of 40 green) — see below | every pre-existing test of this suite **green** |
- * | M4 | the host drops a foreign token silently instead of refusing it | synthetic | RED: `aTokenMintedForAnotherRoomIsRefused`, 2 of 3 — `Got TimedOut` | all green |
- *
- * **M1 was the argument for `requireResumeToken`.** The same fabric was *already* failing
- * `joinerLearnsHostRoomIdOnAdmission` while `resumeWithinWindowFiresResumed` returned green without
- * asserting anything — two tests of one suite, opposite verdicts on one room. The early return was
- * not protecting a population; it was hiding a contradiction.
- *
- * **M4 is why the "verdict, not silence" assertion is not decoration.** Under it the first
- * assertion — "must not be `ResumeResult.Success`" — stays **green**, because `TimedOut` is not
- * `Success`; only the second reds. A lone refusal check would have passed a host that never
- * answered at all. (Its third assertion also reds under M4, but as *blast radius*: the window
- * elapses during the resume timeout. Not an independent diagnosis, and not claimed as one.)
  *
  * **M3's claim is narrower than it looks, and the narrowing matters.** It used to delete the
- * `token.roomId != roomId` guard in `DefaultJoinerReconnectController.tryResume`. That guard is now
+ * room-id guard in `DefaultJoinerReconnectController.tryResume`. That guard is now
  * unreachable through a room: the room builds every `ProvenResume` from its own id, on a proof whose
  * room id it has already checked. Measured on #3212: deleting it reds `:kuilt-session`'s own
  * `JoinerReconnectControllerTest` (2 of 19) and nothing in this suite (40 of 40 green). Since #3215

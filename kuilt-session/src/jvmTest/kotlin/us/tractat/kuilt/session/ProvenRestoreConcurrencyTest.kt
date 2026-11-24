@@ -6,9 +6,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -910,42 +912,78 @@ class ProvenRestoreConcurrencyTest {
      * The `Reject` twin of [aStaleWelcomeRacingACallersResumeSettlesNothing] (#3215): a terminal
      * `Reject` naming the Hello the last round settled arrives, stale, while a caller's own attempt
      * installs its flight. The room checks the Hello the `Reject` names and takes the flight in one
-     * critical section, so whichever lands first the refusal settles nothing: before the install it
-     * finds no flight, after it no latest Hello. Were the check and the take two sections, a flight
-     * installed between them would be refused by an answer to a Hello it never sent.
+     * critical section, so the refusal settles nothing in either order: checked before the install it
+     * finds no flight, checked after it it finds no latest Hello. Were the check and the take two
+     * sections, a flight installed between them would be refused by an answer to a Hello it never sent.
      *
-     * No event is emitted inside that section, so nothing can park a thread there: like the
-     * `Welcome` arm, this one relies on jittered overlap, and states the count it ran.
+     * Each ordering is **forced**, half the rounds each, and counted:
+     * - **check first** — the stale `Reject` lands first, and [SeamRoom.rejectCheckedForTest] parks the
+     *   frame thread between the check and the take while it starts the caller's attempt on the other
+     *   thread and gives it [STALE_REJECT_GAP_NANOS] to install its flight. Under one section the
+     *   caller cannot: it waits on the lock the frame thread holds, which [inGap] counts as zero.
+     * - **install first** — the caller's flight is installed before the stale `Reject` is sent, so the
+     *   check finds the latest Hello forgotten.
+     *
+     * Every round is then settled honestly. Measured: with `handleReject` split into two sections
+     * around the hook, every check-first round is settled by the stale refusal.
      */
     @Test
     fun aStaleRejectRacingACallersResumeSettlesNothing() =
         runConcurrencyStress(cap = ARM_CAP) { stage ->
             Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
                 val rig = JoinerRig(dispatcher, RoomDevice.of(fakeKeyStore(0)))
-                var completed = 0
+                var checkFirst = 0
+                var installFirst = 0
+                var wrongOrdering = 0
+                var inGap = 0
                 var settledByStale = 0
                 var honest = 0
                 val failures = mutableListOf<String>()
+                // The round's stale Reject only: taken by the hook, so no other Reject is parked.
+                val gap = AtomicReference<StaleRejectGap?>(null)
                 try {
                     rig.admit(stage)
-                    for (round in 0 until STALE_WELCOME_ROUNDS) {
-                        val handled = rig.framesHandled.value
+                    rig.room.rejectCheckedForTest = { answersLatest ->
+                        gap.getAndSet(null)?.let { g ->
+                            g.answersLatest = answersLatest
+                            g.onCheck?.invoke()
+                        }
+                    }
+                    for (round in 0 until STALE_REJECT_ROUNDS) {
                         val hellos = rig.hellos.value.size
+                        val handled = rig.framesHandled.value
                         val staleHello = rig.hellos.value.last()
-                        val rejectSpin = jitter.nextLong(0, STALE_WELCOME_SPIN_NANOS)
-                        val resumeSpin = jitter.nextLong(0, STALE_WELCOME_SPIN_NANOS)
-                        val stale = rig.scope.launch {
-                            spin(rejectSpin)
-                            val reject = AdmitMessage.Reject("key-conflict: stale", RejectCode.KeyConflict, staleHello.joinerNonce)
-                            rig.inbound.send(Swatch(AdmitMessage.encode(reject), sender = host))
+                        val stale = AdmitMessage.Reject("key-conflict: stale", RejectCode.KeyConflict, staleHello.joinerNonce)
+                        val forceCheckFirst = round % 2 == 0
+                        val g = StaleRejectGap()
+                        val call: Deferred<ResumeResult.JoinerOutcome>
+                        if (forceCheckFirst) {
+                            // The caller starts from inside the section that checked the stale Reject.
+                            g.onCheck = {
+                                g.call = rig.scope.async { rig.room.sayHelloAgain() }
+                                val deadline = System.nanoTime() + STALE_REJECT_GAP_NANOS
+                                while (!rig.room.hasPendingResume() && System.nanoTime() < deadline) Thread.onSpinWait()
+                                g.installedInGap = rig.room.hasPendingResume()
+                            }
+                            gap.set(g)
+                            rig.inbound.send(Swatch(AdmitMessage.encode(stale), sender = host))
+                            stage.at("round $round: the stale Reject is checked first") { rig.snapshot() }
+                            rig.framesHandled.first { it > handled }
+                            call = checkNotNull(g.call) { "round $round: the hook did not run" }
+                        } else {
+                            call = rig.scope.async { rig.room.sayHelloAgain() }
+                            stage.at("round $round: the caller installs its flight first") { rig.snapshot() }
+                            while (!rig.room.hasPendingResume() && !call.isCompleted) delay(1)
+                            gap.set(g)
+                            rig.inbound.send(Swatch(AdmitMessage.encode(stale), sender = host))
+                            rig.framesHandled.first { it > handled }
                         }
-                        val call = rig.scope.async {
-                            spin(resumeSpin)
-                            rig.room.sayHelloAgain()
+                        when {
+                            forceCheckFirst && g.answersLatest == true -> checkFirst++
+                            !forceCheckFirst && g.answersLatest == false -> installFirst++
+                            else -> wrongOrdering++
                         }
-                        stale.join()
-                        stage.at("round $round: the stale Reject is handled") { rig.snapshot() }
-                        rig.framesHandled.first { it > handled }
+                        if (g.installedInGap) inGap++
                         stage.at("round $round: the caller says Hello, or the stale Reject settled it") { rig.snapshot() }
                         coroutineScope {
                             val hello = async { rig.hellos.first { it.size > hellos } }
@@ -957,7 +995,7 @@ class ProvenRestoreConcurrencyTest {
                         }
                         val settling = if (call.isCompleted) {
                             settledByStale++
-                            if (failures.size < 5) failures += "round $round: ${call.await()} rejectSpin=$rejectSpin resumeSpin=$resumeSpin"
+                            if (failures.size < 5) failures += "round $round checkFirst=$forceCheckFirst: ${call.await()} inGap=${g.installedInGap}"
                             val rearm = rig.scope.async { rig.room.sayHelloAgain() }
                             stage.at("round $round: the re-arming call says Hello") { rig.snapshot() }
                             rig.hellos.first { it.size > hellos }
@@ -972,22 +1010,36 @@ class ProvenRestoreConcurrencyTest {
                         rig.inbound.send(Swatch(AdmitMessage.encode(rig.restoredWelcome(rig.hellos.value.last())), sender = host))
                         stage.at("round $round: the honest Welcome settles the call") { rig.snapshot() }
                         if (settling.await() == ResumeResult.Success) honest++
-                        completed++
                     }
                     println(
-                        "proven-restore stale-reject-race: completed=$completed settledByStale=$settledByStale " +
-                            "honest=$honest failures=$failures",
+                        "proven-restore stale-reject-race: rounds=$STALE_REJECT_ROUNDS checkFirst=$checkFirst " +
+                            "installFirst=$installFirst wrongOrdering=$wrongOrdering inGap=$inGap " +
+                            "settledByStale=$settledByStale honest=$honest failures=$failures",
                     )
                     assertAll(
-                        { assertEquals(STALE_WELCOME_ROUNDS, completed, "every round ran: $failures") },
+                        { assertEquals(STALE_REJECT_ROUNDS / 2, checkFirst, "rig: half the rounds checked the stale Reject first, naming the latest Hello") },
+                        { assertEquals(STALE_REJECT_ROUNDS / 2, installFirst, "rig: half installed the flight first, so the check named no latest Hello") },
+                        { assertEquals(0, inGap, "no caller installs its flight between the check and the take: $failures") },
                         { assertEquals(0, settledByStale, "a stale Reject settles no caller's flight: $failures") },
-                        { assertEquals(completed, honest, "the honest Welcome settled every round's call") },
+                        { assertEquals(STALE_REJECT_ROUNDS, honest, "the honest Welcome settled every round's call") },
                     )
                 } finally {
+                    rig.room.rejectCheckedForTest = null
                     rig.close()
                 }
             }
         }
+
+    /** One round's stale `Reject`, as the hook saw it. Written on the frame thread, read after it. */
+    private class StaleRejectGap {
+        @Volatile var answersLatest: Boolean? = null
+
+        @Volatile var onCheck: (() -> Unit)? = null
+
+        @Volatile var call: Deferred<ResumeResult.JoinerOutcome>? = null
+
+        @Volatile var installedInGap = false
+    }
 
     /**
      * A joiner room the probe plays the host for. Its first Hello is broadcast and every later one
@@ -1380,6 +1432,12 @@ class ProvenRestoreConcurrencyTest {
         /** Slower than a rig waiting on a clock for its challenge would wait. */
         val SLOW_CHALLENGE = 1.seconds
         const val STALE_WELCOME_ROUNDS = 20_000
+
+        /** Even, so the two forced orderings split it exactly. */
+        const val STALE_REJECT_ROUNDS = 1_000
+
+        /** How long a check-first round gives the caller to install its flight inside the gap: 20 ms. */
+        const val STALE_REJECT_GAP_NANOS = 20_000_000L
 
         /** Up to about as long as the room takes to handle a frame, so the two arrivals overlap. */
         const val STALE_WELCOME_SPIN_NANOS = 20_000L

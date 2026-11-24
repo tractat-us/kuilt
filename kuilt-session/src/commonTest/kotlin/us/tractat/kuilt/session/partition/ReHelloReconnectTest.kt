@@ -19,6 +19,7 @@ import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.session.AdmissionFailure
 import us.tractat.kuilt.session.AdmitTap
 import us.tractat.kuilt.session.EventLog
 import us.tractat.kuilt.session.FailureReason
@@ -179,6 +180,24 @@ class ReHelloReconnectTest {
             assertTrue(room.resumeFlightsStarted() > flights, "rig: a reconnect flight started")
             return hellosToHost().drop(before).lastOrNull()
         }
+    }
+
+    /** A joiner room that has said its first Hello and been answered nothing yet. */
+    private suspend fun TestScope.unadmitted(): Scripted {
+        val fake = FakeSeam(selfId = bob, initialPeers = setOf(bob, hostId, eve))
+        val link = FlakyLifecycleSeam(fake, backgroundScope)
+        val joiner = SeamRoomFactory(
+            loom = InMemoryLoom(),
+            scope = backgroundScope,
+            clock = virtualClock(),
+            deviceKeyStore = fakeKeyStore(1),
+            heartbeatConfig = joinerConfig,
+            admitTimeout = 1.seconds,
+        ).adopt(link, SessionRole.Joiner, memberName = "Bob", reweave = { link })
+        val s = Scripted(this, fake, link, joiner)
+        testScheduler.runCurrent()
+        assertEquals(1, s.broadcastHellos().size, "rig: the joiner said its first Hello")
+        return s
     }
 
     private suspend fun TestScope.scripted(): Scripted {
@@ -506,6 +525,74 @@ class ReHelloReconnectTest {
             { assertTrue(reconnectingBefore, "rig: the reconnect loop was running when the Farewell came") },
             { assertTrue(!(s.room as SeamRoom).isReconnectRunning(), "the reconnect loop stopped") },
         )
+    }
+
+    // ── A Reject that names no Hello (#3215, Amendment E's one exception) ────
+
+    /**
+     * Before its first admission a joiner acts on a `ProtocolMismatch` that names no Hello: a host
+     * older than v7 cannot name one, and this is its answer to a v7 Hello. The join fails with that
+     * code at once, rather than at its admit deadline.
+     */
+    @Test
+    fun anUnnamedProtocolMismatchBeforeAdmissionFailsTheJoin() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = unadmitted()
+        val mark = s.log.mark()
+        s.fromHost(AdmitMessage.Reject("protocol-mismatch: 7 not in 6..6", RejectCode.ProtocolMismatch, answers = null))
+        val failed = s.log.since(mark).filterIsInstance<MembershipEvent.AdmissionFailed>()
+
+        assertAll(
+            { assertEquals(1, failed.size, "the join failed at once: ${s.log.since(mark).render()}") },
+            { assertEquals(RejectCode.ProtocolMismatch, assertIs<AdmissionFailure.Rejected>(failed.singleOrNull()?.reason).code) },
+        )
+    }
+
+    /**
+     * The exception is that one code. Any other refusal naming no Hello — here `BadProof` — is ignored
+     * before admission as at any other time, and the join completes when the host admits it.
+     */
+    @Test
+    fun anUnnamedOtherRefusalBeforeAdmissionIsIgnored() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = unadmitted()
+        val mark = s.log.mark()
+        val first = s.broadcastHellos().single()
+        s.fromHost(AdmitMessage.Reject("bad-proof: forged", RejectCode.BadProof, answers = null))
+        val failedByIt = s.log.since(mark).any { it is MembershipEvent.AdmissionFailed }
+        s.challenge(first)
+        s.welcome(first, FIRST_MEMBERSHIP)
+        s.advance(TICK * 15)
+
+        val since = s.log.since(mark)
+        assertAll(
+            { assertFalse(failedByIt, "the unnamed refusal failed nothing: ${since.render()}") },
+            { assertTrue(since.none { it is MembershipEvent.AdmissionFailed }, "the join completed: ${since.render()}") },
+            { assertTrue(s.room.roster.value.any { it.id == hostId }, "the joiner was admitted") },
+        )
+        s.room.leave()
+    }
+
+    /**
+     * Once admitted, a `ProtocolMismatch` naming no Hello ends nothing, a reconnect included: only an
+     * answer naming the reconnect's Hello can end it, and the host's Welcome then closes it.
+     */
+    @Test
+    fun anUnnamedProtocolMismatchDuringAReconnectEndsNothing() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = scripted()
+        val mark = s.log.mark()
+        val reHello = assertNotNull(s.dropAndHeal(), "the reconnect says Hello again")
+        s.challenge(reHello)
+        s.fromHost(AdmitMessage.Reject("protocol-mismatch: 7 not in 6..6", RejectCode.ProtocolMismatch, answers = null))
+        val pendingAfterReject = (s.room as SeamRoom).hasPendingResume()
+        s.welcome(reHello, FIRST_MEMBERSHIP, ReturnKind.Restored)
+        s.advance(joinerConfig.reconnectWindow)
+
+        val since = s.log.since(mark)
+        assertAll(
+            { assertTrue(pendingAfterReject, "the unnamed refusal settled nothing") },
+            { assertTrue(since.none { it is MembershipEvent.HostLost || it is MembershipEvent.AdmissionFailed }, since.render()) },
+            { assertEquals(1, since.count { it is MembershipEvent.Resumed && it.peerId == bob }, since.render()) },
+        )
+        s.room.leave()
     }
 
     // ── A real host ──────────────────────────────────────────────────────────

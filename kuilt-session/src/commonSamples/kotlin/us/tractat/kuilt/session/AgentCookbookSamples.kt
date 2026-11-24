@@ -102,8 +102,7 @@ public suspend fun perSessionIdSample(room: Room) {
  * other systems already key on.
  *
  * Supplying an id does **not** make a host restart resumable: a restarted host has no roster and no
- * reconnect-window registry, so a `ResumeToken` it accepts on identity grounds still cannot
- * complete. Cold-start rejoin is #1593.
+ * reconnect-window registry, so a device that comes back to it is admitted as a new member.
  */
 public suspend fun callerSuppliedRoomIdSample(
     factory: RoomFactory,
