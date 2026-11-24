@@ -589,8 +589,9 @@ group a reload left out is still in it; `ApplyResult` says what landed.
 
 **Intent:** an admin edits the tree and wants to see what the edit would do before confirming it:
 which change waits on which running job, and what each group's share is straight after. Do not
-hand-roll a copy of the engine, or restore a snapshot to apply on: a fork over lease counts cannot
-move a lease on a reweight, and refuses where the real engine would not.
+hand-roll a copy of the engine. Restoring a snapshot and applying on the copy gives the right
+answer, but `restore` needs a fresh epoch above the snapshot's, and the copy has no `basis` to say
+whether the engine has moved since. `previewApply` does the same with neither cost.
 **Primitive:** `LocalHeddle.previewApply(new, generation)` → `TopologyPreview`. Its `result` is
 exactly the `ApplyResult` that `apply` would return, and `after` is a `LocalHeddleView` of the
 engine straight after it, to ask `entitlement`, `explain` and `previewPicks`. It is a read: the
@@ -621,9 +622,12 @@ engine, its `revision` and what it persists are unchanged.
 ```
 
 - **It answers for straight after, not once things settle.** The two differ only where `result`
-  says so: a `StepRefusal.Draining` switches over when its `blockingLeases` finish, and a
-  `StepRefusal.Refused` will not switch by waiting. A removed lane is owed nothing at once;
-  ceilings, lanes and moved leases are already in `after`.
+  says so, and no refused change lands by itself: `complete` and `cancel` never re-run a reload. A
+  `StepRefusal.Draining` lands on a later `apply` of the same topology, once its `blockingLeases`
+  have settled. A `StepRefusal.Refused` is for a reason that waiting on the engine's leases does
+  not cure, save one: a reweight whose lease cannot move within `Long` is refused until that lease
+  settles, and then lands on a later `apply` too. A removed lane is owed nothing at once; ceilings,
+  lanes and moved leases are already in `after`.
 - **Preview and apply with the same `generation`.** It names the edges a reload adds, so a
   different one gives different edge ids in `applied`.
 - **`basis` is the `revision` it was worked out at.** While `heddle.revision == preview.basis`, the
