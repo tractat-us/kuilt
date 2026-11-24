@@ -859,3 +859,38 @@ internal fun sampleRevision() {
     val restarted = LocalHeddle.restore(heddle.persist(), policy, epoch = 1L)
     check(restarted.revision > heddle.revision)
 }
+
+/**
+ * Two admins edit the tree an engine runs. Each page starts its editor from [LocalHeddle.topology],
+ * shows what its edit changes with [Topology.changesTo], and applies only while the running tree is
+ * still the one its edit started from.
+ */
+@Suppress("unused")
+internal fun sampleRunningTopology() {
+    val (heddle, _) = LocalHeddle.fromTopology(twoLanes(), LocalPolicy(defaultReservation = 3L), epoch = 0L)
+
+    // Both pages open their editor on the running tree, written out as a document.
+    val startedFrom = heddle.topology
+    val document = startedFrom.toDocument()
+    fun withLane(name: String): Topology =
+        (Topology.from(document.copy(children = document.children + TopologyDocument.Lane(name))) as TopologyParse.Valid).topology
+    val first = withLane("batch")
+    val second = withLane("nightly")
+
+    // The first admin confirms what the edit changes. Nobody applied a tree meanwhile, so it applies.
+    check(startedFrom.changesTo(first) == listOf(TopologyChange.Added(listOf(2), listOf("pool", "batch"), Topology.Lane("batch"))))
+    check(heddle.topology == startedFrom)
+    heddle.apply(first, generation = 1L)
+    check(heddle.topology == first && heddle.persist().lastApplied == first)
+
+    // The second page's edit started from a tree that is no longer running. Applied as it stands,
+    // it would also take away the lane the first admin just added, so the page lists the changes
+    // again from the running tree before it asks anyone to confirm.
+    check(heddle.topology != startedFrom)
+    check(
+        heddle.topology.changesTo(second) == listOf(
+            TopologyChange.Removed(listOf(2), listOf("pool", "batch"), Topology.Lane("batch")),
+            TopologyChange.Added(listOf(2), listOf("pool", "nightly"), Topology.Lane("nightly")),
+        ),
+    )
+}

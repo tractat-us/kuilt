@@ -116,4 +116,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun revisionHolds() = sampleRevision()
+
+    @Test
+    fun runningTopologyHolds() = sampleRunningTopology()
 }
