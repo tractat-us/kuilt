@@ -509,9 +509,10 @@ an edit changes, see the next section.
 **Intent:** an admin page that edits the tree while it runs — start the editor from the tree that
 is running, and before applying an edit, show the admin what it changes in words they recognise,
 each change beside the line it is at.
-**Primitive:** `Topology.toDocument()` and `Topology.changesTo(after)` → `TopologyChange`s
-(`:kuilt-heddle-core`). `toDocument` writes the running tree out as the `TopologyDocument` an
-editor starts from, and `Topology.from` reads the edited one back, an exact round trip:
+**Primitive:** `LocalHeddle.topology`, `Topology.toDocument()` and `Topology.changesTo(after)` →
+`TopologyChange`s (`:kuilt-heddle-core`). `heddle.topology` is the running tree, the same one
+`persist()` stores as `lastApplied`. `toDocument` writes it out as the `TopologyDocument` an editor
+starts from, and `Topology.from` reads the edited one back, an exact round trip:
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyToDocument -->
 ```kotlin
@@ -544,6 +545,10 @@ editor starts from, and `Topology.from` reads the edited one back, an exact roun
   the dialog rather than presenting a move as free.
 - **A `WeightChanged` restarts that child's share**; a change of ceiling, of template ceiling, or
   of kind (`LaneBecameGroup`, `GroupBecameLane`) keeps its history.
+- **A `TemplateRemoved` cannot be undone.** Every child the app attached under that group is
+  detached for good, and putting the template back brings none of them back. A `TemplateChanged`
+  with a new weight restarts every attached child's share; a new template ceiling keeps their
+  history.
 - **A `Removed` is addressed in the running tree**, since it is not in the edited one; every other
   change is addressed in the edited tree.
 - **Reordering siblings is not a change**: nothing in heddle reads the order.
@@ -552,6 +557,32 @@ editor starts from, and `Topology.from` reads the edited one back, an exact roun
 
 To compare two documents, check each with `Topology.from` first: a change is defined only
 between valid trees.
+
+**Two admins at once.** Keep the tree the edit started from, and before applying, compare it with
+`heddle.topology` again. If someone else applied a tree in between, the edit as it stands would
+undo their change too, so list the changes again from the running tree:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleRunningTopology -->
+```kotlin
+    check(heddle.topology == startedFrom)
+    heddle.apply(first, generation = 1L)
+    check(heddle.topology == first && heddle.persist().lastApplied == first)
+
+    // The second page's edit started from a tree that is no longer running. Applied as it stands,
+    // it would also take away the lane the first admin just added, so the page lists the changes
+    // again from the running tree before it asks anyone to confirm.
+    check(heddle.topology != startedFrom)
+    check(
+        heddle.topology.changesTo(second) == listOf(
+            TopologyChange.Added(listOf(2), listOf("pool", "nightly"), Topology.Lane("nightly")),
+            TopologyChange.Removed(listOf(2), listOf("pool", "batch"), Topology.Lane("batch")),
+        ),
+    )
+```
+
+`heddle.revision` is the wrong guard here: every `acquire` moves it, so on a busy engine it would
+refuse every confirm. Reading `heddle.topology` moves nothing. It is the tree last asked for, so a
+group a reload left out is still in it; `ApplyResult` says what landed.
 
 ## Children your app attaches while running
 

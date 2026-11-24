@@ -23,9 +23,9 @@ package us.tractat.kuilt.heddle
  *  - [LaneBecameGroup], [GroupBecameLane], [CeilingChanged] and every template change keep the
  *    child and its own history. What a template change does to the children the app attached
  *    under it is on [TemplateRemoved] and [TemplateChanged].
- *  - a [RootRenamed] changes every name below it, so it is followed by every old child [Removed]
- *    and every new child [Added]. [Topology.diff] refuses a change of root: it is a new tree, not
- *    an edit of the running one.
+ *  - a [RootRenamed] changes every name below it, so it is followed by every new child [Added],
+ *    then every old child [Removed]. [Topology.diff] refuses a change of root: it is a new tree,
+ *    not an edit of the running one.
  *
  * @property path the child indices from the root to the node this change concerns; `[]` only for
  *   [RootRenamed]. Every index is `>= 0`.
