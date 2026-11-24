@@ -1168,6 +1168,23 @@ internal class SeamRoom(
     private var membership: String? = null
 
     /**
+     * **Joiner only.** Every member a host `Welcome` has named since [latestHelloNonce] was minted
+     * (#3615): the members the host vouches for in the admission that answers that Hello. A
+     * reconnect's admission burst names every member the host holds, and a member admitted after the
+     * host built the burst is named by its own roster `Welcome`, which can reach this room on its
+     * fan-out lane before the burst does. Counting from the Hello rather than from the answer keeps
+     * that member. Guarded by [lock].
+     */
+    private val namedSinceHello = mutableSetOf<PeerId>()
+
+    /**
+     * **Joiner only.** A reconnect closed and its admission burst is still arriving (#3615). The
+     * host's own `Welcome` comes last in the burst; when it arrives, [rebuildRoster] drops every member
+     * the host has not named since the Hello. Cleared by that, or by the next Hello. Guarded by [lock].
+     */
+    private var rosterRebuildPending = false
+
+    /**
      * **Joiner only.** Each fabric sender whose challenge this joiner verified, and the key it signed
      * that challenge with. A `Welcome` is accepted only from a sender here, and a host intro only when
      * it names this key, so the host's entry on a joiner's roster carries a key the host proved.
@@ -2507,6 +2524,10 @@ internal class SeamRoom(
             joinerNonce = CryptoRand.Default.nextBytes(ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE)),
         )
         latestHelloNonce = hello.joinerNonce
+        // A new Hello starts a new count of who the host names, and a burst that never closed is
+        // not closed by a later one's intro.
+        namedSinceHello.clear()
+        rosterRebuildPending = false
         return hello
     }
 
@@ -2690,13 +2711,16 @@ internal class SeamRoom(
      * holds ([membership]), never from its `returnKind`.
      */
     private fun handleWelcome(sender: PeerId, welcome: AdmitMessage.Welcome) {
+        // Members a closing burst dropped (#3615): their inboxes are closed once the lock is released.
+        val dropped = mutableListOf<DetachedMember>()
         // One critical section: whether the Welcome answers the latest Hello, and the flight that
         // Hello's attempt owns, are read together, as a Reject's are, so a new Hello cannot be minted
         // between the two (review round 2 on #3614).
-        val (flight, verdict) = lock.withLock {
-            val restored = acceptWelcome(sender, welcome) ?: return
-            closeReconnect(sender, restored)
-        } ?: return
+        val closed = lock.withLock {
+            acceptWelcome(sender, welcome, dropped)?.let { restored -> closeReconnect(sender, restored) }
+        }
+        dropped.forEach { it.close() }
+        val (flight, verdict) = closed ?: return
         flight?.complete(verdict)
     }
 
@@ -2716,8 +2740,13 @@ internal class SeamRoom(
      * reconnect — and otherwise whether it restored this room's own membership: `true` when it names
      * the id this room already held, `false` for a fresh admission, whose id this room holds from now
      * on (#3215).
+     *
+     * Every other `Welcome` it accepts names a member the host vouches for, counted in
+     * [namedSinceHello]. The host's own, which closes an admission burst, rebuilds the roster when a
+     * reconnect closed on that burst ([rebuildRoster], #3615); a member it drops goes into [dropped],
+     * whose inboxes the caller closes once it has released [lock].
      */
-    private fun acceptWelcome(sender: PeerId, welcome: AdmitMessage.Welcome): Boolean? {
+    private fun acceptWelcome(sender: PeerId, welcome: AdmitMessage.Welcome, dropped: MutableList<DetachedMember>): Boolean? {
         run {
             val assignedId = PeerId(welcome.assignedPeerId)
 
@@ -2787,6 +2816,10 @@ internal class SeamRoom(
                 return restored
             }
 
+            namedSinceHello += assignedId
+            // The host's own Welcome is the last of its admission burst (sendAdmissionBurst).
+            if (assignedId == sender && rosterRebuildPending) dropped += rebuildRoster(host = sender)
+
             if (admittedById.containsKey(assignedId)) return null // already known
             val identity = MemberIdentity(
                 displayName = welcome.displayName,
@@ -2797,6 +2830,26 @@ internal class SeamRoom(
             addToRoster(member)
         }
         return null
+    }
+
+    /**
+     * **Joiner only; under [lock].** The admission burst a reconnect closed on has ended with the
+     * host's own `Welcome` (#3615): drop every member the host has not named since the Hello it
+     * answered ([namedSinceHello]). That burst names every member the host holds, so a member this
+     * room still lists and the host did not name left while this room was away, and its `Farewell`
+     * went down the link that was down. Without this it stays a ghost until something else notices,
+     * and on a star nothing does: this room has no heartbeat edge to it.
+     *
+     * A dropped member leaves with [LeaveReason.Normal]: this room did not see it go and cannot say
+     * why, and `Normal` claims less than [LeaveReason.PartitionExpired], which asserts the member's
+     * link died. Decided and removed in one section, so no `Welcome` naming it lands in between. The
+     * host is never dropped; it sent the burst.
+     */
+    private fun rebuildRoster(host: PeerId): List<DetachedMember> {
+        rosterRebuildPending = false
+        val gone = admittedById.keys.filter { it != host && it !in namedSinceHello }
+        if (gone.isNotEmpty()) logger.info { "room.roster.rebuilt self=${selfId.value} dropped=${gone.map { it.value }}" }
+        return gone.mapNotNull { detachMember(it, LeaveReason.Normal) }
     }
 
     /**
@@ -2824,10 +2877,14 @@ internal class SeamRoom(
      * [restored]: the Welcome names the membership this room already held (#3215), so the seat came
      * back, and the room emits [MembershipEvent.Resumed] for itself. Any other membership means the
      * seat was gone and this was a fresh admission, which the room keeps (Amendment C): it emits
-     * [MembershipEvent.Recovered] for the host if it held the host partitioned — the arc the
-     * reconnect opened is on the host — and nothing was resumed. The flight then settles
+     * [MembershipEvent.Readmitted] for itself (#3615), never [MembershipEvent.Recovered], whose
+     * meaning is a link that healed before its window expired. The flight then settles
      * [ResumeResult.WindowClosed], which is the truth about the seat; the episode is a success all
      * the same ([JoinerResumeMachine.takeFlightForWelcome]).
+     *
+     * Either way it arms the roster rebuild ([rosterRebuildPending]): the rest of the burst this
+     * Welcome heads names every member the host holds, and the host's own Welcome, last in it,
+     * drops the members this room holds and the host did not name ([rebuildRoster]).
      *
      * **A terminal room closes nothing (#3094).** A reconnect window that expires leaves its flight
      * installed until [leave] takes it. The `Welcome` and the window's verdict are ordered by [lock],
@@ -2854,12 +2911,11 @@ internal class SeamRoom(
     ): Pair<CompletableDeferred<ResumeResult.JoinerOutcome>?, ResumeResult.JoinerOutcome>? {
         val (flight, closes) = resumeMachine?.takeFlightForWelcome() ?: return null
         if (closes) {
-            val wasPartitioned = admittedById[sender]?.liveness is Liveness.Partitioned
             updateMemberLiveness(sender, Liveness.Connected)
-            when {
-                restored -> emitEvent(MembershipEvent.Resumed(selfId))
-                wasPartitioned -> emitEvent(MembershipEvent.Recovered(sender, clock()))
-            }
+            // The arc the reconnect opened closes on this room's own membership, either way (#3615).
+            emitEvent(if (restored) MembershipEvent.Resumed(selfId) else MembershipEvent.Readmitted(selfId))
+            // The rest of this Welcome's burst is on its way; the host's own Welcome closes it.
+            rosterRebuildPending = true
         }
         return flight to if (closes && restored) ResumeResult.Success else ResumeResult.WindowClosed
     }

@@ -167,6 +167,55 @@ class FastReconnectRaceTest {
                 { assertEquals(1, h.hostRoom.roster.value.size, "the host holds one seat again") },
             )
         }
+    /**
+     * Eve leaves cleanly while the client's link is down, and the host lets the client's seat go
+     * before it says Hello again. Eve's `Farewell` to the client went down the dead link, so before
+     * #3615 the client was admitted afresh still listing Eve, and on this star, where the client has
+     * no heartbeat edge to Eve, nothing ever took her out. Now the client hears `Readmitted`, and the
+     * host's admission burst, which no longer names Eve, drops her.
+     */
+    @Test
+    fun `a readmitted joiner drops a peer who left during its outage`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            var clockMs = 0L
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
+            val h = gatedHostHarness(
+                clock,
+                hostConfig = fastConfig.copy(reconnectWindow = 100.milliseconds),
+                joinerConfig = fastConfig.copy(reconnectWindow = 10.seconds),
+                reweaveDelayMs = 250L,
+            )
+            val eve = h.addJoiner("eve", 2)
+            h.hostRoom.roster.first { it.size == 2 }
+            h.joinerRoom.roster.first { roster -> roster.any { it.id == eve.selfId } }
+
+            val hostLog = EventLog(h.hostRoom, backgroundScope)
+            val joinerLog = EventLog(h.joinerRoom, backgroundScope)
+            val hostMark = hostLog.mark()
+            val joinerMark = joinerLog.mark()
+            h.muxClient.closeBase()
+            clockMs += 100L
+            advanceTimeBy(100L)
+            eve.leave()
+            repeat(7) { clockMs += 100L; advanceTimeBy(100L) }
+            val rosterAtReadmission = h.joinerRoom.roster.value.map { it.id }.toSet()
+            // Well past the client's own 10 s window, which is all a heartbeat edge could give it.
+            repeat(150) { clockMs += 100L; advanceTimeBy(100L) }
+
+            val hostEdges = hostLog.edgesSince(hostMark)
+            val joinerEvents = joinerLog.since(joinerMark)
+            val client = h.joinerRoom.selfId
+            val hostId = h.hostRoom.selfId
+            assertAll(
+                { assertEquals(listOf(client), hostEdges.filterIsInstance<MembershipEvent.Joined>().map { it.member.id }, "rig: the client was admitted afresh: ${hostEdges.joinToString { it.describe() }}") },
+                { assertTrue(hostEdges.any { it == MembershipEvent.Left(eve.selfId, LeaveReason.Normal) }, "rig: Eve left cleanly: ${hostEdges.joinToString { it.describe() }}") },
+                { assertEquals(listOf<MembershipEvent>(MembershipEvent.Readmitted(client)), joinerEvents.filterIsInstance<MembershipEvent.Readmitted>(), joinerEvents.joinToString { it.describe() }) },
+                { assertTrue(joinerEvents.none { it is MembershipEvent.Recovered || it is MembershipEvent.HostLost }, joinerEvents.joinToString { it.describe() }) },
+                { assertEquals(setOf(hostId), rosterAtReadmission, "no ghost once readmitted: ${joinerEvents.joinToString { it.describe() }}") },
+                { assertEquals(setOf(hostId), h.joinerRoom.roster.value.map { it.id }.toSet(), "and none later: ${joinerEvents.joinToString { it.describe() }}") },
+            )
+        }
+
     // ── Harness ──────────────────────────────────────────────────────────────
 
     private class GatedHarness(
@@ -175,6 +224,8 @@ class FastReconnectRaceTest {
         val muxClient: MuxClientLoom,
         val hostPeers: GatedPeersSeam,
         val reweaveCount: () -> Int,
+        /** A further joiner, [name] on device key [keyIndex], over its own link to the same hub. */
+        val addJoiner: suspend (name: String, keyIndex: Int) -> SeamRoom,
     )
 
     /**
@@ -213,16 +264,15 @@ class FastReconnectRaceTest {
             roomId = RoomId("room-1"),
         ).also { it.start() }
 
-        val clientId = PeerId("client")
         var seed = 1
-        val base = object : Loom {
+        fun baseFor(clientId: PeerId) = object : Loom {
             override suspend fun weave(rendezvous: Rendezvous): Seam {
                 val (serverConn, clientConn) = connectionPair()
                 source.offer(serverConn)
                 return hubMesh(clientId, listOf(clientConn), dispatcher, Random((seed++).toLong()))
             }
         }
-        val muxClient = MuxClientLoom(base, Rendezvous.New(Pattern("base")), backgroundScope, nameOf)
+        val muxClient = MuxClientLoom(baseFor(PeerId("client")), Rendezvous.New(Pattern("base")), backgroundScope, nameOf)
         val tag = InMemoryTag("table-7")
         var reweaveCount = 0
         val joinerRoom = SeamRoom(
@@ -243,7 +293,21 @@ class FastReconnectRaceTest {
             },
         ).also { it.start() }
 
-        return GatedHarness(hostRoom, joinerRoom, muxClient, hostPeers, reweaveCount = { reweaveCount })
+        val addJoiner: suspend (String, Int) -> SeamRoom = { name, keyIndex ->
+            val loom = MuxClientLoom(baseFor(PeerId(name)), Rendezvous.New(Pattern("base-$name")), backgroundScope, nameOf)
+            SeamRoom(
+                seam = loom.join(tag),
+                role = SessionRole.Joiner,
+                memberName = name,
+                scope = backgroundScope,
+                clock = clock,
+                device = RoomDevice.of(fakeKeyStore(keyIndex)),
+                heartbeatConfig = fastConfig,
+                roomId = null,
+            ).also { it.start() }
+        }
+
+        return GatedHarness(hostRoom, joinerRoom, muxClient, hostPeers, reweaveCount = { reweaveCount }, addJoiner = addJoiner)
     }
 }
 

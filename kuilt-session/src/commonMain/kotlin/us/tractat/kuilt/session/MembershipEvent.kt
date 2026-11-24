@@ -95,6 +95,11 @@ public sealed interface MembershipEvent {
      * other than the host by the host's announcement that the peer is back. That announcement covers
      * a partitioned peer whose return the host restored, so those members see this event where the
      * host and the returning peer see [Resumed].
+     *
+     * **Never the answer to a joiner's own reconnect.** A joiner whose host link dropped ends that
+     * arc with [Resumed] (its seat came back), [Readmitted] (the seat was gone and the host admitted
+     * it afresh) or [HostLost] — never with `Recovered(host)`, since a returning joiner does not
+     * know whether its link healed inside the host's window until the host's answer says so (#3615).
      */
     public data class Recovered(val peerId: PeerId, val at: Instant) : MembershipEvent
 
@@ -105,8 +110,10 @@ public sealed interface MembershipEvent {
      * host opens a window to hold its seat ([peerId] = the joiner; if the joiner returns
      * before [expiresAt], [Resumed] follows, otherwise [Left] with [LeaveReason.PartitionExpired]);
      * and on a **joiner's** events when its host link tears and the joiner opens its own window to
-     * re-weave and resume ([peerId] = the host; on success [Resumed] follows, otherwise [HostLost]).
-     * [expiresAt] is the wall-clock instant at which the window closes.
+     * re-weave and say Hello again ([peerId] = the host). The host's answer ends that window one of
+     * three ways: [Resumed] when the seat came back, [Readmitted] when the host had let it go and
+     * admitted this room afresh — a new membership, though the room stays in session — and
+     * otherwise [HostLost] (#3615). [expiresAt] is the wall-clock instant at which the window closes.
      */
     public data class WindowOpened(val peerId: PeerId, val expiresAt: Instant) : MembershipEvent
 
@@ -139,6 +146,13 @@ public sealed interface MembershipEvent {
      * member that joined meanwhile arrives as [Joined], and a member that left while this room was
      * away, whose departure it never heard, leaves as [Left] with [LeaveReason.Normal]. Read
      * [Room.roster] once those have arrived, not on this event.
+     *
+     * **Why an event of its own, and not `Left(self)` then `Joined(self)`** (#3615). On a joiner,
+     * `Left(self)` already means the room is over ([LeaveReason.Superseded] ends it), and a joiner
+     * never lists itself, so it has never emitted `Joined(self)`. Reusing the pair would read as an
+     * ending to every handler written for that meaning. A new type costs an exhaustive `when` a
+     * compile error instead, which is the point: an app whose state rests on membership continuity
+     * is told by its compiler that there is now a case where continuity breaks.
      */
     public data class Readmitted(val peerId: PeerId) : MembershipEvent
 
@@ -150,8 +164,8 @@ public sealed interface MembershipEvent {
      * Treat it as the last word, even though it may not arrive last. An event racing it on another
      * thread can land just after it, so ignore everything that follows: a [Partitioned] or
      * [WindowOpened] would start a countdown no event ends. Stop any countdown already running too,
-     * since no [Recovered] or [Left] will come for it. A [Resumed] never follows it: the host's `Welcome`
-     * that arrives once the host is lost closes nothing and emits nothing.
+     * since no [Recovered] or [Left] will come for it. Neither a [Resumed] nor a [Readmitted] follows
+     * it: the host's `Welcome` that arrives once the host is lost closes nothing and emits nothing.
      *
      * The room then ends itself as [Room.leave] does: [Room.roster] empties and every
      * [Room.incomingFrom] flow completes. The event comes first and the room does not wait for a
