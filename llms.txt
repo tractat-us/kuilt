@@ -42,6 +42,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [Waiting your turn for a slot](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#waiting-your-turn-for-a-slot)
 - [Loading the tree from a config file](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#loading-the-tree-from-a-config-file)
 - [Changing the tree while work runs](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#changing-the-tree-while-work-runs)
+- [Showing an admin what an edit changes](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#showing-an-admin-what-an-edit-changes)
 - [Children your app attaches while running](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#children-your-app-attaches-while-running)
 - [Capping and pausing a group](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#capping-and-pausing-a-group)
 - [Who goes next, and why not me](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#who-goes-next-and-why-not-me)

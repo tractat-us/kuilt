@@ -291,3 +291,58 @@ internal fun sampleConsumerProblems() {
     }
     check(refused != null)
 }
+
+/**
+ * An admin page edits the tree that is running: [Topology.toDocument] writes it back out as the
+ * document an editor starts from, and [Topology.from] reads the edited document back in.
+ */
+@Suppress("unused")
+internal fun sampleTopologyToDocument() {
+    val running = draft("pool") {
+        group("acme", Weight.of(3)) {
+            lane("interactive", Weight.of(3, 2))
+            lane("batch", maxConcurrent = 2)
+        }
+    }
+    val document = running.toDocument()
+    // Weights are written the way an admin writes them: a whole number, or a ratio.
+    val acme = document.children.single() as TopologyDocument.Group
+    check(acme.weight == "3" && acme.children.first().weight == "3/2")
+    // Reading it back gives the same tree.
+    check(Topology.from(document) == TopologyParse.Valid(running))
+}
+
+/**
+ * Before applying an edit, [Topology.changesTo] lists what it changes, for an admin to confirm:
+ * each change names the node it is at, the way a [TopologyProblem] does.
+ */
+@Suppress("unused")
+internal fun sampleTopologyChanges() {
+    val running = draft("pool") {
+        group("acme", Weight.of(3)) {
+            lane("interactive")
+            lane("batch")
+        }
+        group("hobby") { lane("batch") }
+    }
+    val edited = draft("pool") {
+        group("acme", Weight.of(4)) {
+            lane("interactive", maxConcurrent = 2)
+        }
+        group("hobby") {
+            lane("batch")
+            lane("nightly")
+        }
+    }
+    check(
+        running.changesTo(edited) == listOf(
+            TopologyChange.WeightChanged(listOf(0), listOf("pool", "acme"), Weight.of(3), Weight.of(4)),
+            TopologyChange.CeilingChanged(listOf(0, 0), listOf("pool", "acme", "interactive"), null, 2L),
+            // A removed child is addressed where it was, in the running tree.
+            TopologyChange.Removed(listOf(0, 1), listOf("pool", "acme", "batch"), Topology.Lane("batch")),
+            TopologyChange.Added(listOf(1, 1), listOf("pool", "hobby", "nightly"), Topology.Lane("nightly")),
+        ),
+    )
+    // Nothing changed, nothing listed.
+    check(running.changesTo(running).isEmpty())
+}

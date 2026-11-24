@@ -73,6 +73,7 @@ class LocalHeddleRevisionTest {
     fun readsLeaveTheRevisionWhereItIs() {
         val f = fixture()
         val before = f.heddle.revision
+        assertEquals(farm, f.heddle.topology)
         f.heddle.snapshot()
         f.heddle.persist()
         f.heddle.previewPicks(mapOf(web to 2, mobile to 2), both, listOf(3L, 3L))

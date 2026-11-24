@@ -641,9 +641,9 @@ public class LocalHeddle private constructor(
      * How far this engine has come: moved by every call that can change it, [acquire], [admit],
      * [extend], [complete], [cancel], [reconcileCapacity], [apply], [attach] and [detach], whatever
      * the call returns, since a refused [acquire] may still move the wake memory. Never moved by a
-     * read ([snapshot], [persist], [previewPicks], [explain], [entitlement], [reconcileLeases]), nor by
-     * a call that throws, which changes nothing. Costs one field read: compare it with the revision
-     * the last pass saw before copying anything.
+     * read ([topology], [snapshot], [persist], [previewPicks], [explain], [entitlement],
+     * [reconcileLeases]), nor by a call that throws, which changes nothing. Costs one field read:
+     * compare it with the revision the last pass saw before copying anything.
      *
      * Read it as you read the rest of the engine, under the caller's scheduling lock. It is not
      * persisted: see [LocalHeddleRevision] for why a revision held across a restart still compares
@@ -652,6 +652,34 @@ public class LocalHeddle private constructor(
      * @sample us.tractat.kuilt.heddle.sampleRevision
      */
     public val revision: LocalHeddleRevision get() = core.revision
+
+    /**
+     * The tree this engine runs: the one [fromTopology] booted, or the one [apply] was last given,
+     * or after a [restore], the one the persisted engine ran. It is always equal to the
+     * [LocalHeddleSnapshot.lastApplied] that [persist] writes. [attach] and [detach] leave it as it
+     * is: an attached child is the ledger's, and the tree holds only its group's template.
+     *
+     * It is the tree last asked for, not a picture of the ledger. A group a boot or a reload left out
+     * is in it as written, and a lane a reload removed is not, though its leases may still drain:
+     * [ApplyResult] says what landed, and [Topology.diff] what is left between this tree and the
+     * ledger.
+     *
+     * An admin page editing the tree reads it when the edit starts, and writes it out with
+     * [Topology.toDocument] for the editor. Before applying, `startedFrom.changesTo(candidate)`
+     * ([Topology.changesTo]) lists what the edit changes, and comparing `startedFrom` with this
+     * property again tells whether someone else applied a tree in between. [revision] cannot tell
+     * that: every [acquire] moves it.
+     *
+     * Never absent, since every engine a caller can build has a tree. Reading it changes nothing and
+     * does not move [revision]. Read it under the caller's scheduling lock, like the rest of the
+     * engine. A [Topology] is immutable, so the value can be used off the lock.
+     *
+     * @sample us.tractat.kuilt.heddle.sampleRunningTopology
+     */
+    public val topology: Topology
+        get() = checkNotNull((leasable as? Leasable.ByTopology)?.topology) {
+            "an engine over a hand-built ledger has no topology: only a test builds one"
+        }
 
     /** The engine's whole state, as an immutable value. Costs a sort of the open leases and of the wake memory. */
     public fun snapshot(): LocalHeddleState =
@@ -1170,7 +1198,7 @@ public class LocalHeddle private constructor(
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun attach(group: List<String>, name: String, generation: Long): ApplyResult =
-        atomically { run(topology().attach(group, name, ledger, generation), Attribution.CHILD) }
+        atomically { run(topology.attach(group, name, ledger, generation), Attribution.CHILD) }
 
     /**
      * Detach the attached child [name] from the group at [group] ([Topology.detach]):
@@ -1182,10 +1210,7 @@ public class LocalHeddle private constructor(
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun detach(group: List<String>, name: String): ApplyResult =
-        atomically { run(topology().detach(group, name, ledger), Attribution.CHILD) }
-
-    private fun topology(): Topology =
-        checkNotNull((leasable as? Leasable.ByTopology)?.topology) { "an engine over a hand-built ledger has no topology" }
+        atomically { run(topology.detach(group, name, ledger), Attribution.CHILD) }
 
     /**
      * Apply [steps] as one unit. Each [attempt] starts from the committed ledger. One that finds a
@@ -1545,7 +1570,7 @@ public class LocalHeddle private constructor(
         allocatorMemory = allocator.memory,
         totalSlots = capacity.slots,
         open = open.values.sortedBy { it.lease.id }.map { PersistedLease(it.lease, it.path) },
-        lastApplied = topology(),
+        lastApplied = topology,
     )
 
     /**
