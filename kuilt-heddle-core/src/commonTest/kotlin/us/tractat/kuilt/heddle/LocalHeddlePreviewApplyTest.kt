@@ -211,7 +211,7 @@ class LocalHeddlePreviewApplyTest {
     private companion object {
         const val SEEDS = 60
         const val QUESTIONS = 3
-        const val FLOOR = 3
+        const val FLOOR = 10
 
         /** Above both generations [history] applies at. */
         const val GENERATION = 3L
