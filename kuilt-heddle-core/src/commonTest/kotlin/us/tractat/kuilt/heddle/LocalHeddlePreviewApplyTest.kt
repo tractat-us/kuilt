@@ -152,14 +152,13 @@ class LocalHeddlePreviewApplyTest {
                 { assertEquals(questions.map { twin.answers(it) }, afterAnswers, "seed $seed: after answers as the engine does once applied") },
                 { assertEquals(revision, preview.basis, "seed $seed: the basis is the revision the preview was taken at") },
                 { assertEquals(revision, h.revision, "seed $seed: the revision has not moved") },
-                { assertEquals(persisted, h.persist(), "seed $seed: the engine persists as it did") },
+                { assertEquals(persisted, h.persist(), "seed $seed: the engine persists as it did, and the snapshot previewed is unchanged") },
                 { assertEquals(json, encode(h.persist()), "seed $seed: to the same JSON") },
                 { assertEquals(state, h.snapshot(), "seed $seed: its state is as it was") },
                 { assertEquals(answersBefore, questions.map { h.answers(it) }, "seed $seed: and it answers as it did") },
                 { assertEquals(preview.result, fromSnapshot.result, "seed $seed: the snapshot's preview has the engine's result") },
                 { assertEquals(afterAnswers, questions.map { fromSnapshot.after.answers(it) }, "seed $seed: and answers as the engine's does") },
                 { assertNull(fromSnapshot.basis, "seed $seed: a snapshot's preview has no basis") },
-                { assertEquals(json, encode(persisted), "seed $seed: the snapshot the preview was handed encodes as it did") },
             )
 
             if (state.leases.any { twin.capturedPath(it.id) != paths[it.id] }) moved++
