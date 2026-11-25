@@ -172,10 +172,14 @@ class FastReconnectRaceTest {
      * before it says Hello again. Eve's `Farewell` to the client went down the dead link, so before
      * #3615 the client was admitted afresh still listing Eve, and on this star, where the client has
      * no heartbeat edge to Eve, nothing ever took her out. Now the client hears `Readmitted`, and the
-     * host's admission burst, which no longer names Eve, drops her.
+     * host's admission burst, which no longer names Eve, drops her, with `Unobserved`: the client did
+     * not see her go.
+     *
+     * Carol stays connected throughout. The burst names her, so the rebuild keeps her: no `Left`, at
+     * readmission or after the client's own window would have closed.
      */
     @Test
-    fun `a readmitted joiner drops a peer who left during its outage`() =
+    fun `a readmitted joiner drops a peer who left during its outage and keeps one who stayed`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
@@ -186,8 +190,9 @@ class FastReconnectRaceTest {
                 reweaveDelayMs = 250L,
             )
             val eve = h.addJoiner("eve", 2)
-            h.hostRoom.roster.first { it.size == 2 }
-            h.joinerRoom.roster.first { roster -> roster.any { it.id == eve.selfId } }
+            val carol = h.addJoiner("carol", 3)
+            h.hostRoom.roster.first { it.size == 3 }
+            h.joinerRoom.roster.first { roster -> roster.any { it.id == eve.selfId } && roster.any { it.id == carol.selfId } }
 
             val hostLog = EventLog(h.hostRoom, backgroundScope)
             val joinerLog = EventLog(h.joinerRoom, backgroundScope)
@@ -206,13 +211,17 @@ class FastReconnectRaceTest {
             val joinerEvents = joinerLog.since(joinerMark)
             val client = h.joinerRoom.selfId
             val hostId = h.hostRoom.selfId
+            val rendered = joinerEvents.joinToString { it.describe() }
             assertAll(
                 { assertEquals(listOf(client), hostEdges.filterIsInstance<MembershipEvent.Joined>().map { it.member.id }, "rig: the client was admitted afresh: ${hostEdges.joinToString { it.describe() }}") },
                 { assertTrue(hostEdges.any { it == MembershipEvent.Left(eve.selfId, LeaveReason.Normal) }, "rig: Eve left cleanly: ${hostEdges.joinToString { it.describe() }}") },
-                { assertEquals(listOf<MembershipEvent>(MembershipEvent.Readmitted(client)), joinerEvents.filterIsInstance<MembershipEvent.Readmitted>(), joinerEvents.joinToString { it.describe() }) },
-                { assertTrue(joinerEvents.none { it is MembershipEvent.Recovered || it is MembershipEvent.HostLost }, joinerEvents.joinToString { it.describe() }) },
-                { assertEquals(setOf(hostId), rosterAtReadmission, "no ghost once readmitted: ${joinerEvents.joinToString { it.describe() }}") },
-                { assertEquals(setOf(hostId), h.joinerRoom.roster.value.map { it.id }.toSet(), "and none later: ${joinerEvents.joinToString { it.describe() }}") },
+                { assertTrue(hostEdges.none { it is MembershipEvent.Left && it.peerId == carol.selfId }, "rig: Carol stayed: ${hostEdges.joinToString { it.describe() }}") },
+                { assertTrue(h.hostRoom.roster.value.any { it.id == carol.selfId }, "rig: the host still holds Carol") },
+                { assertEquals(listOf<MembershipEvent>(MembershipEvent.Readmitted(client)), joinerEvents.filterIsInstance<MembershipEvent.Readmitted>(), rendered) },
+                { assertTrue(joinerEvents.none { it is MembershipEvent.Recovered || it is MembershipEvent.HostLost }, rendered) },
+                { assertEquals(listOf<MembershipEvent>(MembershipEvent.Left(eve.selfId, LeaveReason.Unobserved)), joinerEvents.filterIsInstance<MembershipEvent.Left>(), "only Eve left, unobserved: $rendered") },
+                { assertEquals(setOf(hostId, carol.selfId), rosterAtReadmission, "no ghost and no lost member once readmitted: $rendered") },
+                { assertEquals(setOf(hostId, carol.selfId), h.joinerRoom.roster.value.map { it.id }.toSet(), "and none later: $rendered") },
             )
         }
 

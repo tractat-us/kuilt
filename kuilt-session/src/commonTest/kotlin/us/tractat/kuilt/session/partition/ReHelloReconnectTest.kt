@@ -146,17 +146,18 @@ class ReHelloReconnectTest {
         suspend fun welcome(hello: AdmitMessage.Hello, membership: String, returnKind: ReturnKind? = null, others: List<PeerId> = emptyList()) {
             selfWelcome(hello, membership, returnKind)
             others.forEach { rosterWelcome(it) }
-            hostIntro()
+            hostIntro(answers = hello.joinerNonce)
         }
 
-        /** The host intro, which closes an admission burst. */
-        suspend fun hostIntro() {
+        /** The host intro, which closes the admission burst answering the Hello whose nonce is [answers]. */
+        suspend fun hostIntro(answers: ByteArray?) {
             fromHost(
                 AdmitMessage.Welcome(
                     assignedPeerId = hostId.value,
                     displayName = "Host",
                     sessionId = hostId.value,
                     key = hostDevice.id,
+                    answers = answers,
                 ),
             )
         }
@@ -206,6 +207,19 @@ class ReHelloReconnectTest {
             test.testScheduler.runCurrent()
             assertTrue(room.resumeFlightsStarted() > flights, "rig: a reconnect flight started")
             return hellosToHost().drop(before).lastOrNull()
+        }
+
+        /** Let [hello]'s attempt go unanswered until the reconnect says Hello again, and return that Hello. */
+        suspend fun awaitNextHello(hello: AdmitMessage.Hello): AdmitMessage.Hello {
+            val before = hellosToHost().size
+            var left = joinerConfig.reconnectWindow
+            while (hellosToHost().size == before && left > Duration.ZERO) {
+                advance(TICK)
+                left -= TICK
+            }
+            val next = assertNotNull(hellosToHost().drop(before).firstOrNull(), "rig: the unanswered attempt said Hello again")
+            assertFalse(next.joinerNonce.contentEquals(hello.joinerNonce), "rig: the new Hello has a nonce of its own")
+            return next
         }
     }
 
@@ -314,7 +328,13 @@ class ReHelloReconnectTest {
         val since = s.log.since(mark)
         assertAll(
             { assertEquals(setOf(hostId), s.room.roster.value.map { it.id }.toSet(), "Eve is not a ghost: ${since.render()}") },
-            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Left(eve, LeaveReason.Normal)), since.filterIsInstance<MembershipEvent.Left>(), since.render()) },
+            {
+                assertEquals(
+                    listOf<MembershipEvent>(MembershipEvent.Left(eve, LeaveReason.Unobserved)),
+                    since.filterIsInstance<MembershipEvent.Left>(),
+                    "Bob did not see Eve go, and says only that: ${since.render()}",
+                )
+            },
             { assertEquals(1, since.count { it is MembershipEvent.Readmitted }, since.render()) },
         )
         s.room.leave()
@@ -383,7 +403,7 @@ class ReHelloReconnectTest {
             { assertEquals(1, since.count { it is MembershipEvent.Resumed && it.peerId == bob }, "rig: the seat came back: ${since.render()}") },
             { assertTrue(since.none { it is MembershipEvent.Readmitted }, "a restore is not a readmission: ${since.render()}") },
             { assertEquals(setOf(hostId), s.room.roster.value.map { it.id }.toSet(), since.render()) },
-            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Left(eve, LeaveReason.Normal)), since.filterIsInstance<MembershipEvent.Left>(), since.render()) },
+            { assertEquals(listOf<MembershipEvent>(MembershipEvent.Left(eve, LeaveReason.Unobserved)), since.filterIsInstance<MembershipEvent.Left>(), since.render()) },
         )
         s.room.leave()
     }
@@ -424,13 +444,105 @@ class ReHelloReconnectTest {
         s.advance(TICK)
         val mark = s.log.mark()
         assertNotNull(s.dropAndHeal(), "the second reconnect says Hello again")
-        s.hostIntro()
+        s.hostIntro(answers = firstReHello.joinerNonce)
         s.advance(TICK)
 
         val since = s.log.since(mark)
         assertAll(
             { assertTrue(s.room.roster.value.any { it.id == eve }, since.render()) },
             { assertTrue(since.none { it is MembershipEvent.Left }, since.render()) },
+        )
+        s.room.leave()
+    }
+
+    /**
+     * Two bursts to Bob interleave on the host. His first re-Hello went unanswered long enough that
+     * he said Hello again, and the host answered both: each burst is sent outside the host's lock,
+     * so their frames can mix on the link. Carol was admitted after the host built the first burst,
+     * and her roster `Welcome` reached Bob before his second Hello. Then the first burst's frames
+     * arrive, stale, with the second's answer among them, and the first burst's intro lands after
+     * it. That intro closes the first burst, not the one that answered: it must drop nobody. Before
+     * the intro named its Hello it rebuilt on a count missing Carol, a live member (#3641 review).
+     */
+    @Test
+    fun aLateIntroAfterTheNewAnswerDropsNobody() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = scripted(others = listOf(eve))
+        val firstReHello = assertNotNull(s.dropAndHeal(), "the reconnect says Hello again")
+        s.challenge(firstReHello)
+        s.rosterWelcome(carol)
+        val heldCarol = s.room.roster.value.any { it.id == carol }
+        val secondReHello = s.awaitNextHello(firstReHello)
+        s.challenge(secondReHello)
+        val mark = s.log.mark()
+        s.selfWelcome(firstReHello, SECOND_MEMBERSHIP)
+        s.rosterWelcome(eve)
+        s.selfWelcome(secondReHello, SECOND_MEMBERSHIP)
+        val readmitted = s.log.since(mark).count { it is MembershipEvent.Readmitted }
+        s.hostIntro(answers = firstReHello.joinerNonce)
+        val afterLateIntro = s.room.roster.value.map { it.id }.toSet()
+        s.rosterWelcome(eve)
+        s.rosterWelcome(carol)
+        s.hostIntro(answers = secondReHello.joinerNonce)
+        s.advance(TICK)
+
+        val since = s.log.since(mark)
+        assertAll(
+            { assertTrue(heldCarol, "rig: Bob held Carol before his second Hello") },
+            { assertEquals(1, readmitted, "rig: the second Hello's answer closed the episode: ${since.render()}") },
+            { assertEquals(setOf(hostId, eve, carol), afterLateIntro, "the first burst's intro dropped nobody: ${since.render()}") },
+            { assertTrue(since.none { it is MembershipEvent.Left }, "nobody left: ${since.render()}") },
+            { assertEquals(setOf(hostId, eve, carol), s.room.roster.value.map { it.id }.toSet(), since.render()) },
+        )
+        s.room.leave()
+    }
+
+    /**
+     * The host intro names the Hello its burst answers, so that a late one from an earlier burst
+     * rebuilds nothing. It is still not the answer to that Hello: only the `Welcome` naming Bob is
+     * (#3215). An intro arriving first closes nothing and drops nobody.
+     */
+    @Test
+    fun anIntroNamingTheHelloIsNotItsAnswer() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = scripted(others = listOf(eve))
+        val mark = s.log.mark()
+        val reHello = assertNotNull(s.dropAndHeal(), "the reconnect says Hello again")
+        s.challenge(reHello)
+        s.hostIntro(answers = reHello.joinerNonce)
+        val pendingAfterIntro = (s.room as SeamRoom).hasPendingResume()
+        val afterIntro = s.log.since(mark)
+        s.welcome(reHello, SECOND_MEMBERSHIP, others = listOf(eve))
+        s.advance(TICK)
+
+        val since = s.log.since(mark)
+        assertAll(
+            { assertTrue(pendingAfterIntro, "the intro settled no flight") },
+            { assertTrue(afterIntro.none { it is MembershipEvent.Readmitted || it is MembershipEvent.Resumed }, "the intro closed nothing: ${afterIntro.render()}") },
+            { assertTrue(afterIntro.none { it is MembershipEvent.Left }, "the intro dropped nobody: ${afterIntro.render()}") },
+            { assertEquals(1, since.count { it is MembershipEvent.Readmitted }, "the answer then closed the episode: ${since.render()}") },
+            { assertEquals(setOf(hostId, eve), s.room.roster.value.map { it.id }.toSet(), since.render()) },
+        )
+        s.room.leave()
+    }
+
+    /**
+     * The count of members the host named since the latest Hello holds only members (#3641 review).
+     * Members come and go between reconnects with no new Hello to clear it, so each one that leaves
+     * leaves the count as well, as every other per-member record does.
+     */
+    @Test
+    fun aMemberWhoLeavesIsNoLongerCounted() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val s = scripted(others = listOf(eve))
+        val room = s.room as SeamRoom
+        s.rosterWelcome(carol)
+        val namedWithCarol = room.namedSinceHelloForTest()
+        s.fromHost(AdmitMessage.Farewell(carol.value))
+        s.fromHost(AdmitMessage.Farewell(eve.value))
+        s.advance(TICK)
+
+        assertAll(
+            { assertTrue(carol in namedWithCarol, "rig: Carol was counted: $namedWithCarol") },
+            { assertEquals(setOf(hostId), s.room.roster.value.map { it.id }.toSet(), "rig: Carol and Eve left") },
+            { assertEquals(setOf(hostId), room.namedSinceHelloForTest(), "the count holds only members") },
         )
         s.room.leave()
     }

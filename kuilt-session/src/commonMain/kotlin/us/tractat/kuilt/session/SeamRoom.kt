@@ -4817,6 +4817,9 @@ internal class SeamRoom(
      */
     internal fun hostPeer(): PeerId? = lock.withLock { hostPeerId }
 
+    /** Test-visibility: the members a host `Welcome` has named since this joiner's latest Hello (#3615). */
+    internal fun namedSinceHelloForTest(): Set<PeerId> = lock.withLock { namedSinceHello.toSet() }
+
     /** Test-visibility: how many membership ids this host holds — one per current member (#3215). */
     internal fun heldMembershipCount(): Int = lock.withLock { membershipIds.size }
 
