@@ -855,6 +855,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public static synthetic fun previewPicks$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/util/Map;Ljava/util/Set;JILjava/lang/Object;)Ljava/util/List;
 	public final fun reconcileCapacity (J)V
 	public final fun reconcileLeases (Ljava/util/Set;J)Lus/tractat/kuilt/heddle/LeaseReconciliation;
+	public final fun shareLine (Ljava/util/Set;)Lus/tractat/kuilt/heddle/ShareLine;
 	public final fun snapshot ()Lus/tractat/kuilt/heddle/LocalHeddleState;
 }
 
@@ -939,6 +940,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddleView {
 	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;J)Ljava/util/List;
 	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;Ljava/util/List;)Ljava/util/List;
 	public static synthetic fun previewPicks$default (Lus/tractat/kuilt/heddle/LocalHeddleView;Ljava/util/Map;Ljava/util/Set;JILjava/lang/Object;)Ljava/util/List;
+	public final fun shareLine (Ljava/util/Set;)Lus/tractat/kuilt/heddle/ShareLine;
 }
 
 public final class us/tractat/kuilt/heddle/LocalPolicy {
@@ -1242,6 +1244,10 @@ public final synthetic class us/tractat/kuilt/heddle/ServiceUnits$$serializer : 
 public final class us/tractat/kuilt/heddle/ServiceUnits$Companion {
 	public final fun getZERO-5aPDI64 ()J
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/ShareLine {
+	public final fun share-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
 }
 
 public final class us/tractat/kuilt/heddle/SlotFinals {

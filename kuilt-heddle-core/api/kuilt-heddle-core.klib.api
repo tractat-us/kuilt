@@ -1573,6 +1573,7 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
     final fun previewPicks(kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin/Int>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/List<kotlin/Long>): kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/LocalHeddle.previewPicks|previewPicks(kotlin.collections.Map<us.tractat.kuilt.heddle.GroupId,kotlin.Int>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.List<kotlin.Long>){}[0]
     final fun reconcileCapacity(kotlin/Long) // us.tractat.kuilt.heddle/LocalHeddle.reconcileCapacity|reconcileCapacity(kotlin.Long){}[0]
     final fun reconcileLeases(kotlin.collections/Set<us.tractat.kuilt.heddle/LeaseId>, kotlin/Long): us.tractat.kuilt.heddle/LeaseReconciliation // us.tractat.kuilt.heddle/LocalHeddle.reconcileLeases|reconcileLeases(kotlin.collections.Set<us.tractat.kuilt.heddle.LeaseId>;kotlin.Long){}[0]
+    final fun shareLine(kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>): us.tractat.kuilt.heddle/ShareLine // us.tractat.kuilt.heddle/LocalHeddle.shareLine|shareLine(kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>){}[0]
     final fun snapshot(): us.tractat.kuilt.heddle/LocalHeddleState // us.tractat.kuilt.heddle/LocalHeddle.snapshot|snapshot(){}[0]
 
     final class Boot { // us.tractat.kuilt.heddle/LocalHeddle.Boot|null[0]
@@ -1683,6 +1684,7 @@ final class us.tractat.kuilt.heddle/LocalHeddleView { // us.tractat.kuilt.heddle
     final fun explain(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long = ...): us.tractat.kuilt.heddle/WaitExplanation // us.tractat.kuilt.heddle/LocalHeddleView.explain|explain(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
     final fun previewPicks(kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin.collections/List<kotlin/Long>>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long = ...): kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/LocalHeddleView.previewPicks|previewPicks(kotlin.collections.Map<us.tractat.kuilt.heddle.GroupId,kotlin.collections.List<kotlin.Long>>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
     final fun previewPicks(kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin/Int>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/List<kotlin/Long>): kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/LocalHeddleView.previewPicks|previewPicks(kotlin.collections.Map<us.tractat.kuilt.heddle.GroupId,kotlin.Int>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.List<kotlin.Long>){}[0]
+    final fun shareLine(kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>): us.tractat.kuilt.heddle/ShareLine // us.tractat.kuilt.heddle/LocalHeddleView.shareLine|shareLine(kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>){}[0]
 }
 
 final class us.tractat.kuilt.heddle/LocalPolicy { // us.tractat.kuilt.heddle/LocalPolicy|null[0]
@@ -1813,6 +1815,10 @@ final class us.tractat.kuilt.heddle/Rational : kotlin/Comparable<us.tractat.kuil
         final fun of(kotlin/Long): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Rational.Companion.of|of(kotlin.Long){}[0]
         final fun of(kotlin/Long, kotlin/Long): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Rational.Companion.of|of(kotlin.Long;kotlin.Long){}[0]
     }
+}
+
+final class us.tractat.kuilt.heddle/ShareLine { // us.tractat.kuilt.heddle/ShareLine|null[0]
+    final fun share(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/ShareLine.share|share(us.tractat.kuilt.heddle.GroupId){}[0]
 }
 
 final class us.tractat.kuilt.heddle/SlotFinals { // us.tractat.kuilt.heddle/SlotFinals|null[0]
