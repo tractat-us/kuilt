@@ -23,24 +23,27 @@ import kotlin.test.assertTrue
  * on every Reject whether its code is retryable. A v7 joiner keeps no pass and would retry an app's
  * terminal refusal, so it is refused.
  *
+ * v9 (#3222) reads the pass: a joiner presents it in its Proof, and a host lets a device inside it
+ * back in unvetted, marking the Welcome. A v8 joiner presents none, so it is refused.
+ *
  * A version-less peer predates #1569 and stays locked out, as it has been since v2 (#1994).
  */
 class ProtocolVersionTest {
 
     @Test
-    fun `the version line is 8`() {
+    fun `the version line is 9`() {
         assertAll(
-            { assertEquals(8, ProtocolVersion.CURRENT) },
-            { assertEquals(8, ProtocolVersion.MIN_SUPPORTED) },
-            { assertEquals(8, ProtocolVersion.MAX_SUPPORTED) },
+            { assertEquals(9, ProtocolVersion.CURRENT) },
+            { assertEquals(9, ProtocolVersion.MIN_SUPPORTED) },
+            { assertEquals(9, ProtocolVersion.MAX_SUPPORTED) },
         )
     }
 
     @Test
-    fun `only version 8 is admitted`() {
+    fun `only version 9 is admitted`() {
         assertAll(
             // Positive control: a gate that refused everything would satisfy the negatives.
-            { assertTrue(ProtocolVersion.isSupported(8)) },
+            { assertTrue(ProtocolVersion.isSupported(9)) },
             { assertFalse(ProtocolVersion.isSupported(null)) },
             { assertFalse(ProtocolVersion.isSupported(1)) },
             { assertFalse(ProtocolVersion.isSupported(2), "a v2 peer sends no device key") },
@@ -49,7 +52,8 @@ class ProtocolVersionTest {
             { assertFalse(ProtocolVersion.isSupported(5), "a v5 peer reads no supersession") },
             { assertFalse(ProtocolVersion.isSupported(6), "a v6 peer checks no answer against its Hello") },
             { assertFalse(ProtocolVersion.isSupported(7), "a v7 peer keeps no pass, and retries an app's terminal refusal") },
-            { assertFalse(ProtocolVersion.isSupported(9)) },
+            { assertFalse(ProtocolVersion.isSupported(8), "a v8 peer presents no pass") },
+            { assertFalse(ProtocolVersion.isSupported(10)) },
         )
     }
 }

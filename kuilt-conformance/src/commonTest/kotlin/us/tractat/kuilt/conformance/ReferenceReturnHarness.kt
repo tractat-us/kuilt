@@ -19,6 +19,7 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.RoomFactory
@@ -72,7 +73,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
     val hostTabs = atomic(0)
 
     // One process: its own scope, its own client loom and its own link, under one peer id.
-    class Process(val peerId: PeerId, deviceIndex: Int) {
+    class Process(val peerId: PeerId, deviceIndex: Int, store: DeviceKeyStore = fakeKeyStore(deviceIndex)) {
         val scope = CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job]))
         // Atomics, not plain vars: the rig is driven from the test body and read from the rooms'
         // own coroutines, and nothing here may lean on the test dispatcher being single-threaded.
@@ -104,7 +105,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
             loom = mux,
             scope = scope,
             clock = clock,
-            deviceKeyStore = fakeKeyStore(deviceIndex),
+            deviceKeyStore = store,
             heartbeatConfig = REFERENCE_JOINER_HEARTBEAT,
         )
 
@@ -184,12 +185,16 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
         }
     }
 
+    // The host's device's one store: the host's own room and every host tab share it, as the tabs of
+    // one browser share its IndexedDB, so a pass one tab keeps is the next tab's to present (#3222).
+    val hostStore = fakeKeyStore(0)
+
     return ReturnHarness(
         hostFactory = SeamRoomFactory(
             loom = server,
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = fakeKeyStore(0),
+            deviceKeyStore = hostStore,
             heartbeatConfig = REFERENCE_HOST_HEARTBEAT,
         ),
         hostPattern = Pattern(REFERENCE_SESSION),
@@ -197,8 +202,8 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
         hostHeartbeat = REFERENCE_HOST_HEARTBEAT,
         joinerHeartbeat = REFERENCE_JOINER_HEARTBEAT,
         device = { newDevice() },
-        // The host's own key store (index 0), under a joiner's link and an id of its own.
-        hostTab = { Process(PeerId("host-tab-${hostTabs.incrementAndGet()}"), deviceIndex = 0).factory },
+        // The host's own key store, under a joiner's link and an id of its own.
+        hostTab = { Process(PeerId("host-tab-${hostTabs.incrementAndGet()}"), deviceIndex = 0, store = hostStore).factory },
     )
 }
 

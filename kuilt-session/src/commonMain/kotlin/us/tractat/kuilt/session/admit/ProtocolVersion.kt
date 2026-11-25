@@ -94,6 +94,15 @@ package us.tractat.kuilt.session.admit
  * does not know the code (Decided 25). A v7 joiner keeps no pass, and retries a refusal its host
  * meant as final until its deadline, so the gate refuses it.
  *
+ * ## Version 9 — a device inside its pass comes back unvetted (#3222)
+ *
+ * Version 9 reads the pass. A joiner puts in its [AdmitMessage.Proof] the passes it holds from the
+ * challenging host that are good in the room the challenge named, and a host that finds one good lets a device whose seat is gone back in
+ * without asking its admission policy. The direct Welcome and its roster copy say so
+ * ([ReturnKind.Returning]) and name the id the device last held ([AdmitMessage.Welcome.previousPeerId]),
+ * so every member present hears the same device return. A v8 joiner sends no pass, and is vetted on
+ * every return its host meant to let it skip, so the gate refuses it.
+ *
  * Every later change to what a joiner must send to be admitted, or must read to be admitted on the
  * terms its host meant, bumps this line again.
  *
@@ -105,13 +114,13 @@ package us.tractat.kuilt.session.admit
  */
 public object ProtocolVersion {
     /** The protocol version this build stamps into every [AdmitMessage.Hello] it sends. */
-    public const val CURRENT: Int = 8
+    public const val CURRENT: Int = 9
 
     /** Oldest declared version this build will admit. */
-    public const val MIN_SUPPORTED: Int = 8
+    public const val MIN_SUPPORTED: Int = 9
 
     /** Newest declared version this build will admit. */
-    public const val MAX_SUPPORTED: Int = 8
+    public const val MAX_SUPPORTED: Int = 9
 
     /**
      * Whether a joiner's declared [version] is one this host can admit.

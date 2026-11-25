@@ -223,9 +223,9 @@ public data class GrantTerms(
  * @property policy Decides every newcomer; never asked about a returning device.
  * @property revocations Per-device cutoffs. A device revoked after its seat was admitted does not get
  *   that seat back, and goes to the [policy] as a newcomer; while it stays connected it keeps its seat,
- *   but the room stops renewing its pass (Decided 14). Checking a returning device's pass against them
- *   starts when the room checks passes at all (identity Task 2.6). They void seats and passes; they do not keep a device out, which is
- *   the [policy]'s job.
+ *   but the room stops renewing its pass (Decided 14). A pass issued before its device's cutoff does not
+ *   let it back in unvetted either (#3222). They void seats and passes; they do not keep a device out,
+ *   which is the [policy]'s job.
  * @sample us.tractat.kuilt.session.hostAdmissionSample
  */
 public class HostAdmission(

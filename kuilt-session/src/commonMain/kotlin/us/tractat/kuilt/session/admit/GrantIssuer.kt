@@ -4,6 +4,8 @@ import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.GrantScope
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * How a host issues a member its pass back in, and when it issues the next one (identity Task 2.5,
@@ -11,8 +13,11 @@ import us.tractat.kuilt.identity.GrantScope
  *
  * The room calls these outside its lock, since signing suspends: [issue] on every direct `Welcome`,
  * and again every [refreshPeriodMillis] while the member stays connected, as long as [mayIssue]
- * holds. The terms come from the member's membership, which the policy gave at admission and a
- * restore or a takeover keeps.
+ * holds. The terms come from the member's membership: the policy's at admission, or those the pass
+ * a device returned on carried ([termsOf], #3222). A restore or a takeover keeps them.
+ *
+ * Stateless: the terms live on the membership and the schedule in the room's renewal jobs, so what a
+ * host remembers of a member that left is the room's too (`DepartedMembers`).
  */
 internal object GrantIssuer {
     /**
@@ -49,4 +54,33 @@ internal object GrantIssuer {
      * policy admitted the device knowing it.
      */
     fun mayIssue(admittedAtMs: Long, cutoff: Long?): Boolean = cutoff == null || cutoff <= admittedAtMs
+
+    /**
+     * The terms [grant] was issued on, read back from it (#3222): a device let back in on its pass is
+     * issued its next on these, so a return keeps the lifetime and reach it presented (the plan's
+     * carried-terms decision). The lifetime is `notAfter − issuedAt`, at least 1 ms since a grant ends
+     * after it starts, or [Duration.INFINITE] for [Grant.NO_EXPIRY].
+     */
+    fun termsOf(grant: Grant): GrantTerms = GrantTerms(
+        readmitFor = if (grant.notAfter == Grant.NO_EXPIRY) Duration.INFINITE else (grant.notAfter - grant.issuedAt).milliseconds,
+        reach = when (grant.scope) {
+            is GrantScope.Room -> GrantReach.ThisRoom
+            GrantScope.AnyRoomOfIssuer -> GrantReach.AnyRoomOfIssuer
+        },
+    )
+
+    /**
+     * Of two passes a host found good, the one whose terms to carry forward: the longer lifetime, then
+     * the wider reach, then [first]. A friend presenting a no-expiry pass beside a stranger's one-hour
+     * one keeps the friend's terms.
+     */
+    fun mostGenerous(first: Grant, second: Grant): Grant {
+        val byLifetime = lifetimeOf(second).compareTo(lifetimeOf(first))
+        if (byLifetime != 0) return if (byLifetime > 0) second else first
+        val widerSecond = second.scope == GrantScope.AnyRoomOfIssuer && first.scope != GrantScope.AnyRoomOfIssuer
+        return if (widerSecond) second else first
+    }
+
+    private fun lifetimeOf(grant: Grant): Long =
+        if (grant.notAfter == Grant.NO_EXPIRY) Long.MAX_VALUE else grant.notAfter - grant.issuedAt
 }

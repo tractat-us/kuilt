@@ -34,8 +34,16 @@ public data class RoomFrame(
  * injected clock — never [kotlin.time.Clock.System.now()] directly.
  */
 public sealed interface MembershipEvent {
-    /** A new peer completed the admit handshake and entered the roster. */
-    public data class Joined(val member: Member) : MembershipEvent
+    /**
+     * A new peer completed the admit handshake and entered the roster.
+     *
+     * [returning] is set when the member is a device whose seat was gone and whose pass let it back
+     * in without the host's admission policy being asked (#3222): the same device coming back after
+     * its hold ran out, inside the time its host gave it. It is a new membership all the same. Null
+     * for an ordinary admission, an additional seat, and a takeover under a new id. The host sets it,
+     * and every other member reads it from the host's `Welcome`.
+     */
+    public data class Joined(val member: Member, val returning: ReturningMark? = null) : MembershipEvent
 
     /**
      * A peer left the room: a clean leave, or a transport disconnect after admission. One naming this
@@ -298,3 +306,15 @@ public sealed interface AdmissionFailure {
      */
     public data object TimedOut : AdmissionFailure
 }
+
+/**
+ * A [MembershipEvent.Joined] member is a device coming back on the pass its host gave it (#3222):
+ * its seat was gone, and the host let it in again without asking its admission policy.
+ *
+ * [previousId] is the peer id the device last held a seat under in this room, when the host still
+ * remembers it; it may equal the member's id now. Null when the host does not: it restarted since,
+ * or the last pass it gave that membership has run out. Read it as a hint for carrying what an app
+ * knew about that peer over to this one, not as proof of anything: one device may hold several
+ * seats, and the device's key, [Member.key], is what names it.
+ */
+public data class ReturningMark(val previousId: PeerId?)

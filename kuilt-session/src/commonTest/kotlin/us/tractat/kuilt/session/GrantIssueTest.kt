@@ -70,14 +70,6 @@ class GrantIssueTest {
     private fun admitting(terms: GrantTerms, revocations: RevocationList = RevocationList.inMemory()) =
         HostAdmission(AdmissionPolicy { AdmissionDecision.Admit(terms) }, revocations)
 
-    private fun RawHost.passesTo(peer: PeerId): List<Grant> = sentTo(peer).mapNotNull { message ->
-        when (message) {
-            is AdmitMessage.Welcome -> message.grant?.takeIf { message.assignedPeerId == peer.value }
-            is AdmitMessage.GrantRenewal -> message.grant
-            else -> null
-        }
-    }.map { assertNotNull(Grant.decode(it), "every pass the host sends decodes") }
-
     private fun RawHost.renewalsTo(peer: PeerId): Int = sentTo(peer).count { it is AdmitMessage.GrantRenewal }
 
     /**

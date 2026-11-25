@@ -91,8 +91,12 @@ public class ReturnHarness(
      * It is a joiner like any other, and there is nothing to drop or kill on it: the host-key row
      * needs only that the key is the host's. The row reads the key back off the host's roster and
      * off a joiner's view of the host, so a hook handing out some other key reds as the rig's own
-     * failure. What it cannot see is *how* the key got there — a shared key store or a copy of one —
-     * which the host cannot see either.
+     * failure.
+     *
+     * Every tab works on the host device's **one** key store, as the tabs of a browser share its
+     * storage: a pass the host hands one tab is kept where the next tab finds it (#3222). The row's
+     * last tab comes back on that pass, so a harness that gives each tab a copy of the key and a store
+     * of its own reds there, on the policy being asked.
      */
     public suspend fun hostTab(): RoomFactory = hostTab.invoke()
 }
@@ -214,9 +218,10 @@ internal class EventTape(room: Room, scope: CoroutineScope) {
  * [AdmissionPolicy.open] does, and records the key of every newcomer it is asked about, oldest first.
  *
  * The friction bar is also a count of vetting. A restore — the same seat back, under the same id or a
- * new one — never asks the policy; a release of a seat to a different key, a seat gone, and an
- * additional seat for a second live process are new memberships, which it asks about once each (plan
- * Amendments C, H and J). The rows read [keys] before and after their return to say which happened.
+ * new one — never asks the policy, and nor does a return on a good pass once the seat is gone (#3222).
+ * A release of a seat to a different key, a seat gone with no good pass, and an additional seat for a
+ * second live process are new memberships, which it asks about once each (plan Amendments C, H and
+ * J). The rows read [keys] before and after their return to say which happened.
  */
 internal class VettingCount {
     private val lock = reentrantLock()
