@@ -288,7 +288,7 @@ public object TopologyWeightSerializer : KSerializer<Weight> {
 private fun Weight.text(): String = if (denominator == 1L) "$numerator" else "$numerator/$denominator"
 
 /** The weight [text] names, or `null`: digits, optionally `/` and digits, a positive ratio. */
-private fun parseWeightText(text: String): Weight? {
+internal fun parseWeightText(text: String): Weight? {
     val parts = text.split('/')
     if (parts.size > 2 || parts.any { part -> part.isEmpty() || part.any { it !in '0'..'9' } }) return null
     val numerator = parts[0].toLongOrNull() ?: return null

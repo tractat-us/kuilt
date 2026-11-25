@@ -1788,6 +1788,15 @@ public final class us/tractat/kuilt/heddle/TopologyDocument$Node$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class us/tractat/kuilt/heddle/TopologyDocumentEditsKt {
+	public static final fun addChild (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$Node;)Lus/tractat/kuilt/heddle/TopologyEdit;
+	public static final fun move (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Ljava/util/List;)Lus/tractat/kuilt/heddle/TopologyEdit;
+	public static final fun remove (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;)Lus/tractat/kuilt/heddle/TopologyEdit;
+	public static final fun rename (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyEdit;
+	public static final fun setMaxConcurrent (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Ljava/lang/Long;)Lus/tractat/kuilt/heddle/TopologyEdit;
+	public static final fun setWeight (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyEdit;
+}
+
 public abstract class us/tractat/kuilt/heddle/TopologyDraft {
 	public final fun group (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;Lkotlin/jvm/functions/Function1;)V
 	public final fun group (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Lkotlin/jvm/functions/Function1;)V
@@ -1809,6 +1818,96 @@ public abstract interface annotation class us/tractat/kuilt/heddle/TopologyDraft
 
 public final class us/tractat/kuilt/heddle/TopologyDraftKt {
 	public static final fun draft (Ljava/lang/String;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/heddle/Topology;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/TopologyEdit {
+}
+
+public final class us/tractat/kuilt/heddle/TopologyEdit$AtRoot : us/tractat/kuilt/heddle/TopologyEdit$Refused {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/TopologyEdit$AtRoot;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getPath ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyEdit$DuplicateName : us/tractat/kuilt/heddle/TopologyEdit$Refused {
+	public fun <init> (Ljava/util/List;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyEdit$DuplicateName;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyEdit$DuplicateName;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyEdit$DuplicateName;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getName ()Ljava/lang/String;
+	public fun getPath ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyEdit$Edited : us/tractat/kuilt/heddle/TopologyEdit {
+	public fun <init> (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyEdit$History;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/TopologyDocument;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()Lus/tractat/kuilt/heddle/TopologyEdit$History;
+	public final fun copy (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyEdit$History;)Lus/tractat/kuilt/heddle/TopologyEdit$Edited;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyEdit$Edited;Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyEdit$History;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyEdit$Edited;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDocument ()Lus/tractat/kuilt/heddle/TopologyDocument;
+	public final fun getHistory ()Lus/tractat/kuilt/heddle/TopologyEdit$History;
+	public final fun getPath ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyEdit$History : java/lang/Enum {
+	public static final field DRAINS Lus/tractat/kuilt/heddle/TopologyEdit$History;
+	public static final field KEPT Lus/tractat/kuilt/heddle/TopologyEdit$History;
+	public static final field NEW_TREE Lus/tractat/kuilt/heddle/TopologyEdit$History;
+	public static final field REPLACED Lus/tractat/kuilt/heddle/TopologyEdit$History;
+	public static final field SHARE_RESTARTS Lus/tractat/kuilt/heddle/TopologyEdit$History;
+	public static final field STARTS_EMPTY Lus/tractat/kuilt/heddle/TopologyEdit$History;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyEdit$History;
+	public static fun values ()[Lus/tractat/kuilt/heddle/TopologyEdit$History;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyEdit$IntoItself : us/tractat/kuilt/heddle/TopologyEdit$Refused {
+	public fun <init> (Ljava/util/List;Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;Ljava/util/List;)Lus/tractat/kuilt/heddle/TopologyEdit$IntoItself;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyEdit$IntoItself;Ljava/util/List;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyEdit$IntoItself;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getParent ()Ljava/util/List;
+	public fun getPath ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyEdit$NoSuchNode : us/tractat/kuilt/heddle/TopologyEdit$Refused {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/heddle/TopologyEdit$NoSuchNode;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyEdit$NoSuchNode;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyEdit$NoSuchNode;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getPath ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyEdit$NotAGroup : us/tractat/kuilt/heddle/TopologyEdit$Refused {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/heddle/TopologyEdit$NotAGroup;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyEdit$NotAGroup;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyEdit$NotAGroup;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getPath ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/TopologyEdit$Refused : us/tractat/kuilt/heddle/TopologyEdit {
+	public abstract fun getPath ()Ljava/util/List;
 }
 
 public final class us/tractat/kuilt/heddle/TopologyException : java/lang/IllegalArgumentException {
