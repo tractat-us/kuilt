@@ -2350,7 +2350,7 @@ internal class SeamRoom(
      * longer a release: a different key meets a connected seat, [SeatDecision.KeyConflict].
      *
      * When the key decided without the seat is not a newcomer — it holds a partitioned seat of its
-     * own, or (2.6) a valid grant — nothing is vetted, and the seat is released at once.
+     * own, or a good pass (#3222) — nothing is vetted, and the seat is released at once.
      */
     private fun settleRelease(
         joinerPeerId: PeerId,
