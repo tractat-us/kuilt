@@ -1141,6 +1141,17 @@ public class ConnectivitySuite {
      * [HeartbeatConfig.reconnectWindow] elapses → `FailureReason.Refused` → `HostLost`. A live room
      * dies of a blip both phones could have shrugged off.
      *
+     * ## What a fixed build does instead, since #3215
+     *
+     * There is no `Resume` frame and no `WindowNotYetOpen` any more. A joiner whose link tears says
+     * Hello again and proves its device key; a host that never noticed the blip still holds the seat
+     * **connected**, so it hands it straight back — no window, no refusal, and nothing on the host's
+     * events. The joiner's `Welcome` names the membership it already held: the resume machine logs
+     * `resume.ok … restored=true` and the room emits `Resumed` for itself. That is what a PASS now
+     * observes. The old FAIL signature, `HostLost(Refused(resume-window-not-yet-open))`, cannot occur
+     * between two builds of this one: a host older than #3215 refuses this build's Hello with
+     * `ProtocolMismatch` before anything else, so that code is not looked for at all.
+     *
      * ## Why scenario 6 structurally cannot show this
      *
      * [scenarioLocalFabric] runs `timeout = 5s`, *below* the shipping 10 s grace — deliberately, so its
@@ -1178,11 +1189,11 @@ public class ConnectivitySuite {
      * - **Dropped (Join)** — the phone under test. It measures its own outage off `localFabric`'s
      *   edges and refuses to judge a run that landed outside the band ([Verdict.SKIP], never a FAIL:
      *   an operator who held 8 s or 35 s must be told to retry, not shown a misleading verdict).
-     *   PASS = the resume lane **observably resolved on the #1637 dwell** ([ResumeLaneProbe]) with no
-     *   `HostLost` and the host back `Connected`. FAIL = `HostLost` **carrying
-     *   `RejectCode.ResumeWindowNotYetOpen`** — that code is the whole signature; any other `HostLost`
-     *   is a different failure and reports as its own SKIP. A room that merely *survives* is not a
-     *   PASS: see [blippedSide] for why "no `HostLost` + host `Connected`" was a false green.
+     *   PASS = the reconnect lane **observably handed this room's own seat back**
+     *   ([ResumeLaneProbe]'s `restored=true`, or the room's own `Resumed`) with no `HostLost` and the
+     *   host back `Connected`. FAIL = a `HostLost` the run cannot blame on its own setup: the blip
+     *   killed a room both phones could have kept. A room that merely *survives* is not a PASS: see
+     *   [blippedSide] for why "no `HostLost` + host `Connected`" was a false green.
      * - **Stay-up (Host)** — a witness, *and the peer the other phone has to come back to*. By
      *   construction it should observe *nothing at all*, and its PASS says exactly that: it never
      *   partitioned the joiner, so no window ever opened. It reads the same on a fixed and an unfixed
@@ -1338,26 +1349,30 @@ public class ConnectivitySuite {
      *
      * So the discriminator is [ResumeLaneProbe], watching the machine's own `resume.*` evidence lines.
      * It answers **two** questions the old code conflated into one: was the lane *entered*
-     * (`resume.refused`, #1969 — or `membership.unresponsive … branch=resume` as the weaker stand-in
-     * on a build without it), and did it *resolve* (`resume.no-op` / `resume.ok`). "Entered and never
-     * resolved" is a real, distinct, actionable answer, and it is not a PASS.
+     * (`resume.refused`, or `membership.unresponsive … branch=resume` as the weaker stand-in), and did
+     * it *resolve* (`resume.ok`). "Entered and never resolved" is a real, distinct, actionable answer,
+     * and it is not a PASS.
      *
      * ## The verdict, which never collapses the ways a room can survive
      *
-     *  - **`HostLost(Refused(code=resume-window-not-yet-open))`** → FAIL. That reject code, and nothing
-     *    else, is #1637's signature: a resume the host kept *answering* — retryably, forever — until the
-     *    window ran out.
-     *  - **any other `HostLost`** → SKIP, with prose that names what it actually was. A
-     *    `HostLost(WindowExpired)` is the *opposite* shape: no resume was ever answered, most likely
-     *    because none was ever sent. The first hardware run produced exactly that and the scenario
-     *    reported it as "#1637 confirmed", asserting three mechanisms it had not observed. A verdict
-     *    must never claim a mechanism the run did not see.
-     *  - **`resume.no-op`** → PASS, and the only PASS. The machine dwelled on a persistent
-     *    `WindowNotYetOpen`, concluded no window was ever coming, and completed the episode locally.
-     *    That is the #1637 fix, observed.
-     *  - **`resume.ok`** (or a `Resumed` event, its membership-level twin) → SKIP. A real `ResumeAck`
-     *    proves the host had a window **open** — it did notice, the outage overran its link, and this
-     *    was the ordinary resume lane. The room recovered; the sub-timeout lane was not tested.
+     * Rewritten for #3215 (census P13 on #3159): the verdict used to turn on the `Resume` frame's
+     * `WindowNotYetOpen` refusal and the dwell that answered it, both retired. A return is now a Hello,
+     * and the episode ends on one of four things: the room's own `Resumed`, `Recovered(host)`, a
+     * readmission, or `HostLost`.
+     *
+     *  - **`HostLost(Refused(ProtocolMismatch))`** → SKIP. The other phone runs a build that speaks
+     *    another protocol, so this run measured the install, not the return. Put one build on both.
+     *  - **`HostLost` from a phone that never re-wove** → SKIP, as before: the seam never got back to
+     *    `Woven`, so no Hello was ever sent, and the stay-up phone or the fabric is what failed.
+     *  - **any other `HostLost`** → FAIL. This phone re-wove, could say Hello, and the room still died of
+     *    a blip the host never noticed — #1637's symptom, whatever its mechanism this time. The prose
+     *    quotes the reason and the lane, and claims no mechanism the run did not see.
+     *  - **`resume.ok … restored=true`** (or this room's own `Resumed`, its membership-level twin) with
+     *    the host `Connected` → PASS, and the only PASS. The host handed back a seat it still held,
+     *    which is the sub-timeout return working. The stay-up phone's report must show it never
+     *    partitioned this one; if it did, that side's verdict already puts the run out of band.
+     *  - **`resume.ok … restored=false`** → SKIP. The host had let the seat go, so it noticed the outage,
+     *    and this was an ordinary readmission, not the sub-timeout lane.
      *  - **neither, and no `HostLost`** → SKIP, **NOT EXERCISED**. The room survived and the resume
      *    lane never resolved. This is the 2026-07-28 run, and reporting it as a PASS is the defect
      *    being fixed here. The prose splits it further, because the two shapes want opposite actions:
@@ -1447,7 +1462,7 @@ public class ConnectivitySuite {
 
         // ── observe the WHOLE window, not up to the first encouraging event ──
         //
-        // #1637 kills the room when the reconnect window expires, ≈ grace + window ≈ 63s after the
+        // #1637 killed the room when the reconnect window expired, ≈ grace + window ≈ 63s after the
         // radio died. A first-match wait rendered its verdict at ~15s and never saw the other 48s, so
         // a room that looked healthy early passed no matter what the resume lane did afterwards. The
         // wait is therefore a deadline measured from the observed radio death, and the loop keeps
@@ -1467,7 +1482,7 @@ public class ConnectivitySuite {
         )
         ctx.hop(
             "blip: watching the whole window — verdict at t=${fmtMs(observeUntilMs)} " +
-                "($OBSERVE_WINDOW after the radio died; a #1637 HostLost lands ≈" +
+                "($OBSERVE_WINDOW after the radio died; a #1637-shaped HostLost would land ≈" +
                 "${S7_WOVEN_PATH_GRACE + S7_HEARTBEAT.reconnectWindow} after it)",
         )
         var outcome: MembershipEvent? = null
@@ -1478,7 +1493,7 @@ public class ConnectivitySuite {
                 when (ev) {
                     is MembershipEvent.HostLost -> ev
                     is MembershipEvent.Recovered -> ev.takeIf { it.peerId == host }
-                    is MembershipEvent.Resumed -> ev
+                    is MembershipEvent.Resumed -> ev.takeIf { it.peerId == room.selfId }
                     else -> null
                 }
             } ?: break
@@ -1505,108 +1520,82 @@ public class ConnectivitySuite {
         val sinceDrop = ctx.ms() - downAt
         when {
             closing is MembershipEvent.HostLost -> {
-                // #1637 has ONE signature and this is it: Refused, carrying ResumeWindowNotYetOpen. A
-                // verdict must never assert a mechanism the run did not observe — the first hardware run
-                // printed "the host never partitioned me … every Resume was answered WindowNotYetOpen"
-                // over a `HostLost(WindowExpired)` in which the joiner had sent zero Resumes and the host
-                // HAD partitioned it. Every clause of that sentence was false.
+                // A verdict must never assert a mechanism the run did not observe: the first hardware run
+                // printed "every Resume was answered WindowNotYetOpen" over a `HostLost(WindowExpired)` in
+                // which the joiner had sent zero Resumes. So the two setups that cannot be the library's
+                // fault are named and skipped, and every other HostLost is reported as itself.
                 val reason = closing.reason
-                // The code was retired with the `Resume` frame (#3215): a host of this build never sends it,
-                // so this arm reads only a pre-1.8 host's refusal, by its wire id.
-                val isNotYetOpen = reason is FailureReason.Refused &&
-                    reason.code.id == RETIRED_NOT_YET_OPEN_ID
-                if (isNotYetOpen) {
-                    ctx.failures.add(
-                        "blip: HostLost ${fmtMs(sinceDrop)} after the radio died, on a " +
-                            "${fmtMs(outage.inWholeMilliseconds)} outage that sat INSIDE the ($lo, $hi) repro " +
-                            "interval — reason=${closing.reason.describe()}, mine=${closing.localFabric.short()}. " +
-                            "This IS #1637, discriminated on the reject code: the host never partitioned me " +
-                            "(its link never closed), so every Resume was answered WindowNotYetOpen and " +
-                            "refreshed its lastSeen, and the whole ${S7_HEARTBEAT.reconnectWindow} budget " +
-                            "burned down to a terminal room. EXPECTED on a build without the #1637 fix — " +
-                            "this FAIL is the capture. resume-lane=${lane.render()} (saw ${seen.render()})",
+                val neverRewove = seam.state.value !is SeamState.Woven
+                val evidence = "reason=${reason.describe()} (mine=${closing.localFabric.short()}), on a " +
+                    "${fmtMs(outage.inWholeMilliseconds)} outage inside the ($lo, $hi) band. " +
+                    "seam=${seam.state.value.short()} " +
+                    "peers=[${seam.peers.value.joinToString(",") { it.value.take(8) }}] " +
+                    "resume-lane=${lane.render()} (saw ${seen.render()}, roster=${room.roster.value.render()})"
+                when {
+                    reason is FailureReason.Refused && reason.code == RejectCode.ProtocolMismatch -> ctx.skip =
+                        "blip: HostLost ${fmtMs(sinceDrop)} after the radio died, refused for the protocol: " +
+                            "the STAY-UP phone runs a build that speaks another protocol version, so this run " +
+                            "measured the install, not the return. Put the same build on both phones and " +
+                            "re-run. $evidence"
+                    neverRewove -> ctx.skip =
+                        "blip: HostLost ${fmtMs(sinceDrop)} after the radio died, and the seam never got " +
+                            "back to Woven, so this phone never dialled and never said Hello. Likely causes, " +
+                            "in order: the STAY-UP phone stopped advertising or was closed, browse never " +
+                            "re-found it, or the dial was refused. CHECK THE STAY-UP PHONE'S REPORT for how " +
+                            "long it stayed up, then re-run. Inconclusive about #1637. $evidence"
+                    else -> ctx.failures.add(
+                        "blip: HostLost ${fmtMs(sinceDrop)} after the radio died — the room died of a blip " +
+                            "the host should never have noticed, after this phone re-wove and could say " +
+                            "Hello. That is #1637's symptom; the reason and the lane below say how. $evidence",
                     )
-                } else {
-                    // A DIFFERENT failure, reported as itself. `WindowExpired` in particular means no
-                    // Resume ever got an answer at all — the opposite of #1637's "answered, over and
-                    // over". The seam's own state is the discriminator worth quoting: still Weaving ⇒
-                    // this phone never re-wove, so it never dialled and never sent one.
-                    val neverRewove = seam.state.value !is SeamState.Woven
-                    ctx.skip = "blip: HostLost ${fmtMs(sinceDrop)} after the radio died with " +
-                        "reason=${closing.reason.describe()} (mine=${closing.localFabric.short()}), on a " +
-                        "${fmtMs(outage.inWholeMilliseconds)} outage inside the ($lo, $hi) band. That is " +
-                        "**not** the #1637 signature — #1637 is HostLost(Refused(code=" +
-                        "$RETIRED_NOT_YET_OPEN_ID)), a resume that kept being answered. " +
-                        "This run's resume was never answered at all. seam=${seam.state.value.short()} " +
-                        "peers=[${seam.peers.value.joinToString(",") { it.value.take(8) }}]" +
-                        (if (neverRewove) " — the seam never got back to Woven, so no Resume was ever sent" else "") +
-                        ". Likely causes, in order: this phone never re-wove (the STAY-UP phone stopped " +
-                        "advertising or was closed, or browse never re-found it); the dial was refused; " +
-                        "or the host process was gone. CHECK THE STAY-UP PHONE'S REPORT for how long it " +
-                        "stayed up, then re-run. Inconclusive about #1637 either way. " +
-                        "resume-lane=${lane.render()} (saw ${seen.render()}, " +
-                        "roster=${room.roster.value.render()})"
                 }
             }
 
-            // ── the ONLY PASS: the fix under test observably ran ──
+            // ── the ONLY PASS: the host handed this room's own seat back ──
             //
-            // `resume.no-op` is emitted at exactly one place — the retry loop concluding, after
-            // dwelling one HeartbeatConfig.timeout on a persistent ResumeWindowNotYetOpen, that no
-            // window was ever coming. Nothing else in the library writes it, and it is unreachable
-            // except THROUGH the refusals, so it proves both halves at once: the lane was entered and
-            // it resolved the #1637 way. The refusal trail (#1969) is quoted when present because it
-            // shows the retries the dwell sat on; its absence on an older build weakens the report,
-            // never the conclusion. The roster check is not ceremony: the dwell must leave a LIVE room
-            // behind, and `onNoOpResume` → markRecovered is what puts the host back to Connected.
-            lane.noOp != null && hostConnected -> ctx.passDetail =
-                "#1637 FIX OBSERVED — the resume lane was entered AND resolved on the dwell after a " +
-                    "${fmtMs(outage.inWholeMilliseconds)} blip inside ($lo, $hi): '${lane.noOp}' " +
-                    "${fmtMs(sinceDrop)} after the radio died, no HostLost through the whole " +
-                    "$OBSERVE_WINDOW observation, host back Connected. " +
-                    (
-                        lane.refused?.let { "Refusal trail: '$it'. " }
-                            ?: "(No resume.refused trail — this build predates #1969; resume.no-op is " +
-                            "still conclusive, since the dwell is only reachable through a persistent " +
-                            "ResumeWindowNotYetOpen.) "
-                        ) +
-                    "This is the mechanism, not an inference from a healthy-looking room: " +
-                    "Recovered(host) alone would prove nothing, since the detector emits the identical " +
-                    "event. (saw ${seen.render()})"
-
-            // Same dwell, but the room it left behind is wrong. Not a PASS (the fix did not finish its
-            // job) and not the #1637 FAIL (no HostLost, no reject code) — its own anomaly.
-            lane.noOp != null -> ctx.skip =
-                "blip: the resume lane DID resolve on the #1637 dwell ('${lane.noOp}') after a " +
-                    "${fmtMs(outage.inWholeMilliseconds)} outage, but ${host.value.take(8)} is NOT " +
-                    "Connected in the roster afterwards (roster=${room.roster.value.render()}, " +
-                    "seam=${seam.state.value.short()}). The dwell is supposed to close the " +
-                    "Partitioned/WindowOpened arc via markRecovered and leave a live room. It did not, " +
-                    "so this is neither the fix working nor #1637 — file it as its own bug. " +
+            // `resume.ok … restored=true` is logged only when the host's Welcome to this room's Hello
+            // names the membership the room already held, and the room's own `Resumed` is emitted at the
+            // same point. A host that never noticed the blip still holds the seat connected and restores
+            // it silently, so this is the sub-timeout return working, observed rather than inferred. The
+            // roster check is not ceremony: the episode must leave a LIVE room behind.
+            (lane.restored != null || closing is MembershipEvent.Resumed) && hostConnected -> ctx.passDetail =
+                "SEAT HANDED BACK — after a ${fmtMs(outage.inWholeMilliseconds)} blip inside ($lo, $hi) " +
+                    "this phone said Hello again and the host restored the seat it held: " +
+                    "'${lane.restored ?: closing?.short()}' ${fmtMs(sinceDrop)} after the radio died, no " +
+                    "HostLost through the whole $OBSERVE_WINDOW observation, host back Connected. " +
+                    (lane.entryEvidence?.let { "Lane entered: '$it'. " } ?: "") +
+                    "Confirm on the STAY-UP phone that it never partitioned this one: a host that noticed " +
+                    "would restore the same way, and only that side can tell the two apart. " +
                     "(saw ${seen.render()})"
 
-            // Recovery, the ordinary way. `resume.ok` and the `Resumed` event are the two faces of one
-            // thing (a real ResumeAck), and either proves the host HAD a window open — i.e. it noticed
-            // the outage, so the run sat above the band and the sub-timeout lane was never entered.
-            // Reading this as a PASS is the false green this scenario could most plausibly produce.
-            lane.ok != null || closing is MembershipEvent.Resumed -> ctx.skip =
-                "blip: the host ACKed a REAL resume (${lane.ok ?: closing?.short()} after " +
-                    "${fmtMs(sinceDrop)}), which means it HAD a window open — so it noticed the outage " +
-                    "and this was the ordinary resume lane, not the sub-timeout one. Measured outage " +
+            // The seat came back, but the room it left behind is wrong. Not a PASS, and not #1637 (no
+            // HostLost) — its own anomaly.
+            lane.restored != null || closing is MembershipEvent.Resumed -> ctx.skip =
+                "blip: the host handed the seat back ('${lane.restored ?: closing?.short()}') after a " +
+                    "${fmtMs(outage.inWholeMilliseconds)} outage, but ${host.value.take(8)} is NOT " +
+                    "Connected in the roster afterwards (roster=${room.roster.value.render()}, " +
+                    "seam=${seam.state.value.short()}). A restored room must list its host connected; " +
+                    "file it as its own bug. (saw ${seen.render()})"
+
+            // The seat was gone: the host had let it go, so it noticed the outage, and this phone was
+            // admitted afresh. The room survived, but the sub-timeout lane was not what ran.
+            lane.afresh != null -> ctx.skip =
+                "blip: the host had let the seat go and admitted this phone afresh ('${lane.afresh}' " +
+                    "${fmtMs(sinceDrop)} after the radio died) — so it noticed the outage, and this was an " +
+                    "ordinary readmission, not the sub-timeout lane. Measured outage " +
                     "${fmtMs(outage.inWholeMilliseconds)} landed inside ($lo, $hi) and the host STILL " +
                     "noticed — most likely its transport died rather than its detect elapsing (~" +
                     "${fmtMs(OBSERVED_HOST_TRANSPORT_DEATH.inWholeMilliseconds)} on the one run measured). " +
                     "Check the STAY-UP phone's Partitioned reason, and re-run with a shorter hold. " +
                     "resume-lane=${lane.render()} (saw ${seen.render()})"
 
-            // The machine ran and gave up before it could ever retry — no reweave, no resume token, or
-            // no known host. None of those is #1637; all of them mean the wiring, not the fix, is what
-            // this run measured.
+            // The machine ran and gave up before it could ever retry — no reweave, or no known host.
+            // Neither is #1637; both mean the wiring, not the return, is what this run measured.
             lane.terminal != null -> ctx.skip =
                 "blip: the resume machine went terminal before retrying ('${lane.terminal}') after a " +
                     "${fmtMs(outage.inWholeMilliseconds)} outage. That names a missing precondition " +
-                    "(reweave / resume token / known host), not #1637 — the dwell under test is in the " +
-                    "RETRY loop and was never reached. (saw ${seen.render()}, " +
+                    "(reweave / known host), not #1637 — the Hello under test is in the RETRY loop and " +
+                    "was never sent. (saw ${seen.render()}, " +
                     "roster=${room.roster.value.render()})"
 
             // Only when the lane was not entered either — a lane that DID run while the membership
@@ -1628,7 +1617,7 @@ public class ConnectivitySuite {
             else -> ctx.skip = buildString {
                 append("NOT EXERCISED — the room survived a ${fmtMs(outage.inWholeMilliseconds)} blip ")
                 append("inside ($lo, $hi) but the resume lane never resolved in $OBSERVE_WINDOW: no ")
-                append("resume.no-op, no resume.ok, no HostLost. This run says NOTHING about #1637. ")
+                append("resume.ok, no Resumed, no HostLost. This run says NOTHING about #1637. ")
                 append(
                     when {
                         // The probe's own wiring failed, so its silence is not a finding about the
@@ -1651,15 +1640,15 @@ public class ConnectivitySuite {
                                 "short, and it is worth filing as its own bug rather than re-running. "
 
                         else ->
-                            "The resume lane was NEVER entered — no resume.refused (#1969) and no " +
+                            "The resume lane was NEVER entered — no resume.refused and no " +
                                 "'membership.unresponsive … branch=resume' — so the seam never evicted " +
                                 "the host: the blip stayed inside the fabric's path grace, or the link " +
                                 "healed before the seam tore. Hold LONGER and re-run. "
                     },
                 )
                 append(
-                    "Any Recovered(${host.value.take(8)}) here is NOT evidence of the fix — the " +
-                        "detector emits the identical event on an ordinary recovery. ",
+                    "Any Recovered(${host.value.take(8)}) here is NOT evidence of a return — the " +
+                        "detector emits it on an ordinary recovery, without the lane running. ",
                 )
                 append("host ${if (hostConnected) "IS" else "is NOT"} Connected. ")
                 append("resume-lane=${lane.render()} (saw ${seen.render()}, ")
@@ -2186,6 +2175,3 @@ public class ConnectivitySuite {
         val HOST_HOLD_AFTER_PARTITION: Duration = 120.seconds
     }
 }
-
-/** The wire id of the retired `ResumeWindowNotYetOpen` code (#3215): the #1637 probe's signature. */
-private const val RETIRED_NOT_YET_OPEN_ID = "resume-window-not-yet-open"
