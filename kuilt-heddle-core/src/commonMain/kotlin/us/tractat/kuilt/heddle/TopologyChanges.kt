@@ -59,9 +59,9 @@ public sealed interface TopologyChange {
     public val history: History
         get() = when (this) {
             is RootRenamed -> History.NEW_TREE
-            is Removed, is WeightChanged, is TemplateRemoved -> History.LOST
+            is Removed, is WeightChanged, is TemplateRemoved, is CeilingChanged -> History.LOST
             is TemplateChanged -> if (before.weight == after.weight) History.KEPT else History.LOST
-            is Added, is LaneBecameGroup, is GroupBecameLane, is CeilingChanged, is TemplateAdded -> History.KEPT
+            is Added, is LaneBecameGroup, is GroupBecameLane, is TemplateAdded -> History.KEPT
         }
 
     /**
