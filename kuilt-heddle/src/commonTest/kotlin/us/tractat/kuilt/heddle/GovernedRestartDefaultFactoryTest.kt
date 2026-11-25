@@ -18,11 +18,11 @@ import kotlin.test.assertTrue
  * A governed peer restarted through [MultiNodeRaftSim]'s **default** node factory forwards again
  * (#3425). Its Raft node runs on `ClientIdentity.Auto`, the default, and mints its client id from
  * its seeded RNG; before #3425 the default factory reseeded a restart with its first seed, so the
- * restarted peer's enroll reused the old incarnation's `(clientId, 1)` with new bytes, and the
+ * restarted peer's enroll reused the old incarnation's `(clientId, requestId)` with new bytes, and the
  * leader, still holding the old result in its cache, refused it with `RequestIdConflictException`.
  *
- * The rig needs the old incarnation to have forwarded under serial 1 (its bootstrap enroll) and the
- * **same** leader on both sides of the restart; it asserts both rather than assuming them.
+ * The rig needs both incarnations to forward under the same serial (each one's first, its enroll)
+ * and the **same** leader on both sides of the restart; it asserts both rather than assuming them.
  */
 class GovernedRestartDefaultFactoryTest {
 
@@ -55,7 +55,8 @@ class GovernedRestartDefaultFactoryTest {
             { assertNotEquals(old.replica, fresh.replica, "the rig: the restarted process is a fresh replica") },
             { assertEquals(leaderId, sim.leader()?.let { l -> ids.first { sim.nodes[it] === l } }, "the rig: the leader before the restart still leads") },
             { assertTrue(fresh.replica in fresh.node.enrolledReplicas(), "the restarted replica's enroll committed") },
-            { assertEquals(listOf(1L, 1L), forwards.map { it.requestId }, "the rig: each incarnation forwarded serial 1: $forwards") },
+            { assertEquals(2, forwards.size, "the rig: each incarnation forwarded once: $forwards") },
+            { assertEquals(1, forwards.map { it.requestId }.toSet().size, "the rig: both under the same serial: $forwards") },
             { assertEquals(2, forwards.map { it.clientId }.toSet().size, "the two incarnations forwarded under two ids: $forwards") },
         )
     }
