@@ -431,8 +431,12 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
   naming an older one (Amendment G). The direct `Welcome` also carries the seat's opaque `membership`
   id, minted at every admission and at a takeover under a new id, and kept through a same-id restore:
   a matching id is a restore, any other a fresh admission. A superseded id's Hello is answered with
-  a `Reject` that names it (`answers` = its nonce) under a terminal superseded code, so a new
-  process of a superseded device ends `Left(self, Superseded(by))` instead of timing out (Decided 32).
+  `Reject(code = Superseded, supersededBy = <successor>, answers = <its nonce>)`, so a new process
+  of a superseded device ends `Left(self, Superseded(by))` instead of timing out (Decided 32,
+  #3695). `RejectCode.Superseded` is terminal; `Reject.init` requires the code and `supersededBy`
+  together, and a superseded `Reject` always names its Hello. The same answer replaces the
+  Proof-time self-`Farewell` for a Hello challenged before the takeover; the takeover's
+  `Farewell(old, supersededBy)` to the admitted old member is unchanged.
 - The returning mark rides the bystander Welcome through `fanOutToOtherMembers`, keeping #1781's
   ordering against `Farewell`.
 - New refusal codes (bad proof, key conflict) override `retryable = false` and get `fromId` branches.
