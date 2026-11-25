@@ -297,7 +297,7 @@ class TopologyDiffPropertyTest {
                 val mine = steps.filter { it.child == child }
                 val prepares = mine.any { it is TopologyStep.Prepare }
                 val known = ledger.allEdges().any { ledger.record(it)?.child == child }
-                if (pathOf(child)?.attached == true) {
+                if (pathOf(child)?.path is GroupPath.Attached) {
                     when {
                         prepares -> runtimeRegenerated++
                         mine.any { it is TopologyStep.Close } -> runtimeClosed++

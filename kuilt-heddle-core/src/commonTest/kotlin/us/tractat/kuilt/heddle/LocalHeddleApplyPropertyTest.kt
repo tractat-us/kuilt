@@ -202,7 +202,7 @@ class LocalHeddleApplyPropertyTest {
             for (lease in after.leases) {
                 if (h.capturedPath(lease.id) == paths[lease.id]) continue
                 tally.moved++
-                if (pathOf(lease.leaf)?.attached == true) tally.runtimeMoved++
+                if (pathOf(lease.leaf)?.path is GroupPath.Attached) tally.runtimeMoved++
                 if (lease.id in formerLanes) tally.formerLaneMoved++
             }
             if (after.leases.map { it.id } != before.leases.map { it.id }) fail("a reload opened or closed a lease at $at")

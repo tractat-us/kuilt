@@ -145,7 +145,7 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
     }
     // An unminted ledger has no mint to name its root, so its edges have to.
     val treeRoots = ledger.allEdges().filter { generationOf(it) != null }
-        .mapNotNull { pathOf(GroupId(it.value.substringBefore('@')))?.names?.first() }
+        .mapNotNull { pathOf(GroupId(it.value.substringBefore('@')))?.root }
         .distinct().sorted()
     require(treeRoots.isEmpty() || new.root in treeRoots) {
         "the ledger holds a tree under ${treeRoots.joinToString()}, not ${new.root}: a change of root is not a diff"
@@ -153,8 +153,8 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
 
     val edgesByChild = ledger.ownedEdges(new.root).groupBy { it.record.child }
     val wants = new.declaredChildren().associateBy { it.child } + edgesByChild.mapNotNull { (child, edges) ->
-        val path = pathOf(child)?.takeIf { it.attached } ?: return@mapNotNull null
-        val template = new.templateAt(path.names.drop(1).dropLast(1)) ?: return@mapNotNull null
+        val attached = pathOf(child)?.path as? GroupPath.Attached ?: return@mapNotNull null
+        val template = new.templateAt(attached.group) ?: return@mapNotNull null
         if (!edges.attached()) return@mapNotNull null
         child to WantedChild(child, parentOf(child), template.weight, group = false)
     }
@@ -168,7 +168,7 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
         val edges = edgesByChild[child].orEmpty()
         val want = wants[child]
         if (want == null) {
-            planned.planRemoval(edges, abandonPrepared = pathOf(child)?.attached == true)
+            planned.planRemoval(edges, abandonPrepared = pathOf(child)?.path is GroupPath.Attached)
         } else {
             planned.planWanted(want, edges, adoptedByChild[child], ledger) { prepareGeneration }
         }
@@ -201,15 +201,15 @@ internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, led
         val owned = ledger.ownedEdge(id, root)?.takeIf { it.lifecycle == Lifecycle.PREPARED } ?: return@filter false
         val child = owned.record.child
         val edges = ledger.ownedEdgesInto(child, root)
-        val path = pathOf(child)
+        val attached = pathOf(child)?.path as? GroupPath.Attached
         val want = declared[child] ?: run {
-            if (path?.attached != true) return@filter true
+            if (attached == null) return@filter true
             // No attached() check: the candidate is itself a PREPARED edge in [edges].
-            val template = templateAt(path.names.drop(1).dropLast(1)) ?: return@filter false
+            val template = templateAt(attached.group) ?: return@filter false
             WantedChild(child, parentOf(child), template.weight, group = false)
         }
         val adopted = edges.adoptable(want)
-        if (path?.attached == true && adopted == null) return@filter false
+        if (attached != null && adopted == null) return@filter false
         adopted?.id != id
     }
 }
@@ -394,8 +394,8 @@ private fun EntitlementLedger.ownedEdgesInto(child: GroupId, root: String): List
 private fun EntitlementLedger.ownedEdge(id: AttachmentId, root: String): OwnedEdge? {
     val generation = generationOf(id) ?: return null
     val record = record(id) ?: return null
-    val path = pathOf(record.child) ?: return null
-    val owned = path.names.first() == root &&
+    val parsed = pathOf(record.child) ?: return null
+    val owned = parsed.root == root &&
         attachmentIdOf(record.child, record.weight, generation) == id &&
         record.parent == parentOf(record.child)
     if (!owned) return null
