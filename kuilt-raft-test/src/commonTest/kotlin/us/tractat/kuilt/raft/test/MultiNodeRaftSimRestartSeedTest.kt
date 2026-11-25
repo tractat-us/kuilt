@@ -26,6 +26,12 @@ import kotlin.test.assertTrue
  * guards against is the leader's cached result for the old incarnation's `(clientId, requestId)`.
  * A new leader holds no cache and would let a reused id through, so the arm asserts the leader did
  * not move rather than assuming it.
+ *
+ * Both sim arms propose **at once** after a restart, before the node has caught up, as a governed
+ * heddle peer does with its enroll. Waiting first is the vacuous configuration: a caught-up `Auto`
+ * node finds its old id in the replicated log, takes it as a collision and re-mints, so every arm
+ * here stayed green with the seed reused on every start. Proposing first, both red with
+ * `RequestIdConflictException` on that mutant.
  */
 class MultiNodeRaftSimRestartSeedTest {
 
@@ -38,9 +44,6 @@ class MultiNodeRaftSimRestartSeedTest {
 
         sim.crash(followerId)
         sim.restart(followerId)
-        sim.awaitTrue("$followerId knows $leaderId after its restart") {
-            sim.nodes.getValue(followerId).leader.value == leaderId
-        }
         val after = proposeOn(sim, followerId, "after the restart")
         val leaderAfter = sim.awaitLeaderId()
 
@@ -89,9 +92,6 @@ class MultiNodeRaftSimRestartSeedTest {
         for (start in 1..restarts) {
             sim.crash(followerId)
             sim.restart(followerId)
-            sim.awaitTrue("$followerId knows a leader after restart $start") {
-                sim.nodes.getValue(followerId).leader.value != null
-            }
             seen += proposeOn(sim, followerId, "start $start").clientIdOf()
         }
         ids.forEach(sim::crash) // so this sim's timers stop before the next one boots
