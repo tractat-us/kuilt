@@ -9,9 +9,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.identity.DeviceKey
+import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.GrantScope
+import us.tractat.kuilt.identity.KeyScheme
 import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeDeviceKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
@@ -22,6 +24,7 @@ import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.GrantReach
 import us.tractat.kuilt.session.admit.GrantTerms
 import us.tractat.kuilt.session.admit.HostAdmission
+import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.admit.ReturnKind
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
@@ -66,6 +69,29 @@ class ReturningAdmissionTest {
         )
 
         fun keys(): List<DidKey> = asked.map { it.key }
+    }
+
+    /**
+     * The host's own store, whose scheme throws, while [failing], on checking a pass's signature: a
+     * platform provider that cannot run. Every other check — a joiner's proof — goes through.
+     */
+    private class FailsPassChecks(private val inner: DeviceKeyStore) : DeviceKeyStore by inner {
+        var failing = false
+        var failed = 0
+
+        override val keyScheme: KeyScheme
+            get() {
+                val scheme = inner.keyScheme
+                return object : KeyScheme by scheme {
+                    override suspend fun verify(key: DidKey, message: ByteArray, signature: ByteArray): Boolean {
+                        if (failing && "kuilt/grant" in message.decodeToString()) {
+                            failed++
+                            error("the platform provider failed")
+                        }
+                        return scheme.verify(key, message, signature)
+                    }
+                }
+            }
     }
 
     private fun RawHost.directWelcomesTo(peer: PeerId): List<AdmitMessage.Welcome> =
@@ -163,6 +189,142 @@ class ReturningAdmissionTest {
         secondBob.leave()
         carolRoom.leave()
         host.leave()
+    }
+
+    /**
+     * A device that has played many rooms with this host holds a pass for each: its store keeps one
+     * per issuer and scope, never drops one that ran out, and puts a new room's pass last. Coming back
+     * here, it must still be let in on this room's pass. The joiner presents only the passes good for
+     * the room its challenger named, so the Proof does not grow with every room it has played.
+     */
+    @Test
+    fun aDeviceThatPlayedManyRoomsReturnsOnThisRoomsPass() = runTest {
+        val board = Switchboard(setOf(KEY_SEAT_HOST, bob))
+        val counted = Counted()
+        val host = boardRoom(board, KEY_SEAT_HOST, fakeKeyStore(HOST_DEVICE), SessionRole.Host, admission = counted.admission)
+        val bobStore = fakeKeyStore(1)
+        val hostSigner = fakeDeviceKey(HOST_DEVICE)
+        val now = testScheduler.currentTime
+        (1..5).forEach { n ->
+            bobStore.keepGrant(Grant.issue(hostSigner, bobKey.id, GrantScope.Room("other-room-$n"), issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds))
+        }
+        val firstBob = boardRoom(board, bob, bobStore, SessionRole.Joiner)
+        testScheduler.runCurrent()
+        val held = bobStore.grants().map { it.scope }
+        firstBob.leave()
+        testScheduler.runCurrent()
+        val vettedBefore = counted.asked.size
+
+        val proofsBefore = board.sent(from = bob, to = KEY_SEAT_HOST).filterIsInstance<AdmitMessage.Proof>().size
+        val hostLog = EventLog(host, backgroundScope)
+        val secondBob = boardRoom(board, bob, bobStore, SessionRole.Joiner)
+        testScheduler.runCurrent()
+        val proof = board.sent(from = bob, to = KEY_SEAT_HOST).filterIsInstance<AdmitMessage.Proof>().drop(proofsBefore).single()
+
+        assertAll(
+            { assertEquals(6, held.size, "rig: Bob holds five other rooms' passes and this one's: $held") },
+            { assertEquals<GrantScope>(GrantScope.Room(KEY_SEAT_ROOM.value), held.last(), "rig: this room's pass is held last") },
+            { assertEquals(1, vettedBefore, "rig: Bob was vetted once, when he first joined") },
+            {
+                assertEquals(
+                    listOf<GrantScope>(GrantScope.Room(KEY_SEAT_ROOM.value)),
+                    proof.grants.map { assertNotNull(Grant.decode(it)).scope },
+                    "Bob presents only the pass good in this room",
+                )
+            },
+            { assertEquals(vettedBefore, counted.asked.size, "he comes back unvetted") },
+            {
+                assertEquals(
+                    listOf(ReturningMark(previousId = bob)),
+                    hostLog.since(0).joins().filter { it.member.id == bob }.map { it.returning },
+                    "and is marked returning",
+                )
+            },
+        )
+        secondBob.leave()
+        host.leave()
+    }
+
+    /**
+     * The host's half of the same: a Proof crowded with passes from this host for other rooms, or run
+     * out, ahead of the good one. The host sets aside every pass whose issuer, subject, scope or end
+     * already rules it out, before checking any signature, so the good one is reached however many
+     * come first.
+     */
+    @Test
+    fun aGoodPassBehindManyThatCannotApplyIsStillFound() = runTest {
+        val counted = Counted()
+        val host = rawHost(joiners = setOf(bob), admission = counted.admission)
+        host.admit(bob, bobKey, nonce = 1)
+        val good = host.passesTo(bob).single()
+        host.say(bob, AdmitMessage.Goodbye)
+        val hostSigner = fakeDeviceKey(HOST_DEVICE)
+        val now = testScheduler.currentTime
+        val otherRooms = (1..6).map { n ->
+            Grant.issue(hostSigner, bobKey.id, GrantScope.Room("other-room-$n"), issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
+        }
+        val runOut = Grant.issue(hostSigner, bobKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now - 2, notAfter = now - 1)
+        val anotherDevices = Grant.issue(hostSigner, carolKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
+
+        host.admit(bob, bobKey, nonce = 2, grants = otherRooms + runOut + anotherDevices + good)
+
+        assertAll(
+            { assertEquals(1, counted.asked.size, "the good pass is found behind eight that cannot apply") },
+            { assertEquals(ReturnKind.Returning, host.directWelcomesTo(bob).last().returnKind) },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * A host that cannot run a pass's signature check — its platform provider fails — has not found
+     * the pass bad: it says so with a retryable `Reject(HostFailed)` naming the Hello, as it does for
+     * a proof it cannot check, rather than send a device inside its pass to the policy. An undecodable
+     * pass is no fault of the host's, and is set aside.
+     */
+    @Test
+    fun aPassTheHostCannotCheckIsAHostFailureNotAVetting() = runTest {
+        val counted = Counted()
+        val hostStore = FailsPassChecks(fakeKeyStore(HOST_DEVICE))
+        val host = rawHost(joiners = setOf(bob), store = hostStore, admission = counted.admission)
+        host.admit(bob, bobKey, nonce = 1)
+        val pass = host.passesTo(bob).single()
+        host.say(bob, AdmitMessage.Goodbye)
+
+        hostStore.failing = true
+        host.admit(bob, bobKey, nonce = 2, grants = listOf(pass))
+        val refused = host.rejectsTo(bob)
+        val checksFailed = hostStore.failed
+        hostStore.failing = false
+        host.admit(bob, bobKey, nonce = 3)
+        val vettedWithNoPass = counted.asked.size
+
+        assertAll(
+            { assertEquals(1, checksFailed, "rig: the pass's check failed once") },
+            { assertEquals(listOf(RejectCode.HostFailed), refused.map { it.code }, "the host says it failed") },
+            { assertTrue(refused.single().code.retryable, "retryably") },
+            { assertTrue(refused.single().answers?.contentEquals(host.hello("bob", bobKey.id, 2).joinerNonce) == true, "naming the Hello") },
+            { assertEquals(2, vettedWithNoPass, "the failed check asked nobody: only the later pass-less Hello was vetted") },
+        )
+        host.room.leave()
+    }
+
+    /** An undecodable pass is set aside, and the device decided as if it presented none. */
+    @Test
+    fun anUndecodablePassIsIgnored() = runTest {
+        val counted = Counted()
+        val host = rawHost(joiners = setOf(bob), admission = counted.admission)
+        val challenge = run {
+            host.say(bob, host.hello("bob", bobKey.id, 1))
+            host.challengesTo(bob).last()
+        }
+        val proof = host.proof(challenge, bobKey, bob)
+        host.say(bob, AdmitMessage.Proof(proof.statement, listOf(byteArrayOf(1, 2, 3))))
+
+        assertAll(
+            { assertTrue(host.rejectsTo(bob).isEmpty(), "no refusal") },
+            { assertEquals(listOf(bobKey.id), counted.keys(), "an ordinary admission") },
+        )
+        host.room.leave()
     }
 
     /**
