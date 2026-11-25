@@ -346,3 +346,36 @@ internal fun sampleTopologyChanges() {
     // Nothing changed, nothing listed.
     check(running.changesTo(running).isEmpty())
 }
+
+/**
+ * An admin page edits the running tree as a document, one path-addressed edit at a time, and
+ * warns before saving an edit that costs a group its history.
+ */
+@Suppress("unused")
+internal fun sampleTopologyDocumentEdits() {
+    val running = draft("pool") {
+        group("acme", Weight.of(3)) {
+            lane("interactive")
+            lane("batch")
+        }
+        group("hobby") { lane("batch") }
+    }
+    var document = running.toDocument()
+
+    // A path is child indices, as on a TopologyProblem: [0, 1] is acme's batch lane.
+    val reweighted = document.setWeight(listOf(0, 1), "2")
+    check(reweighted is TopologyEdit.Edited && reweighted.history == TopologyEdit.History.SHARE_RESTARTS)
+    document = reweighted.document
+
+    // A rename is a delete plus an add, and the result says so before anything is saved.
+    val renamed = document.rename(listOf(1), "hobbyists")
+    check(renamed is TopologyEdit.Edited && renamed.history == TopologyEdit.History.REPLACED)
+    document = renamed.document
+
+    // An edit that would give two siblings one name is refused, naming the sibling that has it.
+    val refused = document.addChild(listOf(0), TopologyDocument.Lane("batch"))
+    check(refused == TopologyEdit.DuplicateName(listOf(0, 1), "batch"))
+
+    // The edited document is checked the usual way before it goes near an engine.
+    check(Topology.from(document) is TopologyParse.Valid)
+}

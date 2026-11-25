@@ -4,7 +4,6 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * The edits on [TopologyDocument] over seeded trees, against a model that does the same edit its
@@ -70,16 +69,16 @@ class TopologyDocumentEditsPropertyTest {
                 if (read !is TopologyParse.Invalid) failures += "seed $seed $label: read back $read from a tree with problems"
             }
         }
-        val editedFloors = listOf("weight", "ceiling", "add", "remove", "rename", "move").map { "$it:edited" }
-        val refusalFloors = listOf("NoSuchNode", "NotAGroup", "DuplicateName", "AtRoot", "IntoItself")
+        // Each floor is about half what the generator reaches on the JVM, so a generator that
+        // stopped reaching an arm reds, and one that drifted a little does not.
+        val tally = listOf("weight", "ceiling", "add", "remove", "rename", "move").map { "$it:edited" to (outcomes["$it:edited"] ?: 0) to 50 } +
+            listOf("NoSuchNode", "NotAGroup", "DuplicateName", "AtRoot", "IntoItself").map { it to (outcomes[it] ?: 0) to 50 } +
+            TopologyEdit.History.entries.map { it.name to (histories[it] ?: 0) to 30 } +
+            listOf("valid trees" to validTrees to 500, "invalid trees" to invalidTrees to 80, "started with a duplicate" to startedWithDuplicate to 150)
+        val short = tally.filter { (counted, floor) -> counted.second < floor }.map { (counted, floor) -> "${counted.first}: ${counted.second} < $floor" }
         assertAll(
             { assertEquals(emptyList(), failures.take(5), "${failures.size} failures") },
-            { editedFloors.forEach { assertTrue((outcomes[it] ?: 0) >= 100, "$it: ${outcomes[it]}") } },
-            { refusalFloors.forEach { assertTrue((outcomes[it] ?: 0) >= 50, "$it refusals: ${outcomes[it]}") } },
-            { TopologyEdit.History.entries.forEach { assertTrue((histories[it] ?: 0) >= 20, "$it: ${histories[it]}") } },
-            { assertTrue(validTrees >= 1000, "valid trees read back: $validTrees") },
-            { assertTrue(invalidTrees >= 50, "invalid trees read back: $invalidTrees") },
-            { assertTrue(startedWithDuplicate >= 100, "trees that started with a duplicate: $startedWithDuplicate") },
+            { assertEquals(emptyList(), short, "every count: ${tally.joinToString { (counted, _) -> "${counted.first}=${counted.second}" }}") },
         )
     }
 
@@ -90,7 +89,7 @@ class TopologyDocumentEditsPropertyTest {
     /** Draws one edit, applies it to [before] with the edit code and to [model] by hand. */
     private fun drawAndApply(before: TopologyDocument, model: M, r: Random): Drawn {
         val path = drawPath(model, r)
-        return when (r.nextInt(6)) {
+        return when (r.nextInt(7)) {
             0 -> {
                 val weight = weights.draw(r)
                 Drawn("weight", before.setWeight(path, weight), model.expectChild(path) { node ->
