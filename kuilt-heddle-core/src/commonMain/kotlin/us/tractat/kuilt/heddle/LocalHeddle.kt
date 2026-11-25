@@ -1289,9 +1289,10 @@ public class LocalHeddle private constructor(
     /**
      * Attach the child [name] to the group at [group], read from the root down, with the weight and
      * ceiling that group's template in the topology gives ([Topology.attach]). Applied as
-     * one unit, like [apply]. Attaching a child that is already attached does nothing; attaching one
-     * whose detach is still draining gives it a new edge and moves its draining leases onto it.
-     * The same as [attach] of `GroupPath.Attached(group, name)`.
+     * one unit, like [apply]. Attaching a child that is already attached does nothing; attaching a
+     * leaf whose detach is still draining gives it a new edge and moves its draining leases onto it.
+     * A group waits instead, as [attach] of a path says. The same as [attach] of
+     * `GroupPath.Attached(group, name)`.
      *
      * @throws IllegalArgumentException if [group] does not name a group the topology gives a
      *   template, [name] is empty, or [generation] is negative.
@@ -1318,9 +1319,12 @@ public class LocalHeddle private constructor(
      * beneath a repository, say, where the declared group's template carries the authors' template.
      * The repository is a group and is never leased; work is charged to an author.
      *
-     * Attaching what is already attached does nothing; attaching a child whose detach is still
-     * draining gives it a new edge and moves its draining leases onto it. Attaching an attached group
-     * again after a detach brings none of its children back.
+     * Attaching what is already attached does nothing. Attaching a leaf whose detach is still
+     * draining gives it a new edge and moves its draining leases onto it. An attached group whose
+     * detach is still draining is different: the leases beneath it run on children the detach
+     * closed, so it is [StepRefusal.Draining] until they complete, and attaching it then brings none
+     * of those children back. What the detach closed beneath it retires in the same unit, so no
+     * child's edge outlives the group edge it hung from.
      *
      * @throws IllegalArgumentException if [path] is a [GroupPath.Declared], no template reaches it
      *   ([Topology.findGroupId] is `null`), or [generation] is negative.
@@ -1438,14 +1442,19 @@ public class LocalHeddle private constructor(
      */
     private fun forgetQuiesced() {
         if (!forgets) return
-        val quiesced = ledger.quiescedEdges()
-        if (quiesced.isEmpty()) return
-        val (prepared, retired) = quiesced.partition { ledger.lifecycle(it) == Lifecycle.PREPARED }
-        val unwanted = (leasable as? Leasable.ByTopology)?.topology?.unwantedPrepared(prepared, ledger).orEmpty()
-        val doomed = ledger.forgettable(retired + unwanted)
-        if (doomed.isEmpty()) return
-        ledger = checkNotNull(ledger.forget(doomed)) { "the ledger refused to forget ${doomed.map { it.value }}, each of which it passed" }
-        allocator.forget(doomed.toHashSet())
+        // Again until nothing more goes: a group's edges become forgettable only once its children's
+        // are gone (EntitlementLedger.forget), so a detached subtree goes level by level, deepest
+        // first, in this one swap. Each round forgets at least one edge, so this ends.
+        while (true) {
+            val quiesced = ledger.quiescedEdges()
+            if (quiesced.isEmpty()) return
+            val (prepared, retired) = quiesced.partition { ledger.lifecycle(it) == Lifecycle.PREPARED }
+            val unwanted = (leasable as? Leasable.ByTopology)?.topology?.unwantedPrepared(prepared, ledger).orEmpty()
+            val doomed = ledger.forgettable(retired + unwanted)
+            if (doomed.isEmpty()) return
+            ledger = checkNotNull(ledger.forget(doomed)) { "the ledger refused to forget ${doomed.map { it.value }}, each of which it passed" }
+            allocator.forget(doomed.toHashSet())
+        }
     }
 
     /**

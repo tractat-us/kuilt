@@ -906,8 +906,10 @@ heddle, of any spelling, and never collide with a declared child.
 `Topology.attach` and `detach`, as in the sample, list the same steps without applying them; on
 an engine, `LocalHeddle.attach` and `detach` apply them as one unit, like `apply`. Attaching
 twice does nothing. A detach drains like a removal, and its own swap forgets the child's retired
-edge once its books close, so detach a child whenever it goes idle. Re-attaching a child whose
-detach is still draining moves its leases onto the new edge. A reload that keeps the template
+edge once its books close, so detach a child whenever it goes idle; detaching a group forgets
+the edges beneath it and then its own, in the same swap. Re-attaching a child whose
+detach is still draining moves its leases onto the new edge; a group whose detach is draining
+waits for the leases beneath it instead. A reload that keeps the template
 keeps every attached child and its history; one that drops the template closes them.
 `Topology.attachedChildId(group, name)` names the child's id.
 

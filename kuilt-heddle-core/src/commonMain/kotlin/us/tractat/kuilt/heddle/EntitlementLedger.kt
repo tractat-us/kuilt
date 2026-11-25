@@ -2294,6 +2294,13 @@ public class EntitlementLedger private constructor(
      * row is what keeps the parent counting as having child edges ([hasChildEdges]), as it did while
      * the edge was held, so no reader of that question sees the forget either.
      *
+     * **A group goes once everything beneath it has.** An edge into a group whose child edges are
+     * all forgotten, so that only its row says it had any, is forgotten with every other inbound
+     * edge of that group in the same call, or not at all ([foldsAsGroup]), and the group's row goes
+     * with them. Its own net inflow and leaf spend fold into its parent's row as a leaf's do. Nothing
+     * read the dropped row any more: with no live inbound edge the group's [holdings] are `0`, and
+     * its books closed, the inflow across its edges equal to what its row says left for its children.
+     *
      * **Not a join.** Every other mutator only adds to the lattice; this removes slots, so the result
      * is not above `this`, and it breaks §10 invariant 2. It is one writer's act: `LocalHeddle` is its
      * only caller, a replicated ledger never forgets, and [piece] refuses what a second writer would
@@ -2309,6 +2316,9 @@ public class EntitlementLedger private constructor(
         val replicas = allReplicas()
         if (doomed.any { forgetRefusal(it, replicas) != null }) return null
 
+        // A group forgotten whole: every inbound edge of it, and its row, go together.
+        val wholeGroups = doomed.mapNotNullTo(HashSet()) { e -> recordOf(e)?.child?.takeIf { foldsAsGroup(it) } }
+        if (wholeGroups.any { g -> inboundEdges(g).any { it !in doomed } }) return null
         val outflow = forgotten.outflow.mapValuesTo(HashMap()) { (_, row) -> HashMap(row) }
         val leafSpend = HashMap(forgotten.leafSpend)
         var floor = forgotten.generationFloor
@@ -2324,6 +2334,7 @@ public class EntitlementLedger private constructor(
                 if (spend != 0L) leafSpend[r] = checkedAdd(leafSpend[r] ?: 0L, spend)
             }
         }
+        for (g in wholeGroups) outflow.remove(g)
         fun <V> Map<AttachmentId, V>.without(): Map<AttachmentId, V> =
             if (keys.none { it in doomed }) this else filterKeys { it !in doomed }
         return EntitlementLedger(
@@ -2354,6 +2365,9 @@ public class EntitlementLedger private constructor(
      *   stops a forgotten edge coming back in a later [piece], and an id without one is below no floor;
      * - one record names it, and it is RETIRED, or PREPARED with no counter and no gauge;
      * - its child has no child edges in any lifecycle, forgotten ones included, so leaves go first;
+     *   or every child edge its child had is forgotten, and the child is dead and its books closed
+     *   as a group ([groupBooksClose]), when the edge goes with every other inbound edge of that
+     *   child ([forget], [forgettable]);
      * - no transfer row, base or relocation, sits at its path;
      * - for a RETIRED edge, its books closed: charged plus returned within issued, no negative
      *   effective spend in total or in any replica's fold, nothing outstanding, nothing stranded on it for any replica (what
@@ -2372,7 +2386,39 @@ public class EntitlementLedger private constructor(
     internal fun forgettable(candidates: Collection<AttachmentId>): List<AttachmentId> {
         if (candidates.isEmpty()) return emptyList()
         val replicas = allReplicas()
-        return candidates.filter { forgetRefusal(it, replicas) == null }
+        val passing = candidates.filter { forgetRefusal(it, replicas) == null }
+        // A group is forgotten whole or not at all: drop its edges unless every one passed.
+        val passed = passing.toHashSet()
+        return passing.filter { e ->
+            val child = recordOf(e)?.child ?: return@filter false
+            !foldsAsGroup(child) || inboundEdges(child).all { it in passed }
+        }
+    }
+
+    /**
+     * Whether an edge into [group] is forgotten as a group's edge rather than a leaf's: every child
+     * edge [group] had is forgotten, so only its row in the folded outflow says it had any.
+     */
+    private fun foldsAsGroup(group: GroupId): Boolean = group in forgotten.outflow && childEdges(group).isEmpty()
+
+    /**
+     * Whether [group], whose children are all forgotten ([foldsAsGroup]), can be forgotten too: no
+     * inbound edge is live, and for every replica what its inbound edges still account for at it
+     * ([strandedOn], summed) is exactly what its row says it handed down. That is its [holdings]
+     * reading `0`, were the inflow still credited; the live-lineage form reads `0` for a dead group
+     * whatever its books say, so this is the check that means something.
+     */
+    private fun groupBooksClose(group: GroupId, replicas: Set<ReplicaId>): Boolean {
+        val inbound = inboundEdges(group)
+        if (inbound.any { isLiveEdge(it) }) return false
+        val row = forgotten.outflow[group].orEmpty()
+        val retired = inbound.filter { lifecycleOf(it) == Lifecycle.RETIRED }
+        return (replicas + row.keys).all { r ->
+            val held = WideSum()
+            for (e in retired) held.add(strandedOn(e, r))
+            held.sub(row[r] ?: 0L)
+            held.toInt128() == Int128.ZERO
+        }
     }
 
     /**
@@ -2389,7 +2435,9 @@ public class EntitlementLedger private constructor(
         val record = recordOf(edge) ?: return ForgetRefusal.NOT_ONE_RECORD
         val lifecycle = lifecycleOf(edge)
         if (lifecycle != Lifecycle.RETIRED && lifecycle != Lifecycle.PREPARED) return ForgetRefusal.LIVE
-        if (hasChildEdges(record.child)) return ForgetRefusal.CHILD_HAS_CHILD_EDGES
+        val asGroup = foldsAsGroup(record.child)
+        if (asGroup && !groupBooksClose(record.child, replicas)) return ForgetRefusal.CHILD_HAS_CHILD_EDGES
+        if (!asGroup && hasChildEdges(record.child)) return ForgetRefusal.CHILD_HAS_CHILD_EDGES
         val path = PathKey.of(edge)
         if (transferMatrices().any { path in it }) return ForgetRefusal.TRANSFER_ROWS
         if (lifecycle == Lifecycle.PREPARED) {
@@ -2404,6 +2452,9 @@ public class EntitlementLedger private constructor(
         val replicas = replicasOnEdge(edge)
         if (replicas.any { netInflow(edge, it) < 0L || effLeafSpentSlot(edge, it) < 0L }) return ForgetRefusal.NEGATIVE_FOLD
         if (edge(edge)?.outstanding != 0L) return ForgetRefusal.OUTSTANDING
+        // A group's edge carried what its children spent, so it strands it: the group's books are
+        // checked whole, across its inbound edges, by [groupBooksClose].
+        if (asGroup) return null
         if (replicas.any { strandedOn(edge, it) != 0L }) return ForgetRefusal.STRANDED
         if (replicas.any { holdings(record.child, it) != 0L }) return ForgetRefusal.CHILD_HOLDS
         return null

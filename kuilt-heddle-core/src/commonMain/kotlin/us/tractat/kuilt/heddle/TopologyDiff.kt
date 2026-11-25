@@ -238,7 +238,9 @@ public fun Topology.attach(group: List<String>, name: String, ledger: Entitlemen
  *
  * An attached child whose template carries a [template][Topology.ChildTemplate.template] is a group:
  * the consumer attaches children beneath it with a [GroupPath.Nested], and it is never leased
- * itself. Attaching it alone attaches no child beneath it.
+ * itself. Attaching it alone attaches no child beneath it. Attaching one again after a detach
+ * brings none of the children that detach closed back: their CLOSING edges retire in the same list,
+ * refused while work beneath them is outstanding, as a diff retires them.
  *
  * Like [Topology.Companion.diff] it reads what exists from [ledger], so asking twice is harmless,
  * and the same contracts on [TopologyStep] apply. Two more shapes follow from them, for each group on
@@ -263,12 +265,37 @@ public fun Topology.attach(path: GroupPath, ledger: EntitlementLedger, generatio
     requireSameRoot(ledger)
     val prepareGeneration by lazy { effectiveGeneration(generation, ledger) }
     val planned = ArrayList<Planned>()
+    val chainIds = chain.mapTo(HashSet()) { it.id }
     for (attached in chain) {
         val want = WantedChild(attached.id, attached.parent, attached.template.weight, group = attached.template.template != null)
         val edges = ledger.ownedEdgesInto(attached.id, root)
-        planned.planWanted(want, edges, edges.adoptable(want), ledger) { prepareGeneration }
+        val adopted = edges.adoptable(want)
+        planned.planWanted(want, edges, adopted, ledger) { prepareGeneration }
+        // A group attached again after a detach: what that detach closed beneath it is not
+        // brought back, so it retires in this list, as a diff would retire it.
+        if (attached.template.template != null && adopted?.lifecycle != Lifecycle.ACTIVE) {
+            planned.planLeftBeneath(attached.id, chainIds, ledger, root)
+        }
     }
     return planned.sortedWith(STEP_ORDER).map { it.step }
+}
+
+/**
+ * The removals that close out what a detach left beneath [group], which this attach brings back:
+ * every group below it, outside [chain], that is no longer attached (no ACTIVE or PREPARED edge),
+ * or whose parent is not. Its CLOSING edges retire, so none outlives the group edge it hung from.
+ * A child attached since the detach, beneath a group this list keeps, is left alone. Walks the
+ * subtree from the index, so it costs nothing for a group with nothing left beneath it, and runs
+ * only for a group attached again, never for one that is attached already.
+ */
+private fun MutableList<Planned>.planLeftBeneath(group: GroupId, chain: Set<GroupId>, ledger: EntitlementLedger, root: String) {
+    val kept = HashSet(chain)
+    // subtreeOf walks top-down, so a parent is judged before its children.
+    for (child in ledger.subtreeOf(group).drop(1)) {
+        if (child in chain) continue
+        val edges = ledger.ownedEdgesInto(child, root)
+        if (edges.attached() && parentOf(child) in kept) kept += child else planRemoval(edges, abandonPrepared = true)
+    }
 }
 
 /**

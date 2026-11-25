@@ -173,6 +173,8 @@ class LocalHeddleNestedAttachPropertyTest {
         }
         assertAll(
             { assertEquals(emptyList(), failures.take(20), "${failures.size} failures") },
+            // Floors below the counts measured on JVM, macosArm64 and wasmJs, identical on all three
+            // (273, 89, 79, 30, 120), so a generator that stopped reaching a drain reds.
             { assertTrue(tally.leases >= 200, "leases ${tally.leases}") },
             { assertTrue(tally.drainingDetaches >= 60, "detaches that waited on a lease ${tally.drainingDetaches}") },
             { assertTrue(tally.reattachesOverClosing >= 55, "attaches over a closing edge ${tally.reattachesOverClosing}") },

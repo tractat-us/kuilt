@@ -152,8 +152,8 @@ independently consumable. Both modules are published and constrained by
 ## 1. Two hierarchies, kept separate
 
 **The logical scheduling tree** is data, not schema — groups created, closed,
-and reparented at runtime, any depth, no fixed level names (today a child the app
-attaches while running is always a leaf; §11.1 says where that stands):
+and reparented at runtime, any depth, no fixed level names (the children an app
+attaches while running nest as deep as their templates do; §11.1 says how):
 
 ```text
 root
@@ -567,7 +567,7 @@ written through `CanonicalMapSerializer` at every level, with its own arm in
 `holdings`, `leafSpentTotal`, the generation floor and `hasChildEdges` each read
 the fold beside the live edges. A parent gets a row in `outflow` once any of its
 children is forgotten, even a row that nets to nothing, so it still counts as
-having child edges. A ledger with nothing forgotten holds `ForgottenEdges.NONE`,
+having child edges, until the group is forgotten itself (*Open*, below). A ledger with nothing forgotten holds `ForgottenEdges.NONE`,
 which a default `Json` or `Cbor` does not encode, so its bytes are what they
 were before the component existed.
 
@@ -579,7 +579,9 @@ names the first one an edge fails, as a `ForgetRefusal`, checking in the order
   only carry an id that has a generation), and one record names it;
 - it is RETIRED, or PREPARED;
 - its child has no child edges in any lifecycle, forgotten ones included, so
-  leaves go first;
+  leaves go first; or every child edge its child had is forgotten, no inbound
+  edge of that child is live, and the child's books close as a group, in which
+  case the edge goes only with every other inbound edge of that child;
 - no transfer row, base or relocation, sits at its path;
 - a PREPARED edge has no counter and no gauge;
 - a RETIRED edge's books closed: charged plus returned within issued, no
@@ -685,10 +687,19 @@ of adopting the old one.
   retires the child's old edge and gives it a new one, so the child lives on and
   usually holds something, and `CHILD_HOLDS` refuses the old edge while it does.
   Only a child that is gone for good compacts reliably.
-- **A group whose children were forgotten is never forgotten itself.** Its row
-  in the fold keeps it counting as having child edges, and leaves go first. This
-  bites a declared group removed after its attached children came and went, and an
-  attached group (#3314) detached after its own attached children did.
+- **A living group whose children were forgotten keeps its row.** The row keeps
+  it counting as having child edges while it has a live inbound edge, so its
+  own edges stay, as a reweighted child's do. A group that is gone is forgotten
+  in the end: once every child edge it had is forgotten and no inbound edge of
+  it is live, its inbound edges go together, in one `forget`, with its row,
+  provided its books close as a group: what its inbound edges still account
+  for at it equals what its row says it handed down, for every replica. Its own
+  net inflow folds into its parent's row as a leaf's does. The engine forgets
+  to a fixed point in each swap, so a detached subtree goes deepest first in the
+  swap that retires it (#3314). Measured on the JVM over 200 cycles of attach an
+  author, lease, complete and detach the repository, with a new repository each
+  cycle or the same one again: 2 edges and about 1,190 bytes after 20 cycles and
+  after 200, where before the rule the ledger held 202 edges after 200.
 
 ## 6. Demand is an `EphemeralMap`, and that is not an accident
 
@@ -2710,7 +2721,8 @@ declared edges: under a template the new tree keeps, an attached child is kept, 
 and all; a new template weight regenerates it on a new edge; and when the template goes, or
 its group does, the child is closed. Each detach retires the child's edge, and the
 engine forgets it in the same swap once its books close (§5.5), so an attached child
-can be detached whenever it goes idle.
+can be detached whenever it goes idle. An attached group goes the same way, in the
+swap that retires the last edge beneath it: its children first, then its own edges.
 
 A template may carry a template of its own (#3314), and then each child attached under
 it is a group: a tree found while running two levels deep (say, a repository and then its
