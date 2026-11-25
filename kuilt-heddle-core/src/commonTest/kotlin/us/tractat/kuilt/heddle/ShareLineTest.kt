@@ -197,6 +197,65 @@ class ShareLineTest {
     }
 
     /**
+     * A leaf whose share fits under a group whose share does not, in a topology `bootWhole` accepts:
+     * `share(b)` is `(2³²−1)² / 2⁶⁴`, too fine for `Long`, while `share(c)` multiplies it by
+     * `2²⁰ / (2³²−1)` and fits. Only cancelling one level's numerator against another level's
+     * denominator gets there, so multiplying level by level would throw on the way. The sum of
+     * `c`'s entitlement takes that way and throws, the product-versus-sum difference #3550 names.
+     */
+    @Test
+    fun aLeafFitsUnderAGroupThatDoesNot() {
+        val big = (1L shl 32) - 1
+        val tree = draft("root") {
+            group("a", Weight.of(big)) {
+                group("b", Weight.of(big)) {
+                    lane("c", Weight.of(1L shl 20))
+                    lane("c2", Weight.of(big - (1L shl 20)))
+                }
+                lane("b2")
+            }
+            lane("a2")
+        }
+        val h = LocalHeddle.bootWhole(tree, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+        val c = tree.groupId("a", "b", "c")
+        val waiting = setOf(c, tree.groupId("a", "b", "c2"), tree.groupId("a", "b2"), tree.groupId("a2"))
+        val line = h.shareLine(waiting)
+        assertAll(
+            { assertEquals(Rational.of(big, 1L shl 44), line.share(c)) },
+            { assertFailsWith<ArithmeticException>("b's own share is too fine") { line.share(tree.groupId("a", "b")) } },
+            { assertFailsWith<ArithmeticException>("entitlement multiplies level by level") { h.entitlement(c, waiting, totalSlots = 1L) } },
+            { assertEquals(Rational.of(big, 1L shl 32), line.share(tree.groupId("a"))) },
+        )
+    }
+
+    /**
+     * Three levels each split evenly between two weights, `3¹³`, `5⁹` and `7⁷`, so each level's
+     * fraction is `w / 2w` and the leaf's share is `1/8`. Across levels nothing cancels, since the
+     * weights share no factor, so the denominators multiply to `8 · 3¹³ · 5⁹ · 7⁷ > 2⁶³` unless each
+     * level's fraction is reduced on its own first.
+     */
+    @Test
+    fun anEvenSplitReducesWithinItsOwnLevel() {
+        val tree = draft("root") {
+            group("g1", Weight.of(1_594_323L)) {
+                group("g2", Weight.of(1_953_125L)) {
+                    lane("leaf", Weight.of(823_543L))
+                    lane("s3", Weight.of(823_543L))
+                }
+                lane("s2", Weight.of(1_953_125L))
+            }
+            lane("s1", Weight.of(1_594_323L))
+        }
+        val h = LocalHeddle.bootWhole(tree, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+        val leaf = tree.groupId("g1", "g2", "leaf")
+        val line = h.shareLine(setOf(leaf, tree.groupId("g1", "g2", "s3"), tree.groupId("g1", "s2"), tree.groupId("s1")))
+        assertAll(
+            { assertEquals(Rational.of(1L, 8L), line.share(leaf)) },
+            { assertEquals(Rational.of(1L, 4L), line.share(tree.groupId("g1", "g2"))) },
+        )
+    }
+
+    /**
      * A chain `g1 → … → g5`, each `gᵢ` of weight 1 beside a leaf `hᵢ` of weight `1/pᵢ` for a prime
      * `pᵢ` near 30,000, so `share(gᵢ) = Π pⱼ / (pⱼ + 1)` and nothing cancels. Four levels fit a
      * `Long` denominator; five do not. The row that does not fit throws, and every other row of the
