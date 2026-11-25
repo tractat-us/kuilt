@@ -46,7 +46,7 @@ public suspend fun callerSuppliedRoomIdSample(
 | Away for… | What happens | What the host and the other members see |
 |---|---|---|
 | less than the host holds the seat (`HeartbeatConfig.reconnectWindow`, 60 s by default, counted from when the host noticed the drop) | the same membership comes back, whether the link healed or the app was killed and reopened | under the same peer id, `Resumed` if the host had noticed the drop, otherwise nothing at all; under a new id while the old seat is partitioned, `Left(old, LeaveReason.Superseded(by = new))` then `Joined(new)`; while the old seat is still connected, a second seat, the old one leaving later |
-| longer | admitted afresh, and the room stays in session | `Left(old, PartitionExpired)` earlier, then `Joined` |
+| longer | admitted afresh, and the room stays in session; it says `Readmitted` for itself and rebuilds its roster | `Left(old, PartitionExpired)` earlier, then `Joined` |
 
 The app makes no call between the drop and the return. The return rows of `RoomConformanceSuite`
 check that every room comes back by itself, through its own reconnect, inside a bounded wait. After

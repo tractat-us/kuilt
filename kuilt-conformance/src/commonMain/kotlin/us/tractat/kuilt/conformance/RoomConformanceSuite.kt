@@ -748,6 +748,143 @@ public abstract class RoomConformanceSuite {
             }
         }
 
+    /**
+     * A device whose link heals only after the host let its seat go is admitted afresh, and its room
+     * says so: `Readmitted(self)`, never `Recovered(host)` (plan Amendment G). The room stays in
+     * session, the host sees the old membership leave and a new one join, and the app makes no call.
+     */
+    @Test
+    public fun aReturnAfterTheSeatWentIsReadmitted(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a return after the seat went is readmitted") ?: return@runTest
+            h.requireReadmissionReachable()
+            val host = h.hostFactory.host(h.hostPattern)
+            val device = h.newDevice()
+            val app = AppCalls()
+            val joiner = app.factory(device.launch()).join(h.joinTag)
+            try {
+                val me = joiner.selfId
+                host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == me } }
+                joiner.awaitRoster("the device sees the host") { it.isNotEmpty() }
+                val hostTape = EventTape(host, backgroundScope)
+                val joinerTape = EventTape(joiner, backgroundScope)
+                val callsAtDrop = app.snapshot()
+                val healsAtDrop = device.heals
+
+                device.drop()
+                host.awaitRoster("the host lets the dropped device's seat go") { roster -> roster.none { it.id == me } }
+                val joinerBeforeReturn = joinerTape.events()
+                device.restore()
+                joiner.awaitEvent("the device's Readmitted") { it as? MembershipEvent.Readmitted }
+                host.awaitRoster("the device is a member again") { roster ->
+                    roster.any { it.id == me && it.liveness == Liveness.Connected }
+                }
+                runCurrent() // let the events that announce the return reach the tapes
+                val callsAtReturn = app.snapshot()
+                val joinerEvents = joinerTape.events()
+                assertAll(
+                    { assertEquals(listOf("join"), callsAtDrop, "rig: the call counter saw the launch's join") },
+                    { assertTrue(joinerBeforeReturn.none { it is MembershipEvent.HostLost }, "rig: the device was still trying when its seat went: $joinerBeforeReturn") },
+                    { assertTrue(device.heals > healsAtDrop, "rig: the device's own reconnect healed its seam (heals ${device.heals}, was $healsAtDrop)") },
+                    { assertEquals(callsAtDrop, callsAtReturn, "the app made no room or factory call between drop and return") },
+                    { assertEquals(listOf<MembershipEvent>(MembershipEvent.Readmitted(me)), joinerEvents.filterIsInstance<MembershipEvent.Readmitted>(), "one Readmitted, naming this room") },
+                    { assertTrue(joinerEvents.none { it is MembershipEvent.Recovered }, "a readmission is never Recovered(host): $joinerEvents") },
+                    { assertTrue(joinerEvents.none { it is MembershipEvent.Resumed || it is MembershipEvent.HostLost }, "neither restored nor ended: $joinerEvents") },
+                    {
+                        assertEquals(
+                            listOf("Left(${me.value}, ${LeaveReason.PartitionExpired})", "Joined(${me.value})"),
+                            hostTape.edges().map { it.edge() },
+                            "the host: the old membership expired, then a new one joined",
+                        )
+                    },
+                )
+                joiner.broadcast(applicationPayload("Readmitted"))
+                val reached = host.awaitHeld(me, count = 1, expected = "a frame the readmitted device sent")
+                assertEquals(listOf("Readmitted"), reached.map { it.payload.decodeToString() }, "the room the app already held is the one in session")
+            } finally {
+                joiner.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * A readmitted device rebuilds its roster from the host's admission burst: a member who left while
+     * its link was down — whose departure went down that link and never arrived — is dropped with
+     * `LeaveReason.Unobserved`, and a member who stayed connected throughout is still listed (plan
+     * Amendment G).
+     *
+     * The row first proves the ghost is real: until the return, the device's room still lists the
+     * member who left, with no `Left` for it. A rig whose departures reached the dropped device would
+     * leave nothing for the rebuild to do, and the row would pass on a room that rebuilds nothing.
+     */
+    @Test
+    public fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a readmitted joiner drops a peer who left during the outage")
+                ?: return@runTest
+            h.requireReadmissionReachable()
+            val host = h.hostFactory.host(h.hostPattern)
+            val hostTape = EventTape(host, backgroundScope)
+            val stayer = h.newDevice().launch().join(h.joinTag)
+            val leaver = h.newDevice().launch().join(h.joinTag)
+            val device = h.newDevice()
+            val app = AppCalls()
+            val joiner = app.factory(device.launch()).join(h.joinTag)
+            try {
+                val me = joiner.selfId
+                val ghost = leaver.selfId
+                val bystander = stayer.selfId
+                host.awaitRoster("all three devices are admitted") { roster -> roster.map { it.id }.containsAll(listOf(me, ghost, bystander)) }
+                joiner.awaitRoster("the device lists both other members") { roster -> roster.map { it.id }.containsAll(listOf(ghost, bystander)) }
+                val joinerTape = EventTape(joiner, backgroundScope)
+                val stayerTape = EventTape(stayer, backgroundScope)
+                val callsAtDrop = app.snapshot()
+
+                device.drop()
+                host.awaitRoster("the host holds the dropped device's seat Partitioned") { roster ->
+                    roster.any { it.id == me && it.liveness is Liveness.Partitioned }
+                }
+                leaver.leave()
+                host.awaitRoster("the leaver is gone from the host") { roster -> roster.none { it.id == ghost } }
+                host.awaitRoster("the host lets the dropped device's seat go") { roster -> roster.none { it.id == me } }
+                runCurrent()
+                val ghostBeforeReturn = joiner.roster.value.any { it.id == ghost }
+                val heardTheLeave = joinerTape.events().any { it is MembershipEvent.Left && it.peerId == ghost }
+
+                device.restore()
+                joiner.awaitEvent("the device's Readmitted") { it as? MembershipEvent.Readmitted }
+                val rebuilt = joiner.awaitRoster("the rebuilt roster drops the leaver") { roster -> roster.none { it.id == ghost } }
+                runCurrent()
+                val joinerEvents = joinerTape.events()
+                assertAll(
+                    { assertTrue(ghostBeforeReturn, "rig: the device still listed the leaver before its return — the ghost was reached") },
+                    { assertTrue(!heardTheLeave, "rig: the leaver's departure never reached the dropped device") },
+                    { assertEquals(callsAtDrop, app.snapshot(), "the app made no room or factory call between drop and return") },
+                    {
+                        assertEquals(
+                            listOf<MembershipEvent>(MembershipEvent.Left(ghost, LeaveReason.Unobserved)),
+                            joinerEvents.filter { it is MembershipEvent.Left && it.peerId == ghost },
+                            "the leaver leaves the device's roster once, as Unobserved: $joinerEvents",
+                        )
+                    },
+                    {
+                        assertEquals(
+                            Liveness.Connected,
+                            rebuilt.singleOrNull { it.id == bystander }?.liveness,
+                            "the member connected throughout is still listed: ${rebuilt.map { it.id }}",
+                        )
+                    },
+                    { assertTrue(joinerEvents.none { it is MembershipEvent.Left && it.peerId == bystander }, "the bystander never left the device's roster") },
+                    { assertTrue(stayerTape.events().none { it is MembershipEvent.Partitioned && it.peerId == host.selfId }, "rig: the bystander never lost the host") },
+                    { assertTrue(hostTape.events().none { it is MembershipEvent.Partitioned && it.peerId == bystander }, "rig: the host never lost the bystander") },
+                )
+            } finally {
+                joiner.leave()
+                stayer.leave()
+                host.leave()
+            }
+        }
+
     // ── (1) host → role = Host, selfId is non-blank ──────────────────────────
 
     @Test
@@ -2026,6 +2163,22 @@ public abstract class RoomConformanceSuite {
                 null
             }
         }
+
+    /**
+     * Fail unless this rig makes a readmission reachable: a device whose reconnect window ends before
+     * the host has noticed it and let its seat go gives up first, and a readmission row would then be
+     * measuring a `HostLost` the fixture chose. Only the rows that need a readmission call it.
+     */
+    private fun ReturnHarness.requireReadmissionReachable() {
+        val hostGivesUp = hostHeartbeat.timeout + hostHeartbeat.reconnectWindow
+        assertTrue(
+            joinerHeartbeat.reconnectWindow > hostGivesUp + joinerHeartbeat.interval,
+            "RoomConformanceSuite: the return rig's joiner window (${joinerHeartbeat.reconnectWindow}) " +
+                "must outlast the host's detection plus hold ($hostGivesUp) by more than one retry " +
+                "interval (${joinerHeartbeat.interval}), or a device stops trying before the host " +
+                "lets its seat go and no readmission is reachable.",
+        )
+    }
 
     /** A membership edge as one line naming its peer, for comparing whole sequences. */
     private fun MembershipEvent.edge(): String = when (this) {

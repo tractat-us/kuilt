@@ -1371,7 +1371,7 @@ public class ConnectivitySuite {
      *    the host `Connected` → PASS, and the only PASS. The host handed back a seat it still held,
      *    which is the sub-timeout return working. The stay-up phone's report must show it never
      *    partitioned this one; if it did, that side's verdict already puts the run out of band.
-     *  - **`resume.ok … restored=false`** → SKIP. The host had let the seat go, so it noticed the outage,
+     *  - **`resume.ok … restored=false`**, or this room's own `Readmitted` → SKIP. The host had let the seat go, so it noticed the outage,
      *    and this was an ordinary readmission, not the sub-timeout lane.
      *  - **neither, and no `HostLost`** → SKIP, **NOT EXERCISED**. The room survived and the resume
      *    lane never resolved. This is the 2026-07-28 run, and reporting it as a PASS is the defect
@@ -1494,6 +1494,7 @@ public class ConnectivitySuite {
                     is MembershipEvent.HostLost -> ev
                     is MembershipEvent.Recovered -> ev.takeIf { it.peerId == host }
                     is MembershipEvent.Resumed -> ev.takeIf { it.peerId == room.selfId }
+                    is MembershipEvent.Readmitted -> ev.takeIf { it.peerId == room.selfId }
                     else -> null
                 }
             } ?: break
@@ -1579,8 +1580,8 @@ public class ConnectivitySuite {
 
             // The seat was gone: the host had let it go, so it noticed the outage, and this phone was
             // admitted afresh. The room survived, but the sub-timeout lane was not what ran.
-            lane.afresh != null -> ctx.skip =
-                "blip: the host had let the seat go and admitted this phone afresh ('${lane.afresh}' " +
+            lane.afresh != null || closing is MembershipEvent.Readmitted -> ctx.skip =
+                "blip: the host had let the seat go and admitted this phone afresh ('${lane.afresh ?: closing?.short()}' " +
                     "${fmtMs(sinceDrop)} after the radio died) — so it noticed the outage, and this was an " +
                     "ordinary readmission, not the sub-timeout lane. Measured outage " +
                     "${fmtMs(outage.inWholeMilliseconds)} landed inside ($lo, $hi) and the host STILL " +

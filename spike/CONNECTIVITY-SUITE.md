@@ -258,7 +258,7 @@ back. The scenario's verdict was rewritten to match (census P13 on #3159):
   the host handed the seat back. Check the stay-up phone's report too; it should have seen nothing.
 - **FAIL** — the room ended in `HostLost` although this phone re-wove and could say hello.
 - **SKIP** — the run measured something else: the other phone runs another protocol version, this
-  phone never re-wove, the host had already let the seat go (`restored=false`), or the reconnect lane
+  phone never re-wove, the host had already let the seat go (`restored=false`, or the room says `Readmitted`), or the reconnect lane
   never ran.
 
 The rest of this section records the scenario as it was built, against the retired `Resume` frame.
