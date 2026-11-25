@@ -33,6 +33,12 @@ public interface DeviceKeyStore {
      * another issuer. A grant that is not newer — older, or issued at the same instant — is ignored,
      * so a replayed or reordered copy can never displace the grant already held.
      *
+     * One exception: a held grant dated more than [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS] after
+     * [grant] gives way to it. Its issuer issued [grant] by its own clock, so it would refuse the held
+     * one as [GrantVerdict.NotYetValid]: a pass issued while that clock ran ahead. Kept, it would
+     * shut out every fresh pass until its date came near, and the device would be vetted on every
+     * return meanwhile.
+     *
      * The store does not check the grant: whether it is signed, names this device or is still good
      * is the room's question when the grant is presented.
      */
@@ -61,15 +67,28 @@ public interface DeviceKeyStore {
 
 /**
  * These grants with [grant] kept: it replaces the grant from the same issuer for the same scope when
- * strictly newer by [Grant.issuedAt], is ignored when not, and is added when none for its issuer and
- * scope is held. Scopes compare by value. The one rule every [DeviceKeyStore] applies, so stores
+ * strictly newer by [Grant.issuedAt], or when that held grant is dated beyond the clock-skew
+ * allowance past it ([isPostDatedPast]); it is ignored otherwise, and added when none for its issuer
+ * and scope is held. Scopes compare by value. The one rule every [DeviceKeyStore] applies, so stores
  * cannot disagree about which grant survives.
  */
 internal fun List<Grant>.keeping(grant: Grant): List<Grant> {
     val held = firstOrNull { it.issuer == grant.issuer && it.scope == grant.scope }
     return when {
         held == null -> this + grant
-        grant.issuedAt > held.issuedAt -> map { if (it === held) grant else it }
+        grant.issuedAt > held.issuedAt || held.isPostDatedPast(grant) -> map { if (it === held) grant else it }
         else -> this
     }
+}
+
+/**
+ * Whether this grant is dated more than [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS] after [fresh]: one
+ * [fresh]'s issuer, reading the clock it dated [fresh] by, refuses as [GrantVerdict.NotYetValid]
+ * (identity Task 2.5, #3221). Compared with [fresh]'s date rather than a clock of the store's own, so
+ * the store needs no clock and agrees with the only clock the verdict is read by. Saturates.
+ */
+private fun Grant.isPostDatedPast(fresh: Grant): Boolean {
+    val allowance = GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS
+    val latestAccepted = if (fresh.issuedAt > Long.MAX_VALUE - allowance) Long.MAX_VALUE else fresh.issuedAt + allowance
+    return issuedAt > latestAccepted
 }
