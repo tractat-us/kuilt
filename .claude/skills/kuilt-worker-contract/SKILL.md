@@ -100,7 +100,10 @@ evidence.
   cross-module DTO, a wire boundary, consensus *behaviour*, or a `*.gradle.kts`. It compiles neither
   the Android variants nor Kotlin/Native nor wasm — and several subclasses of the conformance suites
   live in `appleTest` and `wasmJsTest`, so a new abstract member's compile break **cannot** appear in
-  `jvmTest`. Run the full `./gradlew build`.
+  `jvmTest`. PR CI runs the full `./gradlew build` on Linux, so a local one repeats it. Locally,
+  run `./gradlew jvmTest macosArm64Test --no-watch-fs` across the whole project with the cache
+  on: the cache re-runs only what your change reaches, and the Apple tests are the one thing CI
+  cannot run before merge (AGENTS.md § *Build & test commands*).
 
 - **There is no linter (#2540).** `detekt` and `detektAll` are not tasks — a brief or a doc telling
   you to run either is stale. Static analysis here is the `check`-wired source-scan guards in the root
@@ -111,7 +114,8 @@ evidence.
   state. `./gradlew check` runs them all; each has a header comment saying what it does and does not see.
 
 - **The build cache can serve a stale `FROM-CACHE` success** for a test-compile task whose source is
-  broken. If any test-compile task shows `FROM-CACHE`, re-run as `./gradlew clean && ./gradlew build
+  broken. A cache hit on a task whose inputs you did not change is fine. If a test-compile task
+  whose source you just changed shows `FROM-CACHE`, re-run as `./gradlew clean && ./gradlew build
   --rerun-tasks` (add `--no-build-cache` if it persists) and confirm tasks are `EXECUTED`.
   `--rerun-tasks` without the leading `clean` is not cache-disabled: it leaves Kotlin's incremental
   state in place (#1913, receipts in AGENTS.md § *Build & test commands*).
