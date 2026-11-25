@@ -45,10 +45,6 @@ class MultiNodeRaftSimRestartSeedTest {
 
         sim.crash(followerId)
         sim.restart(followerId)
-        // RIG (b): catch up before proposing, so a reused seed's collision re-mints first.
-        sim.awaitTrue("the restarted node learned the old forward's commit") {
-            sim.nodes.getValue(followerId).commitIndex.value >= before.index
-        }
         val after = proposeOn(sim, followerId, "after the restart")
         val leaderAfter = sim.awaitLeaderId()
 

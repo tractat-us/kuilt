@@ -321,12 +321,9 @@ internal class GovernedCluster(
         val old = live[i]
         old.scope.cancel()
         old.gate.close(CloseReason.Normal)
-        val caughtUpTo = sim.leader()?.commitIndex?.value ?: 0L // RIG (b)
         sim.crash(old.raftId)
         pump(1L)
         sim.restart(old.raftId)
-        // RIG (b): catch up before enrolling, so a reused seed's collision re-mints first.
-        sim.awaitTrue("the restarted node caught up to $caughtUpTo") { sim.nodes.getValue(old.raftId).commitIndex.value >= caughtUpTo }
         val fresh = boot(test, sim, loom, old.raftId, joinAt = 100 + incarnations++, quantum = quantum, cap = cap)
         live[i] = fresh
         everyReplica += fresh.replica
