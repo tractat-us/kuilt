@@ -151,7 +151,7 @@ public fun TopologyDocument.setWeight(path: List<Int>, weight: String): Topology
  * @sample us.tractat.kuilt.heddle.sampleTopologyDocumentEdits
  */
 public fun TopologyDocument.setMaxConcurrent(path: List<Int>, maxConcurrent: Long?): TopologyEdit =
-    editChild(path) { node -> node.with(maxConcurrent = maxConcurrent) to TopologyEdit.History.KEPT }
+    editChild(path) { node -> node.with(maxConcurrent = maxConcurrent) to TopologyEdit.History.SHARE_RESTARTS }
 
 /**
  * Adds [child], a [TopologyDocument.Group] with anything beneath it or a [TopologyDocument.Lane],
