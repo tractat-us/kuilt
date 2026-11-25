@@ -749,18 +749,38 @@ public class HeddleNode internal constructor(
         _unreachable.update { it - replica }
         detector.start(scopeRef)
         scopeRef.launch {
-            detector.events.collect { event ->
-                _partitionEvents.emit(event)
-                applyLivenessEvent(event)
-            }
+            detector.events.collect { event -> onDetectorEvent(event, detector) }
         }
     }
+
+    /** What the collector of [detector] does with each [event] it takes. */
+    private suspend fun onDetectorEvent(event: PartitionEvent, detector: HeartbeatPartitionDetector) {
+        _partitionEvents.emit(event)
+        applyLivenessEvent(event)
+    }
+
+    /** The detector now watching [peer], or `null` if none is. */
+    internal fun detectorForTest(peer: PeerId): HeartbeatPartitionDetector? = lock.withLock { detectors[peer] }
+
+    /**
+     * Hand [event] to the node as if [detector]'s collector had taken it: the pair a collector that
+     * lost its thread between taking an event and acting on it would hand over late (#3672).
+     */
+    internal suspend fun handleDetectorEventForTest(event: PartitionEvent, detector: HeartbeatPartitionDetector) =
+        onDetectorEvent(event, detector)
+
+    /**
+     * Runs after the node's locked section about a liveness event and before anything after it:
+     * the point where a collector on a multi-threaded dispatcher can lose its thread (#3672).
+     */
+    internal var afterLivenessDecisionForTest: ((PartitionEvent) -> Unit)? = null
 
     private fun applyLivenessEvent(event: PartitionEvent) {
         val r = ReplicaId(event.peerId.value)
         // Remember the terminal transition: only a Lost peer is eligible for enrollment-driven
         // re-monitoring, and its detector can never report anything again.
         if (event is PartitionEvent.PeerLost) lock.withLock { lostPeers += r }
+        afterLivenessDecisionForTest?.invoke(event)
         _unreachable.update { current ->
             when (event) {
                 is PartitionEvent.PeerRecovered -> current - r
