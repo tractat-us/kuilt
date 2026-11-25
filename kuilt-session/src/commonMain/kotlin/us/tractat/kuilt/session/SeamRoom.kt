@@ -2301,13 +2301,15 @@ internal class SeamRoom(
      *
      * A seat of [key] admitted before [key]'s revocation cutoff ([HostAdmission.revocations]) is not
      * the device's to come back to:
-     * - the claimed id's own is answered [SeatDecision.ReleaseAndAdmit], so it is released in this
-     *   pass and the key decided again without it — an ordinary admission, the policy's to decide;
+     * - the claimed id's own is answered [SeatDecision.ReleaseAndAdmit], and [settleRelease] decides
+     *   the key again without it: a newcomer, which the policy must admit before the seat is
+     *   released, or a return on a pass issued at or after the cutoff, for which it is released at
+     *   once, unvetted;
      * - any other is left out of what [decideSeat] reads, so it can never come back as
      *   [SeatDecision.RestoreUnderNewId]. A partitioned one then ends when its window does.
      *
      * Revoking does not evict (Decided 12): a seat is only ever given up here, when a Hello under its
-     * key asks for it back. Checked per key, so once for every seat that key holds, before any restore
+     * key and its own id asks for it back. Checked per key, so once for every seat that key holds, before any restore
      * verdict is trusted.
      *
      * [pass] is the pass the joiner presented that [GrantTrust] found good when its Proof was checked
