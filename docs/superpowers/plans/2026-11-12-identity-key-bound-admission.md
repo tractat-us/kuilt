@@ -391,6 +391,20 @@ Iain's rulings, recorded as Decided 32 in the design. These win where they diffe
 - **Pass revocation keys on `issuedAt`; seat revocation keys on `admittedAtMs`.** So a revoked held seat whose device also holds a pass issued at or after the cutoff is released and comes back `Returning`, unvetted (Decided 14, 23, 27). That is intended: the pass is post-revocation.
 - **2.7's tests are reshaped** (see Task 2.7): one store per device across launches, the relaunch row as the headline, the two expiry rows merged, and planted-pass hooks for the two cases a real joiner cannot reach.
 
+## Amendment N — the slice-2 gate (2026-11-25, on `main` @ `8cc2ab9a8` plus PR #3708)
+
+The slice-2 spec-conformance review found no code bug in 2.1–2.6. Its rulings:
+
+- **Task 2.7 was stale in two places, and #3708 was right to depart from it.**
+  - `grantForAnotherRoomIsIgnored` is unreachable through a real joiner as well, because Amendment M's joiner filter drops another room's pass. All three foreign-pass rows go through a planted-pass hook that is `internal` to the reference rig (`PlantedPassRefusalTest`), not through the published suite.
+  - The positive control `holdsValidGrant = true` measures nothing: it decides `Returning` for a first admission that holds no pass. The control is "the host trusts any decodable pass".
+- **"`readmitFor` counts from last contact" is not what the mechanism gives.** A pass lasts `readmitFor` from when it is issued and is renewed every `readmitFor / 2`, so the window after last contact runs from half of `readmitFor` to all of it.
+  - The docs now say exactly that (#3708).
+  - Whether to change the mechanism is a design question for Iain, in #3709 (needs-design). Until it is ruled, Decided 1 and *Grant refresh* read "at least `readmitFor / 2`".
+- **The superseded row (Decided 32) is pinned in `:kuilt-session` only** (`ReHelloAdmissionTest`, `SupersededMembershipTest`), not in `RoomConformanceSuite`. `ReturnDevice` has no way to start a process under a superseded id while its successor runs, and adding one would be a new public member of the published harness. That waits until a non-reference harness needs it.
+- **The test gaps in merged slice-2 code go into #3708's fix round:** row 6's Returning arm, Amendment K's refusing-policy and heal-during-vetting arms, Decided 14's takeover inheritance, and Amendment L's renewal-cannot-displace half. Each comes with a mutation that turns it red.
+- **Informational:** #3697 changed the v7 wire without bumping `ProtocolVersion`, against the per-PR rule. It stopped mattering at 2.5's v8 and needs no action.
+
 ## Global Constraints
 
 - **Each task is one PR and one sub-issue of #3159.**
