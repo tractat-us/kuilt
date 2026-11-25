@@ -510,8 +510,13 @@ public abstract class RoomConformanceSuite {
 
     /**
      * A different device presenting a connected member's id is refused `KeyConflict`, terminally, and
-     * the member keeps its seat and its key; once the impostor is gone the member's room is back with
-     * no call from its app (Decided 18).
+     * the member keeps its seat and its key (Decided 18). Then the impostor's hold ends: the member's
+     * link to the host is torn, and its room comes back through its own reconnect — a re-weave, a
+     * Hello, the seat handed back — before its app makes any call.
+     *
+     * The return is read off the member's own `Resumed` and the rig's [ReturnDevice.heals], never off
+     * a frame the app sends: a send from the member would itself put its link back in use, and the
+     * row would then be measuring the app's call rather than the room's reconnect.
      */
     @Test
     public fun differentKeyOnLiveIdIsRefused(): TestResult =
@@ -529,6 +534,7 @@ public abstract class RoomConformanceSuite {
                 victim.awaitRoster("the member sees the host") { it.isNotEmpty() }
                 val key = admitted.single { it.id == me }.key
                 val hostTape = EventTape(host, backgroundScope)
+                val victimTape = EventTape(victim, backgroundScope)
                 val callsBefore = app.snapshot()
 
                 val arrived = victimDevice.impostor().join(h.joinTag).also { impostor = it }
@@ -546,15 +552,21 @@ public abstract class RoomConformanceSuite {
                     { assertTrue(impostorTape.events().none { it is MembershipEvent.Joined }, "the impostor never entered a roster") },
                 )
 
+                val healsBeforeReturn = victimDevice.heals
                 victimDevice.restore()
+                victim.awaitEvent("the member's own Resumed") { (it as? MembershipEvent.Resumed)?.takeIf { e -> e.peerId == me } }
                 val back = host.awaitRoster("the member's seat is Connected again") { roster ->
                     roster.any { it.id == me && it.liveness == Liveness.Connected }
                 }
+                val callsAtReturn = app.snapshot()
+                val healsAtReturn = victimDevice.heals
                 victim.broadcast(applicationPayload("still-here"))
                 val reached = host.awaitHeld(me, count = 1, expected = "a frame the member sent after the impostor left")
                 assertAll(
                     { assertEquals(listOf("join"), callsBefore, "rig: the call counter saw the launch's join") },
-                    { assertEquals(callsBefore + "broadcast", app.snapshot(), "the member's app made no call to get its seat back") },
+                    { assertTrue(healsAtReturn > healsBeforeReturn, "rig: the member's own reconnect re-wove after the hold (heals $healsAtReturn, was $healsBeforeReturn)") },
+                    { assertEquals(callsBefore, callsAtReturn, "the member's app made no call before its room was back") },
+                    { assertTrue(victimTape.events().none { it is MembershipEvent.HostLost }, "the member's room never ended: ${victimTape.events()}") },
                     { assertEquals(listOf(me), back.map { it.id }, "one seat, still the member's") },
                     { assertEquals(key, back.single().key, "under the member's key") },
                     { assertEquals(listOf("still-here"), reached.map { it.payload.decodeToString() }) },
