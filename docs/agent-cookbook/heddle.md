@@ -460,6 +460,92 @@ prepared with, under ids that are the same on every target and never collide how
 are spelt: `root/acme/batch@1:1#0` is `batch` in `acme`, at weight 1, generation 0, and
 `groupId("acme", "batch")` names the group. `LocalHeddle.fromTopology` does this for you.
 
+## A minimal editor, end to end
+
+An admin page lets a person change who gets how much while work keeps running: rename a group,
+add a lane, give a team more weight. Before saving, it tells them what the change will cost. heddle
+ships no page, because every app brings its own screens. It ships the model the page drives, and
+this is that model's loop, once through.
+
+**Intent:** build the model behind an admin editor for a running `LocalHeddle`, without
+hand-rolling a tree copier, a validator, a diff or a "has someone else saved" check.
+**Primitive:** six steps, each covered in depth by its own section (`:kuilt-heddle-core`):
+
+1. **Load** the running tree with `LocalHeddle.topology`, and write it out with `toDocument()`.
+   Keep the loaded tree as `startedFrom`; see
+   [Showing an admin what an edit changes](#showing-an-admin-what-an-edit-changes).
+2. **Edit by path** with `setWeight`, `addChild`, `rename` and the rest, each returning a
+   `TopologyEdit`. A `Refused` names the node to blame; see
+   [Editing the tree as a document](#editing-the-tree-as-a-document).
+3. **Validate** with `Topology.from`. Every `TopologyProblem` carries the path to edit; see
+   [Loading the tree from a config file](#loading-the-tree-from-a-config-file).
+4. **List what the save changes** with `startedFrom.changesTo(candidate)`, and warn on the changes
+   that lose history; the list is under
+   [Showing an admin what an edit changes](#showing-an-admin-what-an-edit-changes).
+5. **Preview** with `previewApply(candidate, generation, startedFrom)`; see
+   [Previewing a change to the tree](#previewing-a-change-to-the-tree).
+6. **Save** with the checked `apply(candidate, generation, startedFrom)`. On
+   `ApplyOutcome.TreeChanged`, reload from its `current` and go round again; see
+   [two admins at once](#showing-an-admin-what-an-edit-changes).
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleMinimalEditor -->
+```kotlin
+    val (heddle, _) = LocalHeddle.fromTopology(twoLanes(), LocalPolicy(defaultReservation = 3L), epoch = 0L)
+
+    // Load: the editor opens on the running tree, written out as a document.
+    var startedFrom = heddle.topology
+    var document = startedFrom.toDocument()
+
+    // Edit by path. Renaming light to its sibling's name is refused, and the page marks that sibling.
+    val clash = document.rename(listOf(1), "heavy")
+    check(clash is TopologyEdit.DuplicateName && clash.path == listOf(0))
+    document = (document.rename(listOf(1), "interactive") as TopologyEdit.Edited).document
+    document = (document.addChild(emptyList(), TopologyDocument.Lane("batch", weight = "0")) as TopologyEdit.Edited).document
+
+    // Validate. A problem's path is the path to edit, so the page fixes the weight where it points.
+    val problem = (Topology.from(document) as TopologyParse.Invalid).problems.single()
+    check(problem.path == listOf(2) && problem.kind == TopologyProblem.Kind.INVALID_WEIGHT)
+    document = (document.setWeight(problem.path, "1") as TopologyEdit.Edited).document
+    val candidate = (Topology.from(document) as TopologyParse.Valid).topology
+
+    // List what the save changes against the tree the editor loaded: the rename drains light.
+    val drains = startedFrom.changesTo(candidate).filterIsInstance<TopologyChange.Removed>()
+    check(drains.single().names == listOf("pool", "light"))
+
+    // Preview what the save would do to the running engine, checked against the same tree.
+    val preview = heddle.previewApply(candidate, generation = 2L, startedFrom = startedFrom)
+    check(preview is PreviewOutcome.Previewed && preview.preview.result.refusals.isEmpty())
+
+    // Meanwhile another admin saves a new weight for heavy.
+    val theirs = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(3)), Topology.Lane("light")))
+    check(heddle.apply(theirs, generation = 1L, startedFrom = startedFrom) is ApplyOutcome.Applied)
+
+    // Checked apply. Saved as it stands, the edit would undo theirs, so it is refused and changes nothing.
+    val refused = heddle.apply(candidate, generation = 2L, startedFrom = startedFrom)
+    check(refused is ApplyOutcome.TreeChanged && refused.current == theirs)
+
+    // So the page reloads from the running tree, the admin makes the edit again, and the save keeps theirs.
+    startedFrom = refused.current
+    document = (startedFrom.toDocument().rename(listOf(1), "interactive") as TopologyEdit.Edited).document
+    document = (document.addChild(emptyList(), TopologyDocument.Lane("batch")) as TopologyEdit.Edited).document
+    val redone = (Topology.from(document) as TopologyParse.Valid).topology
+    check(startedFrom.changesTo(redone).none { it is TopologyChange.WeightChanged })
+    check(heddle.previewApply(redone, generation = 2L, startedFrom = startedFrom) is PreviewOutcome.Previewed)
+    check(heddle.apply(redone, generation = 2L, startedFrom = startedFrom) is ApplyOutcome.Applied)
+    check(heddle.topology == redone)
+```
+
+- **The page's state is two values:** the tree it loaded (`startedFrom`) and the document being
+  edited. Every check after an edit is against `startedFrom`, never against the previous edit, so
+  a rename and the rename back show no change at all.
+- **The sample warns on `Removed` only, because that is the one its edit makes.** A real page
+  warns on every change that loses history, which also takes in `WeightChanged`,
+  `TemplateRemoved`, a `TemplateChanged` with a new weight, and `RootRenamed`.
+- **Preview and save with the same `generation`**, and preview again after a reload: the tree the
+  preview was taken against has gone.
+- **A save refused as `TreeChanged` changed nothing.** The page does not retry it blind. It lists
+  the changes again from `current`, and saves once the admin has confirmed them.
+
 ## Editing the tree as a document
 
 **Intent:** an editor changes one weight three levels down, adds a lane, renames or moves a

@@ -41,6 +41,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [A fair-share queue in one process](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#a-fair-share-queue-in-one-process)
 - [Waiting your turn for a slot](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#waiting-your-turn-for-a-slot)
 - [Loading the tree from a config file](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#loading-the-tree-from-a-config-file)
+- [A minimal editor, end to end](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#a-minimal-editor-end-to-end)
 - [Editing the tree as a document](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#editing-the-tree-as-a-document)
 - [Changing the tree while work runs](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#changing-the-tree-while-work-runs)
 - [Showing an admin what an edit changes](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#showing-an-admin-what-an-edit-changes)

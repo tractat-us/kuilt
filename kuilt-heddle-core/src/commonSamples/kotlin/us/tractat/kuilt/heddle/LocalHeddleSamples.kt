@@ -1060,6 +1060,7 @@ internal fun sampleMinimalEditor() {
     document = (document.addChild(emptyList(), TopologyDocument.Lane("batch")) as TopologyEdit.Edited).document
     val redone = (Topology.from(document) as TopologyParse.Valid).topology
     check(startedFrom.changesTo(redone).none { it is TopologyChange.WeightChanged })
+    check(heddle.previewApply(redone, generation = 2L, startedFrom = startedFrom) is PreviewOutcome.Previewed)
     check(heddle.apply(redone, generation = 2L, startedFrom = startedFrom) is ApplyOutcome.Applied)
     check(heddle.topology == redone)
 }
