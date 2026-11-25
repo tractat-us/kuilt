@@ -754,7 +754,7 @@ private fun defaultNodeFactory(
     return { id, transport, storage, childScope ->
         val start = starts[id] ?: 0
         starts[id] = start + 1
-        val seed = simNodeSeed(baseSeed, nodeIds.indexOf(id), 0) // MUTANT (a): reuse the first seed
+        val seed = simNodeSeed(baseSeed, nodeIds.indexOf(id), start)
         childScope.raftNode(clusterConfig, transport, storage, baseConfig.copy(random = Random(seed)))
     }
 }
