@@ -107,6 +107,93 @@ class LocalHeddleNestedAttachPropertyTest {
         )
     }
 
+    /**
+     * The same calls with leases held across them, so a detach waits on the work beneath it and an
+     * attach can land on a repository or author whose detach is still draining, or has drained but
+     * not yet retired. After every call:
+     *
+     * - [EntitlementLedger.validate] reports nothing;
+     * - no edge outlives the edge above it: every live edge into an attached child has a live edge
+     *   into its parent numbered at or below it, the edge it was attached under or one older. A
+     *   parent's edge made after the child's is a re-attach, and this tree has no reweight, the one
+     *   change that keeps old children beneath a new edge, so such a child was closed by the
+     *   detach that ended its parent's old edge, and must retire before or with it;
+     *
+     * and once every lease completes, a detach of each path the model no longer holds and an attach
+     * of each it does land with nothing refused, after which [checkModel] and the shares hold as in
+     * [nestedAttachAndDetachKeepTheModelAndItsShares].
+     */
+    @Test
+    fun nestedAttachAndDetachUnderOpenLeasesSettleToTheModel() {
+        val failures = ArrayList<String>()
+        val tally = Tally()
+        // Two names a level, so a lease, a detach and an attach meet on the same groups often.
+        val near = universe.filter { path -> "c" !in path }
+        val leaves = near.filter { it.size == 3 }
+        for (seed in 0 until seeds) {
+            val r = Random(seed)
+            val h = LocalHeddle.bootWhole(t, policy, epoch = 0L).also { it.reconcileCapacity(64L) }
+            val model = LinkedHashSet<List<String>>()
+            val open = ArrayList<Lease>()
+            for (call in 0 until calls * 2) {
+                val names = near[r.nextInt(near.size)]
+                val at = "seed $seed call $call"
+                when (r.nextInt(10)) {
+                    in 0..3 -> {
+                        val draining = names.indices.any { depth -> h.snapshot().ledger.let { l -> l.inboundEdges(idOf(names.subList(0, depth + 1))).any { l.lifecycle(it) == Lifecycle.CLOSING } } }
+                        model += names.indices.map { names.subList(0, it + 1) }
+                        val result = h.attach(pathOf(names), generation = 1_000L + call)
+                        if (draining) tally.reattachesOverClosing++
+                        if (draining && result.refusals.isEmpty()) tally.reattachesLanded++
+                    }
+                    in 4..5 -> {
+                        model.removeAll { it.size >= names.size && it.subList(0, names.size) == names }
+                        val result = h.detach(pathOf(names))
+                        if (result.refusals.any { it is StepRefusal.Draining }) tally.drainingDetaches++
+                    }
+                    in 6..8 -> {
+                        val leaf = idOf(leaves[r.nextInt(leaves.size)])
+                        val out = h.acquire(setOf(leaf), setOf(leaf), startedAt = call.toLong())
+                        if (out is AcquireOutcome.Acquired) open += out.lease.also { tally.leases++ }
+                    }
+                    else -> if (open.isNotEmpty()) {
+                        val lease = open.removeAt(r.nextInt(open.size))
+                        if (h.complete(lease.id, actualCost = 1L, waiting = emptySet()) !is LeaseOutcome.Done) failures += "$at: completing ${lease.id} failed"
+                    }
+                }
+                checkNothingOutlivesItsParent(h.snapshot().ledger, "$at ($names)", failures)
+            }
+            for (lease in open) if (h.complete(lease.id, actualCost = 1L, waiting = emptySet()) !is LeaseOutcome.Done) failures += "seed $seed: completing ${lease.id} failed"
+            val settle = universe.reversed().filter { it !in model }.map { h.detach(pathOf(it)) } +
+                model.sortedBy { it.size }.map { h.attach(pathOf(it), generation = 10_000L) }
+            for (result in settle) if (result.refusals.isNotEmpty()) failures += "seed $seed settle: refused ${result.refusals}"
+            checkNothingOutlivesItsParent(h.snapshot().ledger, "seed $seed settled", failures)
+            checkModel(h, model, "seed $seed settled", failures)
+            tally.compared += checkShares(h, model, r, "seed $seed settled", failures)
+        }
+        assertAll(
+            { assertEquals(emptyList(), failures.take(20), "${failures.size} failures") },
+            { assertTrue(tally.leases >= 200, "leases ${tally.leases}") },
+            { assertTrue(tally.drainingDetaches >= 60, "detaches that waited on a lease ${tally.drainingDetaches}") },
+            { assertTrue(tally.reattachesOverClosing >= 55, "attaches over a closing edge ${tally.reattachesOverClosing}") },
+            { assertTrue(tally.reattachesLanded >= 20, "of which landed ${tally.reattachesLanded}") },
+            { assertTrue(tally.compared >= 80, "shares compared ${tally.compared}") },
+        )
+    }
+
+    /** See [nestedAttachAndDetachUnderOpenLeasesSettleToTheModel]: validate, and no live edge beneath a retired one. */
+    private fun checkNothingOutlivesItsParent(ledger: EntitlementLedger, at: String, failures: MutableList<String>) {
+        val conflicts = ledger.validate()
+        if (conflicts.isNotEmpty()) failures += "$at: validate $conflicts"
+        for (names in universe.filter { it.size >= 2 }) {
+            val child = idOf(names)
+            val parent = idOf(names.dropLast(1))
+            val above = ledger.liveInboundEdges(parent).mapNotNull { generationOf(it) }
+            val outlived = ledger.liveInboundEdges(child).filter { edge -> above.none { it <= checkNotNull(generationOf(edge)) } }
+            if (outlived.isNotEmpty()) failures += "$at: ${outlived.map { it.value }} live with no live edge above it as old: ${parent.value} has $above"
+        }
+    }
+
     /** Every path of the universe is live exactly when the model holds it, and reads back to itself. */
     private fun checkModel(h: LocalHeddle, model: Set<List<String>>, at: String, failures: MutableList<String>) {
         val ledger = h.snapshot().ledger
@@ -177,6 +264,10 @@ class LocalHeddleNestedAttachPropertyTest {
         var reloads = 0
         var compared = 0
         var withBranches = 0
+        var leases = 0
+        var drainingDetaches = 0
+        var reattachesOverClosing = 0
+        var reattachesLanded = 0
     }
 
     private companion object {

@@ -107,6 +107,29 @@ class LocalHeddleNestedAttachTest {
         )
     }
 
+    /**
+     * A repository detached while alice's lease ran, then drained, is attached again through a new
+     * author. Its old edge retires in that unit, and so must alice's: she was closed by the detach,
+     * and a closing edge left beneath a retired one is a child live beneath a dead parent.
+     */
+    @Test
+    fun reattachingADrainedRepositoryRetiresWhatItsDetachClosed() {
+        val h = engine().attached(alice)
+        val lease = assertIs<AcquireOutcome.Acquired>(h.acquire(setOf(aliceId), setOf(aliceId), startedAt = 0L)).lease
+        val draining = h.detach(kuilt)
+        check(h.complete(lease.id, actualCost = 1L, waiting = emptySet()) is LeaseOutcome.Done)
+        val result = h.attach(bob, generation = 2L)
+        val ledger = h.snapshot().ledger
+        assertAll(
+            { assertTrue(draining.refusals.isNotEmpty() && draining.refusals.all { it is StepRefusal.Draining }, "the rig: the detach waited on alice") },
+            { assertEquals(emptyList(), result.refusals) },
+            { assertTrue(h.live(kuiltId) && h.live(bobId), "the repository and bob are attached") },
+            { assertEquals(emptyList(), ledger.liveInboundEdges(aliceId), "alice's old edge is not left closing beneath the new repository edge") },
+            { assertTrue(!h.live(aliceId), "and she is not back") },
+            { assertEquals(emptyList(), ledger.validate(), "nor anything else wrong") },
+        )
+    }
+
     @Test
     fun aNestedTopologyPersistsAndRestores() {
         val h = engine().attached(alice)
