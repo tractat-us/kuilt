@@ -26,10 +26,14 @@ import kotlin.test.assertTrue
  * The rig needs both incarnations to forward under the same serial (each one's first, its enroll)
  * and the **same** leader on both sides of the restart; it asserts both rather than assuming them.
  *
- * Two distinct ids under one serial would also come from a reused seed whose collision re-mint
- * landed before the enroll was stamped, so the test pins each id to the **first** draw from its
- * start's seed, worked by hand from the sim's formula rather than read back through it: a reused seed
- * fails the restarted arm, and so does a re-mint, which takes a later draw.
+ * The test also pins each id to the **first** draw from its start's seed, worked by hand from the
+ * sim's formula rather than read back through it, so it says which id each incarnation used and not
+ * only that the two differ. Unlike the raft-level arm, a collision re-mint cannot mask a reused seed
+ * here today: in this rig the enroll is each process's first control-plane act, so it forwards under serial 0,
+ * and a collision detector reads only a serial above what its node issued as foreign. Catching the
+ * restarted node up before it enrolls was measured to leave a reused seed red with
+ * `RequestIdConflictException`. The pin is what would catch the masking if a forward ever started
+ * above serial 0.
  */
 class GovernedRestartDefaultFactoryTest {
 
