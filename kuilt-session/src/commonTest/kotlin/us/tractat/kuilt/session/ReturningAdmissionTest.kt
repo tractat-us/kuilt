@@ -5,6 +5,7 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.identity.DeviceKey
@@ -22,6 +23,7 @@ import us.tractat.kuilt.session.admit.GrantReach
 import us.tractat.kuilt.session.admit.GrantTerms
 import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.ReturnKind
+import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -362,6 +364,41 @@ class ReturningAdmissionTest {
             { assertTrue(newPass.issuedAt > oldPass.issuedAt, "rig: admission issued a newer pass") },
             { assertEquals(2, counted.asked.size, "the pass issued after it lets Bob back unvetted") },
             { assertEquals(ReturnKind.Returning, host.directWelcomesTo(bob).last().returnKind) },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * A pass is checked when its Proof arrives, and an exchange can then wait on the window controller
+     * before it decides. A revocation landing in that wait still voids the pass: the decision reads
+     * the pass's revocation again, under the lock that decides. Bob's seat, revoked with it, is
+     * released, and Bob is vetted as a newcomer rather than let back in on a pass that is void by then.
+     */
+    @Test
+    fun aRevocationWhileTheExchangeWaitsVoidsThePass() = runTest {
+        val counted = Counted()
+        val gate = CompletableDeferred<Unit>()
+        val host = rawHost(
+            joiners = setOf(bob, carol),
+            hold = ObservedHold(verdict = { ResumeResult.WindowClosed }, gate = gate),
+            admission = counted.admission,
+        )
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        val pass = host.passesTo(bob).single()
+        host.partition(bob, alive = setOf(carol))
+
+        host.admit(bob, bobKey, nonce = 3, grants = listOf(pass))
+        val askingWhileRevoked = host.hold.calls.size
+        counted.revocations.revoke(bobKey.id, notBefore = testScheduler.currentTime + 1)
+        gate.complete(Unit)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertEquals(1, askingWhileRevoked, "rig: the exchange was waiting on the controller when the revocation landed") },
+            { assertEquals(listOf(bobKey.id, carolKey.id, bobKey.id), counted.keys(), "Bob is vetted: his pass was void by the time it was decided") },
+            { assertNull(host.directWelcomesTo(bob).last().returnKind, "an ordinary admission, not a return") },
+            { assertTrue(host.member(bob) != null, "and the open policy admits him") },
         )
         host.room.leave()
     }
