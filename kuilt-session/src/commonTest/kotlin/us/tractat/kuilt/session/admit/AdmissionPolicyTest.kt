@@ -79,6 +79,7 @@ class AdmissionPolicyTest {
         val refused = assertFailsWith<IllegalArgumentException> { AdmissionDecision.Reject(RejectCode.Unknown("superseded")) }
         assertAll(
             { assertTrue(refused.message.orEmpty().contains("superseded"), "names the code: ${refused.message}") },
+            { assertFailsWith<IllegalArgumentException> { AdmissionDecision.Reject(RejectCode.Superseded) } },
             // The control: every other code still builds.
             { assertEquals(RejectCode.Unknown("blocked"), AdmissionDecision.Reject(RejectCode.Unknown("blocked")).code) },
             { assertEquals<RejectCode>(RejectCode.KeyConflict, AdmissionDecision.Reject(RejectCode.KeyConflict).code) },

@@ -135,30 +135,27 @@ public sealed interface AdmissionDecision {
      * is open, so a policy may refuse with one — arrives as [RejectCode.Unknown] with the same id, and
      * that is treated as retryable whatever the app's code says.
      *
-     * **Not `"superseded"`.** That code tells a joiner another process of its own device took its
-     * seat, and the room sends it only with the successor that took it, so a policy cannot. Refusing
-     * it here, at construction, keeps the room from building a refusal it could not send: a policy
-     * that tries throws inside `decide`, and the joiner hears [RejectCode.AdmissionPolicyFailed].
+     * **Not [RejectCode.Superseded].** That code tells a joiner another process of its own device took
+     * its seat, and the room sends it only with the successor that took it
+     * ([AdmitMessage.Reject.supersededBy]), so a policy cannot. Refusing it here, at construction,
+     * keeps the room from building a refusal it could not send: a policy that tries throws inside
+     * `decide`, and the joiner hears [RejectCode.AdmissionPolicyFailed]. It is refused by id, so an
+     * app's own `RejectCode.Unknown("superseded")` is refused too.
      *
-     * @throws IllegalArgumentException when [code]'s id is `"superseded"`, whatever its type.
+     * @throws IllegalArgumentException when [code]'s id is [RejectCode.Superseded]'s, whatever its type.
      */
     public data class Reject(
         /** Why, as the joiner will see it. */
         public val code: RejectCode,
     ) : AdmissionDecision {
         init {
-            require(code.id != SUPERSEDED_ID) {
-                "a policy cannot refuse with \"$SUPERSEDED_ID\": the room sends it only with the successor that took the seat"
+            require(code.id != RejectCode.Superseded.id) {
+                "a policy cannot refuse with \"${RejectCode.Superseded.id}\": the room sends it only with the successor that took the seat"
             }
         }
     }
 }
 
-/**
- * The wire id of the refusal a superseded process hears, which only the room may send (Decided 32).
- * Read by id, so an app's own `RejectCode.Unknown("superseded")` is refused as the room's own would be.
- */
-private const val SUPERSEDED_ID = "superseded"
 
 /** Where a pass from [GrantTerms] is good. */
 public enum class GrantReach {
