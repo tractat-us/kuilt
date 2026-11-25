@@ -165,7 +165,6 @@ public final class us/tractat/kuilt/session/MemberIdentity {
 	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/session/MemberIdentity;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/session/MemberIdentity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/MemberIdentity;
 	public fun equals (Ljava/lang/Object;)Z
-	public final fun getDedupKey ()Ljava/lang/String;
 	public final fun getDeviceId ()Ljava/lang/String;
 	public final fun getDisplayName ()Ljava/lang/String;
 	public final fun getSessionId ()Ljava/lang/String;

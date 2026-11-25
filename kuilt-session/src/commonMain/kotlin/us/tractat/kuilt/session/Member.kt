@@ -58,13 +58,7 @@ public data class MemberIdentity(
     val displayName: String,
     val sessionId: String,
     val deviceId: String? = null,
-) {
-    /**
-     * [deviceId] when present, else [sessionId]. It was the reconnect dedup key before a returning
-     * member was recognised by its device key (#3159); the room no longer uses it for that.
-     */
-    val dedupKey: String get() = deviceId ?: sessionId
-}
+)
 
 /**
  * The liveness state of an admitted member.

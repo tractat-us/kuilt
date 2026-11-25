@@ -1236,8 +1236,6 @@ final class us.tractat.kuilt.session/Member { // us.tractat.kuilt.session/Member
 final class us.tractat.kuilt.session/MemberIdentity { // us.tractat.kuilt.session/MemberIdentity|null[0]
     constructor <init>(kotlin/String, kotlin/String, kotlin/String? = ...) // us.tractat.kuilt.session/MemberIdentity.<init>|<init>(kotlin.String;kotlin.String;kotlin.String?){}[0]
 
-    final val dedupKey // us.tractat.kuilt.session/MemberIdentity.dedupKey|{}dedupKey[0]
-        final fun <get-dedupKey>(): kotlin/String // us.tractat.kuilt.session/MemberIdentity.dedupKey.<get-dedupKey>|<get-dedupKey>(){}[0]
     final val deviceId // us.tractat.kuilt.session/MemberIdentity.deviceId|{}deviceId[0]
         final fun <get-deviceId>(): kotlin/String? // us.tractat.kuilt.session/MemberIdentity.deviceId.<get-deviceId>|<get-deviceId>(){}[0]
     final val displayName // us.tractat.kuilt.session/MemberIdentity.displayName|{}displayName[0]
