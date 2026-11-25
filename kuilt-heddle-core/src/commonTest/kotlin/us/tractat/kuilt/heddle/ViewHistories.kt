@@ -39,6 +39,9 @@ internal object ViewHistories {
     /** What a caller may name as waiting: every leaf, plus `pool`, a leaf that is no lane, and `acme`, a group with active children. */
     val names: List<GroupId> = (leaves + before.groupId("pool") + before.groupId("acme")).sorted()
 
+    /** What [answers] asks a [ShareLine] about: every name, and the groups above them, the root included. */
+    private val shareNames: List<GroupId> = names + before.groupId("acme", "batch") + before.groupId("tenants") + before.groupId()
+
     /** One question, asked of an engine, a view and a restored engine alike. */
     class Question(
         val waiting: Set<GroupId>,
@@ -70,8 +73,9 @@ internal object ViewHistories {
     }
 
     /**
-     * Every answer the three read-only calls give to [q], in order: both previews, then for each name
-     * its explanation and its entitlement. Each arm is one call on whichever surface is asked.
+     * Every answer the read-only calls give to [q], in order: both previews, then for each name its
+     * explanation and its entitlement, then what one share line says of each of [shareNames]. Each
+     * arm is one call on whichever surface is asked.
      */
     private fun answers(
         q: Question,
@@ -79,6 +83,7 @@ internal object ViewHistories {
         byQueue: (Map<GroupId, List<Long>>, Set<GroupId>, Long) -> List<GroupId>,
         explain: (GroupId, Set<GroupId>, Set<GroupId>, Long) -> WaitExplanation,
         entitlement: (GroupId, Set<GroupId>, Long) -> Rational,
+        shareLine: (Set<GroupId>) -> ShareLine,
     ): List<Any> = buildList {
         add(byCount(q.counts, q.eligible, q.reservations))
         add(byQueue(q.queues, q.eligible, q.reservation))
@@ -86,6 +91,8 @@ internal object ViewHistories {
             add(explain(name, q.waiting, q.eligible, q.reservation))
             add(entitlement(name, q.waiting, q.totalSlots))
         }
+        val line = shareLine(q.waiting)
+        for (name in shareNames) add(line.share(name))
     }
 
     fun LocalHeddle.answers(q: Question): List<Any> = answers(
@@ -94,6 +101,7 @@ internal object ViewHistories {
         { w, e, r -> previewPicks(w, e, r) },
         { l, w, e, r -> explain(l, w, e, r) },
         { l, w, n -> entitlement(l, w, n) },
+        { w -> shareLine(w) },
     )
 
     fun LocalHeddleView.answers(q: Question): List<Any> = answers(
@@ -102,6 +110,7 @@ internal object ViewHistories {
         { w, e, r -> previewPicks(w, e, r) },
         { l, w, e, r -> explain(l, w, e, r) },
         { l, w, n -> entitlement(l, w, n) },
+        { w -> shareLine(w) },
     )
 
     /**

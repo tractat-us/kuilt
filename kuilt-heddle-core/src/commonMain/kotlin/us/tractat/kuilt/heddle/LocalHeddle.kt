@@ -1097,6 +1097,15 @@ public class LocalHeddle private constructor(
         view().entitlement(leaf, waiting, totalSlots)
 
     /**
+     * What every group is owed of the whole pool while [waiting] holds still, read once from this
+     * engine's state and answered group by group. Answered by a view of this engine's state: see
+     * [LocalHeddleView.shareLine]. The line keeps what it read, so it does not follow the engine.
+     *
+     * @sample us.tractat.kuilt.heddle.sampleShareLine
+     */
+    public fun shareLine(waiting: Set<GroupId>): ShareLine = view().shareLine(waiting)
+
+    /**
      * Tell the engine how many slots the caller runs at once, [totalSlots]. It sizes the supply
      * watermarks of [LocalPolicy.supply] and nothing else: it mints nothing and changes no lease,
      * and calling it again with the same value changes nothing. Until it is called with a positive
