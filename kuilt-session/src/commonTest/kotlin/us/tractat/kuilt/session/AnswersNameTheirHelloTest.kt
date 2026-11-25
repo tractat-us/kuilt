@@ -39,7 +39,9 @@ class AnswersNameTheirHelloTest {
 
     /**
      * The direct Welcome names the Hello it answers and a membership; the roster copy another member
-     * receives names neither. Two admissions are two memberships.
+     * receives names neither. The rest of the joiner's own burst names its Hello and no membership,
+     * so a joiner can drop a late frame from a burst answering an older Hello (#3615). Two
+     * admissions are two memberships.
      */
     @Test
     fun theDirectWelcomeNamesItsHelloAndAMembership() = runTest {
@@ -49,14 +51,17 @@ class AnswersNameTheirHelloTest {
 
         val toBob = host.sentTo(bob).welcomesFor(bob).single()
         val toCarol = host.sentTo(carol).welcomesFor(carol).single()
-        val bobAsCarolHeardIt = host.sentTo(carol).welcomesFor(bob).single()
+        val carolAsBobHeardIt = host.sentTo(bob).welcomesFor(carol).single()
+        val bobInCarolsBurst = host.sentTo(carol).welcomesFor(bob).single()
         assertAll(
             { assertTrue(nonce(1).contentEquals(toBob.answers), "Bob's Welcome names his Hello") },
             { assertTrue(nonce(2).contentEquals(toCarol.answers), "Carol's Welcome names hers") },
             { assertNotNull(toBob.membership, "Bob's Welcome names his membership") },
             { assertNotEquals(toBob.membership, toCarol.membership, "two admissions, two memberships") },
-            { assertNull(bobAsCarolHeardIt.answers, "the roster copy names no Hello") },
-            { assertNull(bobAsCarolHeardIt.membership, "the roster copy names no membership") },
+            { assertNull(carolAsBobHeardIt.answers, "the roster copy names no Hello") },
+            { assertNull(carolAsBobHeardIt.membership, "the roster copy names no membership") },
+            { assertTrue(nonce(2).contentEquals(bobInCarolsBurst.answers), "Carol's burst names her Hello on its Welcome for Bob") },
+            { assertNull(bobInCarolsBurst.membership, "and names no membership there") },
         )
         host.room.leave()
     }

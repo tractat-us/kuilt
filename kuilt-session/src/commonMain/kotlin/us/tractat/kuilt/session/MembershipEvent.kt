@@ -95,6 +95,14 @@ public sealed interface MembershipEvent {
      * other than the host by the host's announcement that the peer is back. That announcement covers
      * a partitioned peer whose return the host restored, so those members see this event where the
      * host and the returning peer see [Resumed].
+     *
+     * **Never the answer to a joiner's Hello.** A joiner whose host link tore says Hello again, and
+     * the host's answer ends that arc with [Resumed] (its seat came back) or [Readmitted] (the seat
+     * was gone and the host admitted it afresh), or the window ends it with [HostLost] — never with
+     * `Recovered(host)`, since a returning joiner does not know whether it came back inside the
+     * host's window until the host's answer says so (#3615). A heartbeat partition that heals with
+     * no tear is different: the joiner says no Hello, nothing answers one, and the arc still ends in
+     * `Recovered(host)`.
      */
     public data class Recovered(val peerId: PeerId, val at: Instant) : MembershipEvent
 
@@ -104,8 +112,12 @@ public sealed interface MembershipEvent {
      * **Dual-role.** Emitted on the **host's** events when a joiner goes unresponsive and the
      * host opens a window to hold its seat ([peerId] = the joiner; if the joiner returns
      * before [expiresAt], [Resumed] follows, otherwise [Left] with [LeaveReason.PartitionExpired]);
-     * and on a **joiner's** events when its host link tears and the joiner opens its own window to
-     * re-weave and resume ([peerId] = the host; on success [Resumed] follows, otherwise [HostLost]).
+     * and on a **joiner's** events when its host link drops and the joiner opens its own window
+     * ([peerId] = the host). Where the link tore, the joiner re-weaves and says Hello again, and the
+     * host's answer ends that window one of two ways: [Resumed] when the seat came back, [Readmitted]
+     * when the host had let it go and admitted this room afresh — a new membership, though the room
+     * stays in session. Otherwise the window ends in [HostLost] (#3615). Where the host merely went
+     * quiet and the link heals with no tear, no Hello is said and [Recovered] ends the window.
      * [expiresAt] is the wall-clock instant at which the window closes.
      */
     public data class WindowOpened(val peerId: PeerId, val expiresAt: Instant) : MembershipEvent
@@ -119,8 +131,40 @@ public sealed interface MembershipEvent {
      * faster than the host noticed — emits nothing, since the host never saw the member go. Also
      * emitted on the **joiner's** events, with its own id, when the host's answer names the
      * membership it already held.
+     *
+     * On a joiner the host's answer heads an admission burst naming every member the host holds, and
+     * the joiner rebuilds its roster from it, as it does after [Readmitted] (#3615): a member that
+     * left while its link was down, whose departure went down that link, follows this event as a
+     * [Left] with [LeaveReason.Unobserved].
      */
     public data class Resumed(val peerId: PeerId) : MembershipEvent
+
+    /**
+     * This room's seat was gone when it came back, and the host admitted it afresh (joiner
+     * perspective only; [peerId] is this room's own id).
+     *
+     * The reconnect that [WindowOpened] began has ended in a **new membership**: the host had let the
+     * old seat go — its window expired, or the seat was released to a fresh decision — so it admitted
+     * this room as a new member under the same id. The host and every other member see that as
+     * `Left(peerId, PartitionExpired)` followed by `Joined(peerId)`. Whatever an app tied to the old
+     * membership — a game seat, a turn in progress, a replica's view of what this peer had sent — is
+     * not carried over: treat it the way you treat a first admission. Where the old seat came back,
+     * the event is [Resumed] instead, and [Recovered] is never the answer to a return.
+     *
+     * The room keeps the new membership; it is still in session. Its roster is rebuilt from the
+     * host's admission burst, which follows this event and which the host's own `Welcome` closes: a
+     * member that joined meanwhile arrives as [Joined], and a member that left while this room was
+     * away, whose departure it never heard, leaves as [Left] with [LeaveReason.Unobserved]. Read
+     * [Room.roster] once those have arrived, not on this event.
+     *
+     * **Why an event of its own, and not `Left(self)` then `Joined(self)`** (#3615). On a joiner,
+     * `Left(self)` already means the room is over ([LeaveReason.Superseded] ends it), and a joiner
+     * never lists itself, so it has never emitted `Joined(self)`. Reusing the pair would read as an
+     * ending to every handler written for that meaning. A new type costs an exhaustive `when` a
+     * compile error instead, which is the point: an app whose state rests on membership continuity
+     * is told by its compiler that there is now a case where continuity breaks.
+     */
+    public data class Readmitted(val peerId: PeerId) : MembershipEvent
 
     /**
      * The host's transport link was permanently lost (joiner perspective only).
@@ -130,8 +174,8 @@ public sealed interface MembershipEvent {
      * Treat it as the last word, even though it may not arrive last. An event racing it on another
      * thread can land just after it, so ignore everything that follows: a [Partitioned] or
      * [WindowOpened] would start a countdown no event ends. Stop any countdown already running too,
-     * since no [Recovered] or [Left] will come for it. A [Resumed] never follows it: the host's `Welcome`
-     * that arrives once the host is lost closes nothing and emits nothing.
+     * since no [Recovered] or [Left] will come for it. Neither a [Resumed] nor a [Readmitted] follows
+     * it: the host's `Welcome` that arrives once the host is lost closes nothing and emits nothing.
      *
      * The room then ends itself as [Room.leave] does: [Room.roster] empties and every
      * [Room.incomingFrom] flow completes. The event comes first and the room does not wait for a

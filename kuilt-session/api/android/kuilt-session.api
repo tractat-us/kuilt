@@ -99,6 +99,13 @@ public final class us/tractat/kuilt/session/LeaveReason$Superseded : us/tractat/
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/session/LeaveReason$Unobserved : us/tractat/kuilt/session/LeaveReason {
+	public static final field INSTANCE Lus/tractat/kuilt/session/LeaveReason$Unobserved;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface class us/tractat/kuilt/session/Liveness {
 }
 
@@ -272,6 +279,17 @@ public final class us/tractat/kuilt/session/MembershipEvent$Partitioned : us/tra
 	public final fun getLocalFabric ()Lus/tractat/kuilt/core/FabricAvailability;
 	public final fun getPeerId-PaHlmAU ()Ljava/lang/String;
 	public final fun getReason ()Lus/tractat/kuilt/session/ReconnectReason;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MembershipEvent$Readmitted : us/tractat/kuilt/session/MembershipEvent {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun copy-ngToHgY (Ljava/lang/String;)Lus/tractat/kuilt/session/MembershipEvent$Readmitted;
+	public static synthetic fun copy-ngToHgY$default (Lus/tractat/kuilt/session/MembershipEvent$Readmitted;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/MembershipEvent$Readmitted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPeerId-PaHlmAU ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

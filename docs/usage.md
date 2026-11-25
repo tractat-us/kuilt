@@ -117,7 +117,7 @@ val room: Room = factory.host(Pattern(sessionName = "alice", maxPeers = 4))
 // The roster holds admitted members only — never raw, unidentified peers.
 scope.launch { room.roster.collect { members -> render(members) } }
 
-// Membership transitions: Joined / Left / Partitioned / Recovered / WindowOpened / Resumed / HostLost.
+// Membership transitions: Joined / Left / Partitioned / Recovered / WindowOpened / Resumed / Readmitted / HostLost.
 scope.launch { room.events.collect { event -> handle(event) } }
 
 // Frames from admitted members, tagged with the sender. Single-collection, like Seam.incoming.

@@ -289,6 +289,17 @@ expectation. The plan has been amended (branch `plan/1637-sub-timeout-blip`) to 
 **`Recovered(hostId)`** rather than `Resumed(selfId)` — which keeps Correction 2 true instead of
 making it stale, and names a peer that is actually in the roster.
 
+**Superseded in part, 2026-11-24 (#3615).** The no-op resume, and `Recovered(hostId)` as its closing
+edge, are gone: a joiner's reconnect now says Hello again (#3159 Task 1.7), and the host's `Welcome`
+names the membership it admits (#3215). So a joiner's reconnect closes on its own membership, one of
+two ways: `Resumed(selfId)` when the `Welcome` names the membership it held, the seat came back; and
+`MembershipEvent.Readmitted(selfId)` when it names another, the host had let the seat go and admitted
+it afresh. Never `Recovered(hostId)`, whose meaning is a link that healed inside its window, which a
+returning joiner cannot know until the host answers. A readmitted joiner also rebuilds its roster from
+the host's admission burst. Both edges name *self*, which `roster` does not list, so the level argument
+above stands unchanged: in both arcs the host's `Member.liveness` goes back to `Connected`, and a
+consumer keyed on it needs neither edge.
+
 ## What deliberately does not change
 
 - **`:kuilt-game` — zero edits.** `RoomGameSession.presence` *is* `room.events` and `roster` *is*

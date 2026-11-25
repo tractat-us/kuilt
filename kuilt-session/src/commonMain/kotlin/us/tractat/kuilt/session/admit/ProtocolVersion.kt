@@ -59,7 +59,9 @@ package us.tractat.kuilt.session.admit
  * says Hello again, and its device key proves the seat is its own. The direct Welcome and every
  * Reject carry the nonce of the Hello they answer, so a joiner acts only on an answer to its latest
  * Hello, and the direct Welcome carries the id of the membership it admits, so a returning joiner
- * can tell its own seat from a fresh admission. A v6 joiner reads neither, so it would still take an
+ * can tell its own seat from a fresh admission. The rest of the admission burst, a Welcome per
+ * existing member and the host's intro, carries the same nonce (#3615), so a joiner drops a late
+ * frame of a burst answering an older Hello and rebuilds its roster only on the latest burst. A v6 joiner reads neither, so it would still take an
  * answer to an older Hello as the answer to its latest one; the gate refuses it.
  *
  * **One answer may name no Hello.** A host older than v7 cannot name one, and what it sends a v7
