@@ -406,6 +406,15 @@ public class WarpNode(
     private var ringPeers: Set<PeerId> = setOf(selfId)
 
     /**
+     * How many times [rebuildRingAndClaim] has read the effective roster. Each read takes the next
+     * number in the same critical section, so a higher number is a later read. Guarded by [lock].
+     */
+    private var ringReads: Long = 0L
+
+    /** The read number of the rebuild that published [ring]; 0 for the seeded ring. Guarded by [lock]. */
+    private var publishedRingRead: Long = 0L
+
+    /**
      * **Test-visibility.** Run once by the next [rebuildRingAndClaim], between reading the
      * effective roster and publishing the ring built from it, then cleared. Guarded by [lock].
      * Null in production.
@@ -1090,19 +1099,37 @@ public class WarpNode(
      * Recomputes the effective ring from `rosterPeers - partitionedPeers` and re-evaluates
      * task ownership. Tasks whose former owner is now absent or partitioned re-home to
      * their new ring successor.
+     *
+     * The roster collector and every detector collector call this from their own coroutines, so
+     * on a multi-threaded dispatcher two rebuilds can overlap: one stalls between its read and its
+     * publish while a later one runs to the end (#3680). Each read is numbered in the section that
+     * takes it, and a publish lands only if no later read has published already, so an older ring
+     * never overwrites a newer one. Every write to `rosterPeers` and `partitionedPeers` is made
+     * under [lock] and followed by a rebuild, so the latest read has seen them all.
+     *
+     * The claims run whether or not the publish landed. They read [ring] under [lock], never
+     * `newRing`, so a dropped rebuild's claims see the newer ring: a redundant pass, not a stale one.
      */
     private fun rebuildRingAndClaim() {
-        val (effectiveRoster, park) = lock.withLock {
+        val (read, effectiveRoster, park) = lock.withLock {
             val park = beforeRingPublish
             beforeRingPublish = null
-            (rosterPeers - partitionedPeers) to park
+            Triple(++ringReads, rosterPeers - partitionedPeers, park)
         }
         val newRing = RosterSnapshot(effectiveRoster).toTaskRing()
         park?.invoke()
-        lock.withLock {
-            ring = newRing
-            ringPeers = effectiveRoster
-            lastRingChangeAt = clock()
+        val newer = lock.withLock {
+            val newer = publishedRingRead
+            if (read > newer) {
+                publishedRingRead = read
+                ring = newRing
+                ringPeers = effectiveRoster
+                lastRingChangeAt = clock()
+            }
+            newer
+        }
+        if (read < newer) {
+            logger.debug { "WarpNode($selfId): dropping ring rebuild $read; rebuild $newer read the roster later" }
         }
         claimOwned(queueQuilter.state.value.keys, CoordinationKind.Free)
         claimOwned(coordQueueQuilter.state.value.elements, CoordinationKind.Coordinated)
