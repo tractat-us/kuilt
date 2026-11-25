@@ -46,6 +46,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.Quilter")
  * How many of its own recent state roots a [Quilter] keeps, so that a dominated
  * [QuiltMessage.VectorDigest] carrying one of them ends the run toward
  * [QuilterConfig.dominatedDigestBackstop] (#3629).
+ *
+ * A root is recorded whenever one is computed, at least once per digest sent or received, so with
+ * a 1 s tick the ring spans the last 16 states that lived through a digest: several times the
+ * lag of any link a whole state should cross, against a peer that is one lag behind. Each
+ * dominated digest compares against all of them, 16 longs, cheaper than the root it is checked
+ * beside. Larger buys reach only for a peer that has stalled, which is the case the backstop is for.
  */
 internal const val RECENT_ROOTS: Int = 16
 
@@ -135,7 +141,12 @@ public data class QuilterConfig(
      * `initial` states differ in a way no vector records, and then the one whose vector dominates
      * would never ask. So once a run of such digests from one peer has lasted this long, the next
      * one asks for the whole state anyway, through the same bounds as any other request. A matched
-     * digest, a request sent, or a digest that shows something we lack ends the run. `0` asks
+     * digest, a request sent, or a digest that shows something we lack ends the run. So does a
+     * digest whose root is one of this replica's own last few roots (#3629): the sender then holds
+     * a state we once held, which has nothing we lack, so a lagging reader of a writer is not
+     * asked every interval. A sender whose root matches none of them still reaches the backstop.
+     * Only roots this replica computed, for a digest it sent or received, are remembered, and
+     * under churn from more than one writer the sender's state is rarely one we held. `0` asks
      * every time, as a [QuiltMessage.RootDigest] mismatch does.
      */
     @IntroducedAt("0.7.7") val dominatedDigestBackstop: Duration = 30.seconds,
@@ -482,6 +493,16 @@ public class Quilter<S : Quilted<S>>(
      * which is the old cost and never a wrong root. Guarded by [lock], like [stateRoot] itself.
      */
     private var rootCache: Pair<S, Long>? = null
+
+    /**
+     * The last [RECENT_ROOTS] distinct roots [stateRoot] computed, oldest first (#3629). A root is
+     * a hash of the state, so a peer's digest carrying one of these says the peer holds a state
+     * this replica once held, and has nothing we lack. [onVectorDigest] ends a dominated run on
+     * one. Only computed roots are kept, which means a state held between two digests, sent or
+     * received, is never in it; computing every state's root would encode the whole state on every
+     * write, the cost [rootCache] exists to avoid. Under [lock].
+     */
+    private val recentRoots: ArrayDeque<Long> = ArrayDeque(RECENT_ROOTS)
 
     /**
      * The one [QuiltMessage.FullStateRequest] this replica has in flight, or `null` when it has
@@ -1061,6 +1082,10 @@ public class Quilter<S : Quilted<S>>(
             ),
         )
         rootCache = state to root
+        if (root !in recentRoots) {
+            if (recentRoots.size == RECENT_ROOTS) recentRoots.removeFirst()
+            recentRoots.addLast(root)
+        }
         return root
     }
 
@@ -1518,7 +1543,8 @@ public class Quilter<S : Quilted<S>>(
      *   component is acked: a third party's ack is for that third party to collect.
      * - **The sender has seen no more than we have, of anyone.** Its digest is stale, or it is
      *   behind and will ask us. Nothing is asked for, until the run outlasts
-     *   [QuilterConfig.dominatedDigestBackstop].
+     *   [QuilterConfig.dominatedDigestBackstop]. A digest whose root is one of our
+     *   [recentRoots] ends the run: the sender holds a state we once held (#3629).
      * - **The sender has deltas of its own we have not received.** They are asked for by
      *   [QuiltMessage.Resend], which the sender answers from its delta buffer, and with a whole
      *   state only once it has GC'd the range.
@@ -1557,6 +1583,11 @@ public class Quilter<S : Quilted<S>>(
         val ours = seenVector()
         when {
             ours.dominates(seen) && ours != seen -> {
+                if (msg.root in recentRoots) {
+                    // A state we once held: nothing we lack, so the run ends (#3629).
+                    dominatedSince.remove(sender)
+                    return
+                }
                 val since = dominatedSince.getOrPut(sender) { clock.now() }
                 if (clock.now() - since < config.dominatedDigestBackstop.inWholeMilliseconds) return
                 requestFullStateIfAllowed(sender, msg.sender, firstOnThisLink)
