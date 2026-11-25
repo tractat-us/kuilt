@@ -325,12 +325,15 @@ public sealed interface AdmitMessage {
      * Farewell **directly** to the superseded member, which then ends its room and never says Hello
      * again. `null` on every other Farewell.
      *
-     * **It is also the host's answer to a Hello from a superseded id** (v7), while the successor is
-     * seated: a superseded process whose link was dead when the direct Farewell went says Hello again,
-     * and hears this Farewell instead of a challenge. It names no Hello, unlike a [Reject]. A joiner
-     * honours it only from its identified host, as every Farewell, so a room that was admitted ends;
-     * a first-time joiner reusing that id has no host yet, drops it, and its join times out. #3662 is
-     * weighing whether to answer that Hello with a `Reject` naming it instead.
+     * **It is also the host's answer to a Hello from a superseded id under the key that was
+     * superseded** (v7), while the successor is seated: a superseded process whose link was dead when
+     * the direct Farewell went says Hello again, and hears this Farewell instead of a challenge. The
+     * same id under another key is challenged as any Hello is, and so is one the host has forgotten:
+     * it remembers at most 64 superseded ids, oldest first out. The Farewell names no Hello, unlike a
+     * [Reject]. A joiner honours it only from its identified host, as every Farewell, so a room that
+     * was admitted ends; a new process of the same device reusing that id has no host yet, drops it,
+     * and its join times out. #3662 is weighing whether to answer that Hello with a `Reject` naming it
+     * instead.
      *
      * Wire-compatible: an older build that doesn't know this message drops it as
      * malformed and degrades to its own heartbeat-window eviction (the prior behavior).
