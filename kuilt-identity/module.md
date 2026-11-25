@@ -7,7 +7,7 @@ a stranger. This module gives each device one key of its own, kept on that devic
 public name for it. When the device returns it proves it still holds the key, and the room can hand
 back its seat without asking anyone to do anything.
 
-## What is here so far
+## What is here
 
 The name. `DidKey` is the public name of one device's key, a string another device can store,
 compare, and check a signature against. Read one from outside with `DidKey.parse`, which checks
@@ -55,7 +55,10 @@ never revoked anyone, so `open` cannot tell and opens an empty list. A store tha
 damaged is different: `open` throws an `IllegalStateException` naming the store key, rather than
 quietly starting from nothing, and leaves the bytes where they are.
 
-The statements a room's admission exchange is made of arrive in the pieces that follow.
+A room puts these together for you. In `:kuilt-session`, a host gives each device it lets in a
+pass, renews it while the device stays connected, and lets a device whose seat is gone back in on a
+good pass without asking the app. A device whose pass ran out, or whose key the host revoked, is
+decided by the app's admission policy like any newcomer.
 
 The store. A device is recognised only if it comes back with the same key, so the key has to
 outlive the app. `DeviceKeyStore` is where it lives: the first `deviceKey()` call makes it and every
