@@ -40,9 +40,11 @@ The rest of the surface, by what you would ask it:
 
 - **Who goes next, and why not me?** `previewPicks` lists the next picks without
   making them, from a count per leaf or from each leaf's queue of job estimates;
-  `explain` returns a `WaitExplanation`; `entitlement` is a group's
-  fair share as an exact `Rational`. A reader holding only a stored snapshot
-  asks the same three of `LocalHeddleSnapshot.view(policy)` (from `persist()`), with no engine.
+  `explain` returns a `WaitExplanation`; `entitlement` is a leaf's
+  fair share of the slots as an exact `Rational`; `shareLine(waiting)` reads the
+  tree once and its `ShareLine.share` gives any group's share of the pool, the
+  root and every group above a lane included. A reader holding only a stored
+  snapshot asks the same four of `LocalHeddleSnapshot.view(policy)` (from `persist()`), with no engine.
 - **No more than N of these at once.** A `maxConcurrent` on a group, a lane or a
   group's template is a ceiling: the most leases open beneath it at once, `0` to
   pause it. A pick skips a leaf beneath a node at its ceiling for a sibling,

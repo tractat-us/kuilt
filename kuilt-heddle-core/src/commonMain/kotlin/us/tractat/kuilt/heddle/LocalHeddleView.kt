@@ -4,8 +4,9 @@ import us.tractat.kuilt.heddle.LocalHeddle.Companion.MAX_RESERVATION
 
 /**
  * The questions you can ask a [LocalHeddle] without changing it, asked of a saved state instead of
- * a running engine: who goes next ([previewPicks]), why a leaf is waiting ([explain]), and what
- * share it is owed ([entitlement]). An admin screen that holds only the last stored snapshot gets
+ * a running engine: who goes next ([previewPicks]), why a leaf is waiting ([explain]), what share
+ * a leaf is owed ([entitlement]), and what share every group is owed ([shareLine]). An admin
+ * screen that holds only the last stored snapshot gets
  * the same answers the engine that took it would give, with no engine to start and nothing to move.
  *
  * Get one from a snapshot with [LocalHeddleSnapshot.view]. The engine answers these questions
@@ -14,8 +15,9 @@ import us.tractat.kuilt.heddle.LocalHeddle.Companion.MAX_RESERVATION
  *
  * A view is a value. It reads the snapshot's books, wake memory, capacity and last applied topology,
  * with a count of the leases open beneath each node that has a ceiling
- * ([Topology.Node.maxConcurrent]). Each question plays its picks forward on a throwaway engine built
- * from them, so asking twice gives the same answer twice. It needs the policy too, which a snapshot does not keep: pass the one
+ * ([Topology.Node.maxConcurrent]). Each question that picks plays its picks forward on a throwaway
+ * engine built from them, so asking twice gives the same answer twice; the share questions read
+ * the books and pick nothing. It needs the policy too, which a snapshot does not keep: pass the one
  * the engine ran with.
  *
  * A view from a snapshot shares nothing with any engine, and each question only reads it, so any
