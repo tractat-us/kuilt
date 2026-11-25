@@ -970,7 +970,9 @@ public abstract class RoomConformanceSuite {
                 // decided by rules 6–7 again: this time with the pass the first two were given, which
                 // they kept in the store they share with the host. A return on it is not vetted (#3222).
                 val vettedWithTwoTabs = vetting.keys()
+                // One after the other, so the host's record of the key's last departure is the first tab's.
                 tab2.leave()
+                host.awaitRoster("the second tab has left") { roster -> roster.none { it.id == tab2.selfId } }
                 tab1.leave()
                 host.awaitRoster("both tabs have left") { roster -> roster.none { it.id in tabs } }
                 val tab3 = app.factory(h.hostTab()).join(h.joinTag).also { thirdTab = it }
@@ -983,7 +985,7 @@ public abstract class RoomConformanceSuite {
                 assertAll(
                     { assertEquals(vettedWithTwoTabs, vetting.keys(), "the third tab comes back on its pass: the policy is not asked") },
                     { assertNotNull(hostMark, "the host marks it as the device returning") },
-                    { assertTrue(hostMark?.previousId == null || hostMark.previousId in tabs, "naming a tab's old id, if any: ${hostMark?.previousId}") },
+                    { assertEquals(tab1.selfId, hostMark?.previousId, "naming the id the key left last: the host has not restarted, so it remembers") },
                     { assertEquals(hostMark, bystanderMark, "a member present for it hears the same mark: $bystanderJoins") },
                     { assertEquals(hostKey, host.roster.value.singleOrNull { it.id == tab3.selfId }?.key, "rig: the third tab proved the host's own key") },
                 )

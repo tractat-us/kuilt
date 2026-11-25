@@ -217,6 +217,7 @@ class ReturningAdmissionTest {
 
         val proofsBefore = board.sent(from = bob, to = KEY_SEAT_HOST).filterIsInstance<AdmitMessage.Proof>().size
         val hostLog = EventLog(host, backgroundScope)
+        val mark = hostLog.mark()
         val secondBob = boardRoom(board, bob, bobStore, SessionRole.Joiner)
         testScheduler.runCurrent()
         val proof = board.sent(from = bob, to = KEY_SEAT_HOST).filterIsInstance<AdmitMessage.Proof>().drop(proofsBefore).single()
@@ -236,7 +237,7 @@ class ReturningAdmissionTest {
             {
                 assertEquals(
                     listOf(ReturningMark(previousId = bob)),
-                    hostLog.since(0).joins().filter { it.member.id == bob }.map { it.returning },
+                    hostLog.since(mark).joins().filter { it.member.id == bob }.map { it.returning },
                     "and is marked returning",
                 )
             },
@@ -301,8 +302,8 @@ class ReturningAdmissionTest {
         assertAll(
             { assertEquals(1, checksFailed, "rig: the pass's check failed once") },
             { assertEquals(listOf(RejectCode.HostFailed), refused.map { it.code }, "the host says it failed") },
-            { assertTrue(refused.single().code.retryable, "retryably") },
-            { assertTrue(refused.single().answers?.contentEquals(host.hello("bob", bobKey.id, 2).joinerNonce) == true, "naming the Hello") },
+            { assertTrue(refused.singleOrNull()?.code?.retryable == true, "retryably") },
+            { assertTrue(refused.singleOrNull()?.answers?.contentEquals(host.hello("bob", bobKey.id, 2).joinerNonce) == true, "naming the Hello") },
             { assertEquals(2, vettedWithNoPass, "the failed check asked nobody: only the later pass-less Hello was vetted") },
         )
         host.room.leave()

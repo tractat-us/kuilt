@@ -218,9 +218,10 @@ internal class EventTape(room: Room, scope: CoroutineScope) {
  * [AdmissionPolicy.open] does, and records the key of every newcomer it is asked about, oldest first.
  *
  * The friction bar is also a count of vetting. A restore — the same seat back, under the same id or a
- * new one — never asks the policy; a release of a seat to a different key, a seat gone, and an
- * additional seat for a second live process are new memberships, which it asks about once each (plan
- * Amendments C, H and J). The rows read [keys] before and after their return to say which happened.
+ * new one — never asks the policy, and nor does a return on a good pass once the seat is gone (#3222).
+ * A release of a seat to a different key, a seat gone with no good pass, and an additional seat for a
+ * second live process are new memberships, which it asks about once each (plan Amendments C, H and
+ * J). The rows read [keys] before and after their return to say which happened.
  */
 internal class VettingCount {
     private val lock = reentrantLock()

@@ -56,6 +56,7 @@ import us.tractat.kuilt.identity.AdmissionProof
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
+import us.tractat.kuilt.identity.GrantScope
 import us.tractat.kuilt.identity.GrantTrust
 import us.tractat.kuilt.identity.GrantVerdict
 import us.tractat.kuilt.session.admit.AdmissionDecision
@@ -459,9 +460,10 @@ private const val MEMBERSHIP_EVENT_REPLAY = 64
 private const val MEMBERSHIP_ID_BYTES = 16
 
 /**
- * How many passes a host checks from one Proof (#3222). Each costs a signature check, and anyone who
- * is sent a challenge may send a Proof. An honest device presents at most two: its pass for this room
- * and its pass for any room of this host.
+ * How many signature checks a host makes on the passes of one Proof (#3222), once the passes whose
+ * fields already rule them out are set aside. Anyone who is sent a challenge may send a Proof. An honest
+ * device presents two at most — its pass for this room and its pass for any room of this host — so
+ * the cap is never reached by one.
  */
 private const val MAX_PRESENTED_PASSES = 4
 
@@ -2886,8 +2888,8 @@ internal class SeamRoom(
         class Issued(val grant: Grant) : PassIssue
 
         /**
-         * None is owed, now or later: the membership has no terms (no policy was asked about it), or
-         * its device was revoked after it was admitted ([GrantIssuer.mayIssue], Decided 14).
+         * None is owed, now or later: the membership's device was revoked after it was admitted
+         * ([GrantIssuer.mayIssue], Decided 14).
          */
         data object Withheld : PassIssue
 
@@ -3084,54 +3086,93 @@ internal class SeamRoom(
             }
             return
         }
-        val pass = presentedPass(sender, msg.grants, pending.keyed.key)
+        val pass = when (val presented = presentedPass(sender, msg.grants, pending.keyed.key)) {
+            is PresentedPass.Good -> presented.grant
+            PresentedPass.None -> null
+            PresentedPass.CheckFailed -> {
+                if (pendingChallenges.retire(sender, pending.generation)) {
+                    val reject = AdmitMessage.Reject("host-failed: the host could not check a pass", RejectCode.HostFailed, pending.keyed.joinerNonce)
+                    runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
+                }
+                return
+            }
+        }
         seatProvenJoiner(sender, pending.keyed, pending.generation, pending.deadline, pass)
+    }
+
+    /** What [presentedPass] made of the passes a Proof presented. */
+    private sealed interface PresentedPass {
+        /** [grant] is good here and now: the device may come back on it unvetted. */
+        class Good(val grant: Grant) : PresentedPass
+
+        /** None is good, or none was presented: the device is decided as if it had none. */
+        data object None : PresentedPass
+
+        /** A check could not run on this platform: the host failed, and says so. */
+        data object CheckFailed : PresentedPass
     }
 
     /**
      * **Host only.** The pass [subject]'s joiner presented in its Proof that lets it back in without
-     * vetting, or null (#3222). Each is checked with [grantTrust] at the moment the Proof is: issued
-     * and signed by this host, for [subject] — the key the Proof just proved — for this room, not
-     * revoked, not dated ahead, not run out. Anything else is ignored, and the joiner decided as if it
-     * had presented nothing. Of several good ones, the one on the most generous terms
+     * vetting (#3222). Good means what [grantTrust] says at the moment the Proof is checked: issued and
+     * signed by this host, for [subject] — the key the Proof just proved — for this room, not revoked,
+     * not dated ahead, not run out. Of several good ones, the one on the most generous terms
      * ([GrantIssuer.mostGenerous]), since its terms are the ones carried forward.
      *
-     * At most [MAX_PRESENTED_PASSES] are checked, since each costs a signature check and anyone who
-     * gets a challenge can send a Proof. A device keeps one pass per issuer and scope, so an honest
-     * one presents two at most here: one for this room and one for any room of this host.
+     * **The cheap fields first.** A pass that does not decode, or whose issuer, subject, scope or end
+     * already rules it out, is set aside before any signature is checked. Only what is left costs a
+     * signature check, and at most [MAX_PRESENTED_PASSES] are made, since anyone sent a challenge may
+     * send a Proof. An honest joiner presents two at most ([passesFrom]), and the cap never reaches
+     * either; a Proof crowded with passes for other rooms still has its good pass found.
      *
-     * A check that throws — the platform's provider fails — counts the pass as not good: the joiner
-     * is vetted rather than refused, which is the safe direction.
+     * **A check that throws is the host's failure** ([PresentedPass.CheckFailed]): the platform's
+     * provider could not run, which says nothing of the pass. The caller refuses the joiner with a
+     * retryable `HostFailed`, as it does a proof it cannot check, rather than send a device inside its
+     * pass to the policy. Every other defect is a verdict, and the pass is ignored.
      */
-    private suspend fun presentedPass(sender: PeerId, grants: List<ByteArray>, subject: DidKey): Grant? {
-        if (grants.isEmpty()) return null
+    private suspend fun presentedPass(sender: PeerId, grants: List<ByteArray>, subject: DidKey): PresentedPass {
+        if (grants.isEmpty()) return PresentedPass.None
         val trust = checkNotNull(grantTrust) { "only a host checks a presented pass" }
         val now = clock().toEpochMilliseconds()
         val roomId = signedRoomId()
-        if (grants.size > MAX_PRESENTED_PASSES) {
-            logger.info { "room.pass.too-many peer=${sender.value} presented=${grants.size}: checking the first $MAX_PRESENTED_PASSES" }
+        val candidates = grants.mapNotNull(Grant::decode).filter { it.mayApply(trust.hostKey, subject, roomId, now) }
+        if (candidates.size < grants.size) {
+            logger.info { "room.pass.set-aside peer=${sender.value} presented=${grants.size} candidates=${candidates.size}" }
+        }
+        if (candidates.size > MAX_PRESENTED_PASSES) {
+            logger.info { "room.pass.too-many peer=${sender.value} candidates=${candidates.size}: checking the first $MAX_PRESENTED_PASSES" }
         }
         var chosen: Grant? = null
-        for (wire in grants.take(MAX_PRESENTED_PASSES)) {
-            val grant = Grant.decode(wire)
-            val verdict = if (grant == null) {
-                null
-            } else {
-                try {
-                    trust.verify(grant, subject, roomId, now)
-                } catch (failure: Throwable) {
-                    currentCoroutineContext().ensureActive()
-                    logger.warn(failure) { "room.pass.check-failed peer=${sender.value}" }
-                    null
-                }
+        for (grant in candidates.take(MAX_PRESENTED_PASSES)) {
+            val verdict = try {
+                trust.verify(grant, subject, roomId, now)
+            } catch (failure: Throwable) {
+                currentCoroutineContext().ensureActive()
+                logger.warn(failure) { "room.pass.check-failed peer=${sender.value}" }
+                return PresentedPass.CheckFailed
             }
-            if (grant != null && verdict == GrantVerdict.Valid) {
+            if (verdict == GrantVerdict.Valid) {
                 chosen = chosen?.let { GrantIssuer.mostGenerous(it, grant) } ?: grant
             } else {
-                logger.info { "room.pass.ignored peer=${sender.value} verdict=${verdict ?: "undecodable or unchecked"}" }
+                logger.info { "room.pass.ignored peer=${sender.value} verdict=$verdict" }
             }
         }
-        return chosen
+        return chosen?.let(PresentedPass::Good) ?: PresentedPass.None
+    }
+
+    /**
+     * Whether this pass could be good here at all, read from its fields alone, with no signature
+     * checked: [hostKey] issued it, to [subject], for [roomId] or every room of [hostKey]'s, and it has
+     * not run out at [now]. [GrantTrust.verify] checks all of it again; this only spares a signature
+     * check on a pass that cannot apply.
+     */
+    private fun Grant.mayApply(hostKey: DidKey, subject: DidKey, roomId: String, now: Long): Boolean =
+        issuer == hostKey && this.subject == subject && coversRoom(roomId) && (notAfter == Grant.NO_EXPIRY || now < notAfter)
+
+    /** Whether this pass's scope covers [roomId]: a pass for that room, or for every room of its issuer. */
+    private fun Grant.coversRoom(roomId: String): Boolean = when (val scope = scope) {
+        is GrantScope.Room -> scope.roomId == roomId
+        GrantScope.AnyRoomOfIssuer -> true
     }
 
     /**
@@ -3156,22 +3197,24 @@ internal class SeamRoom(
             return
         }
         lock.withLock { verifiedHostKeys[sender] = answer.hostKey }
-        val passes = passesFrom(answer.hostKey)
+        val passes = passesFrom(answer.hostKey, answer.proof.roomId)
         runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(AdmitMessage.Proof(answer.proof.wire, passes))) }
             .onFailure { logger.debug { "room.proof.send-failed to=${sender.value}: $it" } }
     }
 
     /**
-     * **Joiner only.** The passes this device holds from [issuer] (#3222): what its Proof presents to
-     * the host whose challenge [issuer] signed. A pass from any other key is good with no host but the
-     * one that issued it (Decided 11), so it is not shown to this one. Which of them is good here and
-     * now is the host's to decide.
+     * **Joiner only.** The passes this device holds that could let it into [roomId], the room the
+     * challenge from [issuer] named (#3222): what its Proof presents. Only [issuer]'s, since a pass is
+     * good with no host but the one that issued it (Decided 11), and only those for [roomId] or for
+     * every room of [issuer]'s. The store keeps one per issuer and scope (Decided 21), so that is two
+     * at most, however many rooms this device has played with the host. Whether either is good here
+     * and now — revoked, run out — is the host's to decide.
      *
      * A store that cannot be read presents nothing: the device is then vetted as a newcomer, not left
      * unanswered, and the failure is logged.
      */
-    private suspend fun passesFrom(issuer: DidKey): List<ByteArray> = try {
-        device.store.grants().filter { it.issuer == issuer }.map { it.wire }
+    private suspend fun passesFrom(issuer: DidKey, roomId: String): List<ByteArray> = try {
+        device.store.grants().filter { it.issuer == issuer && it.coversRoom(roomId) }.map { it.wire }
     } catch (failure: Throwable) {
         currentCoroutineContext().ensureActive()
         logger.warn(failure) { "room.pass.read-failed" }

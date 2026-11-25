@@ -188,8 +188,8 @@ public sealed interface AdmitMessage {
      * [grant] — the wire form of a signed [us.tractat.kuilt.identity.Grant] the host issued the
      *   member this Welcome admits (v8, #3221), on the direct Welcome only: its pass back in, which the
      *   joiner keeps in its [us.tractat.kuilt.identity.DeviceKeyStore]. The host renews it while the
-     *   member stays connected ([GrantRenewal]). `null` when the host issued none: its policy gave the
-     *   membership no terms, or it could not sign. Opaque here, like [Challenge.statement]: a grant is
+     *   member stays connected ([GrantRenewal]). `null` when the host issued none: it withheld the
+     *   pass from a device revoked since this membership was admitted, or it could not sign. Opaque here, like [Challenge.statement]: a grant is
      *   checked over exactly the bytes its issuer signed. Compared by content.
      * [previousPeerId] — on a Welcome marked [ReturnKind.Returning] (v9, #3222), the direct one and its
      *   roster copy: the peer id this device last held a seat under in this room, while the host
@@ -214,6 +214,9 @@ public sealed interface AdmitMessage {
         init {
             require(answers == null || answers.size == Hello.JOINER_NONCE_SIZE) {
                 "a Welcome answers a ${Hello.JOINER_NONCE_SIZE}-byte joiner nonce, not ${answers?.size} bytes"
+            }
+            require(previousPeerId == null || returnKind == ReturnKind.Returning) {
+                "only a Welcome marking a device returning names a previous id, not one marked $returnKind"
             }
         }
 
@@ -467,10 +470,12 @@ public sealed interface AdmitMessage {
      *
      * [statement] is the wire form of a signed `us.tractat.kuilt.identity.AdmissionProof`, carried
      * opaque like [Challenge.statement]. [grants] are the wire forms of the grants this device holds
-     * from the challenging host, each a signed `us.tractat.kuilt.identity.Grant`; empty when it holds
-     * none. Sent since v9 (#3222): a host that finds one good, and holds no seat for the device, lets
-     * it back in without asking its admission policy. A host checks at most the first few. Compared by
-     * content, element by element.
+     * from the challenging host for the room the challenge named or for every room of that host's,
+     * each a signed `us.tractat.kuilt.identity.Grant`: two at most, and empty when it holds none. Sent
+     * since v9 (#3222): a host that finds one good, and holds no seat for the device, lets it back in
+     * without asking its admission policy. A host sets aside a grant whose fields rule it out before
+     * checking any signature, and checks a few signatures at most. Compared by content, element by
+     * element.
      */
     @Serializable
     @SerialName("proof")

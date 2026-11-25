@@ -96,8 +96,8 @@ package us.tractat.kuilt.session.admit
  *
  * ## Version 9 — a device inside its pass comes back unvetted (#3222)
  *
- * Version 9 reads the pass. A joiner puts the passes it holds from the challenging host in its
- * [AdmitMessage.Proof], and a host that finds one good lets a device whose seat is gone back in
+ * Version 9 reads the pass. A joiner puts in its [AdmitMessage.Proof] the passes it holds from the
+ * challenging host that are good in the room the challenge named, and a host that finds one good lets a device whose seat is gone back in
  * without asking its admission policy. The direct Welcome and its roster copy say so
  * ([ReturnKind.Returning]) and name the id the device last held ([AdmitMessage.Welcome.previousPeerId]),
  * so every member present hears the same device return. A v8 joiner sends no pass, and is vetted on
