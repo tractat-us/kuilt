@@ -23,6 +23,7 @@ import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 
 /**
  * Whether a harness can make a device drop off and come back — and, when it cannot, **where that is
@@ -220,7 +221,8 @@ internal class EventTape(room: Room, scope: CoroutineScope) {
 
 /**
  * The host's admission policy for a return row (#3220): it admits everyone, as
- * [AdmissionPolicy.open] does, and records the key of every newcomer it is asked about, oldest first.
+ * [AdmissionPolicy.open] does with a pass good for [readmitFor], and records the key of every newcomer
+ * it is asked about, oldest first.
  *
  * The friction bar is also a count of vetting. A restore — the same seat back, under the same id or a
  * new one — never asks the policy, and nor does a return on a good pass once the seat is gone (#3222).
@@ -228,10 +230,13 @@ internal class EventTape(room: Room, scope: CoroutineScope) {
  * second live process are new memberships, which it asks about once each (plan Amendments C, H and
  * J). The rows read [keys] before and after their return to say which happened.
  */
-internal class VettingCount {
+internal class VettingCount(readmitFor: Duration = 1.hours) {
     private val lock = reentrantLock()
     private val asked = mutableListOf<DidKey>()
-    private val open = AdmissionPolicy.open()
+    private val open = AdmissionPolicy.open(readmitFor)
+
+    /** The host's revocations, which a row revokes a device in. Its own per row: no row shares another's. */
+    val revocations: RevocationList = RevocationList.inMemory()
 
     /** What a row hosts its room with. */
     val admission: HostAdmission = HostAdmission(
@@ -239,7 +244,7 @@ internal class VettingCount {
             lock.withLock { asked += request.key }
             open.decide(request)
         },
-        revocations = RevocationList.inMemory(),
+        revocations = revocations,
     )
 
     /** The key of every newcomer the policy was asked about so far, oldest first. */
