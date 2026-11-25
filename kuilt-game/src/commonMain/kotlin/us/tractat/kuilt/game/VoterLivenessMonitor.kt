@@ -214,7 +214,9 @@ internal class VoterLivenessMonitor(
      *
      * A vacate counts only while the board still shows the voter vacating, read in the same section
      * (#3684). One he has taken back is dropped, and if the watcher stopped his detector when it saw
-     * the vacate, a new one watches him, so a seat that stays taken is never left unwatched.
+     * the vacate, a new one watches him. That covers only a vacate this loop reads as leader: on a
+     * host that is not leading, the role check skips the vacate first, and a detector the watcher
+     * stopped stays registered and cancelled, so that voter's seat is left unwatched.
      */
     private suspend fun evictAndReopenAdmission() {
         // Peers that have been evicted from the voter set — excluded from re-admission so a gracefully
@@ -240,8 +242,9 @@ internal class VoterLivenessMonitor(
                 if (current) {
                     stopped = detectorJobs.remove(lostId)
                 } else if (request is EvictionRequest.Vacated) {
-                    // Cancelled means the watcher stopped it for this vacate; a detector that lost him
-                    // completes instead, and its own loss is on the way.
+                    // Cancelled means the watcher stopped it for this vacate. A detector that is not
+                    // cancelled either lost him, and its own loss is queued, or is the replacement
+                    // detector #3139 hands to the wrong voter; either way it is left as it is.
                     unwatched = detectorJobs[lostId]?.isCancelled == true
                 }
                 current

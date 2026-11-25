@@ -112,14 +112,16 @@ class StaleDetectorEvictionTest {
 
             t.monitor.requestEvictionForTest(EvictionRequest.Vacated(t.xavier))
             val freed = withTimeoutOrNull(t.liveness.reconnectWindow) { left.await() } != null
-            val freedAfterMs = testScheduler.currentTime - leftAt
+            // Measured only when freed: the bound above caps the clock, so an unfreed seat would pass.
+            val freedAfterMs = if (freed) testScheduler.currentTime - leftAt else null
+            val lossWindowMs = (t.liveness.timeout + t.liveness.reconnectWindow).inWholeMilliseconds
 
             assertAll(
                 { assertTrue(freed, "a vacate frees the seat inside the reconnect window") },
                 {
                     assertTrue(
-                        freedAfterMs < (t.liveness.timeout + t.liveness.reconnectWindow).inWholeMilliseconds,
-                        "and before a loss could have freed it: ${freedAfterMs}ms after he left",
+                        freedAfterMs != null && freedAfterMs < lossWindowMs,
+                        "and before a loss could have freed it: freed ${freedAfterMs}ms after he left",
                     )
                 },
                 { assertTrue(watching.isCancelled, "and stops the detector that watched him") },
