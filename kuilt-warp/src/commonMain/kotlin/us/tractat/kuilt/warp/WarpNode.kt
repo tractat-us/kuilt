@@ -402,6 +402,16 @@ public class WarpNode(
     /** Current consistent-hash ring, rebuilt whenever the effective roster changes. */
     private var ring: TaskRing = TaskRing(setOf(selfId))
 
+    /** The effective roster [ring] was built from. Guarded by [lock]. */
+    private var ringPeers: Set<PeerId> = setOf(selfId)
+
+    /**
+     * **Test-visibility.** Run once by the next [rebuildRingAndClaim], between reading the
+     * effective roster and publishing the ring built from it, then cleared. Guarded by [lock].
+     * Null in production.
+     */
+    private var beforeRingPublish: (() -> Unit)? = null
+
     /** Wall-clock instant of the last effective-ring change. Guarded by [lock]. */
     private var lastRingChangeAt: Instant = Instant.fromEpochMilliseconds(0L)
 
@@ -916,6 +926,23 @@ public class WarpNode(
     }
 
     /**
+     * **Test-visibility.** The effective roster the published ring was built from: the peers that
+     * own work on this node. [eligiblePeers] reads `rosterPeers - partitionedPeers` directly, so it
+     * cannot see a ring that disagrees with them (#3680).
+     */
+    internal fun ringPeersForTest(): Set<PeerId> = lock.withLock { ringPeers }
+
+    /**
+     * **Test-visibility.** Park the next ring rebuild in [hook] after it has read the effective
+     * roster and before it publishes the ring built from it (#3680). A test drives a second rebuild
+     * from inside [hook] to stand in for the interleaving no single-threaded test reaches: two
+     * rebuilds on two threads, the older read publishing last. One shot; the rebuild clears it.
+     */
+    internal fun parkNextRingRebuildForTest(hook: () -> Unit) {
+        lock.withLock { beforeRingPublish = hook }
+    }
+
+    /**
      * Close this node's Quilter connections and stop all detectors. Idempotent.
      */
     public fun close() {
@@ -1065,10 +1092,16 @@ public class WarpNode(
      * their new ring successor.
      */
     private fun rebuildRingAndClaim() {
-        val effectiveRoster = lock.withLock { rosterPeers - partitionedPeers }
+        val (effectiveRoster, park) = lock.withLock {
+            val park = beforeRingPublish
+            beforeRingPublish = null
+            (rosterPeers - partitionedPeers) to park
+        }
         val newRing = RosterSnapshot(effectiveRoster).toTaskRing()
+        park?.invoke()
         lock.withLock {
             ring = newRing
+            ringPeers = effectiveRoster
             lastRingChangeAt = clock()
         }
         claimOwned(queueQuilter.state.value.keys, CoordinationKind.Free)
