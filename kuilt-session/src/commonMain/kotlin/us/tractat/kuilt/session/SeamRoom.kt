@@ -71,6 +71,7 @@ import us.tractat.kuilt.session.admit.SeatDecision
 import us.tractat.kuilt.session.admit.SeatLiveness
 import us.tractat.kuilt.session.admit.SupersededIds
 import us.tractat.kuilt.session.admit.decideSeat
+import us.tractat.kuilt.session.admit.newcomerRequest
 import us.tractat.kuilt.session.election.ElectionLobby
 import us.tractat.kuilt.session.election.LobbyMessage
 import us.tractat.kuilt.session.election.SeamElectionLobby
@@ -612,6 +613,21 @@ private class DetachedMember(private val inbox: MemberInbox?) {
 }
 
 /**
+ * One membership a host admitted (#3215, #3220).
+ *
+ * - [id] is opaque, sent on the member's direct `Welcome`; a restore keeps it and every other seating
+ *   mints a new one.
+ * - [admittedAtMs] is when the host admitted it, in epoch milliseconds: what a revocation's cutoff is
+ *   compared with, so a device revoked after this instant gets no held-seat restore (Decided 14). A
+ *   takeover under a new id inherits it, as it inherits the seat, so a takeover cannot launder a
+ *   revocation.
+ * - [terms] are the ones the host's policy admitted it on, kept for the pass 2.5 issues it. Null when
+ *   no policy was asked: a device let back in on its grant (2.6), whose presented terms are carried
+ *   forward instead.
+ */
+private class Membership(val id: String, val admittedAtMs: Long, val terms: GrantTerms?)
+
+/**
  * One admitted peer's liveness [detector] and the [job] that owns its coroutines, held as one entry
  * so that neither can be registered, or removed, without the other. The job identifies the
  * membership a `PeerLost` is about; the detector is read for its
@@ -909,12 +925,12 @@ internal class SeamRoom(
     private val windowClaims = mutableMapOf<PeerId, WindowClaim>()
 
     /**
-     * **Host only.** Each current member's membership id: an opaque value minted when the membership
-     * was admitted, sent on its direct `Welcome` as [AdmitMessage.Welcome.membership] (#3215). Guarded
-     * by [lock].
+     * **Host only.** Each current member's [Membership]: its opaque id, minted when the membership was
+     * admitted and sent on its direct `Welcome` as [AdmitMessage.Welcome.membership] (#3215), when it
+     * was admitted, and the terms its pass is to be issued on (#3220). Guarded by [lock].
      *
-     * The invariant: `membershipIds.keys` equals `admittedById.keys` whenever [lock] is free.
-     * [admitMember] mints an entry in the critical section that admits the member (and none on a
+     * The invariant: `memberships.keys` equals `admittedById.keys` whenever [lock] is free.
+     * [admitMember] adds an entry in the critical section that admits the member (and none on a
      * closed room, which admits nobody), [detachMember] drops it in the one that removes it, [leave]
      * clears it with the roster, and nothing else writes it. So a restore ([restoreSeat]) sends the id
      * the seat already had, and every new admission, a takeover under a new id included, sends a new
@@ -922,7 +938,7 @@ internal class SeamRoom(
      *
      * Bounded by the live roster, so a fabric that mints a fresh id per connection does not grow it.
      */
-    private val membershipIds = mutableMapOf<PeerId, String>()
+    private val memberships = mutableMapOf<PeerId, Membership>()
     private val _roster = MutableStateFlow<Set<Member>>(emptySet())
     override val roster: StateFlow<Set<Member>> = _roster.asStateFlow()
 
@@ -1839,8 +1855,17 @@ internal class SeamRoom(
      * - [SeatDecision.KeyConflict]: a terminal `Reject`.
      * - [SeatDecision.ReleaseAndAdmit]: the partitioned seat is released, then the joiner is admitted
      *   as the re-decision says (Decided 18, 30).
-     * - every other verdict admits a new member ([admitNewMember]): another tab of a device whose
-     *   seats are all connected gets a seat of its own (Decided 30).
+     * - a [SeatDecision.Newcomer] — [SeatDecision.Ordinary], or [SeatDecision.AdditionalSeat] for
+     *   another tab of a device whose seats are all connected (Decided 30) — is asked about: the host's
+     *   [AdmissionPolicy] decides it outside the lock ([askPolicy]), and the next pass decides again
+     *   and acts on its answer if the verdict is still a newcomer: [admitNewMember] with the terms it
+     *   gave, or a `Reject` with its code (#3220). The policy is asked at most once per exchange.
+     * - [SeatDecision.Returning] admits a new member without asking (2.6 feeds it).
+     *
+     * **Revocation is checked once per key, before any restore verdict is trusted** (Decided 14,
+     * [decideUnderRevocation]). A seat of the proven key admitted before the key's revocation cutoff is
+     * never restored: the claimed id's own is released and the key decided again, and any other is left
+     * out of the decision, so it cannot come back as [SeatDecision.RestoreUnderNewId].
      *
      * A restore sends the joiner the Welcome burst with its direct Welcome marked
      * [ReturnKind.Restored] and naming the membership id the seat already had. It emits
@@ -1872,10 +1897,10 @@ internal class SeamRoom(
      * controller is asked again only about a partition episode it was not asked about before, and a
      * wait ends when another exchange's pass does.
      */
-    private suspend fun seatProvenJoiner(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long) {
+    private suspend fun seatProvenJoiner(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long, deadline: Instant) {
         val exchange = SeatExchange()
         try {
-            seatProvenJoiner(joinerPeerId, keyed, generation, exchange)
+            seatProvenJoiner(joinerPeerId, keyed, generation, deadline, exchange)
         } finally {
             // Every pass that does not ask releases the claim already; this covers a throw, a
             // cancellation, and the controller's own failure.
@@ -1892,14 +1917,38 @@ internal class SeamRoom(
     @Volatile
     internal var seatSettledForTest: (suspend (outcome: String) -> Unit)? = null
 
-    private suspend fun seatProvenJoiner(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long, exchange: SeatExchange) {
+    private suspend fun seatProvenJoiner(
+        joinerPeerId: PeerId,
+        keyed: KeyedHello,
+        generation: Long,
+        deadline: Instant,
+        exchange: SeatExchange,
+    ) {
         var asked: AskedWindow? = null
         var released: PeerId? = null
+        var vetted: AdmissionDecision? = null
         while (true) {
-            val seating = settleSeat(joinerPeerId, keyed, generation, asked, released, exchange)
+            val seating = settleSeat(joinerPeerId, keyed, generation, asked, released, vetted, exchange)
             seatSettledForTest?.invoke(seating::class.simpleName.orEmpty())
             when (seating) {
                 SeatOutcome.Stale -> return logStaleAdmission(joinerPeerId)
+                is SeatOutcome.Vet -> when (val answer = askPolicy(joinerPeerId, seating.request, deadline)) {
+                    is PolicyAnswer.Decided -> vetted = answer.decision
+                    // The challenge ran out while the policy decided: nothing is owed, and the joiner's
+                    // own admit deadline ends the attempt. A later Hello is asked about afresh.
+                    PolicyAnswer.TimedOut -> return
+                    PolicyAnswer.Failed -> {
+                        if (pendingChallenges.retire(joinerPeerId, generation)) {
+                            val reject = AdmitMessage.Reject(
+                                "admission-policy-failed: the host's admission policy failed",
+                                RejectCode.AdmissionPolicyFailed,
+                                keyed.joinerNonce,
+                            )
+                            runCatchingCancellable { seam.sendTo(joinerPeerId, AdmitMessage.encode(reject)) }
+                        }
+                        return
+                    }
+                }
                 is SeatOutcome.AwaitWindow -> {
                     logger.debug { "room.admit.await-window peer=${joinerPeerId.value} seat=${seating.seat.value}" }
                     // This exchange has moved on from the seat its answer was about, and released its
@@ -2027,6 +2076,44 @@ internal class SeamRoom(
         return answer
     }
 
+    /** What the host's [AdmissionPolicy] said about one newcomer, or why it said nothing. */
+    private sealed interface PolicyAnswer {
+        class Decided(val decision: AdmissionDecision) : PolicyAnswer
+
+        /** The newcomer's challenge ran out first: the decision was cancelled. */
+        data object TimedOut : PolicyAnswer
+
+        /** The policy threw. */
+        data object Failed : PolicyAnswer
+    }
+
+    /**
+     * Ask the host's [AdmissionPolicy] about [request] (#3220), outside [lock], bounded by the
+     * newcomer's challenge [deadline] (census P7): unbounded, a stalled policy would park one
+     * coroutine per verified Proof for the room's life, and anyone can send those.
+     *
+     * The policy is the app's own code, so a throw is caught here: on Kotlin/Native an escape from
+     * this launched coroutine aborts the process. `ensureActive` tells this coroutine's own
+     * cancellation, which propagates, from one the policy minted — its own `withTimeout`, say — which is
+     * a failure like any other throw (#1834). The bound's own expiry is not a throw:
+     * `withTimeoutOrNull` answers null for it alone.
+     */
+    private suspend fun askPolicy(joinerPeerId: PeerId, request: AdmissionRequest, deadline: Instant): PolicyAnswer {
+        val policy = checkNotNull(admission) { "only a host asks its policy" }.policy
+        val decision = try {
+            withTimeoutOrNull(deadline - clock()) { policy.decide(request) }
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            logger.warn(failure) { "room.admit.policy-failed peer=${joinerPeerId.value}" }
+            return PolicyAnswer.Failed
+        }
+        if (decision == null) {
+            logger.info { "room.admit.policy-timed-out peer=${joinerPeerId.value}: the challenge ran out while the policy decided" }
+            return PolicyAnswer.TimedOut
+        }
+        return PolicyAnswer.Decided(decision)
+    }
+
     /** What [settleSeat] decided, for [seatProvenJoiner] to act on outside [lock]. */
     private sealed interface SeatOutcome {
         /** The challenge is no longer current: seat nobody. */
@@ -2061,6 +2148,9 @@ internal class SeamRoom(
 
         /** A new member was added. */
         class Admitted(val burst: AdmissionBurst) : SeatOutcome
+
+        /** Ask the host's policy about [request], then decide again: a [SeatDecision.Newcomer]. */
+        class Vet(val request: AdmissionRequest) : SeatOutcome
 
         /**
          * [previous]'s partitioned seat was taken over by the joiner under its new id, in the deciding
@@ -2098,7 +2188,7 @@ internal class SeamRoom(
 
     /**
      * What a joiner is sent once it is seated: its [member] entry, the members it did not know
-     * ([existing]), and the id of the membership it holds ([membershipIds], #3215).
+     * ([existing]), and the id of the membership it holds ([memberships], #3215).
      */
     private class AdmissionBurst(val member: Member, val existing: List<Member>, val membership: String)
 
@@ -2108,7 +2198,9 @@ internal class SeamRoom(
      * change the roster to match, release a seat, or say what must happen outside the lock first.
      *
      * [asked] is the controller's answer, when it was asked, and the partition episode it was asked
-     * about. [released] is the seat an earlier pass released, if any.
+     * about. [released] is the seat an earlier pass released, if any. [vetted] is the policy's answer,
+     * once it was asked: it is acted on only while the verdict is still a [SeatDecision.Newcomer], so a
+     * seat the key gained meanwhile is restored instead.
      */
     private fun settleSeat(
         joinerPeerId: PeerId,
@@ -2116,6 +2208,7 @@ internal class SeamRoom(
         generation: Long,
         asked: AskedWindow?,
         released: PeerId?,
+        vetted: AdmissionDecision?,
         exchange: SeatExchange,
     ): SeatOutcome = lock.withLock {
         // Read in the section that decides, so a recovery the controller is told of after the lock
@@ -2123,8 +2216,7 @@ internal class SeamRoom(
         // next drop, and the controller would take it as the end of that newer window (#3675).
         val decidedAtMs = clock().toEpochMilliseconds()
         val current = pendingChallenges.isCurrent(joinerPeerId, generation)
-        // 2.6: host-side grant verification feeds this (plan amendment bf12e0ffc); revocation is checked from 2.4.
-        val decision = decideSeat(joinerPeerId, keyed.key, heldSeats(), holdsValidGrant = false)
+        val decision = decideUnderRevocation(joinerPeerId, keyed.key)
         val outcome = settleSpentWindow(joinerPeerId, current, decision, asked) ?: toldSuperseded(joinerPeerId, keyed, generation, asked) ?: when (decision) {
             is SeatDecision.Restore -> settleRestore(joinerPeerId, generation, current, asked, decidedAtMs)
             is SeatDecision.ReleaseAndAdmit ->
@@ -2137,13 +2229,73 @@ internal class SeamRoom(
                 SeatOutcome.Stale
             }
             is SeatDecision.RestoreUnderNewId -> settleRestoreUnderNewId(joinerPeerId, generation, current, decision.previous, asked, decidedAtMs)
-            SeatDecision.AdditionalSeat, SeatDecision.Returning, SeatDecision.Ordinary ->
-                if (retire(joinerPeerId, generation)) admitNewMember(joinerPeerId, keyed) else SeatOutcome.Stale
+            is SeatDecision.Newcomer -> settleNewcomer(joinerPeerId, keyed, generation, current, decision, vetted, decidedAtMs)
+            SeatDecision.Returning ->
+                if (retire(joinerPeerId, generation)) admitNewMember(joinerPeerId, keyed, terms = null, decidedAtMs) else SeatOutcome.Stale
         }
         claimOrRelease(exchange, outcome).also { settled ->
             if (released != null && (settled is SeatOutcome.Admitted || settled is SeatOutcome.Superseded)) {
                 logger.info { "room.seat.released peer=${released.value} readmitted=${joinerPeerId.value}" }
             }
+        }
+    }
+
+    /**
+     * **Under [lock].** The key → seat decision for [claimedId] and the proven [key], with revocation
+     * applied first (Decided 14; Amendment A § 1.5, moved here from 1.5).
+     *
+     * A seat of [key] admitted before [key]'s revocation cutoff ([HostAdmission.revocations]) is not
+     * the device's to come back to:
+     * - the claimed id's own is answered [SeatDecision.ReleaseAndAdmit], so it is released in this
+     *   pass and the key decided again without it — an ordinary admission, the policy's to decide;
+     * - any other is left out of what [decideSeat] reads, so it can never come back as
+     *   [SeatDecision.RestoreUnderNewId]. A partitioned one then ends when its window does.
+     *
+     * Revoking does not evict (Decided 12): a seat is only ever given up here, when a Hello under its
+     * key asks for it back. Checked per key, so once for every seat that key holds, before any restore
+     * verdict is trusted.
+     *
+     * 2.6: host-side grant verification feeds `holdsValidGrant` (plan amendment bf12e0ffc).
+     */
+    private fun decideUnderRevocation(claimedId: PeerId, key: DidKey): SeatDecision {
+        val held = heldSeats()
+        val cutoff = checkNotNull(admission) { "only a host decides seats" }.revocations.notBefore(key)
+            ?: return decideSeat(claimedId, key, held, holdsValidGrant = false)
+        val revoked = held.filter { (id, seat) -> seat.key == key && membershipOf(id).admittedAtMs < cutoff }.keys
+        if (claimedId in revoked) {
+            logger.info { "room.seat.revoked peer=${claimedId.value}: its device was revoked after it was admitted" }
+            return SeatDecision.ReleaseAndAdmit(released = claimedId)
+        }
+        return decideSeat(claimedId, key, held - revoked, holdsValidGrant = false)
+    }
+
+    /**
+     * **Under [lock].** A [SeatDecision.Newcomer], which the host's policy decides (#3220).
+     *
+     * Before the policy has answered ([vetted] null), a current challenge asks it ([SeatOutcome.Vet]),
+     * with the request built from [newcomer] alone ([newcomerRequest]). Once it has, the answer is
+     * acted on if the challenge is still the one it answered: [AdmissionDecision.Admit] seats the
+     * joiner with its terms, [AdmissionDecision.Reject] refuses it with its code. A challenge no
+     * longer current seats nobody and refuses nobody: a newer Hello from the same sender owes the
+     * answer now, and a refusal would end that joiner (census P6).
+     */
+    private fun settleNewcomer(
+        joinerPeerId: PeerId,
+        keyed: KeyedHello,
+        generation: Long,
+        current: Boolean,
+        newcomer: SeatDecision.Newcomer,
+        vetted: AdmissionDecision?,
+        decidedAtMs: Long,
+    ): SeatOutcome = when (vetted) {
+        null -> if (current) SeatOutcome.Vet(newcomerRequest(newcomer, keyed)) else SeatOutcome.Stale
+        is AdmissionDecision.Admit ->
+            if (retire(joinerPeerId, generation)) admitNewMember(joinerPeerId, keyed, vetted.grant, decidedAtMs) else SeatOutcome.Stale
+        is AdmissionDecision.Reject -> if (retire(joinerPeerId, generation)) {
+            logger.info { "room.admit.policy-refused peer=${joinerPeerId.value} code=${vetted.code.id}" }
+            SeatOutcome.Refused(AdmitMessage.Reject("refused by the host's admission policy", vetted.code, keyed.joinerNonce))
+        } else {
+            SeatOutcome.Stale
         }
     }
 
@@ -2363,6 +2515,10 @@ internal class SeamRoom(
     private fun supersedeSeat(joinerPeerId: PeerId, generation: Long, held: Member, decidedAtMs: Long): SeatOutcome {
         if (!retire(joinerPeerId, generation)) return SeatOutcome.Stale
         val previous = held.id
+        // The joiner inherits the membership's admission and terms with its seat, under a new id
+        // (#3215): a takeover is a restore, not an admission, so it neither asks the policy nor moves
+        // the instant a revocation is compared with (Decided 14).
+        val inherited = membershipOf(previous)
         val detached = checkNotNull(detachMember(previous, LeaveReason.Superseded(by = joinerPeerId))) {
             "the superseded seat was read under this lock"
         }
@@ -2370,7 +2526,7 @@ internal class SeamRoom(
         // Before the joiner is added, which forgets its own id should it have been superseded once.
         supersededIds.record(previous, held.key, successor = joinerPeerId)
         logger.info { "room.seat.superseded peer=${previous.value} by=${joinerPeerId.value}" }
-        val admitted = admitMember(joinerPeerId, held.identity, held.key)
+        val admitted = admitMember(joinerPeerId, held.identity, held.key, inherited.admittedAtMs, inherited.terms)
         return SeatOutcome.Superseded(previous, detached, admitted.burst, decidedAtMs)
     }
 
@@ -2403,7 +2559,8 @@ internal class SeamRoom(
      * back as [Liveness.Connected], with the member it was admitted as: its identity, key and
      * principal belong to the membership, not to this Hello. So a restore keeps the held member's
      * identity, and a rebuilt process's new `displayName` and `deviceId` are dropped. It keeps its
-     * membership id too ([membershipIds]), which is how the joiner tells this from a fresh admission.
+     * membership too ([memberships]): its id, which is how the joiner tells this from a fresh
+     * admission, and its admission instant and terms.
      * [owesBurst]: this exchange still owes the joiner its Welcome burst.
      */
     private fun restoreSeat(held: Member, owesBurst: Boolean, decidedAtMs: Long): SeatOutcome {
@@ -2421,7 +2578,7 @@ internal class SeamRoom(
         // retry whose earlier attempt the host already answered, or a restart faster than the host's
         // detector — was never seen to go, so there is nothing to announce.
         if (endedPause) emitEvent(MembershipEvent.Resumed(held.id))
-        val burst = if (owesBurst) AdmissionBurst(member, admittedById.values.filter { it.id != held.id }, membershipOf(held.id)) else null
+        val burst = if (owesBurst) AdmissionBurst(member, admittedById.values.filter { it.id != held.id }, membershipOf(held.id).id) else null
         return SeatOutcome.Restored(burst, endedPause = endedPause, decidedAtMs = decidedAtMs)
     }
 
@@ -2443,11 +2600,13 @@ internal class SeamRoom(
     /**
      * **Under [lock].** Add a new member for [joinerPeerId], from [keyed]: the Hello its joiner sent,
      * and the key it proved, which becomes [Member.key] and rides every Welcome that names the joiner.
+     * [terms] are what the policy gave it, recorded with its membership for the pass it is to be
+     * issued (2.5); null for a membership no policy was asked about. It is admitted at [admittedAtMs].
      */
-    private fun admitNewMember(joinerPeerId: PeerId, keyed: KeyedHello): SeatOutcome.Admitted {
+    private fun admitNewMember(joinerPeerId: PeerId, keyed: KeyedHello, terms: GrantTerms?, admittedAtMs: Long): SeatOutcome.Admitted {
         val hello = keyed.hello
         val identity = MemberIdentity(displayName = hello.displayName, sessionId = hello.sessionId, deviceId = hello.deviceId)
-        return admitMember(joinerPeerId, identity, keyed.key)
+        return admitMember(joinerPeerId, identity, keyed.key, admittedAtMs, terms)
     }
 
     /**
@@ -2468,7 +2627,13 @@ internal class SeamRoom(
      * before: the joiner learns the other members only from the burst's member `Welcome`s, which
      * followed the roster copy. It is now one send wider.
      */
-    private fun admitMember(joinerPeerId: PeerId, identity: MemberIdentity, key: DidKey): SeatOutcome.Admitted {
+    private fun admitMember(
+        joinerPeerId: PeerId,
+        identity: MemberIdentity,
+        key: DidKey,
+        admittedAtMs: Long,
+        terms: GrantTerms?,
+    ): SeatOutcome.Admitted {
         val member = Member(
             id = joinerPeerId,
             identity = identity,
@@ -2483,9 +2648,9 @@ internal class SeamRoom(
         addToRoster(member)
         supersededIds.forget(joinerPeerId)
         // Minted in the SAME critical section that admits the member, keeping the invariant on
-        // [membershipIds]. `closed`: addToRoster admitted nobody, so there is no member to name.
+        // [memberships]. `closed`: addToRoster admitted nobody, so there is no member to name.
         val id = newMembershipId()
-        if (!closed) membershipIds[joinerPeerId] = id
+        if (!closed) memberships[joinerPeerId] = Membership(id, admittedAtMs, terms)
         // No-op once closed: [fanOutToOtherMembers] checks [closed] too, and addToRoster admitted nobody.
         fanOutToOtherMembers(joinerPeerId, rosterWelcome(member))
         return SeatOutcome.Admitted(AdmissionBurst(member, existing, id))
@@ -2505,9 +2670,9 @@ internal class SeamRoom(
         roomId = _roomId.value?.value,
     )
 
-    /** **Under [lock].** [peerId]'s membership id, which a held seat always has ([membershipIds]). */
-    private fun membershipOf(peerId: PeerId): String =
-        checkNotNull(membershipIds[peerId]) { "every admitted member has a membership id" }
+    /** **Under [lock].** [peerId]'s membership, which a held seat always has ([memberships]). */
+    private fun membershipOf(peerId: PeerId): Membership =
+        checkNotNull(memberships[peerId]) { "every admitted member has a membership" }
 
     /**
      * A fresh membership id: [MEMBERSHIP_ID_BYTES] bytes from the platform CSPRNG, in hex. Opaque to
@@ -2689,7 +2854,7 @@ internal class SeamRoom(
             }
             return
         }
-        seatProvenJoiner(sender, pending.keyed, pending.generation)
+        seatProvenJoiner(sender, pending.keyed, pending.generation, pending.deadline)
     }
 
     /**
@@ -5010,8 +5175,8 @@ internal class SeamRoom(
         // that ever left. refineWindow's Partitioned gate rejects an announcement for a gone member.
         episodeDetectedAtMs.remove(peerId)
         windowOpenedEpisodeMs.remove(peerId)
-        // Pruned with the member, keeping `membershipIds.keys == admittedById.keys` (#3215).
-        membershipIds.remove(peerId)
+        // Pruned with the member, keeping `memberships.keys == admittedById.keys` (#3215).
+        memberships.remove(peerId)
         // A joiner's count of who the host named is cleared only by a new Hello, and a room that never
         // reconnects never says one, so it is pruned here too (#3615). It changes no rebuild: on a
         // joiner only a Welcome adds a member, and that Welcome names it again.
@@ -5054,7 +5219,7 @@ internal class SeamRoom(
     internal fun namedSinceHelloForTest(): Set<PeerId> = lock.withLock { namedSinceHello.toSet() }
 
     /** Test-visibility: how many membership ids this host holds — one per current member (#3215). */
-    internal fun heldMembershipCount(): Int = lock.withLock { membershipIds.size }
+    internal fun heldMembershipCount(): Int = lock.withLock { memberships.size }
 
     // ── Application frame routing ─────────────────────────────────────────────
 
@@ -5466,8 +5631,8 @@ internal class SeamRoom(
             admittedById.clear()
             episodeDetectedAtMs.clear()
             windowOpenedEpisodeMs.clear()
-            // With the members it belongs to, keeping `membershipIds.keys == admittedById.keys`.
-            membershipIds.clear()
+            // With the members it belongs to, keeping `memberships.keys == admittedById.keys`.
+            memberships.clear()
             supersededIds.clear()
             _roster.value = emptySet()
             _rosterPeers.value = setOf(selfId)

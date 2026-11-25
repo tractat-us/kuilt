@@ -34,6 +34,14 @@ internal sealed interface SeatDecision {
     sealed interface FreshId : SeatDecision
 
     /**
+     * The verdicts that seat a **new membership the host's `AdmissionPolicy` must vet** (#3220):
+     * [Ordinary], and [AdditionalSeat], which is a new membership too (plan Amendment C). Never
+     * [Returning], which a valid grant lets in unasked, and never a restore. `newcomerRequest` takes
+     * one, so the room cannot build a policy request from any other verdict.
+     */
+    sealed interface Newcomer : FreshId
+
+    /**
      * The claimed id holds a seat under the proven key, connected or partitioned: the same membership
      * comes back.
      */
@@ -59,7 +67,7 @@ internal sealed interface SeatDecision {
      * The claimed id holds no seat, and every seat the proven key holds is connected: another tab of
      * the same device. It is admitted to a seat of its own, and no seat is superseded (Decided 30).
      */
-    data object AdditionalSeat : FreshId
+    data object AdditionalSeat : Newcomer
 
     /** Neither the id nor the key holds a seat, and the joiner presented a valid grant. */
     data object Returning : FreshId
@@ -71,7 +79,7 @@ internal sealed interface SeatDecision {
     data object KeyConflict : SeatDecision
 
     /** Neither the id nor the key holds a seat, and no valid grant: ordinary admission. */
-    data object Ordinary : FreshId
+    data object Ordinary : Newcomer
 }
 
 /**
@@ -89,9 +97,9 @@ internal sealed interface SeatDecision {
  * seat out matters today is rule 1: with it in [held], a joiner claiming the host's own **peer id**
  * under the host's key would be told [SeatDecision.Restore] of the host's membership. A joiner on
  * the host's key under a fresh id would not notice: the host's seat is never partitioned, so it would
- * get [SeatDecision.AdditionalSeat] where it now gets [SeatDecision.Ordinary], and the two seat a
- * joiner identically in slice 1. That difference may become observable in 2.4, once an additional
- * seat is vetted (plan Amendment C).
+ * get [SeatDecision.AdditionalSeat] where it now gets [SeatDecision.Ordinary]. Both are
+ * [SeatDecision.Newcomer]s, which the host's policy vets alike (plan Amendment C), so the first tab
+ * on the host's key is decided by rules 6–7 and a later one by rule 5 (plan Amendment J).
  *
  * The precedence, first match wins:
  * 1. the claimed id holds a seat under the proven key → [SeatDecision.Restore];

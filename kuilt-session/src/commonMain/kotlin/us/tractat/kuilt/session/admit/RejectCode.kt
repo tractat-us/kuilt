@@ -94,6 +94,16 @@ public interface RejectCode {
     }
 
     /**
+     * The host's [AdmissionPolicy] threw while deciding the joiner (#3220): the app's own lookup
+     * failed, say, or its own timeout fired. Retryable: nothing about the joiner was judged, and the
+     * policy may answer the next Hello. A policy that does not answer at all in time gets no `Reject`:
+     * the joiner's own admit deadline ends that attempt.
+     */
+    public object AdmissionPolicyFailed : RejectCode {
+        override val id: String = "admission-policy-failed"
+    }
+
+    /**
      * A code this build does not know: a peer that predates typed codes (empty [id]), a newer
      * build's addition, or another module's own code. Retryable — see the type KDoc.
      */
@@ -120,6 +130,7 @@ public interface RejectCode {
             KeyConflict.id -> KeyConflict
             Superseded.id -> Superseded
             HostFailed.id -> HostFailed
+            AdmissionPolicyFailed.id -> AdmissionPolicyFailed
             else -> Unknown(id)
         }
     }

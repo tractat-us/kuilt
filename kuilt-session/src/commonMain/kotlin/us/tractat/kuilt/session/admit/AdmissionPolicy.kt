@@ -30,11 +30,16 @@ import kotlin.time.Duration.Companion.milliseconds
  * and revoke it: blocking alone leaves a held seat or a pass it holds working, and revoking alone
  * only sends it back to this policy. Neither removes a device that is in the room now.
  *
- * [decide] suspends so a policy can look something up, but it must answer within the joiner's admit
- * timeout. It may run concurrently with itself, for two joiners at once.
+ * Every host entry point takes one inside a [HostAdmission]: `RoomFactory.host`, an `AdoptRole.Host`
+ * adopt, and `ElectionLobby.start`. A newcomer is a device whose proven key holds no seat in the room:
+ * a first visit, or a second tab of a device already in the room, which gets a membership of its own
+ * and so is asked about like any other.
  *
- * **No room asks one yet.** These are the types an app writes its policy against; host entry points
- * that take a [HostAdmission] and consult it are tracked by #3220.
+ * [decide] suspends so a policy can look something up, but it must answer within the host's admit
+ * timeout. A policy still deciding when the newcomer's challenge runs out is cancelled and the
+ * newcomer hears nothing, so its own admit deadline ends the attempt; a later Hello is asked about
+ * afresh. A policy that throws refuses the newcomer with [RejectCode.AdmissionPolicyFailed], which is
+ * retryable, and the room keeps running. It may run concurrently with itself, for two joiners at once.
  *
  * @sample us.tractat.kuilt.session.hostAdmissionSample
  */
@@ -75,19 +80,44 @@ private class OpenPolicy(terms: GrantTerms) : AdmissionPolicy {
  * - [key] is **proved**: the joiner signed the host's fresh challenge with it. Key a decision on this.
  * - [deviceId] is **bound** to the key, since the joiner signed over it too, but it is still whatever
  *   the device chose to say. It tells you which id this key goes with, not that the id is unique.
- * - [displayName] is the joiner's **say-so** and nothing more. Show it; never decide on it.
+ * - [displayName] is the joiner's **say-so** and nothing more. Show it; never decide on it. A joiner
+ *   that gave no name is shown, and asked about, under its peer id.
+ *
+ * **No device id is always `null`, never `""`.** The proof signs a missing device id as the empty
+ * string, so a joiner that sends `""` and one that sends nothing sign the same bytes and cannot be
+ * told apart. The constructor therefore reads `""` as `null`, which is what a policy branching on
+ * `deviceId == null` sees whoever built the request: the room, or a test.
  */
 public class AdmissionRequest @SessionInternalApi constructor(
     /** The device key the joiner proved it holds. */
     public val key: DidKey,
     /** The name the joiner asked to be shown under. Unverified. */
     public val displayName: String,
-    /** The app's own device id, if the joiner sent one; signed by [key]. */
-    public val deviceId: String?,
+    deviceId: String?,
 ) {
+    /** The app's own device id, if the joiner sent one; signed by [key]. Never empty: see above. */
+    public val deviceId: String? = deviceId?.takeUnless { it.isEmpty() }
+
     override fun toString(): String =
         "AdmissionRequest(key=${key.value}, displayName=$displayName, deviceId=$deviceId)"
 }
+
+/**
+ * The request the room asks its [AdmissionPolicy] about, for a joiner the key → seat table decided
+ * is a [newcomer] and whose Hello and proven key are [keyed] (#3220).
+ *
+ * [newcomer] is read for nothing but its type: only the [SeatDecision.Newcomer] verdicts reach the
+ * policy, so a caller holding a restore has nothing to pass here, and asking the policy about a
+ * returning device does not compile. That holds for the room because this is the only place it builds
+ * a request; the constructor itself is public under [SessionInternalApi], which this module opts into.
+ *
+ * The display name is the one the joiner's Hello carried: an unnamed kuilt joiner says its own peer
+ * id there. The device id is the Hello's too, and the request reads an empty one as none, as the
+ * proof does.
+ */
+@Suppress("UNUSED_PARAMETER") // [newcomer]'s job is its type; see the KDoc.
+internal fun newcomerRequest(newcomer: SeatDecision.Newcomer, keyed: KeyedHello): AdmissionRequest =
+    AdmissionRequest(key = keyed.key, displayName = keyed.hello.displayName, deviceId = keyed.hello.deviceId)
 
 /** An [AdmissionPolicy]'s answer for one newcomer. */
 public sealed interface AdmissionDecision {

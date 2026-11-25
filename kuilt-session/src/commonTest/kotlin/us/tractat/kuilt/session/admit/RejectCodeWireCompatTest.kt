@@ -113,6 +113,23 @@ class RejectCodeWireCompatTest {
         )
     }
 
+    /**
+     * A policy that threw (#3220) crosses the wire as itself, retryable. Without its `fromId` branch it
+     * would decode as [RejectCode.Unknown] with the same id, retryable too, so only the code itself
+     * tells the two apart.
+     */
+    @Test
+    fun `the policy failure code round-trips as itself and is retryable`() {
+        val code = RejectCode.AdmissionPolicyFailed
+        val decoded = AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Reject(code.id, code, answers = null))) as AdmitMessage.Reject
+        assertAll(
+            { assertEquals("admission-policy-failed", code.id, "the wire id is fixed once shipped") },
+            { assertEquals<RejectCode>(code, decoded.code) },
+            { assertEquals<RejectCode>(code, RejectCode.fromId("admission-policy-failed")) },
+            { assertTrue(decoded.code.retryable) },
+        )
+    }
+
     private fun String.hexToBytes(): ByteArray =
         ByteArray(length / 2) { i -> substring(i * 2, i * 2 + 2).toInt(16).toByte() }
 }
