@@ -665,6 +665,22 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
+     * A snapshot v0.7.6 wrote decodes, and encodes back to the same bytes: the template's new
+     * nested `template` (#3314) defaults to `null` and is left out, so nothing a consumer stored
+     * changes shape.
+     */
+    @Test
+    fun aV076SnapshotReencodesByteIdentical() {
+        val snapshot = decoded(GOLDEN_V0_7_6_RICH)
+        val tenants = assertIs<Topology.Group>(snapshot.lastApplied.children.first { it.name == "tenants" })
+        assertAll(
+            { assertEquals(GOLDEN_V0_7_6_RICH, encode(snapshot)) },
+            { assertTrue("\"template\":{" in GOLDEN_V0_7_6_RICH, "the rig: the golden holds a template") },
+            { assertEquals(Topology.ChildTemplate(Weight.ONE, maxConcurrent = 2L), tenants.template, "the rig: one with no template of its own") },
+        )
+    }
+
+    /**
      * Format 1's rich golden carries a ceiling on a group, a lane and a template, and an engine
      * restored from it enforces each one, told apart by the ceiling `explain` names (#3324). The
      * golden has two leases open beneath `acme` (ceiling 3), one of them at `interactive` (ceiling

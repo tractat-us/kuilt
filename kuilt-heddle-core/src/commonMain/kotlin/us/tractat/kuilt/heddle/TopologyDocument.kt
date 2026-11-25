@@ -71,11 +71,16 @@ public data class TopologyDocument(public val root: String, public val children:
      * @property weight each attached child's share, as text: `"3"` or `"3/2"`.
      * @property maxConcurrent the ceiling on **each** attached child, not on all of them together;
      *   `null` for none. The group's own [Group.maxConcurrent] caps them all together.
+     * @property template what each child attached beneath an attached child gets, or `null` when
+     *   every attached child is a leaf: `template: { weight: "2", template: { weight: "1" } }`
+     *   attaches repositories at weight 2 and authors beneath each at weight 1. A problem in it is
+     *   reported at the group's path, as one in this template is. See [Topology.ChildTemplate.template].
      */
     @Serializable
     public data class ChildTemplate(
         public val weight: String = "1",
         public val maxConcurrent: Long? = null,
+        @IntroducedAt("0.7.7") public val template: ChildTemplate? = null,
     )
 
     /**

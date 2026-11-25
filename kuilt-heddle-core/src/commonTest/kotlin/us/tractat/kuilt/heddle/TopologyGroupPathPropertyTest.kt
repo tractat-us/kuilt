@@ -46,12 +46,18 @@ class TopologyGroupPathPropertyTest {
         var loops = 0
         for (seed in 0 until seeds) {
             val r = Random(seed)
+            // Nesting draws from its own generator, so the trajectory `r` walks is the one it walked
+            // before templates could nest (#3314), and so are the floors measured on it.
+            val nest = Random(seed + NEST_SEED)
             val root = if (r.nextBoolean()) "root" else randomName(r)
-            val t = randomTree(r, root)
-            val other = randomTree(r, root)
+            val t = randomTree(r, root, nest)
+            val other = randomTree(r, root, nest)
 
+            val attachedHere = runtimePaths(t, r)
+            val (nestedHere, nestedNowhere) = nestedPaths(t, attachedHere, nest)
             val resolvable = declaredPaths(t.children, emptyList()).map { GroupPath.Declared(it) to t.groupId(*it.toTypedArray()) } +
-                runtimePaths(t, r).map { GroupPath.Attached(it.first, it.second) to t.attachedChildId(it.first, it.second) }
+                attachedHere.map { GroupPath.Attached(it.first, it.second) to t.attachedChildId(it.first, it.second) } +
+                nestedHere.map { path -> path to nestedId(t, path) }
             for ((path, id) in resolvable) {
                 if (t.findGroupId(path) != id) failures += "seed $seed: findGroupId($path) = ${t.findGroupId(path)}, groupId gives ${id.value}"
                 if (t.findPath(id) != path) failures += "seed $seed: findPath(${id.value}) = ${t.findPath(id)}, expected $path"
@@ -66,22 +72,30 @@ class TopologyGroupPathPropertyTest {
             // Which paths this tree has a group for, read off the tree by this file's own walk: the
             // laws alone hold for a pair that resolves every path in the grammar, here or not.
             val declaredHere = declaredPaths(t.children, emptyList())
-            val markedHere = markedGroups(t.children, emptyList()).map { it.first }
+            val marked = markedGroups(t.children, emptyList())
+            val markedHere = marked.map { it.first }
             fun here(path: GroupPath): Boolean = when (path) {
                 is GroupPath.Declared -> path.names in declaredHere
                 is GroupPath.Attached -> path.group in markedHere
+                // Generated one level deep: the group's template must carry a template.
+                is GroupPath.Nested -> (path.parent as? GroupPath.Attached)?.let { parent ->
+                    marked.firstOrNull { it.first == parent.group }?.second?.template?.template != null
+                } == true
             }
 
             // Paths and ids from a sibling tree, and edits of real ids: most are not this tree's.
-            val foreignPaths = declaredPaths(other.children, emptyList()).map { GroupPath.Declared(it) } +
-                runtimePaths(other, r).map { GroupPath.Attached(it.first, it.second) }
+            val attachedThere = runtimePaths(other, r)
+            val (nestedThere, nestedNotThere) = nestedPaths(other, attachedThere, nest)
+            val siblingPaths = declaredPaths(other.children, emptyList()).map { GroupPath.Declared(it) } +
+                attachedThere.map { GroupPath.Attached(it.first, it.second) } + nestedThere
+            val foreignPaths = siblingPaths + nestedNotThere + nestedNowhere
             for (path in foreignPaths) {
                 val id = t.findGroupId(path)
                 if ((id != null) != here(path)) failures += "seed $seed: findGroupId($path) = $id, but the tree ${if (here(path)) "has" else "has no"} such group"
                 if (id == null) tally.unresolvedPaths++ else if (t.findPath(id) != path) failures += "seed $seed: findPath(findGroupId($path)) = ${t.findPath(id)}"
             }
             // Same root, so a sibling's id is this tree's exactly when its path is.
-            for (path in foreignPaths) {
+            for (path in siblingPaths) {
                 val id = checkNotNull(other.findGroupId(path)) { "seed $seed: the sibling resolves its own $path" }
                 val expected = path.takeIf { here(it) }
                 if (t.findPath(id) != expected) failures += "seed $seed: findPath(${id.value}) = ${t.findPath(id)}, expected $expected"
@@ -103,15 +117,21 @@ class TopologyGroupPathPropertyTest {
             // Floors set below the counts measured on every target, so a drifting generator reds.
             { assertTrue(tally.declared >= 1_500, "declared ${tally.declared}") },
             { assertTrue(tally.runtime >= 250, "runtime ${tally.runtime}") },
+            { assertTrue(tally.nested >= 280, "nested ${tally.nested}") },
             { assertTrue(tally.collisions >= 120, "attached children named like a declared sibling ${tally.collisions}") },
             { assertTrue(tally.unresolvedPaths >= 1_500, "unresolved paths ${tally.unresolvedPaths}") },
             { assertTrue(tally.unresolvedIds >= 10_000, "unresolved ids ${tally.unresolvedIds}") },
         )
     }
 
+    private companion object {
+        const val NEST_SEED = 1_000_003
+    }
+
     private class Tally {
         var declared = 0
         var runtime = 0
+        var nested = 0
         var collisions = 0
         var unresolvedPaths = 0
         var unresolvedIds = 0
@@ -120,6 +140,7 @@ class TopologyGroupPathPropertyTest {
             when (path) {
                 is GroupPath.Declared -> declared++
                 is GroupPath.Attached -> runtime++
+                is GroupPath.Nested -> nested++
             }
         }
     }
@@ -130,9 +151,9 @@ class TopologyGroupPathPropertyTest {
         (1..1 + r.nextInt(2)).joinToString("") { pieces[r.nextInt(pieces.size)] }
 
     /** Depth up to 3, up to 4 children per group, names unique among siblings; a third of the groups with a template. */
-    private fun randomTree(r: Random, root: String): Topology = Topology(root, randomChildren(r, depth = 0))
+    private fun randomTree(r: Random, root: String, nest: Random): Topology = Topology(root, randomChildren(r, depth = 0, nest))
 
-    private fun randomChildren(r: Random, depth: Int): List<Node> {
+    private fun randomChildren(r: Random, depth: Int, nest: Random): List<Node> {
         val names = ArrayList<String>()
         repeat(1 + r.nextInt(4)) {
             val name = randomName(r)
@@ -141,7 +162,8 @@ class TopologyGroupPathPropertyTest {
         return names.map { name ->
             if (depth < 2 && r.nextInt(2) == 0) {
                 val withTemplate = r.nextInt(3) == 0
-                Group(name, Weight.ONE, randomChildren(r, depth + 1), if (withTemplate) ChildTemplate(Weight.ONE) else null)
+                val inner = if (nest.nextBoolean()) ChildTemplate(Weight.ONE) else null
+                Group(name, Weight.ONE, randomChildren(r, depth + 1, nest), if (withTemplate) ChildTemplate(Weight.ONE, template = inner) else null)
             } else {
                 Lane(name)
             }
@@ -167,6 +189,26 @@ class TopologyGroupPathPropertyTest {
                 path to randomName(r),
             ).distinct()
         }
+
+    /**
+     * Nested children of the attached children in [attached]: under each one whose group's template
+     * carries a template, one named like the attached child itself and one drawn from the pieces,
+     * which the tree has; under each one whose group's template carries none, one drawn from the
+     * pieces, which it has not.
+     */
+    private fun nestedPaths(t: Topology, attached: List<Pair<List<String>, String>>, nest: Random): Pair<List<GroupPath.Nested>, List<GroupPath.Nested>> {
+        val templates = markedGroups(t.children, emptyList()).associate { (path, group) -> path to group.template }
+        val (deep, flat) = attached.partition { (group, _) -> templates[group]?.template != null }
+        val resolved = deep.flatMap { (group, outer) -> listOf(outer, randomName(nest)).distinct().map { GroupPath.Nested(GroupPath.Attached(group, outer), it) } }
+        val unresolved = flat.map { (group, outer) -> GroupPath.Nested(GroupPath.Attached(group, outer), randomName(nest)) }
+        return resolved to unresolved
+    }
+
+    /** The id of [path], spelt out from its parent's id rather than by the lookup under test. */
+    private fun nestedId(t: Topology, path: GroupPath.Nested): GroupId {
+        val parent = path.parent as GroupPath.Attached
+        return GroupId(t.attachedChildId(parent.group, parent.name).value + "/!" + escapeSegment(path.name))
+    }
 
     private fun markedGroups(nodes: List<Node>, prefix: List<String>): List<Pair<List<String>, Group>> =
         nodes.filterIsInstance<Group>().flatMap { group ->

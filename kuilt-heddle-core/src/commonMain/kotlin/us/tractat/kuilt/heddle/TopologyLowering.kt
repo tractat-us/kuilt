@@ -8,7 +8,10 @@ package us.tractat.kuilt.heddle
 //   declared child          "<parent>/<escaped name>"
 //   attached child          "<parent>/!<escaped name>"
 //
-// and an edge's id is "<child>@<numerator>:<denominator>#<generation>".
+// and an edge's id is "<child>@<numerator>:<denominator>#<generation>". The `!` marks a contiguous
+// suffix starting at depth two or deeper: the root carries no template, and everything below an
+// attached child is attached (#3314), so `root/ci/!kuilt/!alice` is an author attached under a
+// repository attached under the declared `ci`, and a declared segment never follows a marked one.
 //
 // Escaping keeps only `[A-Za-z0-9._~-]` and writes every other byte of the name as `%XX`, so `/`,
 // `!`, `@`, `:`, `#` and `%` never appear inside a segment. That is what makes the encoding
@@ -41,11 +44,14 @@ public fun Topology.groupId(vararg path: String): GroupId {
 
 /**
  * Where a group sits in a [Topology], read from [root][Topology.root] down: a child the config
- * declares, or a child the consumer attached while running beneath a group with a template.
+ * declares, a child the consumer attached while running beneath a group with a template, or a child
+ * it attached beneath one of those, whose template carries a
+ * [template][Topology.ChildTemplate.template] of its own.
  *
- * The two arms are what keep an attached child apart from a declared sibling of the same name:
+ * The arms are what keep an attached child apart from a declared sibling of the same name:
  * `Attached(listOf("tenants"), "x")` and `Declared(listOf("tenants", "x"))` are different paths,
- * and [Topology.findGroupId] gives them different ids.
+ * and [Topology.findGroupId] gives them different ids. Each group has exactly one path: a child of a
+ * declared group is [Attached], and a child of an attached one is [Nested].
  *
  * Every name is non-empty, because no topology declares or attaches an empty one; a path holding one
  * names nothing, so it cannot be built.
@@ -56,7 +62,7 @@ public sealed interface GroupPath {
 
     /**
      * The names from just below the root down to the group, ending with the attached child's own
-     * name if this is an [Attached]. `[]` is the root.
+     * name if this is an [Attached] or a [Nested]. `[]` is the root.
      */
     public val names: List<String>
 
@@ -85,12 +91,34 @@ public sealed interface GroupPath {
 
         override val names: List<String> get() = group + name
     }
+
+    /**
+     * An attached child [name] of the attached group at [parent]: a child the consumer attached
+     * beneath another attached child, whose template carries a
+     * [template][Topology.ChildTemplate.template] of its own.
+     *
+     * [parent] is always an [Attached] or another [Nested], never a [Declared]: a child of a declared
+     * group is an [Attached], so that every attached child has exactly one path. Everything below an
+     * attached child is attached; a declared name never follows an attached one.
+     *
+     * @throws IllegalArgumentException if [parent] is a [Declared], or [name] is empty.
+     * @sample us.tractat.kuilt.heddle.sampleNestedAttach
+     */
+    public data class Nested(public val parent: GroupPath, public val name: String) : GroupPath {
+        init {
+            require(parent !is Declared) { "a nested child's parent is attached; a child of the declared ${parent.names} is an Attached" }
+            require(name.isNotEmpty()) { "a nested child's path has no empty name: ${parent.names}, $name" }
+        }
+
+        override val names: List<String> get() = parent.names + name
+    }
 }
 
 /**
  * The ledger id of the group at [path], or `null` when this topology has no such group: a
- * [GroupPath.Declared] it does not declare, or a [GroupPath.Attached] whose group has no
- * template. Never throws.
+ * [GroupPath.Declared] it does not declare, a [GroupPath.Attached] whose group has no template, or a
+ * [GroupPath.Nested] whose parent's template carries no [template][Topology.ChildTemplate.template].
+ * Never throws.
  *
  * Gives the same id as [groupId] and [attachedChildId] wherever they do not throw, and is the exact
  * inverse of [findPath].
@@ -99,7 +127,7 @@ public sealed interface GroupPath {
  */
 public fun Topology.findGroupId(path: GroupPath): GroupId? = when (path) {
     is GroupPath.Declared -> GroupId(idOf(path.names)).takeIf { path.names.isEmpty() || declaredAt(path.names) != null }
-    is GroupPath.Attached -> templateAt(path.group)?.let { GroupId(attachedChildPath(idOf(path.group), path.name)) }
+    is GroupPath.Attached, is GroupPath.Nested -> ownTemplate(path)?.let { GroupId(idOf(path)) }
 }
 
 /**
@@ -119,7 +147,8 @@ public fun Topology.findPath(group: GroupId): GroupPath? {
 
 /**
  * The ledger id of the attached child [name] of the group at [group], read from
- * [root][Topology.root] down.
+ * [root][Topology.root] down. A child attached beneath an attached one has no form here: read its id
+ * with [findGroupId] and a [GroupPath.Nested].
  *
  * [name] is opaque: any non-empty string, chosen by the consumer. An attached child lives in its own
  * namespace, so one named like a declared sibling still gets a different id.
@@ -129,22 +158,50 @@ public fun Topology.findPath(group: GroupId): GroupPath? {
  */
 public fun Topology.attachedChildId(group: List<String>, name: String): GroupId = attachedChild(group, name).id
 
-/** An attached child's [id], its [parent] group's id, and the [template] that group carries. */
+/**
+ * An attached child's [id], its [parent] group's id, and the [template] it is attached under: what
+ * gives it its weight and ceiling, and through [Topology.ChildTemplate.template] whether it is a
+ * group of attached children itself.
+ */
 internal class AttachedChild(val id: GroupId, val parent: GroupId, val template: Topology.ChildTemplate)
 
 /**
- * The attached child [name] of the group at [group], checked once: [group] names a declared group
- * with a template and [name] is non-empty.
+ * The attached child at [path], checked once: a template reaches it ([ownTemplate]).
  *
- * @throws IllegalArgumentException otherwise, as [Topology.attachedChildId] documents.
+ * @throws IllegalArgumentException if [path] is a [GroupPath.Declared], or no template reaches it.
  */
-internal fun Topology.attachedChild(group: List<String>, name: String): AttachedChild {
-    require(name.isNotEmpty()) { "an attached child needs a name" }
-    // The root carries no template, so the path must name a declared group beneath it.
-    val template = requireNotNull(templateAt(group).takeIf { group.isNotEmpty() }) { "$group is not a group with a template" }
-    val parent = idOf(group)
-    return AttachedChild(GroupId(attachedChildPath(parent, name)), GroupId(parent), template)
+internal fun Topology.attachedChild(path: GroupPath): AttachedChild {
+    val template = requireNotNull(ownTemplate(path)) {
+        if (path is GroupPath.Declared) "${path.names} is declared, not attached" else "no template reaches ${path.names}"
+    }
+    val id = idOf(path)
+    return AttachedChild(GroupId(id), GroupId(id.substringBeforeLast('/')), template)
 }
+
+/**
+ * The attached child [name] of the declared group at [group]: [attachedChild] of the one-level path.
+ *
+ * @throws IllegalArgumentException as [Topology.attachedChildId] documents.
+ */
+internal fun Topology.attachedChild(group: List<String>, name: String): AttachedChild =
+    attachedChild(GroupPath.Attached(group, name))
+
+/**
+ * The template the attached child at this path is attached under: its declared group's template
+ * for a [GroupPath.Attached], and its parent's template's
+ * [template][Topology.ChildTemplate.template] for a [GroupPath.Nested]. `null` for a
+ * [GroupPath.Declared], or when no template reaches the path. [templateOfDeclared] reads a declared
+ * group's template by its names, so a caller can answer from its own index.
+ */
+internal fun GroupPath.ownTemplate(templateOfDeclared: (List<String>) -> Topology.ChildTemplate?): Topology.ChildTemplate? =
+    when (this) {
+        is GroupPath.Declared -> null
+        is GroupPath.Attached -> templateOfDeclared(group)
+        is GroupPath.Nested -> parent.ownTemplate(templateOfDeclared)?.template
+    }
+
+/** [GroupPath.ownTemplate] read from this topology. Never throws. */
+internal fun Topology.ownTemplate(path: GroupPath): Topology.ChildTemplate? = path.ownTemplate { templateAt(it) }
 
 /**
  * The declared node at the non-empty [path], read from the root down.
@@ -173,6 +230,13 @@ private fun Topology.declaredAt(path: List<String>): Topology.Node? {
 /** The id [path] encodes beneath this topology's root, without checking that it is declared. */
 private fun Topology.idOf(path: List<String>): String =
     path.fold(escapeSegment(root)) { parent, name -> declaredChildId(parent, name) }
+
+/** The id [path] encodes beneath this topology's root, without checking that a template reaches it. */
+private fun Topology.idOf(path: GroupPath): String = when (path) {
+    is GroupPath.Declared -> idOf(path.names)
+    is GroupPath.Attached -> attachedChildPath(idOf(path.group), path.name)
+    is GroupPath.Nested -> attachedChildPath(idOf(path.parent), path.name)
+}
 
 /**
  * Every declared edge of this tree, as the records a ledger is prepared with, sorted by id.
@@ -217,24 +281,30 @@ internal data class ParsedGroupId(val root: String, val path: GroupPath)
  * [Topology.attachedChildId] would print. Grammar only: whether a topology has that group is
  * [Topology.findPath]'s question. Never throws.
  *
- * Every name is non-empty, and only the last segment may be an attached child's, and only at depth
- * two or deeper: the root carries no template, so `root/!x` has no topology that prints it. Those are
- * the rules [GroupPath]'s `init` enforces. The checks here refuse such an id before a [GroupPath] is
- * built from it, so that its `require` never escapes.
+ * Every name is non-empty, and the attached segments are a contiguous suffix starting at depth two or
+ * deeper: the root carries no template, so `root/!x` has no topology that prints it, and everything
+ * below an attached child is attached, so `root/g/!x/y` has none either. Those are the rules
+ * [GroupPath]'s `init`s enforce. The checks here refuse such an id before a [GroupPath] is built from
+ * it, so that no `require` escapes.
  */
 internal fun pathOf(group: GroupId): ParsedGroupId? {
     val segments = group.value.split('/')
-    var attached = false
+    // The index of the first attached segment, or -1 while every segment so far is declared.
+    var firstAttached = -1
     val names = segments.mapIndexed { index, segment ->
         val marked = segment.startsWith(ATTACHED_MARKER)
-        if (marked && (index < 2 || index != segments.lastIndex)) return null
-        attached = marked
+        if (marked && firstAttached < 0) {
+            if (index < 2) return null
+            firstAttached = index
+        }
+        if (!marked && firstAttached >= 0) return null
         val name = unescapeSegment(if (marked) segment.substring(1) else segment) ?: return null
         if (name.isEmpty()) return null
         name
     }
-    val below = names.subList(1, names.size)
-    val path = if (attached) GroupPath.Attached(below.dropLast(1), below.last()) else GroupPath.Declared(below)
+    if (firstAttached < 0) return ParsedGroupId(names.first(), GroupPath.Declared(names.subList(1, names.size)))
+    val attached: GroupPath = GroupPath.Attached(names.subList(1, firstAttached), names[firstAttached])
+    val path = names.subList(firstAttached + 1, names.size).fold(attached) { parent, name -> GroupPath.Nested(parent, name) }
     return ParsedGroupId(names.first(), path)
 }
 

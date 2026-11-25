@@ -152,8 +152,8 @@ independently consumable. Both modules are published and constrained by
 ## 1. Two hierarchies, kept separate
 
 **The logical scheduling tree** is data, not schema — groups created, closed,
-and reparented at runtime, any depth, no fixed level names (today a child the app
-attaches while running is always a leaf; §11.1 says where that stands):
+and reparented at runtime, any depth, no fixed level names (the children an app
+attaches while running nest as deep as their templates do; §11.1 says how):
 
 ```text
 root
@@ -567,7 +567,8 @@ written through `CanonicalMapSerializer` at every level, with its own arm in
 `holdings`, `leafSpentTotal`, the generation floor and `hasChildEdges` each read
 the fold beside the live edges. A parent gets a row in `outflow` once any of its
 children is forgotten, even a row that nets to nothing, so it still counts as
-having child edges. A ledger with nothing forgotten holds `ForgottenEdges.NONE`,
+having child edges, until the group is forgotten itself (*A group goes
+whole*, below). A ledger with nothing forgotten holds `ForgottenEdges.NONE`,
 which a default `Json` or `Cbor` does not encode, so its bytes are what they
 were before the component existed.
 
@@ -579,13 +580,34 @@ names the first one an edge fails, as a `ForgetRefusal`, checking in the order
   only carry an id that has a generation), and one record names it;
 - it is RETIRED, or PREPARED;
 - its child has no child edges in any lifecycle, forgotten ones included, so
-  leaves go first;
+  leaves go first (`CHILD_HAS_CHILD_EDGES`); or every child edge its child had
+  is forgotten, no inbound edge of that child is live (`GROUP_LIVE`), and the
+  child's books close as a group (`GROUP_STRANDED`), in which case the edge
+  goes only with every other inbound edge of that child;
 - no transfer row, base or relocation, sits at its path;
 - a PREPARED edge has no counter and no gauge;
 - a RETIRED edge's books closed: charged plus returned within issued, no
   negative effective spend in total, no negative net inflow or effective leaf
-  spend in any one replica's share, nothing outstanding, nothing stranded on it
-  for any replica, and its child holding nothing.
+  spend in any one replica's share, and nothing outstanding; and, for a leaf's
+  edge, nothing stranded on it for any replica and its child holding nothing.
+  A group's edge skips those two: it carried what its children spent, so it
+  strands that by construction, and a dead group's holdings read nothing
+  whatever its books say. The group's balance is checked instead, across all
+  its inbound edges, as the next part describes.
+
+**A group goes whole.** An edge into a group whose child edges are all
+forgotten, so that only its row says it had any, is forgotten as a group's edge:
+with every other inbound edge of that group, in one `forget`, or not at all,
+and the group's row goes with them. The group must be dead, with no inbound
+edge live, and its books must close: for every replica, what its inbound edges
+still account for at it, summed, equals what its row says it handed down. Each
+edge's own net inflow and leaf spend fold into its parent's row, as a leaf's
+do. Nothing read the dropped row any more: with no live lineage the group's
+holdings read nothing before and after, the parent's holdings do not move, and
+neither does the leaf spend. A group whose books do not close keeps its edges,
+so a re-attach's `Reconcile` can still move the stranded units onto its new
+edge. A living group keeps its row and its edges, as a reweighted child does
+(*Open*, below).
 
 Whether an open lease's captured path crosses the edge is the engine's
 question, not the ledger's. With nothing outstanding, no lease is charging it.
@@ -635,11 +657,15 @@ format 1 before it ships.
 #### As built: the engine forgets
 
 `LocalHeddle` forgets automatically, with no new API, in the swap that lands
-each `apply`, `attach` and `detach`. That swap forgets:
+each `apply`, `attach` and `detach`. That swap forgets, in rounds, until a round
+finds nothing more:
 
-- every RETIRED edge `forgetRefusal` passes and no open lease's path crosses.
-  Every one, not only the edges this swap retired, so an edge an open lease
-  held at an earlier swap goes at the first swap after that lease settles;
+- every RETIRED edge `forgetRefusal` passes and no open lease's path crosses,
+  a leaf's or a dead group's. Every one, not only the edges this swap retired,
+  so an edge an open lease held at an earlier swap goes at the first swap after
+  that lease settles. A group's edges pass only once its children's are gone,
+  which is why there are rounds: a detached subtree goes deepest first, one
+  level a round, all in the swap that retires it;
 - every PREPARED edge the topology in force does not want: a diff of that
   topology would leave it prepared and name it in no step. It moves the floor and
   gives its parent a row, nothing else. An attached child's prepared edge is kept
@@ -648,9 +674,11 @@ each `apply`, `attach` and `detach`. That swap forgets:
 
 The same swap prunes each forgotten edge from the allocator's wake memory,
 `AllocatorMemory`, since `forgetDepartedChildren` finds an edge's parent through
-its record and could not once the record is gone. The sweep reads every edge's
-lifecycle once. It walks the counters for their replicas twice, once to choose
-the candidates and once to forget them, rather than once per candidate.
+its record and could not once the record is gone. Each round reads every
+edge's lifecycle once, and walks the counters for their replicas twice, once to
+choose the candidates and once to forget them, rather than once per candidate.
+A swap takes one round more than the depth of the deepest subtree it retires,
+and one round when nothing it retired can go.
 
 Measured on the JVM: 2,000 users each attached, served once and detached leave
 the snapshot within 64 bytes of where it stood after the first 20. Before, each
@@ -659,6 +687,12 @@ that forgets and one that keeps everything give the same picks, holdings and
 conservation on the same calls. A forgotten prepared edge does change a later
 diff: one that wants that edge back prepares a new edge above the floor instead
 of adopting the old one.
+
+Measured on the JVM over 200 cycles of attach an author, lease, complete and
+detach its repository, with a new repository each cycle, the same one again, or
+the lease held across the detach (#3314): 2 edges and about 1,190 bytes after
+20 cycles and after 200. Before groups went whole, the ledger held 202 edges
+after 200 cycles and about 69,000 bytes, one edge for every repository detached.
 
 #### Settled — don't reopen
 
@@ -681,14 +715,12 @@ of adopting the old one.
   per edge plus a tombstone, and a stored aggregate risks the drift that rejected
   candidate B ([`heddle-ledger-design.md`](heddle-ledger-design.md), *How this
   was chosen*). Tracked by #3332.
-- **A reweighted or reparented child's old edge stays.** A reweight or a move
-  retires the child's old edge and gives it a new one, so the child lives on and
-  usually holds something, and `CHILD_HOLDS` refuses the old edge while it does.
-  Only a child that is gone for good compacts reliably.
-- **A group whose children were forgotten is never forgotten itself.** Its row
-  in the fold keeps it counting as having child edges, and leaves go first. An
-  attached child is always a leaf, so this bites a declared group removed after
-  its attached children came and went.
+- **A reweighted or reparented child's old edge stays while the child lives.**
+  A reweight or a move retires the child's old edge and gives it a new one, so
+  the child lives on and usually holds something, and `CHILD_HOLDS` refuses the
+  old edge while it does. A living group keeps its row and its old edges the
+  same way, refused as `GROUP_LIVE`. Only a child or a group that is gone for
+  good compacts reliably.
 
 ## 6. Demand is an `EphemeralMap`, and that is not an accident
 
@@ -2710,14 +2742,21 @@ declared edges: under a template the new tree keeps, an attached child is kept, 
 and all; a new template weight regenerates it on a new edge; and when the template goes, or
 its group does, the child is closed. Each detach retires the child's edge, and the
 engine forgets it in the same swap once its books close (§5.5), so an attached child
-can be detached whenever it goes idle.
+can be detached whenever it goes idle. An attached group goes the same way, in the
+swap that retires the last edge beneath it: its children first, then its own edges.
 
-An attached child is a leaf, one level below its group: it cannot carry a template
-itself, so nothing discovered while running has children of its own. §1's "any depth"
-is met today by declared groups, which nest freely and reshape on a reload, and not
-yet by attached ones. A tree found while running two levels deep (say, a repository and
-then its authors) has to declare each repository as a group with a template and reload as
-each one appears. Letting an attached child have attached children is tracked by #3314.
+A template may carry a template of its own (#3314), and then each child attached under
+it is a group: a tree found while running two levels deep (say, a repository and then its
+authors) is a declared group whose template's template is the authors'. Everything below
+an attached child is attached, so the id grammar marks a contiguous suffix with `!`
+(`pool/ci/!kuilt/!alice`), and a declared name never follows an attached one. Weights
+are per template. `attach(path, ledger, generation)` attaches any missing attached
+ancestor in the same list, and `detach(path, ledger)` takes the whole subtree beneath an
+attached group, closes top-down and retires bottom-up as a removal of a declared subtree
+does; attaching the group again brings none of its children back. An attached group is
+never leased, even before its first child arrives and the ledger reads it as a leaf. So
+§1's "any depth" now holds for attached groups too, with one difference from declared
+ones: an attached subtree is reshaped by detaching it, not by a reload.
 
 ### 11.2 A ceiling: "run no more than N of these"
 

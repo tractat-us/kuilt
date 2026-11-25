@@ -119,6 +119,8 @@ class EntitlementLedgerForgetTest {
             Triple("a fold negative for one replica", oneReplicaNegative(), e) to ForgetRefusal.NEGATIVE_FOLD,
             Triple("units outstanding", closed(leafSpent = mapOf(e to counter(r1 to 3L))), e) to ForgetRefusal.OUTSTANDING,
             Triple("a strand that nets to zero", closed(leafSpent = mapOf(e to counter(r2 to 5L))), e) to ForgetRefusal.STRANDED,
+            Triple("a group, its children forgotten, with its books open", deadGroup(handedDown = 3L), e) to ForgetRefusal.GROUP_STRANDED,
+            Triple("a group, its children forgotten, still live", deadGroup(handedDown = 5L, live = true), e) to ForgetRefusal.GROUP_LIVE,
             Triple(
                 "a child live under another edge",
                 closed(records = liveSecond, issued = mapOf(e to counter(r1 to 5L), e2 to counter(r1 to 3L)), lifecycle = mapOf(e to Lifecycle.RETIRED)),
@@ -131,10 +133,50 @@ class EntitlementLedgerForgetTest {
                 val check: () -> Unit = {
                     assertEquals(expected, ledger.forgetRefusal(edge), name)
                     assertNull(ledger.forget(listOf(edge)), "$name: forget refuses")
+                    assertEquals(emptyList(), ledger.forgettable(listOf(edge)), "$name: forgettable leaves it out")
                 }
                 check
             }.toTypedArray(),
             { assertNull(closed(leafSpent = mapOf(e to counter(r1 to 3L))).forget(listOf(e, AttachmentId("root/z@1:1#0"))), "one refusal refuses the lot") },
+        )
+    }
+
+    /**
+     * `root → c` over [e], RETIRED, where `c` is a group whose one child edge (generation 2) is
+     * already forgotten, its fold saying [handedDown] went down through it. [r1] was issued 5 at [e]
+     * and 5 rolled up through it, so nothing is outstanding; with [handedDown] at 5 the group's books
+     * close, and below that 5 − [handedDown] are stranded at `c`. [live] adds a second, ACTIVE edge
+     * into `c`, so the group is alive.
+     */
+    private fun deadGroup(handedDown: Long, live: Boolean = false): EntitlementLedger = EntitlementLedger.of(
+        records = mapOf(e to setOf(AttachmentRecord(e, root, c, Weight.ONE))) +
+            (if (live) mapOf(e2 to setOf(AttachmentRecord(e2, root, c, Weight.ONE))) else emptyMap()),
+        minted = mapOf(MintId("m") to MintRecord(root, r1, 10L)),
+        issued = mapOf(e to counter(r1 to 5L)),
+        rollupSpent = mapOf(e to counter(r1 to 5L)),
+        lifecycle = mapOf(e to Lifecycle.RETIRED),
+        forgottenOutflow = mapOf(c to mapOf(r1 to handedDown)),
+        forgottenLeafSpend = mapOf(r1 to handedDown),
+        forgottenGenerationFloor = 2L,
+    )
+
+    /**
+     * A group whose children are all forgotten is forgotten itself once its books close: its edge
+     * folds into the root's row, and its own row goes. The twin of the open-books case in
+     * [eachIneligibleEdgeIsRefusedForItsOwnReason], one number apart.
+     */
+    @Test
+    fun aDeadGroupWhoseBooksCloseIsForgottenWithItsRow() {
+        val before = deadGroup(handedDown = 5L)
+        val after = checkNotNull(before.forget(listOf(e)))
+        assertAll(
+            { assertNull(before.forgetRefusal(e), "the rig: forgettable") },
+            { assertTrue(c in before.allGroups(), "the rig: c had a row") },
+            { assertEquals(emptySet(), after.allEdges()) },
+            { assertTrue(c !in after.allGroups() && !after.hasChildEdges(c), "c's row went with its edge") },
+            { assertEquals(before.holdings(root, r1), after.holdings(root, r1), "the root's holdings do not move") },
+            { assertEquals(before.leafSpentTotal(), after.leafSpentTotal(), "nor does the leaf spend") },
+            { assertEquals(3L, after.generationFloor()) },
         )
     }
 

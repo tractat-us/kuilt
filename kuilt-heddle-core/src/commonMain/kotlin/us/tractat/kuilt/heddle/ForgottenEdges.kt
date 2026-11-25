@@ -17,7 +17,9 @@ import us.tractat.kuilt.crdt.ReplicaId
  *   so a new edge is never numbered at or below one the ledger once held.
  *
  * A parent appears in [outflow] once any of its children is forgotten, even when what it folded
- * nets to zero, because "this group has child edges" is part of what the child's edge meant.
+ * nets to zero, because "this group has child edges" is part of what the child's edge meant. The
+ * row stays while the parent lives, and goes when the parent is forgotten itself: every inbound
+ * edge of it at once, when none is live and its books close ([EntitlementLedger.forget]).
  *
  * It is the ledger's seventeenth component, and the only one that is not a join: forgetting removes
  * slots, so [EntitlementLedger.piece] refuses any fold that is not the receiver's own. It is scoped to a single
@@ -81,8 +83,26 @@ internal enum class ForgetRefusal {
     /** The edge is ACTIVE or CLOSING: only a RETIRED or an unused PREPARED edge is forgotten. */
     LIVE,
 
-    /** The edge's child has child edges, live, retired or forgotten: leaves go first. */
+    /**
+     * The edge's child has a child edge the ledger still holds, live or retired: leaves go first. A
+     * child whose child edges are all forgotten is judged as a group instead, by [GROUP_LIVE] and
+     * [GROUP_STRANDED]; when neither applies, its inbound edges go together, with its row in
+     * [ForgottenEdges.outflow].
+     */
     CHILD_HAS_CHILD_EDGES,
+
+    /**
+     * Every child edge the edge's child had is forgotten, but an inbound edge of that child is
+     * still live: a group that lives keeps its row in [ForgottenEdges.outflow], and its edges.
+     */
+    GROUP_LIVE,
+
+    /**
+     * Every child edge the edge's child had is forgotten and none of its inbound edges is live, but
+     * its books do not close as a group: what its inbound edges still account for at it is not what
+     * its row says it handed down. Those units stay for a re-attach's reconcile to recover.
+     */
+    GROUP_STRANDED,
 
     /** A transfer row, base or relocation, sits at the edge's path, and would lose its key. */
     TRANSFER_ROWS,
