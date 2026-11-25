@@ -28,9 +28,12 @@ coming back is recognised by the key it proves, never by a name or a token it wa
 
 A host revokes a lost device in the `RevocationList` its `HostAdmission` holds. Every pass issued to
 the device before that moment stops working, and when the device next says hello the policy decides
-it like a newcomer. A seat the room still holds for it is let go only if the policy lets it in; if
-the policy says no, the seat stays held until its hold runs out. A pass issued after the revocation,
-which a later admission gave the device, still works. Revoking removes nobody who is in the room
+it like a newcomer. A seat the room still holds for it is let go only when that hello asks for the
+seat under its own peer id, and then only if the policy lets the device in; if the policy says no,
+the seat stays held until its hold runs out. An app reopened after a kill normally says hello under a
+new peer id, and then the old seat is never let go or taken over: it ends when its hold does,
+whatever the policy says. A pass issued after the revocation, which a later admission gave the
+device, still works, and lets the device back without asking the policy. Revoking removes nobody who is in the room
 now, though their pass stops being renewed, and it is not a ban: to keep a device out, the policy
 refuses it.
 
