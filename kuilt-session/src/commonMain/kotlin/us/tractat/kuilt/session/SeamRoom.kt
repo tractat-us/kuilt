@@ -5405,6 +5405,9 @@ internal class SeamRoom(
     /** Test-visibility: the members a host `Welcome` has named since this joiner's latest Hello (#3615). */
     internal fun namedSinceHelloForTest(): Set<PeerId> = lock.withLock { namedSinceHello.toSet() }
 
+    /** Test-visibility: whether this host is renewing [peerId]'s pass (#3221). */
+    internal fun renewsPassForTest(peerId: PeerId): Boolean = lock.withLock { grantRenewals[peerId]?.isActive == true }
+
     /** Test-visibility: how many membership ids this host holds — one per current member (#3215). */
     internal fun heldMembershipCount(): Int = lock.withLock { memberships.size }
 
