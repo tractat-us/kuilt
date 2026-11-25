@@ -60,6 +60,9 @@ class RouteWatcherMarkConcurrencyTest {
                 val room = SeamRoomFactory(InMemoryLoom(), scope, { Clock.System.now() }, fakeKeyStore(HOST_DEVICE))
                     .adopt(seam, SessionRole.Host, memberName = "Host", roomId = KEY_SEAT_ROOM)
 
+                // Its first read, of a list with bob, so that his leaving is a departure to it.
+                stage.at("awaiting the watcher's first read")
+                val started = seam.started.await(STEP, TimeUnit.SECONDS)
                 seam.arm()
                 fake.removePeer(bob)
                 stage.at("awaiting the watcher's read without bob")
@@ -75,15 +78,20 @@ class RouteWatcherMarkConcurrencyTest {
                 val stillHeld = seam.release.count == 1L
 
                 seam.release.countDown()
+                // The watcher's next read is of bob's return, so by then it has acted on the read it held.
+                stage.at("awaiting the watcher's next read")
+                val actedBeforeProof = seam.readAgain.await(STEP, TimeUnit.SECONDS)
                 assertNotNull(challenge, "rig: the host challenged bob while the watcher was held")
                 fake.deliver(bob, AdmitMessage.encode(handProof(challenge, hostId, TEST_DEVICE_A)))
                 stage.at("awaiting bob's admission")
                 val admitted = withTimeoutOrNull(STEP.seconds) { room.roster.first { roster -> roster.any { it.id == bob } } } != null
 
                 assertAll(
+                    { assertTrue(started, "rig: the watcher read a list with bob first") },
                     { assertTrue(held, "rig: the watcher read a list without bob and blocked") },
                     { assertEquals(setOf(hostId), seam.read, "rig: the list the watcher read") },
                     { assertTrue(stillHeld, "rig: the watcher was still held when the challenge went out") },
+                    { assertTrue(actedBeforeProof, "rig: the watcher acted on its read before bob's proof arrived") },
                     { assertTrue(admitted, "bob's proof finds the challenge opened after the watcher's read") },
                 )
                 room.leave()
@@ -95,14 +103,18 @@ class RouteWatcherMarkConcurrencyTest {
     }
 
     /**
-     * The host's seam over [fake], recording every admit frame the room sends. Once [arm]ed, the first
+     * The host's seam over [fake], recording every admit frame the room sends. The route watcher's
+     * first read of a list with [without] counts down [started]. Once [arm]ed, the first
      * read of [Seam.peers]'s `value` **by the route watcher** that finds no [without] blocks its thread
-     * until [release], then answers the list it read. Other readers are never blocked: holding the main
-     * loop's thread would stop the very Hello the test needs.
+     * until [release], then answers the list it read; the watcher's next read counts down [readAgain].
+     * Other readers are never blocked: holding the main loop's thread would stop the very Hello the
+     * test needs.
      */
     private class BlockingReadSeam(private val fake: FakeSeam, private val without: PeerId) : Seam by fake {
+        val started = CountDownLatch(1)
         val held = CountDownLatch(1)
         val release = CountDownLatch(1)
+        val readAgain = CountDownLatch(1)
         val sent = Channel<Pair<PeerId, AdmitMessage>>(Channel.UNLIMITED)
 
         @Volatile
@@ -125,11 +137,16 @@ class RouteWatcherMarkConcurrencyTest {
             override val value: Set<PeerId>
                 get() {
                     val now = fake.peers.value
-                    if (armed && without !in now && fromRouteWatcher()) {
+                    if (!fromRouteWatcher()) return now
+                    if (armed && without !in now) {
                         armed = false
                         read = now
                         held.countDown()
                         release.await(STEP, TimeUnit.SECONDS)
+                    } else if (read != null) {
+                        readAgain.countDown()
+                    } else if (!armed && without in now) {
+                        started.countDown()
                     }
                     return now
                 }
