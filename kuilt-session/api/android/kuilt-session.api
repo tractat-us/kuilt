@@ -99,6 +99,13 @@ public final class us/tractat/kuilt/session/LeaveReason$Superseded : us/tractat/
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/session/LeaveReason$Unobserved : us/tractat/kuilt/session/LeaveReason {
+	public static final field INSTANCE Lus/tractat/kuilt/session/LeaveReason$Unobserved;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface class us/tractat/kuilt/session/Liveness {
 }
 

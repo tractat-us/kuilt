@@ -5243,7 +5243,7 @@ internal class SeamRoom(
             when (reason) {
                 is LeaveReason.Normal -> CloseReason.Normal
                 is LeaveReason.Error -> CloseReason.Error(RuntimeException(reason.message))
-                is LeaveReason.PartitionExpired, is LeaveReason.Superseded -> CloseReason.Normal
+                is LeaveReason.PartitionExpired, is LeaveReason.Superseded, is LeaveReason.Unobserved -> CloseReason.Normal
             },
         )
     }

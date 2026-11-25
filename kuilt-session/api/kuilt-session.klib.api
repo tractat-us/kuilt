@@ -881,6 +881,12 @@ sealed interface us.tractat.kuilt.session/LeaveReason { // us.tractat.kuilt.sess
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/LeaveReason.PartitionExpired.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.session/LeaveReason.PartitionExpired.toString|toString(){}[0]
     }
+
+    final object Unobserved : us.tractat.kuilt.session/LeaveReason { // us.tractat.kuilt.session/LeaveReason.Unobserved|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/LeaveReason.Unobserved.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/LeaveReason.Unobserved.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/LeaveReason.Unobserved.toString|toString(){}[0]
+    }
 }
 
 sealed interface us.tractat.kuilt.session/Liveness { // us.tractat.kuilt.session/Liveness|null[0]
