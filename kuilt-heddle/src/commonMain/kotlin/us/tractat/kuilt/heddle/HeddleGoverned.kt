@@ -220,7 +220,11 @@ public class GovernedHeddleNode internal constructor(
     /** The replicated entitlement ledger as converged on this peer (the gossip-merged data-plane view). */
     public val ledger: StateFlow<EntitlementLedger> get() = node.ledger
 
-    /** Peer-liveness signals (design §8.1); the node takes no ledger action on either. */
+    /**
+     * Peer-liveness signals (design §8.1); the node takes no ledger action on either. An event is
+     * announced only after [unreachable] reflects it, and an event from a detector that no longer
+     * watches its peer is never announced (see [HeddleNode.partitionEvents]).
+     */
     public val partitionEvents: Flow<PartitionEvent> get() = node.partitionEvents
 
     /** Peers currently flagged unresponsive or lost by the liveness detectors. */
