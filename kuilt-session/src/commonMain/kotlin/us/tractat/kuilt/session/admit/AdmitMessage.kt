@@ -164,10 +164,11 @@ public sealed interface AdmitMessage {
      *   host's own key. Every one is the host's assertion. **Required on the wire**, unlike
      *   [Hello.key]: a v2 host, the only sender of a keyless Welcome, refuses a v3 Hello before it
      *   admits anyone, so a v3 joiner never receives one.
-     * [returnKind] — set only on the direct Welcome, when the host restored a seat it was holding
-     *   rather than admitting a new member (v5, #3212): under the same peer id, or, taking over a
-     *   partitioned seat of the same key, under a new one (v6, #3213). `null` is an ordinary
-     *   admission. It describes the host's decision; a joiner reads a restore from [membership]
+     * [returnKind] — set on the direct Welcome when the host restored a seat it was holding rather
+     *   than admitting a new member (v5, #3212): under the same peer id, or, taking over a
+     *   partitioned seat of the same key, under a new one (v6, #3213). [ReturnKind.Returning] (v9,
+     *   #3222) marks a device let back in on its pass, and rides the roster copy as well, so every
+     *   member hears it. `null` is an ordinary admission. It describes the host's decision; a joiner reads a restore from [membership]
      *   instead, since only that names *which* membership came back.
      * [answers] — the [Hello.joinerNonce] of the Hello this Welcome answers (v7, #3215), on the direct
      *   Welcome, the bootstrap Welcomes and the host intro; never on a roster copy. A joiner takes a
@@ -190,6 +191,10 @@ public sealed interface AdmitMessage {
      *   member stays connected ([GrantRenewal]). `null` when the host issued none: its policy gave the
      *   membership no terms, or it could not sign. Opaque here, like [Challenge.statement]: a grant is
      *   checked over exactly the bytes its issuer signed. Compared by content.
+     * [previousPeerId] — on a Welcome marked [ReturnKind.Returning] (v9, #3222), the direct one and its
+     *   roster copy: the peer id this device last held a seat under in this room, while the host
+     *   still remembers it. `null` when it does not: the host restarted since, or the last pass it
+     *   gave that membership has run out. `null` on every other Welcome.
      */
     @Serializable
     @SerialName("welcome")
@@ -204,6 +209,7 @@ public sealed interface AdmitMessage {
         val answers: ByteArray? = null,
         val membership: String? = null,
         val grant: ByteArray? = null,
+        val previousPeerId: String? = null,
     ) : AdmitMessage {
         init {
             require(answers == null || answers.size == Hello.JOINER_NONCE_SIZE) {
@@ -223,7 +229,8 @@ public sealed interface AdmitMessage {
                 returnKind == other.returnKind &&
                 answers.contentEquals(other.answers) &&
                 membership == other.membership &&
-                grant.contentEquals(other.grant)
+                grant.contentEquals(other.grant) &&
+                previousPeerId == other.previousPeerId
 
         override fun hashCode(): Int {
             var result = assignedPeerId.hashCode()
@@ -236,6 +243,7 @@ public sealed interface AdmitMessage {
             result = 31 * result + answers.contentHashCode()
             result = 31 * result + (membership?.hashCode() ?: 0)
             result = 31 * result + grant.contentHashCode()
+            result = 31 * result + (previousPeerId?.hashCode() ?: 0)
             return result
         }
     }
@@ -581,7 +589,10 @@ public enum class ReturnKind {
 
     /**
      * The seat was gone, and the joiner was let back in without vetting on a grant the host issued
-     * it. Not sent yet: returning admission lands with grants.
+     * it (v9, #3222): a new membership the host's admission policy was not asked about. Set on the
+     * direct Welcome and on its roster copy to every other member, so each of them can tell the same
+     * device returning from a stranger; [AdmitMessage.Welcome.previousPeerId] names the id it last
+     * held, when the host remembers it.
      */
     @SerialName("returning")
     Returning,

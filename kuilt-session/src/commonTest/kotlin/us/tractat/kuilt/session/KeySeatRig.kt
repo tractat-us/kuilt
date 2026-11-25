@@ -21,6 +21,7 @@ import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
@@ -276,8 +277,8 @@ internal class RawHost(
         joinerNonce = ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE) { nonce },
     )
 
-    /** The proof [device] signs, as fabric sender [from], to answer [challenge]. */
-    suspend fun proof(challenge: Challenge, device: DeviceKey, from: PeerId): AdmitMessage.Proof = AdmitMessage.Proof(
+    /** The proof [device] signs, as fabric sender [from], to answer [challenge], presenting [grants]. */
+    suspend fun proof(challenge: Challenge, device: DeviceKey, from: PeerId, grants: List<Grant> = emptyList()): AdmitMessage.Proof = AdmitMessage.Proof(
         AdmissionProof.sign(
             joiner = device,
             roomId = challenge.roomId,
@@ -287,21 +288,32 @@ internal class RawHost(
             deviceId = null,
             hostNonce = challenge.hostNonce,
         ).wire,
+        grants.map { it.wire },
     )
 
     /**
      * One whole exchange from fabric sender [from] proving [device]: Hello, then the proof answering
-     * the challenge that Hello drew. Asserts the challenge was sent — the rig fired — and returns it.
+     * the challenge that Hello drew, presenting [grants]. Asserts the challenge was sent — the rig
+     * fired — and returns it.
      */
-    suspend fun admit(from: PeerId, device: DeviceKey, nonce: Byte, name: String = from.value): Challenge {
+    suspend fun admit(from: PeerId, device: DeviceKey, nonce: Byte, name: String = from.value, grants: List<Grant> = emptyList()): Challenge {
         val before = challengesTo(from).size
         say(from, hello(name, device.id, nonce))
         val challenges = challengesTo(from)
         assertTrue(challenges.size == before + 1, "rig: the Hello from ${from.value} drew one challenge")
         val challenge = challenges.last()
-        say(from, proof(challenge, device, from))
+        say(from, proof(challenge, device, from, grants))
         return challenge
     }
+
+    /** Every pass the host sent [peer], on its direct Welcomes and renewals, decoded, in order. */
+    fun passesTo(peer: PeerId): List<Grant> = sentTo(peer).mapNotNull { message ->
+        when (message) {
+            is AdmitMessage.Welcome -> message.grant?.takeIf { message.assignedPeerId == peer.value }
+            is AdmitMessage.GrantRenewal -> message.grant
+            else -> null
+        }
+    }.map { assertNotNull(Grant.decode(it), "every pass the host sends decodes") }
 
     /** A frame from [from] the host's detector counts as contact. */
     suspend fun ping(from: PeerId) {
@@ -343,6 +355,7 @@ internal suspend fun TestScope.rawHost(
     store: DeviceKeyStore = fakeKeyStore(HOST_DEVICE),
     clock: () -> Instant = virtualClock(),
     admission: HostAdmission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
+    roomId: RoomId? = KEY_SEAT_ROOM,
 ): RawHost {
     val seam = FakeSeam(selfId = KEY_SEAT_HOST, initialPeers = setOf(KEY_SEAT_HOST) + joiners)
     val room = SeamRoomFactory(
@@ -353,10 +366,10 @@ internal suspend fun TestScope.rawHost(
         heartbeatConfig = KEY_SEAT_HEARTBEAT,
         admitTimeout = KEY_SEAT_ADMIT_TIMEOUT,
         reconnectControllerFactory = hold.factory,
-    ).adopt(seam, AdoptRole.Host(admission, roomId = KEY_SEAT_ROOM), memberName = "Host")
+    ).adopt(seam, AdoptRole.Host(admission, roomId = roomId), memberName = "Host")
     val events = EventLog(room, backgroundScope)
     testScheduler.runCurrent()
-    return RawHost(this, seam, room, hold, events, fakeDidKey(HOST_DEVICE))
+    return RawHost(this, seam, room, hold, events, store.deviceKey().id)
 }
 
 // ── Real rooms with peer ids the test chooses ────────────────────────────────

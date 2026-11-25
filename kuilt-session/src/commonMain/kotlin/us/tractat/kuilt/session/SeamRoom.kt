@@ -5439,6 +5439,9 @@ internal class SeamRoom(
     /** Test-visibility: whether this host is renewing [peerId]'s pass (#3221). */
     internal fun renewsPassForTest(peerId: PeerId): Boolean = lock.withLock { grantRenewals[peerId]?.isActive == true }
 
+    /** Test-visibility: how many departed members this host still remembers (#3222). */
+    internal fun departedRecordCountForTest(): Int = 0
+
     /** Test-visibility: how many membership ids this host holds — one per current member (#3215). */
     internal fun heldMembershipCount(): Int = lock.withLock { memberships.size }
 

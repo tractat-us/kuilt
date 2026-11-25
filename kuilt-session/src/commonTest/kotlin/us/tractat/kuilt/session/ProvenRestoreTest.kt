@@ -14,8 +14,13 @@ import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.test.fakeDeviceKey
 import us.tractat.kuilt.identity.test.fakeDidKey
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionDecision
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.GrantTerms
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.admit.ReturnKind
@@ -28,6 +33,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.hours
 
 /**
  * A joiner that proves the key a held seat was admitted under gets that seat back (#3159, Task 1.5).
@@ -528,8 +534,8 @@ class ProvenRestoreTest {
      * The controller refuses the restore — a hold policy that has given the seat up — so the seat is
      * treated as gone and the key is decided again without it: ordinary admission, as a new member.
      *
-     * Only the `Ordinary` arm is here. The `Returning` arm (a valid grant) needs the host to verify a
-     * presented grant, which lands in Task 2.6 with the per-key revocation check.
+     * This is the `Ordinary` arm, with no pass presented. The `Returning` arm, the same refusal met
+     * by a device holding a good pass, is [windowExpiredWithAGoodPassReturnsUnvetted].
      */
     @Test
     fun windowExpiredDecidesAgainWithoutTheSeat() = runTest {
@@ -560,6 +566,57 @@ class ProvenRestoreTest {
             { assertEquals(listOf<ReturnKind?>(null), direct.map { it.returnKind }, "an ordinary admission is not marked") },
             { assertTrue(host.rejectsTo(bob).isEmpty()) },
             { assertEquals(Liveness.Connected, host.member(bob)?.liveness, "still a member after the old window would have run out") },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * The `Returning` arm of [windowExpiredDecidesAgainWithoutTheSeat] (#3222, moved here from Task
+     * 1.5): the refused seat is released and the key decided again without it, and Bob's good pass
+     * makes that decision `Returning`. So the policy is not asked, the direct Welcome is marked, and
+     * the host's `Joined` names the id whose seat it just let go.
+     */
+    @Test
+    fun windowExpiredWithAGoodPassReturnsUnvetted() = runTest {
+        var asked = 0
+        val admission = HostAdmission(
+            AdmissionPolicy {
+                asked++
+                AdmissionDecision.Admit(GrantTerms(1.hours))
+            },
+            RevocationList.inMemory(),
+        )
+        val host = rawHost(
+            joiners = setOf(bob, carol),
+            hold = ObservedHold(verdict = { ResumeResult.WindowClosed }),
+            admission = admission,
+        )
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        val pass = host.passesTo(bob).single()
+        host.partition(bob, alive = setOf(carol))
+        val vettedBefore = asked
+
+        val mark = host.events.mark()
+        val toBob = host.sentTo(bob).size
+        host.admit(bob, bobKey, nonce = 3, grants = listOf(pass))
+        val edges = host.events.edgesSince(mark)
+        val direct = host.sentTo(bob).drop(toBob).welcomesFor(bob)
+
+        assertAll(
+            { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.WindowClosed), host.hold.verdicts, "rig: the restore was refused") },
+            { assertEquals(2, vettedBefore, "rig: Bob and Carol were each vetted once") },
+            { assertEquals(vettedBefore, asked, "a return on a good pass is not vetted") },
+            {
+                assertEquals(
+                    listOf("Left(bob, ${LeaveReason.PartitionExpired})", "Joined(bob)"),
+                    edges.map { it.describe() },
+                    "the held seat goes, then the device returns: ${edges.render()}",
+                )
+            },
+            { assertEquals(ReturningMark(previousId = bob), edges.filterIsInstance<MembershipEvent.Joined>().single().returning) },
+            { assertEquals(listOf<ReturnKind?>(ReturnKind.Returning), direct.map { it.returnKind }, "the direct Welcome is marked") },
+            { assertTrue(host.rejectsTo(bob).isEmpty()) },
         )
         host.room.leave()
     }
