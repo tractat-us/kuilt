@@ -564,25 +564,46 @@ class JoinerReconnectControllerTest {
             assertEquals(listOf(opened(100L), expired(100L)), events.map { it.normalised() })
         }
 
-    /** The same episode reported again must not reset a spent window, the #1572 distinction. */
+    /**
+     * An open at a live window's own instant is that episode again: the window is not re-armed or
+     * announced again, and keeps its deadline.
+     */
     @Test
-    fun `an open at the held window's own instant does not reopen a spent window`() =
+    fun `an open at a live window's own instant is ignored`() =
         runTest {
             val ctrl = controller(backgroundScope)
             val events = collect(ctrl)
+
+            ctrl.onPeerUnresponsive(peerA, at = 100L)
+            testScheduler.runCurrent()
+            ctrl.onPeerUnresponsive(peerA, at = 100L)
+            testScheduler.advanceTimeBy(150L + windowMs)
+            testScheduler.runCurrent()
+
+            assertEquals(listOf(opened(100L), expired(100L)), events.map { it.normalised() })
+        }
+
+    /**
+     * Once a window is spent, a drop at its instant opens one: a clock that did not move between two
+     * drops reports both at the same instant (`JoinerReconnectTest`'s repeated tears, on a fixed
+     * clock), so the room can return a second time.
+     */
+    @Test
+    fun `an open at a spent window's own instant opens one`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
             val token = ProvenResume(peerId = peerA, roomId = sessionId, key = keyA)
 
             ctrl.onPeerUnresponsive(peerA, at = 100L)
             testScheduler.runCurrent()
-            val first = ctrl.tryResume(token, at = 150L)
+            val first = ctrl.tryResume(token, at = 100L)
             ctrl.onPeerUnresponsive(peerA, at = 100L)
             testScheduler.runCurrent()
-            val second = ctrl.tryResume(token, at = 160L)
+            val second = ctrl.tryResume(token, at = 100L)
 
             assertAll(
                 { assertEquals(ResumeResult.Success, first, "rig: the window was spent on a resume") },
-                { assertEquals(ResumeResult.WindowClosed, second, "a spent window stays spent") },
-                { assertEquals(1, events.count { it is JoinerReconnectEvent.WindowOpened }, "and is not announced again: $events") },
+                { assertEquals(ResumeResult.Success, second, "the second drop has a window of its own") },
             )
         }
 

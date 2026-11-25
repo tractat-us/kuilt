@@ -2,7 +2,6 @@ package us.tractat.kuilt.session.partition
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -27,9 +26,17 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.session.partition.De
  *
  * **Calls are ordered by the instant they carry, not by when they arrive (#3673).** A peer has one
  * window here, and a room makes these calls outside its lock, so a call about a membership that has
- * since ended can arrive after the newer membership's window opened. An [onPeerUnresponsive] whose
- * `at` is older than the window's `detectedAt` is ignored, and so is an [onPeerRecovered] whose `at`
- * precedes it. An equal `at` is the same episode: it re-arms or disarms that window.
+ * since ended can arrive after the newer membership's window opened.
+ * - An [onPeerUnresponsive] whose `at` is no later than the held window's `detectedAt` is ignored
+ *   while that window is **live**: armed, and neither resumed, expired nor disarmed.
+ * - Once the held window has finished, an older or equal `at` opens a window as usual. It is what a
+ *   clock that stepped back, or one too coarse to tell two drops apart, reports for the next drop.
+ *   Refused, that drop would have no window, so nothing would expire its seat and no other member
+ *   would be told. The cost is that the same episode reported again after a resume would re-open
+ *   its spent window; a room reports each episode once.
+ * - An [onPeerRecovered] disarms the held window only when its `at` is **strictly later** than the
+ *   window's `detectedAt`. A detector reports a recovery at least one poll after the drop it
+ *   recovers from, so a recovery at the same instant is about the episode before.
  *
  * @param roomId The Room this controller guards. A [ProvenResume] for a different
  *   Room holds no window here, so it is answered [ResumeResult.WindowClosed]; a room never builds one.
@@ -39,6 +46,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.session.partition.De
  *   `System.currentTimeMillis()` from commonMain production code; the JVM
  *   wiring layer (your dependency injection container) passes `{ System.currentTimeMillis() }`.
  *   Tests pass a fixed or advancing value so no wall-clock coupling escapes.
+ *   The ordering above assumes the instants handed to this controller do not run backwards. A wall
+ *   clock can step back, and then a recovery reported after the step, at an instant before the held
+ *   window opened, leaves that window armed: its expiry is refused by a room that holds the member
+ *   connected, but it is not disarmed.
  * @param scope Coroutine scope that owns per-peer timer jobs. Must outlive this
  *   controller; typically the Room's scope.
  */
@@ -119,27 +130,28 @@ public class DefaultJoinerReconnectController(
 
         // The check, the cancel and the write are one section: split, two calls could both pass the
         // check and the older one's write land last.
-        val timerJob = mutex.withLock {
+        mutex.withLock {
             val existing = windows[peerId]
-            // A drop older than this window's is about a membership that has ended (#3673). Acted
-            // on, it would replace the newer window with one that expires early, so a Proof inside
-            // the newer window would be refused and its expiry would never name it.
-            if (existing != null && at < existing.detectedAt) {
+            // A drop no later than a live window is about that episode or a membership that has
+            // ended (#3673). Acted on, an older one would replace the newer window with one that
+            // expires early, so a Proof inside the newer window would be refused and its expiry would
+            // never name it. Once the held window has finished, an older or equal drop is a clock
+            // that stepped back or did not move, and opens a window (see the class KDoc).
+            if (existing != null && at <= existing.detectedAt && existing.isLive) {
                 logger.debug { "window.open.stale peer=${peerId.value} at=$at held=${existing.detectedAt}" }
                 return
             }
             // Cancel any in-flight timer for this peer (e.g. a refreshed window).
             existing?.timerJob?.cancel()
-            // Lazy, and started once the window is stored, so the timer never runs against the
-            // window it replaces.
-            val timer = scope.launch(start = CoroutineStart.LAZY) { runTimer(peerId, expiresAt) }
+            // Launched inside the section, which is safe: the timer reaches `windows` only through
+            // this mutex, so it sees the window stored below, and a later replacement cancels it
+            // under the same mutex before it can act.
+            val timer = scope.launch { runTimer(peerId, expiresAt) }
             // `detectedAt` is stored, not re-read later: it is this episode's identity, and
             // `forceExpire` has to echo the same value onto `WindowExpired` however it is reached
             // (timer or explicit `expire`). See [JoinerReconnectEvent.WindowExpired.detectedAt].
             windows[peerId] = WindowState(timerJob = timer, detectedAt = at)
-            timer
         }
-        timerJob.start()
         // `detectedAt` is the `at` this controller was handed, echoed unchanged — NOT `clock()`.
         // The whole point is to name the episode this window belongs to, and a clock read here
         // would name the moment the announcement was made, which is the ambiguous quantity (#1781).
@@ -167,20 +179,24 @@ public class DefaultJoinerReconnectController(
      * fast-reconnect race would answer [ResumeResult.WindowClosed] — terminal, "re-join fresh" —
      * for a peer whose window merely stopped being needed.
      *
-     * A recovery at an instant before the window's `detectedAt` is about an earlier episode, often
-     * of a membership that has ended (#3673), and leaves the window armed: disarmed, it would never
-     * expire, and nothing would tell the other members the seat is gone.
+     * A recovery that is not strictly later than the window's `detectedAt` is about an earlier
+     * episode, often of a membership that has ended (#3673), and leaves the window armed: disarmed,
+     * it would never expire, and nothing would tell the other members the seat is gone. An equal
+     * instant counts as earlier, since a detector reports a recovery at least one poll after the
+     * drop it recovers from.
      */
     private suspend fun cancelWindowTimer(peerId: PeerId, at: Long) {
         val timerJob = mutex.withLock {
             val state = windows[peerId] ?: return
-            if (at < state.detectedAt) {
+            if (at <= state.detectedAt) {
                 logger.debug { "window.recover.stale peer=${peerId.value} at=$at held=${state.detectedAt}" }
                 return
             }
-            state.takeIf { it.expiredAt == null }?.timerJob
+            if (state.expiredAt != null) return
+            state.disarmed = true
+            state.timerJob
         }
-        timerJob?.cancel()
+        timerJob.cancel()
     }
 
     private suspend fun runTimer(
@@ -227,4 +243,10 @@ private class WindowState(
 ) {
     var consumed: Boolean = false
     var expiredAt: Long? = null
+
+    /** Its peer recovered without resuming, so its timer was stopped; still resumable. */
+    var disarmed: Boolean = false
+
+    /** Armed and still running: neither resumed, expired nor disarmed. */
+    val isLive: Boolean get() = !consumed && expiredAt == null && !disarmed
 }
