@@ -96,10 +96,13 @@ public sealed interface MembershipEvent {
      * a partitioned peer whose return the host restored, so those members see this event where the
      * host and the returning peer see [Resumed].
      *
-     * **Never the answer to a joiner's own reconnect.** A joiner whose host link dropped ends that
-     * arc with [Resumed] (its seat came back), [Readmitted] (the seat was gone and the host admitted
-     * it afresh) or [HostLost] — never with `Recovered(host)`, since a returning joiner does not
-     * know whether its link healed inside the host's window until the host's answer says so (#3615).
+     * **Never the answer to a joiner's Hello.** A joiner whose host link tore says Hello again, and
+     * the host's answer ends that arc with [Resumed] (its seat came back) or [Readmitted] (the seat
+     * was gone and the host admitted it afresh), or the window ends it with [HostLost] — never with
+     * `Recovered(host)`, since a returning joiner does not know whether it came back inside the
+     * host's window until the host's answer says so (#3615). A heartbeat partition that heals with
+     * no tear is different: the joiner says no Hello, nothing answers one, and the arc still ends in
+     * `Recovered(host)`.
      */
     public data class Recovered(val peerId: PeerId, val at: Instant) : MembershipEvent
 
@@ -109,11 +112,13 @@ public sealed interface MembershipEvent {
      * **Dual-role.** Emitted on the **host's** events when a joiner goes unresponsive and the
      * host opens a window to hold its seat ([peerId] = the joiner; if the joiner returns
      * before [expiresAt], [Resumed] follows, otherwise [Left] with [LeaveReason.PartitionExpired]);
-     * and on a **joiner's** events when its host link tears and the joiner opens its own window to
-     * re-weave and say Hello again ([peerId] = the host). The host's answer ends that window one of
-     * three ways: [Resumed] when the seat came back, [Readmitted] when the host had let it go and
-     * admitted this room afresh — a new membership, though the room stays in session — and
-     * otherwise [HostLost] (#3615). [expiresAt] is the wall-clock instant at which the window closes.
+     * and on a **joiner's** events when its host link drops and the joiner opens its own window
+     * ([peerId] = the host). Where the link tore, the joiner re-weaves and says Hello again, and the
+     * host's answer ends that window one of two ways: [Resumed] when the seat came back, [Readmitted]
+     * when the host had let it go and admitted this room afresh — a new membership, though the room
+     * stays in session. Otherwise the window ends in [HostLost] (#3615). Where the host merely went
+     * quiet and the link heals with no tear, no Hello is said and [Recovered] ends the window.
+     * [expiresAt] is the wall-clock instant at which the window closes.
      */
     public data class WindowOpened(val peerId: PeerId, val expiresAt: Instant) : MembershipEvent
 
@@ -126,6 +131,11 @@ public sealed interface MembershipEvent {
      * faster than the host noticed — emits nothing, since the host never saw the member go. Also
      * emitted on the **joiner's** events, with its own id, when the host's answer names the
      * membership it already held.
+     *
+     * On a joiner the host's answer heads an admission burst naming every member the host holds, and
+     * the joiner rebuilds its roster from it, as it does after [Readmitted] (#3615): a member that
+     * left while its link was down, whose departure went down that link, follows this event as a
+     * [Left] with [LeaveReason.Unobserved].
      */
     public data class Resumed(val peerId: PeerId) : MembershipEvent
 
@@ -144,7 +154,7 @@ public sealed interface MembershipEvent {
      * The room keeps the new membership; it is still in session. Its roster is rebuilt from the
      * host's admission burst, which follows this event and which the host's own `Welcome` closes: a
      * member that joined meanwhile arrives as [Joined], and a member that left while this room was
-     * away, whose departure it never heard, leaves as [Left] with [LeaveReason.Normal]. Read
+     * away, whose departure it never heard, leaves as [Left] with [LeaveReason.Unobserved]. Read
      * [Room.roster] once those have arrived, not on this event.
      *
      * **Why an event of its own, and not `Left(self)` then `Joined(self)`** (#3615). On a joiner,

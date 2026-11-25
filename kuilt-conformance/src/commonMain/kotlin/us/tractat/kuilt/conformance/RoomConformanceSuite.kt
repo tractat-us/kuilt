@@ -354,6 +354,13 @@ public abstract class RoomConformanceSuite {
     // A return property owes a harness that can tear a joiner's link under a loom that heals the same
     // seam, and asserts that the app made no call between the drop and the return; that is the
     // identity plan's Task 1.9.
+    //
+    // The same harness owes two rows for a readmission (#3615, Amendment G), which `RoomHarness`
+    // cannot drive because it only drops frames and a readmission needs the joiner's own seam torn
+    // and healed in place. A return after the seat went ends in `Readmitted(self)`, never
+    // `Recovered(host)`, with no app call. And a readmitted joiner drops a peer who left during the
+    // outage, with `LeaveReason.Unobserved`, while a member connected throughout is still listed.
+    // Its reference must be able to reach that ghost, or the row cannot fail.
 
     // ── (1) host → role = Host, selfId is non-blank ──────────────────────────
 

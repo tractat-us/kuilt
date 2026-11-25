@@ -2317,7 +2317,9 @@ internal class SeamRoom(
      * The order is the one #1781 needs on every lane: the `Farewell` is enqueued here, before the
      * roster `Welcome` [seatProvenJoiner] enqueues for the new member once this section ends, so no
      * member hears `Welcome(new)` and then `Farewell(old)` for a membership that has moved, and every
-     * member's events read `Left(old, Superseded(new))`, then `Joined(new)`.
+     * member present for it reads `Left(old, Superseded(new))`, then `Joined(new)`. A member whose
+     * link was down hears neither: its admission burst names `new`, which it hears as `Joined(new)`,
+     * and its roster rebuild drops `old` later with [LeaveReason.Unobserved] (#3615).
      */
     private fun supersedeSeat(joinerPeerId: PeerId, generation: Long, held: Member): SeatOutcome {
         if (!retire(joinerPeerId, generation)) return SeatOutcome.Stale

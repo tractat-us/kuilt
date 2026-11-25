@@ -49,14 +49,15 @@ instance** the room already holds, with the **same `selfId`**. `MuxClientLoom` a
 that stable handle. The host keys the held seat by peer id and device key, so another device's key
 cannot take it over. If the seat was already gone, the Hello is admitted afresh and the room stays in
 session, as a new membership: it hears `Readmitted` rather than `Resumed`, and rebuilds its roster
-from the host's answer, so a peer who left while it was away leaves its roster too.
+from the host's answer, so a peer who left while it was away leaves its roster too, with
+`LeaveReason.Unobserved`. A restore rebuilds the same way.
 
 A loom that returns a new seam on each join leaves the old room's seam torn: reconnect ends in
 `HostLost`. Rebuilding the room needs no token. Its `Hello` proves the device key the held seat was admitted
 under, and a host still holding that seat under the same peer id restores it. A rebuilt room under a
-new peer id takes the old seat over while its member is partitioned: everyone sees
+new peer id takes the old seat over while its member is partitioned: every member present sees
 `Left(old, LeaveReason.Superseded(by = new))` then `Joined(new)`, and the new member keeps the old one's
-identity. Beside a connected seat, such as a second browser tab, it gets a seat of its own, so one key
+identity. A member that was away hears `Joined(new)` on its return and drops `old` as `Unobserved`. Beside a connected seat, such as a second browser tab, it gets a seat of its own, so one key
 may hold several seats.
 
 **A peer id belongs to one process, so never reuse a superseded one under the same key.** While the
@@ -77,6 +78,8 @@ public suspend fun watchTheReturnSample(room: Room) {
             // The seat was gone, so the host admitted this room afresh: still in session, but a new
             // membership. Drop what was tied to the old seat. The roster rebuilds as Joined/Left.
             is MembershipEvent.Readmitted -> Unit
+            // The host went quiet and came back with no tear: no Hello was needed, the seat is as it was.
+            is MembershipEvent.Recovered -> Unit
             // The window closed, or the host refused the Hello. WHY is in the reason's code.
             // See classifyRejectCodeSample.
             is MembershipEvent.HostLost -> Unit
@@ -304,8 +307,9 @@ public suspend fun observePausedPeersSample(room: Room) {
             // this one (a more authoritative deadline arrived), so keep the latest, not the first.
             is MembershipEvent.WindowOpened -> Unit
             is MembershipEvent.Recovered -> Unit // it returned inside the window — un-grey it
-            // Gone for good: Normal (clean) or PartitionExpired. Superseded(by) is the same device back
-            // under a new peer id: move whatever you keep by peer id over to `by`, not delete it.
+            // Gone for good: Normal (clean), PartitionExpired, or Unobserved (it left while this room's
+            // link was down). Superseded(by) is the same device back under a new peer id: move
+            // whatever you keep by peer id over to `by`, not delete it.
             is MembershipEvent.Left -> Unit
             else -> Unit
         }
