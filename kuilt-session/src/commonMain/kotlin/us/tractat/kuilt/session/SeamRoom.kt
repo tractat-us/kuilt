@@ -54,7 +54,11 @@ import org.kotlincrypto.random.CryptoRand
 import us.tractat.kuilt.identity.AdmissionProof
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.session.admit.AdmissionDecision
+import us.tractat.kuilt.session.admit.AdmissionRequest
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.GrantTerms
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.KeyAdmission
 import us.tractat.kuilt.session.admit.KeyedHello
 import us.tractat.kuilt.session.admit.PendingChallenges
@@ -212,7 +216,7 @@ public class SeamRoomFactory(
         }
     }
 
-    override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room {
+    override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?, admission: HostAdmission): Room {
         KeyAdmission.requireSignable(roomId = roomId)
         val device = RoomDevice.of(deviceKeyStore)
         val seam = loom.host(pattern)
@@ -220,6 +224,7 @@ public class SeamRoomFactory(
         return SeamRoom(
             seam = seam,
             role = SessionRole.Host,
+            admission = admission,
             // This peer's own roster name. Null → peer-id-derived (see SeamRoom.resolvedMemberName).
             // Deliberately NOT pattern.sessionName — the session name names the session, not this
             // host (#1177).
@@ -277,9 +282,12 @@ public class SeamRoomFactory(
      * host-election lobby, #1439). The returned [Room] owns the seam's lifetime from here:
      * [Room.leave] closes it — correct, because the seam is handed over exactly once.
      *
-     * [role] is fixed for the room's lifetime. [roomKey] is the admit-gate key
-     * ([us.tractat.kuilt.core.Pattern.roomKey]); [memberName] is this peer's own roster label
-     * (null → peer-id-derived).
+     * [role] is fixed for the room's lifetime. A host's role carries what only a host needs: the
+     * [AdoptRole.Host.admission] it decides newcomers with, and the room's identity
+     * ([AdoptRole.Host.roomId]) when the caller supplies one. A joiner learns the room's id from the
+     * host's `Welcome`, and decides nothing, so [AdoptRole.Joiner] carries neither. [roomKey] is the
+     * admit-gate key ([us.tractat.kuilt.core.Pattern.roomKey]); [memberName] is this peer's own roster
+     * label (null → peer-id-derived).
      *
      * [reweave] threads resume-after-tear into the adopted room (#1618). When null (the default) a
      * joiner whose host link tears goes terminal ([MembershipEvent.HostLost]) — the pre-#1618
@@ -290,49 +298,32 @@ public class SeamRoomFactory(
      * again) instead of going straight to terminal. See the [SeamRoom] `reweave` KDoc for the
      * same-instance-heal contract this must satisfy.
      *
-     * [roomId] is this room's identity ([Room.roomId]) and applies to a **host** adopt only — a
-     * joiner learns the room's id from the host's `Welcome`. Null — the default — mints a fresh one
-     * per adopt, which is what stops two rooms one device adopts in a row from colliding (#1594).
-     * Supply it when the identity is decided outside kuilt (a lobby code, an invite link, a
-     * matchmaker-assigned game id) and the room must adopt it. It does **not** make a host restart
-     * resumable — see [Room.roomId]: a restarted host holds no seats.
+     * A host's room id does **not** make a host restart resumable — see [Room.roomId]: a restarted
+     * host holds no seats.
      *
      * [deviceId] travels in this peer's `Hello` when it joins, and the host records it as the
      * member's [MemberIdentity.deviceId]. Null, the default, sends none. A host sends no `Hello`, so
      * a host adopt ignores it.
      *
-     * @throws IllegalArgumentException if [roomId] is non-null and [role] is [SessionRole.Joiner].
-     *   A joiner cannot choose the room's identity, and silently overriding the caller's value with
-     *   a different one would fork its durable records with no signal. Also when [roomId] or
-     *   [deviceId] cannot be signed into the key-proving exchange: it holds an unpaired surrogate, or
-     *   its UTF-8 is longer than 65 535 bytes. That is checked whatever the [role], before the seam
-     *   is touched.
+     * @throws IllegalArgumentException when a host's room id or [deviceId] cannot be signed into the
+     *   key-proving exchange: it holds an unpaired surrogate, or its UTF-8 is longer than 65 535
+     *   bytes. That is checked whatever the [role], before the seam is touched.
      */
     public suspend fun adopt(
         seam: Seam,
-        role: SessionRole,
+        role: AdoptRole,
         memberName: String? = null,
         roomKey: String? = null,
         reweave: (suspend () -> Seam)? = null,
-        roomId: RoomId? = null,
         deviceId: String? = null,
     ): Room {
-        // Rejected, not ignored. A joiner learns the room's identity from the host's Welcome, so a
-        // supplied id here is a claim this peer is not entitled to make — and silently dropping it
-        // is the worse failure: a caller following the supply-your-own-id pattern would land on the
-        // joiner branch, get a DIFFERENT identity than it asked for, and fork its durable records
-        // with no signal at all. Fail fast instead. (The hypothetical decide-role-at-runtime caller
-        // does not exist today: SeamElectionLobby.adoptRoom passes no roomId. If one appears, that
-        // is the moment to relax this — with a test.)
-        require(roomId == null || role == SessionRole.Host) {
-            "roomId applies to a host adopt; a joiner learns it from the host's Welcome"
-        }
-        KeyAdmission.requireSignable(roomId = roomId, deviceId = deviceId)
+        val host = role as? AdoptRole.Host
+        KeyAdmission.requireSignable(roomId = host?.roomId, deviceId = deviceId)
         val device = RoomDevice.of(deviceKeyStore)
-        val resolvedRoomId = if (role == SessionRole.Host) roomId ?: mintRoomId(seam) else null
         return SeamRoom(
             seam = seam,
-            role = role,
+            role = role.sessionRole,
+            admission = host?.admission,
             memberName = memberName,
             deviceId = deviceId,
             scope = scope,
@@ -340,7 +331,7 @@ public class SeamRoomFactory(
             device = device,
             heartbeatConfig = heartbeatConfig,
             admitTimeout = admitTimeout,
-            roomId = resolvedRoomId,
+            roomId = host?.let { it.roomId ?: mintRoomId(seam) },
             roomKey = roomKey,
             memberInboxCapacity = memberInboxCapacity,
             reweave = reweave,
@@ -678,6 +669,14 @@ internal class SeamRoom(
     private val seam: Seam,
     role: SessionRole,
     /**
+     * **Host only, and required for a host.** Decides every newcomer whose proven key holds no seat
+     * to restore ([SeatDecision.Vetted]), and carries the revocations a held seat is checked against
+     * (#3220). Null for a joiner, which decides nothing; construction refuses a host without one and a
+     * joiner with one. [SeamRoomFactory] takes it from [RoomFactory.host] or [AdoptRole.Host], so a
+     * caller outside this module cannot reach the mismatch.
+     */
+    private val admission: HostAdmission? = null,
+    /**
      * This peer's **own** roster name — the label other members see for this peer. Null means
      * "derive from the peer id" ([resolvedMemberName]); it is never derived from the session name
      * ([us.tractat.kuilt.core.Pattern.sessionName] / [us.tractat.kuilt.core.Tag.sessionName]),
@@ -806,6 +805,9 @@ internal class SeamRoom(
      */
     private val constructedRoomId: RoomId? = _roomId.value.also { id ->
         require(id != null || role != SessionRole.Host) { "a host room needs a roomId: it signs it into every challenge" }
+        require((admission != null) == (role == SessionRole.Host)) {
+            "a host room needs a HostAdmission and a joiner room takes none; role=$role"
+        }
     }
 
     /**

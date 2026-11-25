@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.session.Room
+import us.tractat.kuilt.session.admit.HostAdmission
 
 /**
  * The elected host is the peer with the lowest [PeerId] value among those currently connected.
@@ -137,6 +138,10 @@ public interface ElectionLobby {
      * the election settles. A host sends no `Hello`, so a host's room ignores it, as
      * [us.tractat.kuilt.session.SeamRoomFactory.adopt] does.
      *
+     * [admission] decides who the adopted room lets in, as it does for
+     * [us.tractat.kuilt.session.RoomFactory.host]. It is asked here, on the call only the elected host
+     * makes, so a member waiting in [awaitRoom] never supplies a policy it would not use.
+     *
      * @throws IllegalArgumentException if [deviceId] could not be signed into a key proof (an
      *   unpaired surrogate, or UTF-8 longer than 65 535 bytes), before the election runs. Checked
      *   here too, though a host sends no proof, so a value is refused the same whichever role it lands.
@@ -144,7 +149,7 @@ public interface ElectionLobby {
      * @throws LobbyTornException if the underlying seam tears mid-election, or a member drains away or
      *   goes silent (co-electors permanently gone). Terminal and retryable.
      */
-    public suspend fun start(memberName: String? = null, deviceId: String? = null): Room
+    public suspend fun start(memberName: String? = null, deviceId: String? = null, admission: HostAdmission): Room
 
     /**
      * Await the session as a member: suspend until the elected host freezes the lobby, acknowledge it,

@@ -9,6 +9,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Duration
 
@@ -478,8 +479,19 @@ public interface RoomFactory {
      *
      * It does **not** make a host restart resumable — see [Room.roomId]: a restarted host holds no
      * seats, and reusing an id does not give it any.
+     *
+     * [admission] decides who comes in: the room asks its [HostAdmission.policy] about every newcomer
+     * whose proven key holds no seat to restore, and gives every pass it checks its own device key and
+     * [HostAdmission.revocations]. It is required, and last, so a host is never opened without one and
+     * a forwarding factory that drops it does not compile. `HostAdmission(AdmissionPolicy.open(),
+     * RevocationList.inMemory())` admits everyone.
      */
-    public suspend fun host(pattern: Pattern, memberName: String? = null, roomId: RoomId? = null): Room
+    public suspend fun host(
+        pattern: Pattern,
+        memberName: String? = null,
+        roomId: RoomId? = null,
+        admission: HostAdmission,
+    ): Room
 
     /**
      * Join an existing room. The caller's peer becomes a [SessionRole.Joiner].

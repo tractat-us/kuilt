@@ -43,7 +43,8 @@ import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.session.PerPeerSeam
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
-import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.AdoptRole
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.KeyAdmission
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -174,7 +175,7 @@ internal class SeamElectionLobby(
         }
     }
 
-    override suspend fun start(memberName: String?, deviceId: String?): Room {
+    override suspend fun start(memberName: String?, deviceId: String?, admission: HostAdmission): Room {
         // Before the election, so a device id no proof could sign is refused here, not after the
         // freeze round, and never takes part (#3211).
         KeyAdmission.requireSignable(deviceId = deviceId)
@@ -188,7 +189,7 @@ internal class SeamElectionLobby(
             guardElection(collapseSignals = listOf(membersLostSignal())) {
                 runHostElection()
             }
-            adoptAfterCommit(SessionRole.Host, memberName, deviceId)
+            adoptAfterCommit(AdoptRole.Host(admission), memberName, deviceId)
         } catch (e: LobbyTornException) {
             stopAnsweringPings()
             throw e
@@ -313,7 +314,7 @@ internal class SeamElectionLobby(
             }
             // Adoption OUTSIDE guardElection (finding #1): once the Commit is received the race is over,
             // so the became-host/tear collapse signals can no longer cancel adoptRoom mid-commit.
-            ElectionOutcome.Adopted(adoptAfterCommit(SessionRole.Joiner, memberName, deviceId))
+            ElectionOutcome.Adopted(adoptAfterCommit(AdoptRole.Joiner, memberName, deviceId))
         } catch (e: PromotedToHostSignal) {
             logger.info { "lobby.awaitRoom.promoted self=${selfId.value} roster=${e.roster.map { it.value }} → BecameHost (recovery: start() on this lobby)" }
             ElectionOutcome.BecameHost
@@ -589,7 +590,7 @@ internal class SeamElectionLobby(
      * we adopt is surfaced as a clean retryable [LobbyTornException]; a tear *during* the fast, now
      * uncancellable adopt is handled by the room's own `runTornWatcher` (a born-dead room), not a wedge.
      */
-    private suspend fun adoptAfterCommit(role: SessionRole, memberName: String?, deviceId: String?): Room {
+    private suspend fun adoptAfterCommit(role: AdoptRole, memberName: String?, deviceId: String?): Room {
         (seam.state.value as? SeamState.Torn)?.let { throw LobbyTornException(it.reason) }
         return adoptRoom(role, memberName, deviceId)
     }
@@ -599,7 +600,7 @@ internal class SeamElectionLobby(
      * the lobby collector has fully stopped before the room starts its own collector (single-collection).
      * Callable at most once.
      */
-    private suspend fun adoptRoom(role: SessionRole, memberName: String?, deviceId: String?): Room =
+    private suspend fun adoptRoom(role: AdoptRole, memberName: String?, deviceId: String?): Room =
         adoptMutex.withLock {
             check(!adopted) { "lobby already adopted a room" }
             adopted = true
