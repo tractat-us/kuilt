@@ -37,6 +37,17 @@ abstract fun interface <#A: kotlin/Any?> us.tractat.kuilt.conformance.lattice/Op
     abstract fun applyRandomOp(#A, kotlin/Int, kotlin.random/Random): #A // us.tractat.kuilt.conformance.lattice/OperationGenerator.applyRandomOp|applyRandomOp(1:0;kotlin.Int;kotlin.random.Random){}[0]
 }
 
+abstract interface us.tractat.kuilt.conformance/ReturnDevice { // us.tractat.kuilt.conformance/ReturnDevice|null[0]
+    abstract val heals // us.tractat.kuilt.conformance/ReturnDevice.heals|{}heals[0]
+        abstract fun <get-heals>(): kotlin/Int // us.tractat.kuilt.conformance/ReturnDevice.heals.<get-heals>|<get-heals>(){}[0]
+
+    abstract suspend fun drop() // us.tractat.kuilt.conformance/ReturnDevice.drop|drop(){}[0]
+    abstract suspend fun impostor(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnDevice.impostor|impostor(){}[0]
+    abstract suspend fun kill(kotlin/Boolean = ...) // us.tractat.kuilt.conformance/ReturnDevice.kill|kill(kotlin.Boolean){}[0]
+    abstract suspend fun launch(kotlin/Boolean = ...): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnDevice.launch|launch(kotlin.Boolean){}[0]
+    abstract suspend fun restore() // us.tractat.kuilt.conformance/ReturnDevice.restore|restore(){}[0]
+}
+
 sealed interface us.tractat.kuilt.conformance/CancelledCallerFixture { // us.tractat.kuilt.conformance/CancelledCallerFixture|null[0]
     final class NeverChecks : us.tractat.kuilt.conformance/CancelledCallerFixture { // us.tractat.kuilt.conformance/CancelledCallerFixture.NeverChecks|null[0]
         constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/CancelledCallerFixture.NeverChecks.<init>|<init>(kotlin.String){}[0]
@@ -320,6 +331,34 @@ sealed interface us.tractat.kuilt.conformance/RestartFixture { // us.tractat.kui
 
         final val store // us.tractat.kuilt.conformance/RestartFixture.KeepsNothing.store|{}store[0]
             final fun <get-store>(): us.tractat.kuilt.store/DurableStore // us.tractat.kuilt.conformance/RestartFixture.KeepsNothing.store.<get-store>|<get-store>(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.conformance/ReturnFixture { // us.tractat.kuilt.conformance/ReturnFixture|null[0]
+    final class Supported : us.tractat.kuilt.conformance/ReturnFixture { // us.tractat.kuilt.conformance/ReturnFixture.Supported|null[0]
+        constructor <init>(us.tractat.kuilt.conformance/ReturnHarness) // us.tractat.kuilt.conformance/ReturnFixture.Supported.<init>|<init>(us.tractat.kuilt.conformance.ReturnHarness){}[0]
+
+        final val harness // us.tractat.kuilt.conformance/ReturnFixture.Supported.harness|{}harness[0]
+            final fun <get-harness>(): us.tractat.kuilt.conformance/ReturnHarness // us.tractat.kuilt.conformance/ReturnFixture.Supported.harness.<get-harness>|<get-harness>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.conformance/ReturnHarness // us.tractat.kuilt.conformance/ReturnFixture.Supported.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.conformance/ReturnHarness = ...): us.tractat.kuilt.conformance/ReturnFixture.Supported // us.tractat.kuilt.conformance/ReturnFixture.Supported.copy|copy(us.tractat.kuilt.conformance.ReturnHarness){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/ReturnFixture.Supported.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/ReturnFixture.Supported.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/ReturnFixture.Supported.toString|toString(){}[0]
+    }
+
+    final class Unsupported : us.tractat.kuilt.conformance/ReturnFixture { // us.tractat.kuilt.conformance/ReturnFixture.Unsupported|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/ReturnFixture.Unsupported.<init>|<init>(kotlin.String){}[0]
+
+        final val trackingUrl // us.tractat.kuilt.conformance/ReturnFixture.Unsupported.trackingUrl|{}trackingUrl[0]
+            final fun <get-trackingUrl>(): kotlin/String // us.tractat.kuilt.conformance/ReturnFixture.Unsupported.trackingUrl.<get-trackingUrl>|<get-trackingUrl>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.conformance/ReturnFixture.Unsupported.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.conformance/ReturnFixture.Unsupported // us.tractat.kuilt.conformance/ReturnFixture.Unsupported.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/ReturnFixture.Unsupported.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/ReturnFixture.Unsupported.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/ReturnFixture.Unsupported.toString|toString(){}[0]
     }
 }
 
@@ -1093,6 +1132,7 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     open val memberInboxCapacity // us.tractat.kuilt.conformance/RoomConformanceSuite.memberInboxCapacity|{}memberInboxCapacity[0]
         open fun <get-memberInboxCapacity>(): kotlin/Int // us.tractat.kuilt.conformance/RoomConformanceSuite.memberInboxCapacity.<get-memberInboxCapacity>|<get-memberInboxCapacity>(){}[0]
 
+    abstract fun newReturnHarness(kotlinx.coroutines.test/TestScope): us.tractat.kuilt.conformance/ReturnFixture // us.tractat.kuilt.conformance/RoomConformanceSuite.newReturnHarness|newReturnHarness(kotlinx.coroutines.test.TestScope){}[0]
     open fun newHarness(kotlinx.coroutines/CoroutineScope): us.tractat.kuilt.conformance/RoomConformanceSuite.RoomHarness // us.tractat.kuilt.conformance/RoomConformanceSuite.newHarness|newHarness(kotlinx.coroutines.CoroutineScope){}[0]
 
     sealed interface FaultInjection { // us.tractat.kuilt.conformance/RoomConformanceSuite.FaultInjection|null[0]
@@ -1149,10 +1189,22 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     }
 
     // Targets: [apple]
+    final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat() // us.tractat.kuilt.conformance/RoomConformanceSuite.aDifferentKeyOnAPartitionedIdReleasesTheSeat|aDifferentKeyOnAPartitionedIdReleasesTheSeat(){}[0]
+
+    // Targets: [apple]
+    final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage() // us.tractat.kuilt.conformance/RoomConformanceSuite.aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage|aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(){}[0]
+
+    // Targets: [apple]
+    final fun aReturnAfterTheSeatWentIsReadmitted() // us.tractat.kuilt.conformance/RoomConformanceSuite.aReturnAfterTheSeatWentIsReadmitted|aReturnAfterTheSeatWentIsReadmitted(){}[0]
+
+    // Targets: [apple]
     final fun broadcastDeliversRoomFrameTaggedWithSender() // us.tractat.kuilt.conformance/RoomConformanceSuite.broadcastDeliversRoomFrameTaggedWithSender|broadcastDeliversRoomFrameTaggedWithSender(){}[0]
 
     // Targets: [apple]
     final fun channelStateTornAfterLeave() // us.tractat.kuilt.conformance/RoomConformanceSuite.channelStateTornAfterLeave|channelStateTornAfterLeave(){}[0]
+
+    // Targets: [apple]
+    final fun differentKeyOnLiveIdIsRefused() // us.tractat.kuilt.conformance/RoomConformanceSuite.differentKeyOnLiveIdIsRefused|differentKeyOnLiveIdIsRefused(){}[0]
 
     // Targets: [apple]
     final fun hostFactoryAssignsHostRole() // us.tractat.kuilt.conformance/RoomConformanceSuite.hostFactoryAssignsHostRole|hostFactoryAssignsHostRole(){}[0]
@@ -1236,7 +1288,19 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun partitionedAndRecoveredFireOnLivenessTransitions() // us.tractat.kuilt.conformance/RoomConformanceSuite.partitionedAndRecoveredFireOnLivenessTransitions|partitionedAndRecoveredFireOnLivenessTransitions(){}[0]
 
     // Targets: [apple]
+    final fun processRebuiltInsideWindowRestores() // us.tractat.kuilt.conformance/RoomConformanceSuite.processRebuiltInsideWindowRestores|processRebuiltInsideWindowRestores(){}[0]
+
+    // Targets: [apple]
+    final fun processRebuiltWithFreshIdRestores() // us.tractat.kuilt.conformance/RoomConformanceSuite.processRebuiltWithFreshIdRestores|processRebuiltWithFreshIdRestores(){}[0]
+
+    // Targets: [apple]
     final fun rejoinAfterLeaveWorks() // us.tractat.kuilt.conformance/RoomConformanceSuite.rejoinAfterLeaveWorks|rejoinAfterLeaveWorks(){}[0]
+
+    // Targets: [apple]
+    final fun resumeWithinWindowFiresResumed() // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeWithinWindowFiresResumed|resumeWithinWindowFiresResumed(){}[0]
+
+    // Targets: [apple]
+    final fun returnRestoresHeldSeatSameId() // us.tractat.kuilt.conformance/RoomConformanceSuite.returnRestoresHeldSeatSameId|returnRestoresHeldSeatSameId(){}[0]
 
     // Targets: [apple]
     final fun rosterIsEmptyBeforeAnyHandshake() // us.tractat.kuilt.conformance/RoomConformanceSuite.rosterIsEmptyBeforeAnyHandshake|rosterIsEmptyBeforeAnyHandshake(){}[0]
@@ -1245,10 +1309,22 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun theTeardownFaultReallyFires() // us.tractat.kuilt.conformance/RoomConformanceSuite.theTeardownFaultReallyFires|theTeardownFaultReallyFires(){}[0]
 
     // Targets: [wasmJs]
+    final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aDifferentKeyOnAPartitionedIdReleasesTheSeat|aDifferentKeyOnAPartitionedIdReleasesTheSeat(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage|aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aReturnAfterTheSeatWentIsReadmitted(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aReturnAfterTheSeatWentIsReadmitted|aReturnAfterTheSeatWentIsReadmitted(){}[0]
+
+    // Targets: [wasmJs]
     final fun broadcastDeliversRoomFrameTaggedWithSender(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.broadcastDeliversRoomFrameTaggedWithSender|broadcastDeliversRoomFrameTaggedWithSender(){}[0]
 
     // Targets: [wasmJs]
     final fun channelStateTornAfterLeave(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.channelStateTornAfterLeave|channelStateTornAfterLeave(){}[0]
+
+    // Targets: [wasmJs]
+    final fun differentKeyOnLiveIdIsRefused(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.differentKeyOnLiveIdIsRefused|differentKeyOnLiveIdIsRefused(){}[0]
 
     // Targets: [wasmJs]
     final fun hostFactoryAssignsHostRole(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.hostFactoryAssignsHostRole|hostFactoryAssignsHostRole(){}[0]
@@ -1332,7 +1408,19 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun partitionedAndRecoveredFireOnLivenessTransitions(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.partitionedAndRecoveredFireOnLivenessTransitions|partitionedAndRecoveredFireOnLivenessTransitions(){}[0]
 
     // Targets: [wasmJs]
+    final fun processRebuiltInsideWindowRestores(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.processRebuiltInsideWindowRestores|processRebuiltInsideWindowRestores(){}[0]
+
+    // Targets: [wasmJs]
+    final fun processRebuiltWithFreshIdRestores(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.processRebuiltWithFreshIdRestores|processRebuiltWithFreshIdRestores(){}[0]
+
+    // Targets: [wasmJs]
     final fun rejoinAfterLeaveWorks(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.rejoinAfterLeaveWorks|rejoinAfterLeaveWorks(){}[0]
+
+    // Targets: [wasmJs]
+    final fun resumeWithinWindowFiresResumed(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeWithinWindowFiresResumed|resumeWithinWindowFiresResumed(){}[0]
+
+    // Targets: [wasmJs]
+    final fun returnRestoresHeldSeatSameId(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.returnRestoresHeldSeatSameId|returnRestoresHeldSeatSameId(){}[0]
 
     // Targets: [wasmJs]
     final fun rosterIsEmptyBeforeAnyHandshake(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.rosterIsEmptyBeforeAnyHandshake|rosterIsEmptyBeforeAnyHandshake(){}[0]
@@ -1967,6 +2055,23 @@ final class us.tractat.kuilt.conformance/MatrixEntry { // us.tractat.kuilt.confo
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/MatrixEntry.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/MatrixEntry.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.conformance/MatrixEntry.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.conformance/ReturnHarness { // us.tractat.kuilt.conformance/ReturnHarness|null[0]
+    constructor <init>(us.tractat.kuilt.session/RoomFactory, us.tractat.kuilt.core/Pattern, us.tractat.kuilt.core/Tag, us.tractat.kuilt.liveness/HeartbeatConfig, us.tractat.kuilt.liveness/HeartbeatConfig, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/ReturnDevice>) // us.tractat.kuilt.conformance/ReturnHarness.<init>|<init>(us.tractat.kuilt.session.RoomFactory;us.tractat.kuilt.core.Pattern;us.tractat.kuilt.core.Tag;us.tractat.kuilt.liveness.HeartbeatConfig;us.tractat.kuilt.liveness.HeartbeatConfig;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.conformance.ReturnDevice>){}[0]
+
+    final val hostFactory // us.tractat.kuilt.conformance/ReturnHarness.hostFactory|{}hostFactory[0]
+        final fun <get-hostFactory>(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnHarness.hostFactory.<get-hostFactory>|<get-hostFactory>(){}[0]
+    final val hostHeartbeat // us.tractat.kuilt.conformance/ReturnHarness.hostHeartbeat|{}hostHeartbeat[0]
+        final fun <get-hostHeartbeat>(): us.tractat.kuilt.liveness/HeartbeatConfig // us.tractat.kuilt.conformance/ReturnHarness.hostHeartbeat.<get-hostHeartbeat>|<get-hostHeartbeat>(){}[0]
+    final val hostPattern // us.tractat.kuilt.conformance/ReturnHarness.hostPattern|{}hostPattern[0]
+        final fun <get-hostPattern>(): us.tractat.kuilt.core/Pattern // us.tractat.kuilt.conformance/ReturnHarness.hostPattern.<get-hostPattern>|<get-hostPattern>(){}[0]
+    final val joinTag // us.tractat.kuilt.conformance/ReturnHarness.joinTag|{}joinTag[0]
+        final fun <get-joinTag>(): us.tractat.kuilt.core/Tag // us.tractat.kuilt.conformance/ReturnHarness.joinTag.<get-joinTag>|<get-joinTag>(){}[0]
+    final val joinerHeartbeat // us.tractat.kuilt.conformance/ReturnHarness.joinerHeartbeat|{}joinerHeartbeat[0]
+        final fun <get-joinerHeartbeat>(): us.tractat.kuilt.liveness/HeartbeatConfig // us.tractat.kuilt.conformance/ReturnHarness.joinerHeartbeat.<get-joinerHeartbeat>|<get-joinerHeartbeat>(){}[0]
+
+    final suspend fun newDevice(): us.tractat.kuilt.conformance/ReturnDevice // us.tractat.kuilt.conformance/ReturnHarness.newDevice|newDevice(){}[0]
 }
 
 final class us.tractat.kuilt.conformance/SampleEvidenceReport { // us.tractat.kuilt.conformance/SampleEvidenceReport|null[0]

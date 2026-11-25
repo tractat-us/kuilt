@@ -9,21 +9,20 @@ import kotlinx.atomicfu.locks.withLock
  *
  * ## Why a log-line watcher, of all things
  *
- * Scenario 7's PASS has to mean *"the #1637 fix ran and resolved this episode"*. Every in-process
- * surface a `Room` consumer can subscribe to was checked first, and none of them can say that:
+ * Scenario 7's PASS has to mean *"this episode ran the reconnect lane and the host handed the seat
+ * back"*. Every in-process surface a `Room` consumer can subscribe to was checked first, and none of
+ * them can say all of that:
  *
- *  * **`MembershipEvent.Recovered(hostId)` cannot.** The #1637 dwell path
- *    (`JoinerResumeHost.onNoOpResume` → the room's `markRecovered`) and an ordinary
- *    detector-observed recovery (`PartitionEvent.PeerRecovered` → the *same* `markRecovered`) emit a
- *    byte-identical event. The 2026-07-28 hardware run is the receipt: it reported a green
- *    `Recovered(441485b2)` 8.5 s after the radio died while the resume machine had not resolved
- *    anything at all — the fix under test was never exercised, and the event stream could not tell.
+ *  * **`MembershipEvent.Recovered(hostId)` cannot.** An ordinary detector-observed recovery emits it
+ *    without the reconnect lane ever running. The 2026-07-28 hardware run is the receipt: it reported
+ *    a green `Recovered(441485b2)` 8.5 s after the radio died while the resume machine had not
+ *    resolved anything at all, and the event stream could not tell.
  *  * **`Partitioned` / `WindowOpened` cannot either**, and this is the subtler trap: the joiner emits
  *    both from `markPartitioned` on a plain heartbeat `Timeout`, with the resume machine never
  *    entered and its host-liveness detector still running. "The episode opened" is therefore evidence
  *    about the *detector*, not about the resume lane.
- *  * **`Room` exposes nothing else** — `roster`, `events`, `localFabric`, `role`, `resumeToken`. There
- *    is no `reconnecting` flow, no resume-outcome callback. Adding one is a library change, which this
+ *  * **`Room` exposes nothing else** — `roster`, `events`, `localFabric`, `role`. There is no
+ *    `reconnecting` flow, no reconnect-outcome callback. Adding one is a library change, which this
  *    scenario is explicitly not allowed to make in order to pass itself.
  *
  * What *is* unambiguous is the resume machine's own evidence-capture logging, added for #1618 and
@@ -35,8 +34,10 @@ import kotlinx.atomicfu.locks.withLock
  *
  *  * The tee hands over `loggerName` and `message` as separate values ([SuiteLogCapture.observe]), so
  *    nothing here depends on how a line is *rendered*.
- *  * Only the **stable prefix** is matched — `resume.no-op`, `resume.ok`, `resume.terminal` — never
- *    the whole line, so the identities and durations those lines carry can change freely.
+ *  * Only the **stable prefix** is matched — `resume.ok`, `resume.terminal`, `resume.refused` — never
+ *    the whole line, so the identities and durations those lines carry can change freely. The one
+ *    field read is `resume.ok`'s `restored=true|false`, which says whether the host's answer named the
+ *    membership this room already held.
  *  * The logger name is recorded for the report but deliberately **not** required: a rename of the
  *    class would otherwise blind the probe silently, and the prefixes are already unique.
  *  * A probe that saw nothing is never read as a PASS. Going blind produces an explicit
@@ -46,8 +47,9 @@ internal class ResumeLaneProbe {
     private val lock = reentrantLock()
     private var handedOff: String? = null
     private var refused: String? = null
-    private var noOp: String? = null
     private var ok: String? = null
+    private var restored: String? = null
+    private var afresh: String? = null
     private var terminal: String? = null
     private var witness: String? = null
     private val lines = mutableListOf<String>()
@@ -71,8 +73,11 @@ internal class ResumeLaneProbe {
             when (kind) {
                 Kind.HANDED_OFF -> handedOff = handedOff ?: message
                 Kind.REFUSED -> refused = refused ?: message
-                Kind.NO_OP -> noOp = noOp ?: message
-                Kind.OK -> ok = ok ?: message
+                Kind.OK -> {
+                    ok = ok ?: message
+                    if (message.contains(RESTORED)) restored = restored ?: message
+                    if (message.contains(AFRESH)) afresh = afresh ?: message
+                }
                 Kind.TERMINAL -> terminal = terminal ?: message
             }
         }
@@ -83,8 +88,9 @@ internal class ResumeLaneProbe {
         ResumeLane(
             handedOff = handedOff,
             refused = refused,
-            noOp = noOp,
             ok = ok,
+            restored = restored,
+            afresh = afresh,
             terminal = terminal,
             witness = witness,
             lines = lines.toList(),
@@ -92,7 +98,6 @@ internal class ResumeLaneProbe {
     }
 
     private fun classify(message: String): Kind? = when {
-        message.startsWith(NO_OP) -> Kind.NO_OP
         message.startsWith(OK) -> Kind.OK
         message.startsWith(TERMINAL) -> Kind.TERMINAL
         message.startsWith(REFUSED) -> Kind.REFUSED
@@ -100,23 +105,28 @@ internal class ResumeLaneProbe {
         else -> null
     }
 
-    private enum class Kind { HANDED_OFF, REFUSED, NO_OP, OK, TERMINAL }
+    private enum class Kind { HANDED_OFF, REFUSED, OK, TERMINAL }
 
     private companion object {
-        /** `JoinerResumeMachine`: the episode completed on the #1637 dwell — the fixed behaviour. */
-        const val NO_OP = "resume.no-op"
-
-        /** `JoinerResumeMachine`: the episode completed on a real `ResumeAck` — the ordinary lane. */
+        /**
+         * `JoinerResumeMachine`: the episode closed on the host's `Welcome` to this room's Hello. Since
+         * #3215 that is every successful return; [RESTORED] and [AFRESH] say which kind.
+         */
         const val OK = "resume.ok"
 
-        /** `JoinerResumeMachine`: the machine bailed before retrying (no reweave / token / host). */
+        /** On a [OK] line: the `Welcome` named the membership this room already held — the seat came back. */
+        const val RESTORED = "restored=true"
+
+        /** On a [OK] line: the `Welcome` named another membership — the seat was gone, admitted afresh. */
+        const val AFRESH = "restored=false"
+
+        /** `JoinerResumeMachine`: the machine bailed before retrying (no reweave, or no known host). */
         const val TERMINAL = "resume.terminal"
 
         /**
          * `JoinerResumeMachine`: one host `Reject` inside the retry loop, carrying the code, the
-         * attempt number and the dwell progress — **the** direct evidence that the #1637 lane was
-         * entered and is running. Introduced by #1969; matched here already so this scenario upgrades
-         * itself the moment that lands, and simply finds nothing on a build predating it.
+         * attempt number and the window's progress — direct evidence that the reconnect lane was
+         * entered and is running (#1969).
          */
         const val REFUSED = "resume.refused"
 
@@ -139,10 +149,11 @@ internal class ResumeLaneProbe {
  * never collapse — **was the lane ENTERED**, and **did it RESOLVE**:
  *
  *  * [entered] — the episode reached the resume machine at all ([refused], or [handedOff] as the
- *    weaker stand-in on a build without #1969).
- *  * [noOp] non-null — it resolved on the #1637 dwell. The fix demonstrably ran.
- *  * [ok] non-null — it resolved on a real `ResumeAck`, so the host *had* a window open and this was
- *    the ordinary resume lane, not the sub-timeout one. Recovery, but out of band.
+ *    weaker stand-in).
+ *  * [restored] non-null — it resolved on a `Welcome` naming the membership this room held: the host
+ *    handed the seat back.
+ *  * [afresh] non-null — it resolved on a `Welcome` naming another membership: the host had let the
+ *    seat go, so it had noticed the outage. Recovery, but out of band.
  *  * entered and neither — the lane ran and never concluded. An anomaly of its own.
  *  * not entered — the blip never reached the lane. Nothing was tested, however healthy the room looks.
  */
@@ -151,13 +162,15 @@ internal data class ResumeLane(
     val handedOff: String?,
     /**
      * The first `resume.refused` line (#1969) — a host `Reject` inside the retry loop. Direct evidence
-     * the #1637 lane was entered *and* running. Always null on a build predating #1969.
+     * the reconnect lane was entered *and* running.
      */
     val refused: String?,
-    /** The `resume.no-op` line — the #1637 dwell fired. */
-    val noOp: String?,
-    /** The `resume.ok` line — a real resume was ACKed. */
+    /** The first `resume.ok` line of any kind — the episode closed on the host's `Welcome`. */
     val ok: String?,
+    /** The first `resume.ok … restored=true` line — the host handed this room's own seat back. */
+    val restored: String?,
+    /** The first `resume.ok … restored=false` line — the seat was gone, and this room was admitted afresh. */
+    val afresh: String?,
     /** The `resume.terminal` line — the machine gave up on a null gate before ever retrying. */
     val terminal: String?,
     /**
@@ -183,7 +196,7 @@ internal data class ResumeLane(
     val entryEvidence: String? get() = refused ?: handedOff
 
     /** True when the lane reached a conclusion of its own, either way. */
-    val resolved: Boolean get() = noOp != null || ok != null
+    val resolved: Boolean get() = ok != null
 
     /** True when the probe never saw a single log event — its silence means nothing. */
     val blind: Boolean get() = witness == null

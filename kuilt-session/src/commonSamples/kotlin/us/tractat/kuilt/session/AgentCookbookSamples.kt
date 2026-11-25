@@ -1,14 +1,18 @@
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.FlushOutcome
+import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.util.ExponentialBackoff
+import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.session.admit.AdmissionDecision
@@ -28,6 +32,7 @@ import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 
 // Minimal, compile-checked snippets quoted verbatim by docs/agent-cookbook/session.md (most) and
 // docs/agent-cookbook/fabrics.md (chunkToTheRoomsBudgetSample).
@@ -385,4 +390,49 @@ public suspend fun hostAdmissionSample(
         }
     }
     return HostAdmission(policy, revocations)
+}
+
+/**
+ * The whole of an app's part in a device coming back: one [DeviceKeyStore] per device, on the factory.
+ *
+ * Every room the factory makes proves this device's key when it says Hello, and the host hands back
+ * the seat it holds for that key: after a torn link, through the room's own reconnect, and after an
+ * app kill, through the launch's ordinary `join`. `RoomConformanceSuite`'s return rows check that a
+ * room comes back by itself, through its own reconnect, inside a bounded wait.
+ */
+public suspend fun returnIsAutomaticSample(
+    loom: Loom,
+    scope: CoroutineScope,
+    clock: () -> Instant,
+    keyStore: DeviceKeyStore,
+    tag: Tag,
+): Room {
+    // One store per device, opened once at launch and shared by every room: it IS the device. In an
+    // app that is DeviceKeyStore.platform(…); a fresh InMemoryDeviceKeyStore() every launch makes a
+    // new device every launch, and nothing comes back.
+    val factory = SeamRoomFactory(loom = loom, scope = scope, clock = clock, deviceKeyStore = keyStore)
+    // The first join and the join after an app kill are the same call. A torn link needs none: keep
+    // the room, and on a loom that heals its seam in place it says Hello again by itself.
+    return factory.join(tag, memberName = "Ada")
+}
+
+/**
+ * Tell a member who came back from a stranger, on the host or on anyone else in the room. The key the
+ * returning device proved decides it, so these events are the host's word, not a guess from a name.
+ */
+public suspend fun whoCameBackSample(room: Room) {
+    room.events.collect { event ->
+        when (event) {
+            // The same seat under the same peer id: nothing on anyone's screen needs to change.
+            is MembershipEvent.Resumed -> Unit
+            is MembershipEvent.Left -> when (event.reason) {
+                // The same device under a new peer id, which joins next. Move whatever you keyed on
+                // event.peerId over to the reason's `by`: that Joined is not a stranger. On this
+                // room's own id it means another process of this device took the seat: this room is over.
+                is LeaveReason.Superseded -> Unit // "Ada is back"
+                else -> Unit // gone
+            }
+            else -> Unit
+        }
+    }
 }

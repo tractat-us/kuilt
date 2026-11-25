@@ -246,7 +246,23 @@ waiting long enough to get worried. So when the first phone comes back and says 
 the second phone answers, quite reasonably, "back from what? You never left." The first phone asks
 again. And again. It keeps asking for a whole minute, and then gives up and declares the session dead —
 over a ten-second hiccup that neither phone had any real trouble with. That is the bug. **This
-scenario is how we catch it on real phones, and today it is expected to FAIL.**
+scenario is how we catch it on real phones.**
+
+### What it checks since #3215
+
+The "back from what?" answer is gone. Since #3215 a returning phone says hello again and proves its
+device key, and a host that never noticed the gap still holds its seat, so it simply hands the seat
+back. The scenario's verdict was rewritten to match (census P13 on #3159):
+
+- **PASS** — the phone's reconnect logged `resume.ok … restored=true`, or its room said `Resumed`:
+  the host handed the seat back. Check the stay-up phone's report too; it should have seen nothing.
+- **FAIL** — the room ended in `HostLost` although this phone re-wove and could say hello.
+- **SKIP** — the run measured something else: the other phone runs another protocol version, this
+  phone never re-wove, the host had already let the seat go (`restored=false`, or the room says `Readmitted`), or the reconnect lane
+  never ran.
+
+The rest of this section records the scenario as it was built, against the retired `Resume` frame.
+Its sample report lines quote the old verdicts.
 
 ### Why scenario 6 can't show it
 
