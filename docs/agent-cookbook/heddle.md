@@ -478,17 +478,24 @@ blame. None throws, and the document it was asked of is unchanged.
     check(reweighted is TopologyEdit.Edited && reweighted.history == TopologyEdit.History.SHARE_RESTARTS)
     document = reweighted.document
 
-    // A rename is a delete plus an add, and the result says so before anything is saved.
+    // history is what one edit does: a rename replaces hobby, and so does renaming it back.
     val renamed = document.rename(listOf(1), "hobbyists")
     check(renamed is TopologyEdit.Edited && renamed.history == TopologyEdit.History.REPLACED)
-    document = renamed.document
+    val back = renamed.document.rename(listOf(1), "hobby")
+    check(back is TopologyEdit.Edited && back.history == TopologyEdit.History.REPLACED)
+    document = back.document
 
     // An edit that would give two siblings one name is refused, naming the sibling that has it.
     val refused = document.addChild(listOf(0), TopologyDocument.Lane("batch"))
     check(refused == TopologyEdit.DuplicateName(listOf(0, 1), "batch"))
 
-    // The edited document is checked the usual way before it goes near an engine.
-    check(Topology.from(document) is TopologyParse.Valid)
+    // The warning before saving compares with the tree the editor loaded: the round trip is gone.
+    val candidate = Topology.from(document)
+    check(candidate is TopologyParse.Valid)
+    check(
+        running.changesTo(candidate.topology) ==
+            listOf(TopologyChange.WeightChanged(listOf(0, 1), listOf("pool", "acme", "batch"), Weight.ONE, Weight.of(2))),
+    )
 ```
 
 - **A path is child indices, the address a `TopologyProblem` and a `TopologyChange` carry.** The
@@ -497,10 +504,13 @@ blame. None throws, and the document it was asked of is unchanged.
 - **An index is a place, not a node.** `remove` and `move` shift later siblings up one, and
   `Edited.path` says where the edit landed in the new document. `addChild` and a move append, so
   they never shift an existing sibling.
-- **`Edited.history` is the warning to show before saving.** `REPLACED` for a rename or a move to
-  another parent, which drain the old group and start a new one with no history; `DRAINS` for a
-  removal; `SHARE_RESTARTS` for a new weight; `NEW_TREE` for a renamed root, which
-  `LocalHeddle.apply` refuses. A ceiling, a reorder and an edit that changes nothing are `KEPT`.
+- **`Edited.history` is what this one edit does, not the warning before saving.** `REPLACED` for
+  a rename or a move to another parent, which drain the old group and start a new one with no
+  history; `DRAINS` for a removal; `SHARE_RESTARTS` for a new weight; `NEW_TREE` for a renamed
+  root, for which `LocalHeddle.apply` throws `IllegalArgumentException`. A ceiling, a reorder and
+  an edit that changes nothing are `KEPT`. Edits cancel out: a rename and the rename back are
+  `REPLACED` twice and change nothing. So the warning before saving is
+  `loaded.changesTo(candidate)`, the tree the editor started from against the edited one.
 - **Edits check the shape, not the values.** A bad weight, an empty name, a negative ceiling or a
   group left empty go in as a file would put them, and `Topology.from` reports them. The refusals
   are `NoSuchNode`, `NotAGroup`, `DuplicateName`, `AtRoot` (the root has no weight, ceiling or

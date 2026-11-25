@@ -349,7 +349,7 @@ internal fun sampleTopologyChanges() {
 
 /**
  * An admin page edits the running tree as a document, one path-addressed edit at a time, and
- * warns before saving an edit that costs a group its history.
+ * before saving warns with what the edited tree changes against the one it loaded.
  */
 @Suppress("unused")
 internal fun sampleTopologyDocumentEdits() {
@@ -367,15 +367,22 @@ internal fun sampleTopologyDocumentEdits() {
     check(reweighted is TopologyEdit.Edited && reweighted.history == TopologyEdit.History.SHARE_RESTARTS)
     document = reweighted.document
 
-    // A rename is a delete plus an add, and the result says so before anything is saved.
+    // history is what one edit does: a rename replaces hobby, and so does renaming it back.
     val renamed = document.rename(listOf(1), "hobbyists")
     check(renamed is TopologyEdit.Edited && renamed.history == TopologyEdit.History.REPLACED)
-    document = renamed.document
+    val back = renamed.document.rename(listOf(1), "hobby")
+    check(back is TopologyEdit.Edited && back.history == TopologyEdit.History.REPLACED)
+    document = back.document
 
     // An edit that would give two siblings one name is refused, naming the sibling that has it.
     val refused = document.addChild(listOf(0), TopologyDocument.Lane("batch"))
     check(refused == TopologyEdit.DuplicateName(listOf(0, 1), "batch"))
 
-    // The edited document is checked the usual way before it goes near an engine.
-    check(Topology.from(document) is TopologyParse.Valid)
+    // The warning before saving compares with the tree the editor loaded: the round trip is gone.
+    val candidate = Topology.from(document)
+    check(candidate is TopologyParse.Valid)
+    check(
+        running.changesTo(candidate.topology) ==
+            listOf(TopologyChange.WeightChanged(listOf(0, 1), listOf("pool", "acme", "batch"), Weight.ONE, Weight.of(2))),
+    )
 }

@@ -34,8 +34,11 @@ public sealed interface TopologyEdit {
      * @property document the document after the edit. The one it was made from is unchanged.
      * @property path where the edit landed in [document]: the node edited, added, renamed or
      *   moved, or, for a removal, the parent the child was removed from.
-     * @property history what the edit does to fairness history when the document is applied to a
-     *   running engine, for an editor to warn about before it saves.
+     * @property history what this one edit does to the document it was applied to. It is not
+     *   the warning to show before saving: edits add up and cancel out, so a rename and the
+     *   rename back are [History.REPLACED] twice and change nothing. What a save will cost is
+     *   `loaded.changesTo(candidate)` ([Topology.changesTo]), the tree the editor started from
+     *   against the edited one read back with [Topology.from].
      */
     public data class Edited(
         public val document: TopologyDocument,
@@ -76,9 +79,17 @@ public sealed interface TopologyEdit {
     public data class IntoItself(override val path: List<Int>, public val parent: List<Int>) : Refused
 
     /**
-     * What an edit does to fairness history once [LocalHeddle.apply] runs the edited tree. A child
-     * is identified by its names from the root down, so an edit that changes a name along the way
-     * makes a new child (see [Topology]).
+     * What this one edit does to the document it was applied to, read as fairness history: what
+     * [LocalHeddle.apply] would do were this edit the whole difference. A child is identified by
+     * its names from the root down, so an edit that changes a name along the way makes a new
+     * child (see [Topology]).
+     *
+     * **One edit, not a save.** An editor that chains edits cannot add these up into a warning:
+     * a rename and the rename back, an add and then a remove, or a new weight and then the old one
+     * are two edits each and no change at all. The warning before saving is
+     * `loaded.changesTo(candidate)` ([Topology.changesTo]), which compares the tree the editor
+     * started from with the one it is about to save. Each value is the shape [Topology.changesTo]
+     * gives for that edit alone, between valid trees.
      */
     public enum class History {
         /** Nothing loses history: a ceiling, an edit that changes nothing, or a reorder among siblings. */
@@ -105,7 +116,7 @@ public sealed interface TopologyEdit {
 
         /**
          * The root was renamed. This is a new tree, not an edit of the running one: [LocalHeddle.apply]
-         * and [Topology.diff] refuse a tree with another root.
+         * and [Topology.diff] throw [IllegalArgumentException] for a tree with another root.
          */
         NEW_TREE,
     }
