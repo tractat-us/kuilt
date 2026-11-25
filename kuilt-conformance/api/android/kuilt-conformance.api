@@ -532,6 +532,7 @@ public abstract interface class us/tractat/kuilt/conformance/ReturnDevice {
 	public static synthetic fun kill$default (Lus/tractat/kuilt/conformance/ReturnDevice;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public abstract fun launch (ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun launch$default (Lus/tractat/kuilt/conformance/ReturnDevice;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun launchBeside (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun restore (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
@@ -566,20 +567,24 @@ public final class us/tractat/kuilt/conformance/ReturnFixture$Unsupported : us/t
 }
 
 public final class us/tractat/kuilt/conformance/ReturnHarness {
-	public fun <init> (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/core/Tag;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/jvm/functions/Function1;)V
+	public fun <init> (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/core/Tag;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)V
 	public final fun getHostFactory ()Lus/tractat/kuilt/session/RoomFactory;
 	public final fun getHostHeartbeat ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
 	public final fun getHostPattern ()Lus/tractat/kuilt/core/Pattern;
 	public final fun getJoinTag ()Lus/tractat/kuilt/core/Tag;
 	public final fun getJoinerHeartbeat ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
+	public final fun hostTab (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun newDevice (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public fun <init> ()V
 	public final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat ()V
+	public final fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat ()V
 	public final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage ()V
 	public final fun aReturnAfterTheSeatWentIsReadmitted ()V
+	public final fun aSecondLiveProcessGetsAnAdditionalSeat ()V
+	public final fun anAwayJoinerHearsASupersedeThroughItsRosterRebuild ()V
 	public final fun broadcastDeliversRoomFrameTaggedWithSender ()V
 	public final fun channelStateTornAfterLeave ()V
 	public final fun differentKeyOnLiveIdIsRefused ()V
