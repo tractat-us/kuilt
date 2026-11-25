@@ -14,6 +14,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultySeam
@@ -31,8 +33,8 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
- * A host evicts a voter on a detector's loss only while that detector is the one watching him now,
- * and on his own vacate whenever he is still a voter (#3672).
+ * A host evicts a voter on a detector's loss only while that detector is the one watching him now
+ * (#3672), and on his own vacate only while he is still vacating (#3684).
  *
  * Xavier's link drops for longer than the reconnect window, so the host evicts him. His link comes
  * back while the host is still filling seats ([ReturnPolicy.Quorum]), so he is admitted again, and a
@@ -90,45 +92,162 @@ class StaleDetectorEvictionTest {
      * A vacate is the voter's own word, so it frees a watched voter's seat whatever detector is
      * watching him. Asked for directly: the room-level vacate path is rarely reached, since the
      * watcher re-reads the vacaters only when the presence key set changes.
+     *
+     * Xavier really leaves first, and the host's board shows it, because a vacate counts only while
+     * he is still vacating (#3684). Leaving stops him answering pings, so his detector would lose him
+     * one loss window later. The seat is freed well inside that window, so it was the vacate.
      */
     @Test
     fun `a vacate from a watched voter frees its seat`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val loom = InMemoryLoom()
-            val (hostRaw, aRaw, xRaw) = seats(loom, 3)
-            val liveness = fastLivenessConfig()
-            val hostDeferred = async {
-                backgroundScope.gameHost(
-                    hostRaw,
-                    peerCount = 3,
-                    raftConfig = fastRaftConfig(seed = 1L),
-                    livenessConfig = liveness,
-                    clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
-                )
-            }
-            val aDeferred = async { backgroundScope.gameJoin(aRaw, raftConfig = fastRaftConfig(seed = 2L)) }
-            val xDeferred = async { backgroundScope.gameJoin(xRaw, raftConfig = fastRaftConfig(seed = 3L)) }
-            val host = within("the host seats everyone") { hostDeferred.await() }
-            within("Ada is admitted") { aDeferred.await() }
-            within("Xavier is admitted") { xDeferred.await() }
-
-            val voter = NodeId(xRaw.selfId.value)
-            val monitor = assertNotNull(host.livenessMonitor, "rig: the host monitors its voters")
-            val watching = assertNotNull(monitor.detectorJobForTest(voter), "rig: a detector watches Xavier")
-            val left = async { host.node.membership.first { voter !in it.voters } }
+            val t = threeSeated()
+            val watching = assertNotNull(t.monitor.detectorJobForTest(t.xavier), "rig: a detector watches Xavier")
+            val left = async { t.host.node.membership.first { t.xavier !in it.voters } }
             runCurrent()
             assertFalse(left.isCompleted, "rig: Xavier is seated before he vacates")
 
-            monitor.requestEvictionForTest(EvictionRequest.Vacated(voter))
-            // Inside the reconnect window, so the seat was freed by the vacate and not by a loss.
-            val freed = withTimeoutOrNull(liveness.reconnectWindow) { left.await() } != null
+            val leftAt = testScheduler.currentTime
+            t.xSession.leave()
+            awaitVacating(t, vacating = true)
+
+            t.monitor.requestEvictionForTest(EvictionRequest.Vacated(t.xavier))
+            val freed = withTimeoutOrNull(t.liveness.reconnectWindow) { left.await() } != null
+            // Measured only when freed: the bound above caps the clock, so an unfreed seat would pass.
+            val freedAfterMs = if (freed) testScheduler.currentTime - leftAt else null
+            val lossWindowMs = (t.liveness.timeout + t.liveness.reconnectWindow).inWholeMilliseconds
 
             assertAll(
                 { assertTrue(freed, "a vacate frees the seat inside the reconnect window") },
+                {
+                    assertTrue(
+                        freedAfterMs != null && freedAfterMs < lossWindowMs,
+                        "and before a loss could have freed it: freed ${freedAfterMs}ms after he left",
+                    )
+                },
                 { assertTrue(watching.isCancelled, "and stops the detector that watched him") },
-                { assertNull(monitor.detectorJobForTest(voter), "and unregisters it") },
+                { assertNull(t.monitor.detectorJobForTest(t.xavier), "and unregisters it") },
             )
         }
+
+    /**
+     * A vacate queued while the eviction loop is busy counts only if the voter is still vacating
+     * when the loop acts on it (#3684).
+     *
+     * The loop evicts Ada and waits for someone to take her seat. Meanwhile Xavier says he is
+     * leaving, and his vacate is queued behind that wait. Then he says he is present again. When
+     * Yasmin takes Ada's seat, the loop reaches Xavier's vacate, which no longer holds: he keeps his
+     * seat, and a detector watches him again.
+     *
+     * The watcher stops a vacater's detector when it sees the vacate, so the test stops it too.
+     * Xavier says he is present again on the same presence instance, which keeps his leave latch, so
+     * he answers no pings, and the detector the loop starts for him loses him one loss window later.
+     * The test reads the seat at the moment the loop acts, which is inside that window.
+     */
+    @Test
+    fun `a vacate the voter took back before the loop reached it keeps him seated`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val t = threeSeated()
+            val ada = NodeId(t.aRaw.selfId.value)
+
+            // Ada's loss sends the loop into its wait for a replacement.
+            val adaDetector = assertNotNull(t.monitor.detectorJobForTest(ada), "rig: a detector watches Ada")
+            t.monitor.requestEvictionForTest(EvictionRequest.Lost(ada, adaDetector))
+            within("Ada is evicted") { t.host.node.membership.first { ada !in it.voters } }
+
+            // Xavier leaves, and the watcher's two steps follow: his detector stops, his vacate is queued.
+            val xDetector = assertNotNull(t.monitor.detectorJobForTest(t.xavier), "rig: a detector watches Xavier")
+            t.xSession.leave()
+            awaitVacating(t, vacating = true)
+            xDetector.cancel()
+            val vacatingWhenQueued = t.xavier.value in t.hostPresence.vacaters().map { it.value }
+            t.monitor.requestEvictionForTest(EvictionRequest.Vacated(t.xavier))
+
+            // He takes it back before the loop reaches it.
+            assertNotNull(t.xSession.lobbyPresence, "rig: Xavier has a lobby presence").declarePresent()
+            awaitVacating(t, vacating = false)
+            val vacatingWhenActedOn = t.xavier.value in t.hostPresence.vacaters().map { it.value }
+
+            var leftSeat = false
+            val seatWatcher = backgroundScope.launch {
+                t.host.node.membership.collect { if (t.xavier !in it.voters) leftSeat = true }
+            }
+            runCurrent()
+
+            // Yasmin takes Ada's seat, so the loop moves on to Xavier's vacate.
+            val yRaw = t.loom.join(InMemoryTag("yasmin"))
+            val yasmin = NodeId(yRaw.selfId.value)
+            backgroundScope.launch { backgroundScope.gameJoin(yRaw, raftConfig = fastRaftConfig(seed = 4L)) }
+            within("Yasmin takes Ada's seat") { t.host.node.membership.first { yasmin in it.voters } }
+            var rewatched: Job? = null
+            repeat(REGISTRATION_STEPS) {
+                if (rewatched == null && !leftSeat) {
+                    rewatched = t.monitor.detectorJobForTest(t.xavier)?.takeIf { it !== xDetector }
+                    if (rewatched == null) advanceTimeBy(1L)
+                }
+            }
+            val seatedWhenActedOn = !leftSeat && t.xavier in t.host.node.membership.value.voters
+            seatWatcher.cancel()
+
+            assertAll(
+                { assertTrue(vacatingWhenQueued, "rig: Xavier was vacating when his vacate was queued") },
+                { assertFalse(vacatingWhenActedOn, "rig: and was not once he said he was present") },
+                { assertTrue(seatedWhenActedOn, "a vacate he took back keeps him seated") },
+                { assertNotNull(rewatched, "and the loop starts a detector for him again") },
+                { assertTrue(rewatched?.isActive == true, "which is running") },
+            )
+        }
+
+    private class ThreeSeated(
+        val loom: InMemoryLoom,
+        val aRaw: Seam,
+        val host: GameSession,
+        val hostPresence: GamePresence,
+        val monitor: VoterLivenessMonitor,
+        val xSession: GameSession,
+        val xavier: NodeId,
+        val liveness: HeartbeatConfig,
+    )
+
+    /** A host of three seats, full membership, with Ada and Xavier seated and watched. */
+    private suspend fun TestScope.threeSeated(): ThreeSeated {
+        val loom = InMemoryLoom()
+        val (hostRaw, aRaw, xRaw) = seats(loom, 3)
+        val liveness = fastLivenessConfig()
+        val hostDeferred = async {
+            backgroundScope.gameHost(
+                hostRaw,
+                peerCount = 3,
+                raftConfig = fastRaftConfig(seed = 1L),
+                livenessConfig = liveness,
+                clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+            )
+        }
+        val aDeferred = async { backgroundScope.gameJoin(aRaw, raftConfig = fastRaftConfig(seed = 2L)) }
+        val xDeferred = async { backgroundScope.gameJoin(xRaw, raftConfig = fastRaftConfig(seed = 3L)) }
+        val host = within("the host seats everyone") { hostDeferred.await() }
+        within("Ada is admitted") { aDeferred.await() }
+        val xSession = within("Xavier is admitted") { xDeferred.await() }
+        return ThreeSeated(
+            loom = loom,
+            aRaw = aRaw,
+            host = host,
+            hostPresence = assertNotNull(host.lobbyPresence, "rig: the host has a lobby presence"),
+            monitor = assertNotNull(host.livenessMonitor, "rig: the host monitors its voters"),
+            xSession = xSession,
+            xavier = NodeId(xRaw.selfId.value),
+            liveness = liveness,
+        )
+    }
+
+    /** Steps virtual time until the host's board shows Xavier [vacating], or not, failing past the bound. */
+    private fun TestScope.awaitVacating(t: ThreeSeated, vacating: Boolean) {
+        repeat(REGISTRATION_STEPS) {
+            if ((t.xavier.value in t.hostPresence.vacaters().map { it.value }) == vacating) return
+            advanceTimeBy(1L)
+            runCurrent()
+        }
+        fail("rig: the host's board shows Xavier ${if (vacating) "vacating" else "present"}")
+    }
 
     private class Rejoined(
         val host: GameSession,

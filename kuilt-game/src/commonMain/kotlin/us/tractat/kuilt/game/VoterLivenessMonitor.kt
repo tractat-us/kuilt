@@ -36,7 +36,8 @@ internal sealed interface EvictionRequest {
 
     /**
      * [voter] said it is leaving. Its own statement rather than a detector's report, so no detector
-     * is checked: it counts while [voter] is still a voter.
+     * is checked: it counts while [voter] is still a voter and the board still shows it vacating
+     * (#3684). A vacate it has taken back by the time the eviction loop reaches this does not count.
      */
     class Vacated(override val voter: NodeId) : EvictionRequest
 }
@@ -71,7 +72,9 @@ internal sealed interface EvictionRequest {
  * seat can still be on its way, from a detector's collector that lost its thread before sending it.
  * Acted on, it would evict a voter whose link is healthy, and the eviction loop's exclusion list
  * keeps him out of the seat for good. A vacate is the voter's own word, not a detector's, so it is
- * checked only against the voter set.
+ * checked against the voter set and against the board: it counts only while [GamePresence.vacaters]
+ * still names him when the eviction loop acts on it (#3684). The loop can sit in [admitVotersUntil]
+ * for as long as no replacement comes, and a vacate queued behind that wait may have been taken back.
  *
  * All coroutines launch on the injected [scope]; cancelling it tears them all down (the #1001-class
  * leak guard).
@@ -207,8 +210,13 @@ internal class VoterLivenessMonitor(
      *
      * A loss counts only while the detector that reported it is still the voter's, checked in the
      * section that unregisters it (#3672). This loop is the only one that unregisters a detector or
-     * evicts a voter, so nothing can replace the detector between that check and the eviction. A
-     * vacate needs only the voter-set check.
+     * evicts a voter, so nothing can replace the detector between that check and the eviction.
+     *
+     * A vacate counts only while the board still shows the voter vacating, read in the same section
+     * (#3684). One he has taken back is dropped, and if the watcher stopped his detector when it saw
+     * the vacate, a new one watches him. That covers only a vacate this loop reads as leader: on a
+     * host that is not leading, the role check skips the vacate first, and a detector the watcher
+     * stopped stays registered and cancelled, so that voter's seat is left unwatched.
      */
     private suspend fun evictAndReopenAdmission() {
         // Peers that have been evicted from the voter set — excluded from re-admission so a gracefully
@@ -224,16 +232,31 @@ internal class VoterLivenessMonitor(
 
             // Skip a loss about an earlier seat: the detector that reported it has been unregistered.
             var stopped: Job? = null
+            var unwatched = false
             val current = lock.withLock {
                 val current = when (request) {
                     is EvictionRequest.Lost -> detectorJobs[lostId] === request.detector
-                    is EvictionRequest.Vacated -> true
+                    // Skip a vacate the voter has taken back: read the board now, not when it was queued.
+                    is EvictionRequest.Vacated -> presence.vacaters().any { it.value == lostId.value }
                 }
-                if (current) stopped = detectorJobs.remove(lostId)
+                if (current) {
+                    stopped = detectorJobs.remove(lostId)
+                } else if (request is EvictionRequest.Vacated) {
+                    // Cancelled means the watcher stopped it for this vacate. A detector that is not
+                    // cancelled either lost him, and its own loss is queued, or is the replacement
+                    // detector #3139 hands to the wrong voter; either way it is left as it is.
+                    unwatched = detectorJobs[lostId]?.isCancelled == true
+                }
                 current
             }
             if (!current) {
-                logger.debug { "eviction.stale-detector voter=${lostId.value}: the detector that lost it no longer watches it" }
+                when (request) {
+                    is EvictionRequest.Lost ->
+                        logger.debug { "eviction.stale-detector voter=${lostId.value}: the detector that lost it no longer watches it" }
+                    is EvictionRequest.Vacated ->
+                        logger.debug { "eviction.stale-vacate voter=${lostId.value}: no longer vacating, rewatch=$unwatched" }
+                }
+                if (unwatched) watch(lostId)
                 continue
             }
             // Cancel the detector (if still running — vacate path cancels it first).
