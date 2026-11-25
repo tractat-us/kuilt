@@ -43,7 +43,7 @@ import kotlin.test.assertEquals
  */
 class TopologyChangeHistoryPropertyTest {
 
-    private val seeds = 600
+    private val seeds = 1500
     private val names = listOf("a", "b", "c", "d")
     private val weights = listOf(Weight.ONE, Weight.of(2), Weight.of(3, 2))
     private val ceilings = listOf(null, 0L, 2L)
@@ -113,22 +113,24 @@ class TopologyChangeHistoryPropertyTest {
                 if (decisive) reached.count("${change::class.simpleName}:${change.history}")
             }
         }
-        // Each floor is about half what the generator reaches on the JVM, so a generator that
-        // stopped reaching an arm reds, and one that drifted a little does not.
+        // Each floor is about half what the generator reaches on the JVM (727, 569, 428, 206, 143,
+        // 50, 107, 63, 36, 41; 1392 applied, 108 new trees), so a generator that stopped reaching an
+        // arm reds, and one that drifted a little does not.
         val floors = listOf(
-            "Added:KEPT" to 100,
-            "Removed:LOST" to 100,
-            "WeightChanged:LOST" to 100,
-            "CeilingChanged:KEPT" to 50,
-            "LaneBecameGroup:KEPT" to 20,
-            "GroupBecameLane:KEPT" to 20,
-            "TemplateAdded:KEPT" to 20,
-            "TemplateRemoved:LOST" to 20,
-            "TemplateChanged:LOST" to 10,
-            "TemplateChanged:KEPT" to 10,
+            "Added:KEPT" to 360,
+            "Removed:LOST" to 280,
+            "WeightChanged:LOST" to 210,
+            "CeilingChanged:KEPT" to 100,
+            "LaneBecameGroup:KEPT" to 70,
+            "GroupBecameLane:KEPT" to 25,
+            "TemplateAdded:KEPT" to 50,
+            "TemplateRemoved:LOST" to 30,
+            "TemplateChanged:LOST" to 18,
+            "TemplateChanged:KEPT" to 20,
         )
         val counts = floors.map { (arm, floor) -> Triple(arm, reached[arm] ?: 0, floor) } +
-            listOf(Triple("applied", applied, 400), Triple("new trees threw", newTreesThrew, 20))
+            listOf(Triple("applied", applied, 700), Triple("new trees threw", newTreesThrew, 50))
+        println("CHANGE-HISTORY ${counts.joinToString { "${it.first}=${it.second}" }}, refused=$refused")
         val short = counts.filter { (_, counted, floor) -> counted < floor }.map { (arm, counted, floor) -> "$arm: $counted < $floor" }
         assertAll(
             { assertEquals(emptyList(), failures.take(5), "${failures.size} failures") },
@@ -205,10 +207,15 @@ class TopologyChangeHistoryPropertyTest {
         val paths = nodePaths(t.children, emptyList())
         val path = paths.draw(r)
         val node = nodeAt(t.children, path)
-        val children = when (r.nextInt(10)) {
+        // Half the template edits go to a group that has one, which is where children are attached.
+        val templated = paths.filter { (nodeAt(t.children, it) as? Group)?.template != null }
+        val children = when (r.nextInt(11)) {
             0 -> t.children.update(path) { it.with(weight = (weights - it.weight).draw(r)) }
             1 -> t.children.update(path) { it.with(maxConcurrent = (ceilings - it.maxConcurrent).draw(r)) }
-            2 -> t.children.update(path) { if (it is Group) it.copy(template = retemplate(it.template, r)) else it }
+            2, 10 -> {
+                val at = if (templated.isNotEmpty() && r.nextBoolean()) templated.draw(r) else path
+                t.children.update(at) { if (it is Group) it.copy(template = retemplate(it.template, r)) else it }
+            }
             3 -> {
                 val parent = if (node is Group) path else path.dropLast(1)
                 val free = names - childrenAt(t.children, parent).map { it.name }.toSet()
