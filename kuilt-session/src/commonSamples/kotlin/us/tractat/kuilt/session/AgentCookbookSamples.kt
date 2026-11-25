@@ -374,7 +374,9 @@ public suspend fun flushThenLeaveSample(
  * set across restarts as you keep the revocations: a forgotten block lets a revoked device back in as
  * a newcomer. To keep a device out from its next return, block it and revoke it: blocking alone
  * leaves a held seat or a pass it holds working, and revoking alone only sends it back to this
- * policy. Neither removes a device that is in the room now.
+ * policy. With both, each Hello it sends is refused, and a seat the room still holds for it is not let
+ * go by the refusal: it stays held, empty, until its hold runs out. Neither removes a device that is in
+ * the room now.
  */
 public suspend fun hostAdmissionSample(
     friends: Set<DidKey>,
