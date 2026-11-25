@@ -1924,11 +1924,11 @@ internal class SeamRoom(
                             reconnectController?.onPeerRecovered(joinerPeerId, clock().toEpochMilliseconds())
                         }
                     }
-                    seating.burst?.let { sendAdmissionBurst(it, keyed.joinerNonce, ReturnKind.Restored, announce = false) }
+                    seating.burst?.let { sendAdmissionBurst(it, keyed.joinerNonce, ReturnKind.Restored) }
                     return
                 }
                 is SeatOutcome.Admitted -> {
-                    sendAdmissionBurst(seating.burst, keyed.joinerNonce, returnKind = null, announce = true)
+                    sendAdmissionBurst(seating.burst, keyed.joinerNonce, returnKind = null)
                     return
                 }
                 is SeatOutcome.Superseded -> {
@@ -1938,7 +1938,7 @@ internal class SeamRoom(
                     if (!asked.spent(seating.previous)) {
                         reconnectController?.onPeerRecovered(seating.previous, clock().toEpochMilliseconds())
                     }
-                    sendAdmissionBurst(seating.burst, keyed.joinerNonce, ReturnKind.Restored, announce = true)
+                    sendAdmissionBurst(seating.burst, keyed.joinerNonce, ReturnKind.Restored)
                     // Decided 19: told directly, since the other members' fan-out excludes its subject.
                     // Last, and best-effort: its link is the one that went quiet, and a send into it
                     // must not hold the new member's Welcomes back.
@@ -2316,7 +2316,7 @@ internal class SeamRoom(
      * Hello's, as [restoreSeat] keeps it for a same-id restore.
      *
      * The order is the one #1781 needs on every lane: the `Farewell` is enqueued here, before the
-     * roster `Welcome` [seatProvenJoiner] enqueues for the new member once this section ends, so no
+     * roster `Welcome` [admitMember] enqueues for the new member later in this section, so no
      * member hears `Welcome(new)` and then `Farewell(old)` for a membership that has moved, and every
      * member present for it reads `Left(old, Superseded(new))`, then `Joined(new)`. A member whose
      * link was down hears neither: its admission burst names `new`, which it hears as `Joined(new)`,
@@ -2412,7 +2412,24 @@ internal class SeamRoom(
         return admitMember(joinerPeerId, identity, keyed.key)
     }
 
-    /** **Under [lock].** Add [joinerPeerId] as a connected member with [identity] and [key]. */
+    /**
+     * **Under [lock].** Add [joinerPeerId] as a connected member with [identity] and [key], and enqueue
+     * its roster `Welcome` on every other member's fan-out lane (#3630).
+     *
+     * The enqueue is in this section, the one that admits, and so before the suspending direct
+     * `Welcome` to the joiner ([sendAdmissionBurst]). Whatever a later section decides about the new
+     * member is then enqueued behind it on every lane: a `Paused` from its detector, or the `Farewell`
+     * of its `Goodbye`. After the send, either could reach a bystander first. A `Paused` for a member
+     * the bystander did not hold yet was dropped, and the `Welcome` then added the member as
+     * connected. A `Farewell` was dropped the same way, and the `Welcome` then added a member that
+     * had left: on a star the bystander has no heartbeat to it, so that ghost stays.
+     *
+     * The bystanders may now hear of the new member before the joiner hears its own `Welcome`. A
+     * relayed frame from a bystander can then reach the joiner before the joiner holds that
+     * bystander, and the joiner drops it (`origin-not-admitted`). That window was already open
+     * before: the joiner learns the other members only from the burst's member `Welcome`s, which
+     * followed the roster copy. It is now one send wider.
+     */
     private fun admitMember(joinerPeerId: PeerId, identity: MemberIdentity, key: DidKey): SeatOutcome.Admitted {
         val member = Member(
             id = joinerPeerId,
@@ -2431,8 +2448,24 @@ internal class SeamRoom(
         // [membershipIds]. `closed`: addToRoster admitted nobody, so there is no member to name.
         val id = newMembershipId()
         if (!closed) membershipIds[joinerPeerId] = id
+        // No-op once closed: [fanOutToOtherMembers] checks [closed] too, and addToRoster admitted nobody.
+        fanOutToOtherMembers(joinerPeerId, rosterWelcome(member))
         return SeatOutcome.Admitted(AdmissionBurst(member, existing, id))
     }
+
+    /**
+     * The `Welcome` that names [member] to the others: its roster copy, which names neither a Hello
+     * nor a membership, since both are the joiner's business alone. The direct `Welcome` to the
+     * joiner is a copy of it that adds them.
+     */
+    private fun rosterWelcome(member: Member): AdmitMessage.Welcome = AdmitMessage.Welcome(
+        assignedPeerId = member.id.value,
+        displayName = member.identity.displayName,
+        sessionId = member.identity.sessionId,
+        key = member.key,
+        deviceId = member.identity.deviceId,
+        roomId = _roomId.value?.value,
+    )
 
     /** **Under [lock].** [peerId]'s membership id, which a held seat always has ([membershipIds]). */
     private fun membershipOf(peerId: PeerId): String =
@@ -2448,43 +2481,26 @@ internal class SeamRoom(
 
     /**
      * Send a seated joiner what it needs, outside [lock]: its direct Welcome (marked [returnKind],
-     * naming the Hello it [answers] and the membership), then, when [announce], the roster copy to
-     * every other member, then a Welcome for each member it did not know, then the host's own intro,
-     * which names the same Hello.
+     * naming the Hello it [answers] and the membership), then a Welcome for each member it did not
+     * know, then the host's own intro, which names the same Hello.
      *
      * The direct Welcome is the ONE frame that names the joiner's membership, and the one that
      * answers its Hello (#3215). Every other frame of the burst names the Hello too, but only to say
      * which burst it belongs to (#3615): a joiner drops a member Welcome or an intro from a burst
      * answering an older Hello, and takes the intro of the latest one as the end of its burst, never
      * as the answer.
-     * It and the two joiner-directed loops stay INLINE: they address the joiner, not the bystanders, so they share no
+     * These sends stay INLINE: they address the joiner, not the bystanders, so they share no
      * recipient with any queued fan-out and have no order to keep against one.
      *
-     * The roster copy goes through the per-recipient fan-out lanes (#1781/#2048), not a loop of direct
-     * sends. It is a host-authoritative membership announcement to bystanders, structurally identical
-     * to [propagateFarewell], so it needs the same ordering: a slow bystander link could leave
-     * `Welcome(X)` in flight while X drops and its window expires, and the `Farewell(X)` queued behind
-     * it on THAT bystander's lane would then arrive FIRST. [handleFarewell] removes a peer that
-     * bystander does not hold yet — a no-op — and the late Welcome then ADDS X to its roster. On a star
-     * that bystander has no heartbeat edge to X, so it holds a ghost member forever with no
-     * anti-entropy to correct it. The roster copy names neither the Hello nor the membership: they
-     * are the joiner's business alone. A restored seat sends no roster copy at all, since every other
-     * member already holds it.
+     * The roster copy to the other members is not sent here. [admitMember] enqueues it on their
+     * fan-out lanes in the section that admits, before this first suspends (#3630). A restored seat
+     * sends no roster copy at all, since every other member already holds it.
      */
-    private suspend fun sendAdmissionBurst(burst: AdmissionBurst, answers: ByteArray, returnKind: ReturnKind?, announce: Boolean) {
+    private suspend fun sendAdmissionBurst(burst: AdmissionBurst, answers: ByteArray, returnKind: ReturnKind?) {
         val member = burst.member
-        val welcome = AdmitMessage.Welcome(
-            assignedPeerId = member.id.value,
-            displayName = member.identity.displayName,
-            sessionId = member.identity.sessionId,
-            key = member.key,
-            deviceId = member.identity.deviceId,
-            roomId = _roomId.value?.value,
-        )
+        val welcome = rosterWelcome(member)
         val direct = AdmitMessage.encode(welcome.copy(returnKind = returnKind, answers = answers, membership = burst.membership))
         runCatchingCancellable { seam.sendTo(member.id, direct) }
-
-        if (announce) fanOutToOtherMembers(member.id, welcome)
 
         for (existing in burst.existing) {
             // Names the Hello the burst answers, as the intro does, so a joiner can drop it when it
@@ -2811,12 +2827,12 @@ internal class SeamRoom(
             // Learn the room's identity (#1594). Placed above the self-admission branch to cover
             // every Welcome shape a joiner accepts.
             //
-            // TWO shapes carry a roomId, not one: `sendAdmissionBurst` builds one `welcome` with
-            // `roomId = _roomId.value?.value`, sends a copy of it naming the joiner's Hello and its
-            // membership to the joiner itself (the self-admission Welcome), and hands the original to
-            // `fanOutToOtherMembers`, which re-encodes it to every other admitted member (the
-            // roster-sync Welcome). Both therefore name the room. The bootstrap and host-intro
-            // Welcomes send null. Which shape lands first does not matter: they agree on the value,
+            // TWO shapes carry a roomId, not one: `rosterWelcome` builds one `welcome` with
+            // `roomId = _roomId.value?.value`. `admitMember` hands it to `fanOutToOtherMembers`,
+            // which re-encodes it to every other admitted member (the roster-sync Welcome), and
+            // `sendAdmissionBurst` sends a copy of it naming the joiner's Hello and its membership to
+            // the joiner itself (the self-admission Welcome). Both therefore name the room. The
+            // bootstrap and host-intro Welcomes send null. Which shape lands first does not matter: they agree on the value,
             // and the write-once guard in [adoptRoomIdIfAbsent] makes every one after the first a
             // no-op.
             adoptRoomIdIfAbsent(welcome.roomId)
@@ -2967,7 +2983,7 @@ internal class SeamRoom(
      * on a topology where members have no heartbeat edge to each other).
      *
      * The eviction counterpart of the [AdmitMessage.Welcome] roster-sync broadcast in
-     * [sendAdmissionBurst]: the host is the membership authority for joins *and* leaves. Best-effort —
+     * [admitMember]: the host is the membership authority for joins *and* leaves. Best-effort —
      * a lost Farewell degrades to that member's heartbeat-window eviction *where such a window
      * exists* (a mesh; on a star it does not, which is why the expiry fan-out matters).
      *
@@ -3415,9 +3431,9 @@ internal class SeamRoom(
         // concern). With the enqueue there, whatever a LATER section decides about this member is
         // enqueued after this `Paused` on every lane, wherever that section enqueues. An EARLIER
         // section's frame precedes it only if that section also enqueued under its own lock:
-        // every `Paused`/`Unpaused` sender now does, but the `Goodbye` handler's `Farewell` (#3628)
-        // and an admission's roster `Welcome` ([sendAdmissionBurst]) are still enqueued after their
-        // deciding section. `PausedFanOutOrderConcurrencyTest` parks this thread on the gap.
+        // every `Paused`/`Unpaused` sender now does, and so does an admission's roster `Welcome`
+        // ([admitMember], #3630), but the `Goodbye` handler's `Farewell` (#3628) is still enqueued
+        // after its deciding section. `PausedFanOutOrderConcurrencyTest` parks this thread on the gap.
         // `fanOutToOtherMembers` re-enters the reentrant lock, and its `trySend` into an
         // UNLIMITED lane cannot suspend, so nothing suspend-capable runs under the lock.
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
@@ -4203,7 +4219,9 @@ internal class SeamRoom(
      * - `Welcome(X)` overtaken by `Farewell(X)` leaves a **departed** member in a bystander's roster
      *   forever: the `Farewell` removes a peer that bystander does not hold yet (a no-op) and the late
      *   `Welcome` then adds it. On a star that bystander has no heartbeat edge to X, so nothing
-     *   evicts the ghost. This one is why the welcome fan-out is enqueued here too — see [sendAdmissionBurst].
+     *   evicts the ghost. This one is why the welcome fan-out is enqueued here too, and why it is
+     *   enqueued in the section that admits rather than after the joiner's own `Welcome` (#3630) —
+     *   see [admitMember].
      *
      * This is the dedicated-writer-draining-a-[Channel] pattern (`:kuilt-core`'s
      * `CompositeSeam.capabilityWriter` is the sibling), **not** a `limitedParallelism(1)` confinement
