@@ -58,8 +58,8 @@ internal sealed interface EvictionRequest {
  * [MutableSharedFlow], satisfying the ADR-034 single-collection contract.
  *
  * On [PartitionEvent.PeerLost] (leader only): evicts the dead voter through [HostMembership.evict],
- * re-opens admission, runs [admitVotersUntil] for one replacement, then starts a fresh detector for
- * the new voter. Graceful leave ([GamePresence.vacaters]) triggers eviction immediately without
+ * re-opens admission, runs [admitVotersUntil] for one replacement, closes admission again if that
+ * filled all `peerCount` seats, then starts a fresh detector for the new voter. Graceful leave ([GamePresence.vacaters]) triggers eviction immediately without
  * waiting the reconnect window.
  *
  * Non-leader nodes receive [PartitionEvent.PeerLost] but take no action — Raft's commit-majority
@@ -82,6 +82,8 @@ internal sealed interface EvictionRequest {
  * @param mux The [MuxSeam] wrapping [seam]; the liveness channel ([HEARTBEAT_CHANNEL]) is a view on it.
  * @param membership The host's one membership writer, shared with the admission and spectator loops;
  *   every eviction and replacement goes through it, so neither drops a spectator or another voter.
+ * @param peerCount The number of seats, host included. A replacement closes admission again only once
+ *   the roster has this many voters; below it a seat is still open for a latecomer (#3683).
  * @param presence The [GamePresence] instance; used to detect vacaters and re-open/re-close admission.
  * @param config [HeartbeatConfig] driving ping interval, timeout, and reconnect window.
  * @param clock Clock for liveness measurements; injected for virtual-time test determinism.
@@ -92,6 +94,7 @@ internal class VoterLivenessMonitor(
     private val seam: Seam,
     private val mux: MuxSeam,
     private val membership: HostMembership,
+    private val peerCount: Int,
     private val presence: GamePresence,
     private val config: HeartbeatConfig,
     private val clock: () -> Instant,
@@ -254,8 +257,10 @@ internal class VoterLivenessMonitor(
                 excluded = evictedVoterIds.toSet(),
             )
 
-            // Re-close admission with the refreshed voter set.
-            presence.declareAdmissionClosed(membership.voters.value)
+            // Re-close admission only if the replacement filled the roster. Under ReturnPolicy.Quorum a
+            // seat can still be open, and the latecomer loop closes admission when it fills it (#3683).
+            val voters = membership.voters.value
+            if (voters.size >= peerCount) presence.declareAdmissionClosed(voters)
 
             // Start a liveness detector for the replacement voter (the one not in votersBeforeAdmit).
             val newVoterId = membership.voters.value.firstOrNull { it !in votersBeforeAdmit }

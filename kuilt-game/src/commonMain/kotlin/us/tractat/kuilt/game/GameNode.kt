@@ -511,7 +511,7 @@ public suspend fun CoroutineScope.gameHost(
     // The leader observes PeerLost events and evicts the dead voter, then re-opens the admission
     // loop for a replacement. Graceful leave (vacate signal) is also handled here.
     val livenessMonitor = livenessConfig?.let {
-        VoterLivenessMonitor(this, node, seam, mux, membership, presence, it, clock).also { monitor -> monitor.start() }
+        VoterLivenessMonitor(this, node, seam, mux, membership, peerCount, presence, it, clock).also { monitor -> monitor.start() }
     }
 
     return GameSession(node, seam, appMux, presence, livenessMonitor)
