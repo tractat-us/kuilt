@@ -7,6 +7,7 @@ import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.time.Instant
 
@@ -101,14 +102,14 @@ class SeatDecisionTest {
         assertAll(
             {
                 assertEquals(
-                    SeatDecision.ReleaseAndAdmit(released = p1, admission = SeatDecision.Ordinary),
-                    decideSeat(p1, a, held = mapOf(p1 to away(b)), holdsValidGrant = false),
+                    listOf(SeatDecision.ReleaseAndAdmit(released = p1), SeatDecision.Ordinary),
+                    settle(p1, a, held = mapOf(p1 to away(b)), holdsValidGrant = false),
                 )
             },
             {
                 assertEquals(
-                    SeatDecision.ReleaseAndAdmit(released = p1, admission = SeatDecision.Returning),
-                    decideSeat(p1, a, held = mapOf(p1 to away(b)), holdsValidGrant = true),
+                    listOf(SeatDecision.ReleaseAndAdmit(released = p1), SeatDecision.Returning),
+                    settle(p1, a, held = mapOf(p1 to away(b)), holdsValidGrant = true),
                 )
             },
         )
@@ -128,12 +129,10 @@ class SeatDecisionTest {
         val checks = helds.flatMap { held ->
             listOf(false, true).map { grant ->
                 {
-                    val decision = decideSeat(p1, a, held, grant)
-                    assertEquals(
-                        SeatDecision.ReleaseAndAdmit(released = p1, admission = decideSeat(p1, a, held - p1, grant) as SeatDecision.FreshId),
-                        decision,
-                        "held=$held grant=$grant",
-                    )
+                    val again = settle(p1, a, held, grant)
+                    assertEquals(SeatDecision.ReleaseAndAdmit(released = p1), again.first(), "held=$held grant=$grant")
+                    assertIs<SeatDecision.FreshId>(again.last(), "held=$held grant=$grant")
+                    assertEquals(decideSeat(p1, a, held - p1, grant), again.last(), "held=$held grant=$grant")
                 }
             }
         }
@@ -173,14 +172,14 @@ class SeatDecisionTest {
         assertAll(
             {
                 assertEquals(
-                    SeatDecision.ReleaseAndAdmit(released = p1, admission = SeatDecision.AdditionalSeat),
-                    decideSeat(p1, a, held = mapOf(p1 to away(b), p2 to live(a)), holdsValidGrant = false),
+                    listOf(SeatDecision.ReleaseAndAdmit(released = p1), SeatDecision.AdditionalSeat),
+                    settle(p1, a, held = mapOf(p1 to away(b), p2 to live(a)), holdsValidGrant = false),
                 )
             },
             {
                 assertEquals(
-                    SeatDecision.ReleaseAndAdmit(released = p1, admission = SeatDecision.RestoreUnderNewId(previous = p2)),
-                    decideSeat(p1, a, held = mapOf(p2 to away(a), p1 to away(b)), holdsValidGrant = true),
+                    listOf(SeatDecision.ReleaseAndAdmit(released = p1), SeatDecision.RestoreUnderNewId(previous = p2)),
+                    settle(p1, a, held = mapOf(p2 to away(a), p1 to away(b)), holdsValidGrant = true),
                 )
             },
         )
@@ -253,7 +252,7 @@ class SeatDecisionTest {
             Triple(mapOf(p3 to live(c), p1 to away(b), p2 to away(a)), false, "release p1, then restore under new id, previous p2"),
             Triple(mapOf(p3 to live(c), p1 to away(b), p2 to away(a)), true, "release p1, then restore under new id, previous p2"),
         )
-        val actual = rows.map { (held, grant, _) -> label(decideSeat(p1, a, held, grant)) }
+        val actual = rows.map { (held, grant, _) -> settle(p1, a, held, grant).joinToString(", then ") { label(it) } }
         assertEquals(rows.map { it.third }, actual)
     }
 
@@ -283,10 +282,23 @@ class SeatDecisionTest {
         )
     }
 
+    /**
+     * What the host acts on, as `SeamRoom.settleSeat` reaches it: [decideSeat], and after a release
+     * the decision again on the seats that remain.
+     */
+    private fun settle(claimedId: PeerId, key: DidKey, held: Map<PeerId, Seat>, holdsValidGrant: Boolean): List<SeatDecision> {
+        val first = decideSeat(claimedId, key, held, holdsValidGrant)
+        return if (first is SeatDecision.ReleaseAndAdmit) {
+            listOf(first, decideSeat(claimedId, key, held - first.released, holdsValidGrant))
+        } else {
+            listOf(first)
+        }
+    }
+
     private fun label(decision: SeatDecision): String = when (decision) {
         is SeatDecision.Restore -> "restore ${decision.peerId.value}"
         is SeatDecision.RestoreUnderNewId -> "restore under new id, previous ${decision.previous.value}"
-        is SeatDecision.ReleaseAndAdmit -> "release ${decision.released.value}, then ${label(decision.admission)}"
+        is SeatDecision.ReleaseAndAdmit -> "release ${decision.released.value}"
         SeatDecision.AdditionalSeat -> "additional seat"
         SeatDecision.Returning -> "returning"
         SeatDecision.KeyConflict -> "key conflict"

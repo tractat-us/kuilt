@@ -33,9 +33,6 @@ internal sealed interface SeatDecision {
     /** The verdicts for a claimed id that holds no seat: what [decideSeat] answers from the key alone. */
     sealed interface FreshId : SeatDecision
 
-    /** The verdicts that admit the joiner as a new membership rather than restoring a held one. */
-    sealed interface NewMember : FreshId
-
     /**
      * The claimed id holds a seat under the proven key, connected or partitioned: the same membership
      * comes back.
@@ -50,21 +47,22 @@ internal sealed interface SeatDecision {
     data class RestoreUnderNewId(val previous: PeerId) : FreshId
 
     /**
-     * The claimed id holds a **partitioned** seat under a different key: the old seat is released and
-     * the joiner's key is decided again as if that seat had never been held, which is [admission].
-     * This is how a device whose key store was cleared, and whose peer id is durable, gets back in
-     * with no prompt (Decided 18); the key it now holds may have seats of its own (Decided 30).
+     * The claimed id holds a **partitioned** seat under a different key: the old seat is released, and
+     * the caller then decides the joiner's key again without it ([decideSeat] on the seats that
+     * remain), which answers one of the [FreshId] verdicts. This is how a device whose key store was
+     * cleared, and whose peer id is durable, gets back in with no prompt (Decided 18); the key it now
+     * holds may have seats of its own (Decided 30).
      */
-    data class ReleaseAndAdmit(val released: PeerId, val admission: FreshId) : SeatDecision
+    data class ReleaseAndAdmit(val released: PeerId) : SeatDecision
 
     /**
      * The claimed id holds no seat, and every seat the proven key holds is connected: another tab of
      * the same device. It is admitted to a seat of its own, and no seat is superseded (Decided 30).
      */
-    data object AdditionalSeat : NewMember
+    data object AdditionalSeat : FreshId
 
     /** Neither the id nor the key holds a seat, and the joiner presented a valid grant. */
-    data object Returning : NewMember
+    data object Returning : FreshId
 
     /**
      * Terminal refusal: the claimed id holds a **connected** seat under a different key — a different
@@ -73,7 +71,7 @@ internal sealed interface SeatDecision {
     data object KeyConflict : SeatDecision
 
     /** Neither the id nor the key holds a seat, and no valid grant: ordinary admission. */
-    data object Ordinary : NewMember
+    data object Ordinary : FreshId
 }
 
 /**
@@ -95,7 +93,7 @@ internal sealed interface SeatDecision {
  * 1. the claimed id holds a seat under the proven key → [SeatDecision.Restore];
  * 2. the claimed id holds a connected seat under another key → [SeatDecision.KeyConflict];
  * 3. the claimed id holds a partitioned seat under another key → [SeatDecision.ReleaseAndAdmit],
- *    carrying the decision for the key without that seat (rules 4–7);
+ *    and the caller decides again without that seat, which reaches rules 4–7;
  * 4. the proven key holds a partitioned seat → [SeatDecision.RestoreUnderNewId], naming the one
  *    with the latest [Seat.lastContact];
  * 5. the proven key holds only connected seats → [SeatDecision.AdditionalSeat];
@@ -108,8 +106,8 @@ internal sealed interface SeatDecision {
  * window refuses it, or the device was revoked since it was admitted — the caller calls this again
  * with the seat removed from [held], and acts on that answer. It does not substitute
  * [SeatDecision.Ordinary]: the answer may be [SeatDecision.Returning], or another seat under the same
- * key. [SeatDecision.ReleaseAndAdmit] is that same re-decision, made here. Revocation is the
- * caller's to check; this function never sees it.
+ * key. [SeatDecision.ReleaseAndAdmit] asks for that same re-decision once the seat is released.
+ * Revocation is the caller's to check; this function never sees it.
  *
  * **One key may hold many seats (Decided 30), so nothing here assumes one.** Ties on
  * [Seat.lastContact] go to the lowest peer id, so the answer never depends on the map's iteration
@@ -126,10 +124,7 @@ internal fun decideSeat(
         byId == null -> decideFreshId(provenKey, held, holdsValidGrant)
         byId.key == provenKey -> SeatDecision.Restore(claimedId)
         byId.liveness == SeatLiveness.Connected -> SeatDecision.KeyConflict
-        else -> SeatDecision.ReleaseAndAdmit(
-            released = claimedId,
-            admission = decideFreshId(provenKey, held - claimedId, holdsValidGrant),
-        )
+        else -> SeatDecision.ReleaseAndAdmit(released = claimedId)
     }
 }
 
