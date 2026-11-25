@@ -610,6 +610,20 @@ sealed interface us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.he
         abstract fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.names.<get-names>|<get-names>(){}[0]
     abstract val path // us.tractat.kuilt.heddle/TopologyChange.path|{}path[0]
         abstract fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.path.<get-path>|<get-path>(){}[0]
+    open val history // us.tractat.kuilt.heddle/TopologyChange.history|{}history[0]
+        open fun <get-history>(): us.tractat.kuilt.heddle/TopologyChange.History // us.tractat.kuilt.heddle/TopologyChange.history.<get-history>|<get-history>(){}[0]
+
+    final enum class History : kotlin/Enum<us.tractat.kuilt.heddle/TopologyChange.History> { // us.tractat.kuilt.heddle/TopologyChange.History|null[0]
+        enum entry KEPT // us.tractat.kuilt.heddle/TopologyChange.History.KEPT|null[0]
+        enum entry LOST // us.tractat.kuilt.heddle/TopologyChange.History.LOST|null[0]
+        enum entry NEW_TREE // us.tractat.kuilt.heddle/TopologyChange.History.NEW_TREE|null[0]
+
+        final val entries // us.tractat.kuilt.heddle/TopologyChange.History.entries|#static{}entries[0]
+            final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.heddle/TopologyChange.History> // us.tractat.kuilt.heddle/TopologyChange.History.entries.<get-entries>|<get-entries>#static(){}[0]
+
+        final fun valueOf(kotlin/String): us.tractat.kuilt.heddle/TopologyChange.History // us.tractat.kuilt.heddle/TopologyChange.History.valueOf|valueOf#static(kotlin.String){}[0]
+        final fun values(): kotlin/Array<us.tractat.kuilt.heddle/TopologyChange.History> // us.tractat.kuilt.heddle/TopologyChange.History.values|values#static(){}[0]
+    }
 
     final class Added : us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.heddle/TopologyChange.Added|null[0]
         constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>, us.tractat.kuilt.heddle/Topology.Node) // us.tractat.kuilt.heddle/TopologyChange.Added.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;us.tractat.kuilt.heddle.Topology.Node){}[0]
