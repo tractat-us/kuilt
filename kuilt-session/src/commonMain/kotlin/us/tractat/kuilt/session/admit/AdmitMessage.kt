@@ -499,8 +499,8 @@ public sealed interface AdmitMessage {
      * [Welcome] carried (v8, #3221).
      *
      * A pass is good for a fixed time after it was issued, and the host issues a new one every half of
-     * that time while the member stays connected, so the time counts from the member's last contact
-     * rather than from when it joined. A member the host holds as partitioned is sent nothing, and a
+     * that time while the member stays connected, so a member that drops off holds a pass good for
+     * between half that time and all of it after its last contact, however long ago it joined. A member the host holds as partitioned is sent nothing, and a
      * pass that never expires is never renewed. Nor is the pass of a member whose device the host
      * revoked after admitting it (Decided 14).
      *

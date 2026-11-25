@@ -50,7 +50,9 @@ public fun interface AdmissionPolicy {
     public companion object {
         /**
          * Admits everyone, each with a pass back into this room that is good for [readmitFor] after
-         * last contact: [GrantTerms] of [readmitFor] and [GrantReach.ThisRoom].
+         * it is issued, and renewed every half of that while the device stays connected: [GrantTerms]
+         * of [readmitFor] and [GrantReach.ThisRoom]. So a device that drops off can come back on it for
+         * at least half of [readmitFor] after its last contact, and at most all of it.
          *
          * [readmitFor] is checked here, so a bad value throws when the host is configured rather than
          * on some joiner's admission.
@@ -175,9 +177,10 @@ public enum class GrantReach {
  * What a host promises a newcomer it admits: how long the device may come back without being asked
  * again ([readmitFor]), and where ([reach]).
  *
- * The room re-issues the pass while the member stays connected, so [readmitFor] counts from the
- * member's last contact, not from when it first joined. [Duration.INFINITE] means the pass never runs
- * out.
+ * A pass is good for [readmitFor] after it is issued, and the room issues a fresh one every half of
+ * [readmitFor] while the member stays connected. So a device that drops off can come back on its pass
+ * for at least half of [readmitFor] after its last contact, and at most all of it, however long ago it
+ * first joined. [Duration.INFINITE] means the pass never runs out.
  *
  * A grant is dated in whole epoch milliseconds and must end after it starts, so [readmitFor] is at
  * least one millisecond; a part millisecond beyond that is dropped.

@@ -275,7 +275,7 @@ class GrantIssueTest {
 
     /**
      * A member the host holds as partitioned is sent nothing, so the pass it left with runs out while
-     * it is away: it counts from its last contact. The renewal that fell due meanwhile goes once the
+     * it is away. The renewal that fell due meanwhile goes once the
      * member is heard from again.
      */
     @Test
