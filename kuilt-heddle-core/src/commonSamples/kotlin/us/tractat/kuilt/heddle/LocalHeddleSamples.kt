@@ -1012,3 +1012,54 @@ internal fun sampleSharesOverACandidate() {
     check(scratch.entitlement(web, busy, totalSlots = 8L) == Rational.of(6L))
     check(scratch.entitlement(mobile, busy, totalSlots = 8L) == Rational.of(2L))
 }
+
+/**
+ * A minimal admin editor, end to end: the loop a host's page drives over heddle's model. It loads
+ * the running tree, edits it by path, reads it back with every problem listed, warns on what the
+ * save costs, previews it, and saves only if nobody else saved first.
+ */
+@Suppress("unused")
+internal fun sampleMinimalEditor() {
+    val (heddle, _) = LocalHeddle.fromTopology(twoLanes(), LocalPolicy(defaultReservation = 3L), epoch = 0L)
+
+    // Load: the editor opens on the running tree, written out as a document.
+    var startedFrom = heddle.topology
+    var document = startedFrom.toDocument()
+
+    // Edit by path. Renaming light to its sibling's name is refused, and the page marks that sibling.
+    val clash = document.rename(listOf(1), "heavy")
+    check(clash is TopologyEdit.DuplicateName && clash.path == listOf(0))
+    document = (document.rename(listOf(1), "interactive") as TopologyEdit.Edited).document
+    document = (document.addChild(emptyList(), TopologyDocument.Lane("batch", weight = "0")) as TopologyEdit.Edited).document
+
+    // Validate. A problem's path is the path to edit, so the page fixes the weight where it points.
+    val problem = (Topology.from(document) as TopologyParse.Invalid).problems.single()
+    check(problem.path == listOf(2) && problem.kind == TopologyProblem.Kind.INVALID_WEIGHT)
+    document = (document.setWeight(problem.path, "1") as TopologyEdit.Edited).document
+    val candidate = (Topology.from(document) as TopologyParse.Valid).topology
+
+    // List what the save changes against the tree the editor loaded: the rename drains light.
+    val drains = startedFrom.changesTo(candidate).filterIsInstance<TopologyChange.Removed>()
+    check(drains.single().names == listOf("pool", "light"))
+
+    // Preview what the save would do to the running engine, checked against the same tree.
+    val preview = heddle.previewApply(candidate, generation = 2L, startedFrom = startedFrom)
+    check(preview is PreviewOutcome.Previewed && preview.preview.result.refusals.isEmpty())
+
+    // Meanwhile another admin saves a new weight for heavy.
+    val theirs = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(3)), Topology.Lane("light")))
+    check(heddle.apply(theirs, generation = 1L, startedFrom = startedFrom) is ApplyOutcome.Applied)
+
+    // Checked apply. Saved as it stands, the edit would undo theirs, so it is refused and changes nothing.
+    val refused = heddle.apply(candidate, generation = 2L, startedFrom = startedFrom)
+    check(refused is ApplyOutcome.TreeChanged && refused.current == theirs)
+
+    // So the page reloads from the running tree, the admin makes the edit again, and the save keeps theirs.
+    startedFrom = refused.current
+    document = (startedFrom.toDocument().rename(listOf(1), "interactive") as TopologyEdit.Edited).document
+    document = (document.addChild(emptyList(), TopologyDocument.Lane("batch")) as TopologyEdit.Edited).document
+    val redone = (Topology.from(document) as TopologyParse.Valid).topology
+    check(startedFrom.changesTo(redone).none { it is TopologyChange.WeightChanged })
+    check(heddle.apply(redone, generation = 2L, startedFrom = startedFrom) is ApplyOutcome.Applied)
+    check(heddle.topology == redone)
+}
