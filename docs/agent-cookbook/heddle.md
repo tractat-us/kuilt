@@ -554,9 +554,11 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
 ## Editing the tree as a document
 
 **Intent:** an editor changes one weight three levels down, adds a lane, renames or moves a
-group, without copying every group on the way to it by hand.
+group, or turns on children the app attaches while running, without copying every group on the
+way to it by hand.
 **Primitive:** the edits on `TopologyDocument` (`:kuilt-heddle-core`): `setWeight`,
-`setMaxConcurrent` (`null` clears it), `addChild`, `remove`, `rename` and `move`. Each takes a
+`setMaxConcurrent` (`null` clears it), `addChild`, `remove`, `rename`, `move` and `setTemplate`
+(`null` removes the template). Each takes a
 path and returns a `TopologyEdit`: `Edited` with the new document, or a refusal naming the path to
 blame. None throws, and the document it was asked of is unchanged.
 
@@ -576,6 +578,12 @@ blame. None throws, and the document it was asked of is unchanged.
     check(back is TopologyEdit.Edited && back.history == TopologyEdit.History.REPLACED)
     document = back.document
 
+    // A template lets the app attach children to hobby while it runs, here two levels deep.
+    // Adding one costs nobody history; removing it later would drain the attached children.
+    val attaching = document.setTemplate(listOf(1), TopologyDocument.ChildTemplate("2", template = TopologyDocument.ChildTemplate()))
+    check(attaching is TopologyEdit.Edited && attaching.history == TopologyEdit.History.KEPT)
+    document = attaching.document
+
     // An edit that would give two siblings one name is refused, naming the sibling that has it.
     val refused = document.addChild(listOf(0), TopologyDocument.Lane("batch"))
     check(refused == TopologyEdit.DuplicateName(listOf(0, 1), "batch"))
@@ -583,9 +591,13 @@ blame. None throws, and the document it was asked of is unchanged.
     // The warning before saving compares with the tree the editor loaded: the round trip is gone.
     val candidate = Topology.from(document)
     check(candidate is TopologyParse.Valid)
+    val attached = Topology.ChildTemplate(Weight.of(2), template = Topology.ChildTemplate(Weight.ONE))
     check(
         running.changesTo(candidate.topology) ==
-            listOf(TopologyChange.WeightChanged(listOf(0, 1), listOf("pool", "acme", "batch"), Weight.ONE, Weight.of(2))),
+            listOf(
+                TopologyChange.WeightChanged(listOf(0, 1), listOf("pool", "acme", "batch"), Weight.ONE, Weight.of(2)),
+                TopologyChange.TemplateAdded(listOf(1), listOf("pool", "hobby"), attached),
+            ),
     )
 ```
 
@@ -603,10 +615,14 @@ blame. None throws, and the document it was asked of is unchanged.
   `REPLACED` twice and change nothing. So the warning before saving is
   `loaded.changesTo(candidate)`, the tree the editor started from against the edited one, read
   through each change's `history`.
+- **`setTemplate` replaces a group's whole template, nested ones included,** so change one field
+  with `template.copy(...)`. Its `history` is what happens to the children attached under it:
+  `KEPT` for a template added, a ceiling or a nested level added; `SHARE_RESTARTS` for a new
+  weight at any level; `DRAINS` for a template or a nested level removed.
 - **Edits check the shape, not the values.** A bad weight, an empty name, a negative ceiling or a
   group left empty go in as a file would put them, and `Topology.from` reports them. The refusals
-  are `NoSuchNode`, `NotAGroup`, `DuplicateName`, `AtRoot` (the root has no weight, ceiling or
-  parent) and `IntoItself` (a move under its own subtree).
+  are `NoSuchNode`, `NotAGroup`, `DuplicateName`, `AtRoot` (the root has no weight, ceiling,
+  template or parent) and `IntoItself` (a move under its own subtree).
 
 These edits are one step of an admin page's loop. Listing what the edit changes, previewing it and
 saving it only if nobody else saved first are in

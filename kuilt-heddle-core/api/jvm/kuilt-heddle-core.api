@@ -1848,6 +1848,7 @@ public final class us/tractat/kuilt/heddle/TopologyDocumentEditsKt {
 	public static final fun remove (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;)Lus/tractat/kuilt/heddle/TopologyEdit;
 	public static final fun rename (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyEdit;
 	public static final fun setMaxConcurrent (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Ljava/lang/Long;)Lus/tractat/kuilt/heddle/TopologyEdit;
+	public static final fun setTemplate (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;)Lus/tractat/kuilt/heddle/TopologyEdit;
 	public static final fun setWeight (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyEdit;
 }
 
