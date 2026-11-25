@@ -227,6 +227,7 @@ public data class GrantTerms(
  *   let it back in unvetted either (#3222). They void seats and passes; they do not keep a device out,
  *   which is the [policy]'s job.
  * @sample us.tractat.kuilt.session.hostAdmissionSample
+ * @sample us.tractat.kuilt.session.revokeALostDeviceSample
  */
 public class HostAdmission(
     public val policy: AdmissionPolicy,

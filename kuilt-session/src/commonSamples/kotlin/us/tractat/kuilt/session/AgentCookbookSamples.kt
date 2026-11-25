@@ -403,6 +403,22 @@ public suspend fun hostAdmissionSample(
 }
 
 /**
+ * Stop a lost or stolen device coming back on the pass a room you host gave it: revoke its key in the
+ * revocations the room's [HostAdmission] holds, which are the ones it checks every returning pass
+ * against. Every pass issued to that key before the cutoff is void from then on. When the device next
+ * says Hello your admission policy decides it as a newcomer, and a seat the room still holds for it is
+ * let go rather than handed back.
+ *
+ * It removes nobody. A device in the room now keeps its seat, but the host stops renewing its pass, so
+ * the pass runs out. Nor is it a ban: if the policy admits the device again, the fresh pass it gets
+ * works. Refuse it in the policy as well to keep it out ([hostAdmissionSample]).
+ */
+public suspend fun revokeALostDeviceSample(admission: HostAdmission, lost: DidKey, clock: () -> Instant) {
+    // One past the clock, so a pass issued in this same millisecond is void too.
+    admission.revocations.revoke(lost, notBefore = clock().toEpochMilliseconds() + 1)
+}
+
+/**
  * The whole of an app's part in a device coming back: one [DeviceKeyStore] per device, on the factory.
  *
  * Every room the factory makes proves this device's key when it says Hello, and the host hands back
@@ -441,6 +457,14 @@ public suspend fun whoCameBackSample(room: Room) {
                 // room's own id it means another process of this device took the seat: this room is over.
                 is LeaveReason.Superseded -> Unit // "Ada is back"
                 else -> Unit // gone
+            }
+            // A new membership. Marked when the device came back on the pass its host gave it, after
+            // its seat was let go: move whatever you keyed on the mark's `previousId` over to
+            // event.member.id (it is null once the host has forgotten the old id). Unmarked, it is a
+            // newcomer the host's admission policy let in.
+            is MembershipEvent.Joined -> when (event.returning) {
+                null -> Unit // a stranger
+                else -> Unit // "Ada is back", on her pass
             }
             else -> Unit
         }

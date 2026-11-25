@@ -122,8 +122,8 @@ public suspend fun watchTheReturnSample(room: Room) {
 }
 ```
 
-On the host, and on every other member, the same return reads as one of two shapes. Tell a member
-who came back from a stranger by them, never by a display name:
+On the host, and on every other member, the same return reads as one of three shapes. Tell a
+member who came back from a stranger by them, never by a display name:
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#whoCameBackSample -->
 ```kotlin
@@ -138,6 +138,14 @@ public suspend fun whoCameBackSample(room: Room) {
                 // room's own id it means another process of this device took the seat: this room is over.
                 is LeaveReason.Superseded -> Unit // "Ada is back"
                 else -> Unit // gone
+            }
+            // A new membership. Marked when the device came back on the pass its host gave it, after
+            // its seat was let go: move whatever you keyed on the mark's `previousId` over to
+            // event.member.id (it is null once the host has forgotten the old id). Unmarked, it is a
+            // newcomer the host's admission policy let in.
+            is MembershipEvent.Joined -> when (event.returning) {
+                null -> Unit // a stranger
+                else -> Unit // "Ada is back", on her pass
             }
             else -> Unit
         }
@@ -801,4 +809,14 @@ public suspend fun admissionPolicyTestSample(blocked: DidKey, stranger: DidKey):
 
 **The key on a roster:** `Member.key`. A room proves every key at the door: the host challenges each joiner and admits it only once it has signed a proof under the key its Hello named, and the host signs its own challenge too. So on the host every member's key is verified, and on a joiner the host's own entry is; every *other* entry on a joiner's roster is host-asserted, carried on the host's Welcome. Do not hand-roll a second handshake to "check" a key the room already proved. Two limits, both stated in `Member`'s KDoc. **The key binds the handshake, not later frames:** on a `Mesh`, a link that later takes a member's peer id (#2387) sends frames under that member's key, so a `HostedOverlay` deployment should use a binding `LinkAdmission` until #2387 lands. **A key is not unique:** two tabs of one browser share one key and hold two seats, so never look a member up by its key alone.
 
-So far this is the store (in memory, on the desktop JVM, on iOS, on macOS, on Android and in the browser), the key, its name, the pass, its check, the revocations, the policy's types, the room's proof of each key at admission, and the seat a host holds for that key, which a returning device gets back with no call from the app ([Rejoin & reconnect](#rejoin--reconnect)). The room issues a pass with every admission, renews it while the member stays connected, and lets a device whose seat is gone back in on it without asking the policy (same section).
+**Revoking a device from a room you host:** `HostAdmission.revocations`. Do not keep a second "lost devices" list beside the room, or end a lost phone's membership by hand. Revoke the key in the list the room's `HostAdmission` holds, the one it checks every returning pass against. From the cutoff, every pass issued to that key is void: the device's next Hello goes to your `AdmissionPolicy` as a newcomer, and a seat the room still holds for it is let go rather than handed back. A device in the room now keeps its seat, but its pass is no longer renewed, so it runs out. Revoking is not a ban: a device the policy admits again gets a fresh pass, dated after the cutoff, that works. Refuse it in the policy too to keep it out. Every one of these outcomes is a row of `RoomConformanceSuite` (`returnInsideGrantNoVetting`, `expiredGrantIsVetted`, `revokedSubjectIsVetted`), each counting the policy's calls.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#revokeALostDeviceSample -->
+```kotlin
+public suspend fun revokeALostDeviceSample(admission: HostAdmission, lost: DidKey, clock: () -> Instant) {
+    // One past the clock, so a pass issued in this same millisecond is void too.
+    admission.revocations.revoke(lost, notBefore = clock().toEpochMilliseconds() + 1)
+}
+```
+
+That is the whole of it: a store per device that keeps its key (in memory, on the desktop JVM, on iOS, on macOS, on Android and in the browser), the key and its name, the pass and its check, the revocations, the policy, and the room's proof of each key at admission. A device whose seat the host still holds gets it back with no call from the app ([Rejoin & reconnect](#rejoin--reconnect)). Once the seat is gone, the pass the room issued with every admission, and renewed while the member stayed connected, lets the device back in without asking the policy until it runs out or its key is revoked; then the policy decides it as a newcomer.
