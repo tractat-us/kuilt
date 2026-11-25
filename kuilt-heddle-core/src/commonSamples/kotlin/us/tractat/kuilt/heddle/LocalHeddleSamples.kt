@@ -875,7 +875,7 @@ internal fun sampleRunningTopology() {
 
     // The admin confirms what the edit changes, and it becomes the running tree.
     check(startedFrom.changesTo(edited) == listOf(TopologyChange.Added(listOf(2), listOf("pool", "batch"), Topology.Lane("batch"))))
-    heddle.apply(edited, generation = 1L, startedFrom = startedFrom)
+    check(heddle.apply(edited, generation = 1L, startedFrom = startedFrom) is ApplyOutcome.Applied)
     check(heddle.topology == edited && heddle.persist().lastApplied == edited)
 }
 
