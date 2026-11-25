@@ -11,6 +11,7 @@ import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.test.assertAll
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -53,6 +54,20 @@ class MultiNodeRaftSimRestartSeedTest {
             { assertEquals(1L, before.requestIdOf(), "the rig: the old incarnation used serial 1") },
             { assertEquals(1L, after.requestIdOf(), "the rig: the new incarnation reuses serial 1") },
             { assertNotEquals(before.clientIdOf(), after.clientIdOf(), "the restart minted a new client id") },
+            {
+                assertEquals(
+                    ClientId.auto(followerId, Random(FIRST_START_SEEDS.getValue(sim.nodeIds.indexOf(followerId)))),
+                    before.clientIdOf(),
+                    "the rig: the first incarnation forwarded under the first draw from its first-start seed",
+                )
+            },
+            {
+                assertEquals(
+                    ClientId.auto(followerId, Random(FIRST_RESTART_SEEDS.getValue(sim.nodeIds.indexOf(followerId)))),
+                    after.clientIdOf(),
+                    "the restarted node forwarded under the first draw from its restart seed, not a re-mint",
+                )
+            },
             { assertTrue(after.index > before.index, "the forward committed after the old one: $before then $after") },
         )
         sim.awaitCommit(after.index)
@@ -72,11 +87,14 @@ class MultiNodeRaftSimRestartSeedTest {
 
     @Test
     fun aFirstStartKeepsItsSeedAndEachRestartMovesOff() {
+        // Worked by hand from `baseSeed + nodeIndex + start * -0x61c8864680b583eb`, wrapping at 2^64.
         val starts = (0..3).map { simNodeSeed(MULTI_NODE_SIM_SEED, nodeIndex = 2, start = it) }
         val firstStarts = (0..4).map { simNodeSeed(MULTI_NODE_SIM_SEED, nodeIndex = it, start = 0) }
         assertAll(
-            { assertEquals(MULTI_NODE_SIM_SEED + 2, starts.first(), "a first start keeps baseSeed + nodeIndex") },
-            { assertEquals(starts, (0..3).map { simNodeSeed(MULTI_NODE_SIM_SEED, 2, it) }, "a pure function") },
+            { assertEquals(487L, simNodeSeed(baseSeed = 485L, nodeIndex = 2, start = 0), "a first start keeps baseSeed + nodeIndex") },
+            { assertEquals(-7046029254386352644L, simNodeSeed(baseSeed = 485L, nodeIndex = 2, start = 1), "a first restart") },
+            { assertEquals(4354685564936845841L, simNodeSeed(baseSeed = 485L, nodeIndex = 2, start = 2), "a second restart wraps") },
+            { assertEquals(-2691343689449507777L, simNodeSeed(baseSeed = 0L, nodeIndex = 0, start = 3), "a third restart wraps twice") },
             { assertEquals(starts.size, starts.toSet().size, "each start of one node has its own seed: $starts") },
             { assertTrue(starts.drop(1).none { it in firstStarts }, "no restart lands on a node's first seed") },
         )
@@ -114,4 +132,13 @@ class MultiNodeRaftSimRestartSeedTest {
     private fun LogEntry.clientIdOf(): ClientId = checkNotNull(dedupKey) { "no dedup key on $this" }.clientId
 
     private fun LogEntry.requestIdOf(): Long = checkNotNull(dedupKey) { "no dedup key on $this" }.requestId
+
+    private companion object {
+        /** `MULTI_NODE_SIM_SEED + nodeIndex`, by node index: each node's first-start seed in a default sim. */
+        val FIRST_START_SEEDS: Map<Int, Long> = mapOf(0 to 485L, 1 to 486L, 2 to 487L)
+
+        /** Each node's first-restart seed in a default sim, worked by hand as in the literal test above. */
+        val FIRST_RESTART_SEEDS: Map<Int, Long> =
+            mapOf(0 to -7046029254386352646L, 1 to -7046029254386352645L, 2 to -7046029254386352644L)
+    }
 }
