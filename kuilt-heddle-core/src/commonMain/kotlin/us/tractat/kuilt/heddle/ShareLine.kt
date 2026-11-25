@@ -93,6 +93,7 @@ public class ShareLine internal constructor(
      * anything narrows.
      *
      * @throws ArithmeticException when the lag itself does not fit an exact [Rational] over `Long`.
+     * @sample us.tractat.kuilt.heddle.sampleShareLineLag
      */
     public fun lag(group: GroupId): Rational? {
         val parent = parentOf[group] ?: return null

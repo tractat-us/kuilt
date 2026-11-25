@@ -462,9 +462,9 @@ public class FairShareAllocator(
      *
      * The step at a parent reads and writes only its children's entries and its own clock, so it
      * runs here on a copy of just those ([scopedTo]): a line over a tree of `n` edges copies each
-     * entry once, where a copy of the whole memory per parent cost `n²` (on the JVM, 2,000
-     * groups of three lanes took 1.6 s that way and 24 ms this one). Leaving out the entries of children that have left changes nothing a present child
-     * reads; the step would only forget them.
+     * entry once, where a copy of the whole memory per parent cost `n²` (on the JVM, 2,000 groups
+     * of three lanes took 1.6 s that way and 24 ms this one). Leaving out the entries of children
+     * that have left changes nothing a present child reads; the step would only forget them.
      *
      * [Placement.Refused] when the children's weights fail [weightsFitTheBudget], so no pick there
      * can be computed, or the step would pass the [POSITION_LIMIT].

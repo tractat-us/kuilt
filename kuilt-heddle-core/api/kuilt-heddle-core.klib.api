@@ -1838,6 +1838,7 @@ final class us.tractat.kuilt.heddle/Rational : kotlin/Comparable<us.tractat.kuil
 }
 
 final class us.tractat.kuilt.heddle/ShareLine { // us.tractat.kuilt.heddle/ShareLine|null[0]
+    final fun lag(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/ShareLine.lag|lag(us.tractat.kuilt.heddle.GroupId){}[0]
     final fun share(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/ShareLine.share|share(us.tractat.kuilt.heddle.GroupId){}[0]
 }
 

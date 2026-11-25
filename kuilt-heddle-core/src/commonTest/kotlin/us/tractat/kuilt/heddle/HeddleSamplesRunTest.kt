@@ -100,6 +100,9 @@ class HeddleSamplesRunTest {
     fun shareLineHolds() = sampleShareLine()
 
     @Test
+    fun shareLineLagHolds() = sampleShareLineLag()
+
+    @Test
     fun fairShareQueueHolds() = sampleFairShareQueue()
 
     @Test
