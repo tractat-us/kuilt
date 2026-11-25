@@ -144,7 +144,9 @@ public class HeddleNode internal constructor(
     private val _partitionEvents = MutableSharedFlow<PartitionEvent>(extraBufferCapacity = 64)
 
     /**
-     * Peer-liveness signals as they are detected (design §8.1). A
+     * Peer-liveness signals as the node applies them (design §8.1). An event is announced only
+     * after [unreachable] reflects it, and an event from a detector that no longer watches its
+     * peer is never announced (#3672). A
      * [PartitionEvent.PeerUnresponsive] is a recoverable partition; a
      * [PartitionEvent.PeerLost] is a crash. **The node takes no ledger action on either**
      * — stranding a crashed peer's holdings is the safe choice (a wrong reclaim is an
@@ -789,9 +791,13 @@ public class HeddleNode internal constructor(
      * Lost peer, attached a fresh detector and cleared the peer, and the late write then marked it
      * unreachable behind a healthy detector that, reporting only transitions, would never clear it.
      *
-     * The check refuses an event from a detector [remonitorOnEnrollment] has replaced, which a
-     * collector stalled on a multi-threaded dispatcher hands over late. [detectors] is written only
-     * under [lock], and [attachDetector] registers a detector before starting it.
+     * The check refuses an event from a detector [remonitorOnEnrollment] has replaced. It guards
+     * an ordering the detector's contract allows: a [HeartbeatPartitionDetector] can report
+     * `PeerUnresponsive(TransportClosed)` after its own `PeerLost`, because the two come from
+     * separate jobs, and that event would reach a peer already watched by a new detector. It is
+     * unreachable today only because a [PerPeerLivenessSeam]'s `incoming` never completes, so
+     * the transport-closed report never fires here. [detectors] is written only under [lock],
+     * and [attachDetector] registers a detector before starting it.
      */
     private fun applyLivenessEvent(event: PartitionEvent, detector: HeartbeatPartitionDetector): Boolean {
         val r = ReplicaId(event.peerId.value)
