@@ -763,6 +763,114 @@ sealed interface us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.he
     }
 }
 
+sealed interface us.tractat.kuilt.heddle/TopologyEdit { // us.tractat.kuilt.heddle/TopologyEdit|null[0]
+    final enum class History : kotlin/Enum<us.tractat.kuilt.heddle/TopologyEdit.History> { // us.tractat.kuilt.heddle/TopologyEdit.History|null[0]
+        enum entry DRAINS // us.tractat.kuilt.heddle/TopologyEdit.History.DRAINS|null[0]
+        enum entry KEPT // us.tractat.kuilt.heddle/TopologyEdit.History.KEPT|null[0]
+        enum entry NEW_TREE // us.tractat.kuilt.heddle/TopologyEdit.History.NEW_TREE|null[0]
+        enum entry REPLACED // us.tractat.kuilt.heddle/TopologyEdit.History.REPLACED|null[0]
+        enum entry SHARE_RESTARTS // us.tractat.kuilt.heddle/TopologyEdit.History.SHARE_RESTARTS|null[0]
+        enum entry STARTS_EMPTY // us.tractat.kuilt.heddle/TopologyEdit.History.STARTS_EMPTY|null[0]
+
+        final val entries // us.tractat.kuilt.heddle/TopologyEdit.History.entries|#static{}entries[0]
+            final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.heddle/TopologyEdit.History> // us.tractat.kuilt.heddle/TopologyEdit.History.entries.<get-entries>|<get-entries>#static(){}[0]
+
+        final fun valueOf(kotlin/String): us.tractat.kuilt.heddle/TopologyEdit.History // us.tractat.kuilt.heddle/TopologyEdit.History.valueOf|valueOf#static(kotlin.String){}[0]
+        final fun values(): kotlin/Array<us.tractat.kuilt.heddle/TopologyEdit.History> // us.tractat.kuilt.heddle/TopologyEdit.History.values|values#static(){}[0]
+    }
+
+    sealed interface Refused : us.tractat.kuilt.heddle/TopologyEdit { // us.tractat.kuilt.heddle/TopologyEdit.Refused|null[0]
+        abstract val path // us.tractat.kuilt.heddle/TopologyEdit.Refused.path|{}path[0]
+            abstract fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.Refused.path.<get-path>|<get-path>(){}[0]
+    }
+
+    final class DuplicateName : us.tractat.kuilt.heddle/TopologyEdit.Refused { // us.tractat.kuilt.heddle/TopologyEdit.DuplicateName|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin/String) // us.tractat.kuilt.heddle/TopologyEdit.DuplicateName.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.String){}[0]
+
+        final val name // us.tractat.kuilt.heddle/TopologyEdit.DuplicateName.name|{}name[0]
+            final fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/TopologyEdit.DuplicateName.name.<get-name>|<get-name>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyEdit.DuplicateName.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.DuplicateName.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.DuplicateName.component1|component1(){}[0]
+        final fun component2(): kotlin/String // us.tractat.kuilt.heddle/TopologyEdit.DuplicateName.component2|component2(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin/String = ...): us.tractat.kuilt.heddle/TopologyEdit.DuplicateName // us.tractat.kuilt.heddle/TopologyEdit.DuplicateName.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyEdit.DuplicateName.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyEdit.DuplicateName.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyEdit.DuplicateName.toString|toString(){}[0]
+    }
+
+    final class Edited : us.tractat.kuilt.heddle/TopologyEdit { // us.tractat.kuilt.heddle/TopologyEdit.Edited|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/TopologyDocument, kotlin.collections/List<kotlin/Int>, us.tractat.kuilt.heddle/TopologyEdit.History) // us.tractat.kuilt.heddle/TopologyEdit.Edited.<init>|<init>(us.tractat.kuilt.heddle.TopologyDocument;kotlin.collections.List<kotlin.Int>;us.tractat.kuilt.heddle.TopologyEdit.History){}[0]
+
+        final val document // us.tractat.kuilt.heddle/TopologyEdit.Edited.document|{}document[0]
+            final fun <get-document>(): us.tractat.kuilt.heddle/TopologyDocument // us.tractat.kuilt.heddle/TopologyEdit.Edited.document.<get-document>|<get-document>(){}[0]
+        final val history // us.tractat.kuilt.heddle/TopologyEdit.Edited.history|{}history[0]
+            final fun <get-history>(): us.tractat.kuilt.heddle/TopologyEdit.History // us.tractat.kuilt.heddle/TopologyEdit.Edited.history.<get-history>|<get-history>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyEdit.Edited.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.Edited.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/TopologyDocument // us.tractat.kuilt.heddle/TopologyEdit.Edited.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.Edited.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.heddle/TopologyEdit.History // us.tractat.kuilt.heddle/TopologyEdit.Edited.component3|component3(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/TopologyDocument = ..., kotlin.collections/List<kotlin/Int> = ..., us.tractat.kuilt.heddle/TopologyEdit.History = ...): us.tractat.kuilt.heddle/TopologyEdit.Edited // us.tractat.kuilt.heddle/TopologyEdit.Edited.copy|copy(us.tractat.kuilt.heddle.TopologyDocument;kotlin.collections.List<kotlin.Int>;us.tractat.kuilt.heddle.TopologyEdit.History){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyEdit.Edited.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyEdit.Edited.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyEdit.Edited.toString|toString(){}[0]
+    }
+
+    final class IntoItself : us.tractat.kuilt.heddle/TopologyEdit.Refused { // us.tractat.kuilt.heddle/TopologyEdit.IntoItself|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/Int>) // us.tractat.kuilt.heddle/TopologyEdit.IntoItself.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.Int>){}[0]
+
+        final val parent // us.tractat.kuilt.heddle/TopologyEdit.IntoItself.parent|{}parent[0]
+            final fun <get-parent>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.IntoItself.parent.<get-parent>|<get-parent>(){}[0]
+        final val path // us.tractat.kuilt.heddle/TopologyEdit.IntoItself.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.IntoItself.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.IntoItself.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.IntoItself.component2|component2(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/Int> = ...): us.tractat.kuilt.heddle/TopologyEdit.IntoItself // us.tractat.kuilt.heddle/TopologyEdit.IntoItself.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.Int>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyEdit.IntoItself.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyEdit.IntoItself.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyEdit.IntoItself.toString|toString(){}[0]
+    }
+
+    final class NoSuchNode : us.tractat.kuilt.heddle/TopologyEdit.Refused { // us.tractat.kuilt.heddle/TopologyEdit.NoSuchNode|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>) // us.tractat.kuilt.heddle/TopologyEdit.NoSuchNode.<init>|<init>(kotlin.collections.List<kotlin.Int>){}[0]
+
+        final val path // us.tractat.kuilt.heddle/TopologyEdit.NoSuchNode.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.NoSuchNode.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.NoSuchNode.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ...): us.tractat.kuilt.heddle/TopologyEdit.NoSuchNode // us.tractat.kuilt.heddle/TopologyEdit.NoSuchNode.copy|copy(kotlin.collections.List<kotlin.Int>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyEdit.NoSuchNode.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyEdit.NoSuchNode.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyEdit.NoSuchNode.toString|toString(){}[0]
+    }
+
+    final class NotAGroup : us.tractat.kuilt.heddle/TopologyEdit.Refused { // us.tractat.kuilt.heddle/TopologyEdit.NotAGroup|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>) // us.tractat.kuilt.heddle/TopologyEdit.NotAGroup.<init>|<init>(kotlin.collections.List<kotlin.Int>){}[0]
+
+        final val path // us.tractat.kuilt.heddle/TopologyEdit.NotAGroup.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.NotAGroup.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.NotAGroup.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ...): us.tractat.kuilt.heddle/TopologyEdit.NotAGroup // us.tractat.kuilt.heddle/TopologyEdit.NotAGroup.copy|copy(kotlin.collections.List<kotlin.Int>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyEdit.NotAGroup.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyEdit.NotAGroup.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyEdit.NotAGroup.toString|toString(){}[0]
+    }
+
+    final object AtRoot : us.tractat.kuilt.heddle/TopologyEdit.Refused { // us.tractat.kuilt.heddle/TopologyEdit.AtRoot|null[0]
+        final val path // us.tractat.kuilt.heddle/TopologyEdit.AtRoot.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyEdit.AtRoot.path.<get-path>|<get-path>(){}[0]
+
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyEdit.AtRoot.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyEdit.AtRoot.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyEdit.AtRoot.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.heddle/TopologyParse { // us.tractat.kuilt.heddle/TopologyParse|null[0]
     final class Invalid : us.tractat.kuilt.heddle/TopologyParse { // us.tractat.kuilt.heddle/TopologyParse.Invalid|null[0]
         constructor <init>(kotlin.collections/List<us.tractat.kuilt.heddle/TopologyProblem>) // us.tractat.kuilt.heddle/TopologyParse.Invalid.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.heddle.TopologyProblem>){}[0]
@@ -2269,6 +2377,12 @@ final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/findPath(us
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/groupId(kotlin/Array<out kotlin/String>...): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/groupId|groupId@us.tractat.kuilt.heddle.Topology(kotlin.Array<out|kotlin.String>...){}[0]
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/lower(kotlin/Long = ...): kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentRecord> // us.tractat.kuilt.heddle/lower|lower@us.tractat.kuilt.heddle.Topology(kotlin.Long){}[0]
 final fun (us.tractat.kuilt.heddle/Topology.Companion).us.tractat.kuilt.heddle/diff(us.tractat.kuilt.heddle/Topology, us.tractat.kuilt.heddle/EntitlementLedger, kotlin/Long): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyStep> // us.tractat.kuilt.heddle/diff|diff@us.tractat.kuilt.heddle.Topology.Companion(us.tractat.kuilt.heddle.Topology;us.tractat.kuilt.heddle.EntitlementLedger;kotlin.Long){}[0]
+final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/addChild(kotlin.collections/List<kotlin/Int>, us.tractat.kuilt.heddle/TopologyDocument.Node): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/addChild|addChild@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;us.tractat.kuilt.heddle.TopologyDocument.Node){}[0]
+final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/move(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/Int>): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/move|move@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.Int>){}[0]
+final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/remove(kotlin.collections/List<kotlin/Int>): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/remove|remove@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>){}[0]
+final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/rename(kotlin.collections/List<kotlin/Int>, kotlin/String): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/rename|rename@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;kotlin.String){}[0]
+final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/setMaxConcurrent(kotlin.collections/List<kotlin/Int>, kotlin/Long?): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/setMaxConcurrent|setMaxConcurrent@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;kotlin.Long?){}[0]
+final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/setWeight(kotlin.collections/List<kotlin/Int>, kotlin/String): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/setWeight|setWeight@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;kotlin.String){}[0]
 final fun us.tractat.kuilt.heddle/draft(kotlin/String, kotlin/Function1<us.tractat.kuilt.heddle/TopologyDraft, kotlin/Unit>): us.tractat.kuilt.heddle/Topology // us.tractat.kuilt.heddle/draft|draft(kotlin.String;kotlin.Function1<us.tractat.kuilt.heddle.TopologyDraft,kotlin.Unit>){}[0]
 final fun us.tractat.kuilt.heddle/weightFitsTheBudget(us.tractat.kuilt.heddle/Weight): kotlin/Boolean // us.tractat.kuilt.heddle/weightFitsTheBudget|weightFitsTheBudget(us.tractat.kuilt.heddle.Weight){}[0]
 final inline fun <#A: kotlin/Any?, #B: kotlin/Any?> (kotlin.collections/Map<#A, #B>).us.tractat.kuilt.heddle/mergeValues(kotlin.collections/Map<#A, #B>, kotlin/Function2<#B, #B, #B>): kotlin.collections/Map<#A, #B> // us.tractat.kuilt.heddle/mergeValues|mergeValues@kotlin.collections.Map<0:0,0:1>(kotlin.collections.Map<0:0,0:1>;kotlin.Function2<0:1,0:1,0:1>){0§<kotlin.Any?>;1§<kotlin.Any?>}[0]
