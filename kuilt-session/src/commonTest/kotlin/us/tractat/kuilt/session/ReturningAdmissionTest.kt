@@ -295,16 +295,17 @@ class ReturningAdmissionTest {
         host.admit(bob, bobKey, nonce = 2, grants = listOf(pass))
         val refused = host.rejectsTo(bob)
         val checksFailed = hostStore.failed
+        val vettedAfterFailure = counted.asked.size
         hostStore.failing = false
-        host.admit(bob, bobKey, nonce = 3)
-        val vettedWithNoPass = counted.asked.size
+        host.admit(bob, bobKey, nonce = 3, grants = listOf(pass))
 
         assertAll(
             { assertEquals(1, checksFailed, "rig: the pass's check failed once") },
             { assertEquals(listOf(RejectCode.HostFailed), refused.map { it.code }, "the host says it failed") },
             { assertTrue(refused.singleOrNull()?.code?.retryable == true, "retryably") },
             { assertTrue(refused.singleOrNull()?.answers?.contentEquals(host.hello("bob", bobKey.id, 2).joinerNonce) == true, "naming the Hello") },
-            { assertEquals(2, vettedWithNoPass, "the failed check asked nobody: only the later pass-less Hello was vetted") },
+            { assertEquals(1, vettedAfterFailure, "the policy was not asked about the Hello whose pass could not be checked") },
+            { assertTrue(host.member(bob) != null && counted.asked.size == 1, "the retry, once the provider runs, comes back on the pass unvetted") },
         )
         host.room.leave()
     }
