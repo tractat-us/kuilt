@@ -120,7 +120,9 @@ public class GamePresence(
      *
      * Driven by [declareAdmissionClosed] on the host side; observed by [gameJoin] to detect
      * roster-full rejections. The value is `null` while the admission loop is still running or
-     * has not yet converged. Once it becomes non-null it never reverts — the signal is monotone.
+     * has not yet converged. It is not monotone. An eviction calls [declareAdmissionOpen], which
+     * reverts it to `null` until the replacement is admitted and admission closes again, and the
+     * host's own [declareVacate] overwrites the host slot and clears it.
      */
     public val admissionClosed: StateFlow<Set<NodeId>?> =
         quilter.state
@@ -132,7 +134,10 @@ public class GamePresence(
      * spectators are disabled or because [maxSpectators] has been reached.
      *
      * Driven by [declareSpectatorsClosed] on the host side; observed by [gameSpectate] to detect
-     * and throw [SpectatorsClosedException]. `false` until then; once `true`, never reverts.
+     * and throw [SpectatorsClosedException]. `false` until then. Once `true` it survives admission
+     * reopening and closing again, since [declareAdmissionOpen] and [declareAdmissionClosed] both
+     * carry the mark forward (#3689). Only the host's own [declareVacate] clears it, by
+     * overwriting the host slot.
      */
     public val spectatorsClosed: StateFlow<Boolean> =
         quilter.state
@@ -216,7 +221,9 @@ public class GamePresence(
      * [maxSpectators] has been reached. Appends [SPECTATORS_CLOSED_SUFFIX] to whatever value
      * the host's slot currently holds, so the signal coexists with [admissionClosed].
      *
-     * The signal is monotone — once published it is never retracted.
+     * No other host declaration retracts the signal: [declareAdmissionClosed] and
+     * [declareAdmissionOpen] both carry it forward. The exception is the host's own
+     * [declareVacate], which overwrites the whole slot.
      */
     public fun declareSpectatorsClosed() {
         declareIf { board ->
@@ -248,18 +255,25 @@ public class GamePresence(
             .keys
 
     /**
-     * Re-opens admission by reverting the host's slot to [HOST_DECLARED].
+     * Re-opens admission by reverting the host's slot to [HOST_DECLARED], keeping
+     * [SPECTATORS_CLOSED_SUFFIX] if the board carries it.
      *
      * Called by the host after evicting a voter so that new [gameJoin] callers see
      * [admissionClosed] == `null` again and wait for the next admission rather than
      * immediately throwing [RosterFullException].
      *
-     * This is safe to call multiple times — it is idempotent if the host slot already
-     * holds [HOST_DECLARED].
+     * Reopening admission must not reopen the spectator gallery (#3689). The spectator manager
+     * publishes the mark once and exits, so a reopen that dropped it would leave every later
+     * [gameSpectate] waiting out its backstop instead of being refused. The mark is read from
+     * the board inside the same critical section as the write, as [declareAdmissionClosed] does.
+     *
+     * This is safe to call multiple times — it publishes nothing if the host slot already
+     * holds the value it would write.
      */
     public fun declareAdmissionOpen() {
         declareIf { board ->
-            if (board.entries[quilter.replica]?.value == HOST_DECLARED) null else HOST_DECLARED
+            val open = HOST_DECLARED + if (spectatorsClosedFrom(board)) SPECTATORS_CLOSED_SUFFIX else ""
+            if (board.entries[quilter.replica]?.value == open) null else open
         }
     }
 
