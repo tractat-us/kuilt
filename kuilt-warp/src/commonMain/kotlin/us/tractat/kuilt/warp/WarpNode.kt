@@ -402,25 +402,6 @@ public class WarpNode(
     /** Current consistent-hash ring, rebuilt whenever the effective roster changes. */
     private var ring: TaskRing = TaskRing(setOf(selfId))
 
-    /** The effective roster [ring] was built from. Guarded by [lock]. */
-    private var ringPeers: Set<PeerId> = setOf(selfId)
-
-    /**
-     * How many times [rebuildRingAndClaim] has read the effective roster. Each read takes the next
-     * number in the same critical section, so a higher number is a later read. Guarded by [lock].
-     */
-    private var ringReads: Long = 0L
-
-    /** The read number of the rebuild that published [ring]; 0 for the seeded ring. Guarded by [lock]. */
-    private var publishedRingRead: Long = 0L
-
-    /**
-     * **Test-visibility.** Run once by the next [rebuildRingAndClaim], between reading the
-     * effective roster and publishing the ring built from it, then cleared. Guarded by [lock].
-     * Null in production.
-     */
-    private var beforeRingPublish: (() -> Unit)? = null
-
     /** Wall-clock instant of the last effective-ring change. Guarded by [lock]. */
     private var lastRingChangeAt: Instant = Instant.fromEpochMilliseconds(0L)
 
@@ -935,23 +916,6 @@ public class WarpNode(
     }
 
     /**
-     * **Test-visibility.** The effective roster the published ring was built from: the peers that
-     * own work on this node. [eligiblePeers] reads `rosterPeers - partitionedPeers` directly, so it
-     * cannot see a ring that disagrees with them (#3680).
-     */
-    internal fun ringPeersForTest(): Set<PeerId> = lock.withLock { ringPeers }
-
-    /**
-     * **Test-visibility.** Park the next ring rebuild in [hook] after it has read the effective
-     * roster and before it publishes the ring built from it (#3680). A test drives a second rebuild
-     * from inside [hook] to stand in for the interleaving no single-threaded test reaches: two
-     * rebuilds on two threads, the older read publishing last. One shot; the rebuild clears it.
-     */
-    internal fun parkNextRingRebuildForTest(hook: () -> Unit) {
-        lock.withLock { beforeRingPublish = hook }
-    }
-
-    /**
      * Close this node's Quilter connections and stop all detectors. Idempotent.
      */
     public fun close() {
@@ -1099,37 +1063,21 @@ public class WarpNode(
      * Recomputes the effective ring from `rosterPeers - partitionedPeers` and re-evaluates
      * task ownership. Tasks whose former owner is now absent or partitioned re-home to
      * their new ring successor.
-     *
-     * The roster collector and every detector collector call this from their own coroutines, so
-     * on a multi-threaded dispatcher two rebuilds can overlap: one stalls between its read and its
-     * publish while a later one runs to the end (#3680). Each read is numbered in the section that
-     * takes it, and a publish lands only if no later read has published already, so an older ring
-     * never overwrites a newer one. Every write to `rosterPeers` and `partitionedPeers` is made
-     * under [lock] and followed by a rebuild, so the latest read has seen them all.
-     *
-     * The claims run whether or not the publish landed. They read [ring] under [lock], never
-     * `newRing`, so a dropped rebuild's claims see the newer ring: a redundant pass, not a stale one.
      */
     private fun rebuildRingAndClaim() {
-        val (read, effectiveRoster, park) = lock.withLock {
-            val park = beforeRingPublish
-            beforeRingPublish = null
-            Triple(++ringReads, rosterPeers - partitionedPeers, park)
-        }
-        val newRing = RosterSnapshot(effectiveRoster).toTaskRing()
-        park?.invoke()
-        val newer = lock.withLock {
-            val newer = publishedRingRead
-            if (read > newer) {
-                publishedRingRead = read
-                ring = newRing
-                ringPeers = effectiveRoster
-                lastRingChangeAt = clock()
-            }
-            newer
-        }
-        if (read < newer) {
-            logger.debug { "WarpNode($selfId): dropping ring rebuild $read; rebuild $newer read the roster later" }
+        // Read the effective roster and publish its ring in ONE critical section (#3680). The
+        // roster collector and every detector collector call this from their own coroutines, so on
+        // a multi-threaded dispatcher a rebuild split into a read section and a publish section can
+        // stall between them while a later rebuild runs to the end, and then publish the older ring
+        // last: a recovered peer left out of the ring while `partitionedPeers` has it back, with
+        // nothing to rebuild it. The build is pure and cheap (a few thousand vnode entries). No test drives that
+        // interleaving, so nothing reds if the section is split again; keep it whole.
+        //
+        // The claims below need no such care: they read [ring] under [lock] for every decision, so
+        // a claim pass always sees the newest ring published.
+        lock.withLock {
+            ring = RosterSnapshot(rosterPeers - partitionedPeers).toTaskRing()
+            lastRingChangeAt = clock()
         }
         claimOwned(queueQuilter.state.value.keys, CoordinationKind.Free)
         claimOwned(coordQueueQuilter.state.value.elements, CoordinationKind.Coordinated)
