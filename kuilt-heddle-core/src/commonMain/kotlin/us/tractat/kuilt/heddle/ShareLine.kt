@@ -94,7 +94,15 @@ public class ShareLine internal constructor(
      *
      * @throws ArithmeticException when the lag itself does not fit an exact [Rational] over `Long`.
      */
-    public fun lag(group: GroupId): Rational? = TODO("#3551")
+    public fun lag(group: GroupId): Rational? {
+        val parent = parentOf[group] ?: return null
+        val family = checkNotNull(families[parent]) { "${parent.value} has a competing child but no family" }
+        val front = family.front as? Front.Fits ?: return null
+        val sum = family.sum as? WeightSum.Fits ?: return null
+        val weight = checkNotNull(family.weights[group]) { "${group.value} is not among ${parent.value}'s competing children" }
+        val position = checkNotNull(front.positions[group]) { "${group.value} competes beneath ${parent.value} but was not placed" }
+        return lagOf(weight, position, front.total, sum)
+    }
 
     /**
      * [child]'s weight over the summed weights of its competing siblings beneath [parent], as
@@ -203,7 +211,19 @@ public class ShareLine internal constructor(
          * answer does not fit, never on how far the positions have run: `q` is no further from zero
          * than `T`, and a placed step keeps `T` and `p` within the position limit, `2¹²⁵`.
          */
-        internal fun lagOf(weight: Weight, position: Int128, total: Int128, sum: WeightSum.Fits): Rational = TODO("#3551")
+        internal fun lagOf(weight: Weight, position: Int128, total: Int128, sum: WeightSum.Fits): Rational {
+            val s = sum.total
+            val a = checkedMul(weight.numerator, sum.lcm / weight.denominator)
+            val q = checkNotNull(mulDiv(total, a, s, Rounding.FLOOR)) { "a · T / S is no further from zero than T: $a · $total / $s" }
+            val r = productMod(total, a, s)
+            val scaled = mulDiv(q - position, s, 1L, Rounding.FLOOR) ?: throw ArithmeticException("a lag's numerator leaves 128 bits")
+            val numerator = scaled + Int128.of(r)
+            val denominator = checkedMul(TICKS_PER_UNIT, s)
+            val remainder = numerator % denominator
+            val g = gcdOf(if (remainder < 0L) -remainder else remainder, denominator)
+            val reduced = numerator.divideOrNull(g, Rounding.FLOOR) ?: throw ArithmeticException("a lag's numerator leaves Long: $numerator / $g")
+            return Rational.of(reduced, denominator / g)
+        }
 
         /**
          * The product of [fractions], each `[numerator, denominator]` and positive, in lowest terms.
