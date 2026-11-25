@@ -814,13 +814,18 @@ public abstract class RoomConformanceSuite {
                 host.awaitRoster("the host holds the first process's seat Partitioned") { roster ->
                     roster.any { it.id == one && it.liveness is Liveness.Partitioned }
                 }
-                val partitionedAt = testScheduler.currentTime
                 val mark = hostTape.events().size
-                val after = host.awaitRoster("the host lets the first process's seat go") { roster -> roster.none { it.id == one } }
-                val heldFor = (testScheduler.currentTime - partitionedAt).milliseconds
-                tab.awaitRoster("the second process drops the first's seat too") { roster -> roster.none { it.id == one } }
+                // Bounded settles rather than waits, so a host that never lets the seat go reds on the
+                // assertion below, naming the roster, instead of on a wait's budget.
+                advanceTimeBy(h.hostHeartbeat.reconnectWindow / 2)
                 runCurrent()
+                val midHold = host.roster.value.singleOrNull { it.id == one }?.liveness
+                advanceTimeBy(h.hostHeartbeat.reconnectWindow * 2)
+                runCurrent()
+                val after = host.roster.value
                 assertAll(
+                    { assertIs<Liveness.Partitioned>(midHold, "the dead process's seat is held for its window, not let go at once") },
+                    { assertTrue(after.none { it.id == one }, "then let go: ${after.map { it.id to it.liveness }}") },
                     {
                         assertEquals(
                             listOf("Left(${one.value}, ${LeaveReason.PartitionExpired})"),
@@ -828,12 +833,7 @@ public abstract class RoomConformanceSuite {
                             "the dead process's seat expires: not superseded by the live one, which already has a seat",
                         )
                     },
-                    {
-                        assertTrue(
-                            heldFor >= h.hostHeartbeat.reconnectWindow,
-                            "the seat went when its hold ran out ($heldFor after it went Partitioned, against a ${h.hostHeartbeat.reconnectWindow} hold)",
-                        )
-                    },
+                    { assertTrue(tab.roster.value.none { it.id == one }, "the second process drops it too: ${tab.roster.value.map { it.id }}") },
                     { assertEquals(Liveness.Connected, after.singleOrNull { it.id == two }?.liveness, "the second process keeps its seat: $after") },
                     { assertEquals(key, after.singleOrNull { it.id == two }?.key, "under the device's key") },
                     {
