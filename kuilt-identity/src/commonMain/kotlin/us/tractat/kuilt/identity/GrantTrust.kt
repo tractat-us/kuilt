@@ -15,7 +15,8 @@ public sealed interface GrantVerdict {
 
     /**
      * Issued by some other key than this host's. A grant is good only with the host that issued it:
-     * after a host change, a returning device's old pass is this, and the device is admitted afresh.
+     * after a host change, a returning device's old pass is this, and the device goes through
+     * ordinary admission.
      */
     public data object UntrustedIssuer : GrantVerdict
 
