@@ -295,6 +295,32 @@ public abstract class DeviceKeyStoreConformanceSuite {
     }
 
     /**
+     * [DeviceKeyStore.keepGrant] never lets an older copy displace the grant held, however much older
+     * (Decided 21): a renewal replayed or delivered late, more than [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS]
+     * behind the pass held, is ignored like any other. A renewal names no Hello, so nothing tells a
+     * replay from a fresh pass, and only [DeviceKeyStore.keepFreshGrant] may give a held pass up for an
+     * older one. On the durable arm the rule is read again after a restart.
+     */
+    @Test
+    public fun anOlderRenewalNeverDisplacesTheHeldPass(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val fixture = newFixture()
+        val store = fixture.open { }
+        val me = store.deviceKey().id
+        val host = DeviceKey.generate()
+        val held = grant(host, me, T + GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS + HOUR)
+        val replayed = grant(host, me, T)
+        store.keepGrant(held)
+        store.keepGrant(replayed)
+        val kept = store.grants()
+        val keptAcrossRestart = (fixture as? DeviceKeyStoreFixture.Durable)?.open { }?.grants()
+
+        assertAll(
+            { assertEquals(listOf(held), kept, "an older renewal, however much older, is ignored") },
+            { if (keptAcrossRestart != null) assertEquals(listOf(held), keptAcrossRestart, "and the kept medium holds the held pass") },
+        )
+    }
+
+    /**
      * A held grant dated more than [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS] after another grant from
      * the same issuer and scope is replaced by it, although that grant is older (identity Task 2.5,
      * Decided 24).
