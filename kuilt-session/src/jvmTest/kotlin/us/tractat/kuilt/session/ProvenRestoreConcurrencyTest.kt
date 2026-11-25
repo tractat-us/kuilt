@@ -1330,9 +1330,10 @@ class ProvenRestoreConcurrencyTest {
 
         /**
          * Bob's `Resumed` or `Joined` this round. An exchange that draws nothing is sent again: the
-         * room forgets the open challenge of a sender that leaves the fabric, and its watcher of the
-         * fabric can act on bob's drop after he is back and has said Hello. A second exchange makes
-         * the first stale, so it seats nobody. A rig retry, counted.
+         * room forgets the open challenge of a sender that leaves the fabric, so a Hello it opened
+         * before its watcher of the fabric read bob's drop goes with the drop. One opened after that
+         * read survives it (#3610). A second exchange makes the first stale, so it seats nobody. A rig
+         * retry, counted.
          */
         suspend fun awaitEdge(peer: PeerId = bob): MembershipEvent {
             while (true) {

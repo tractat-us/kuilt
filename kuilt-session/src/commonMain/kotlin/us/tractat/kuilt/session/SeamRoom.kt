@@ -3070,13 +3070,23 @@ internal class SeamRoom(
      */
     private suspend fun runDetectorRouteWatcher() {
         var previous = emptySet<PeerId>()
-        seam.peers.collect { reachable ->
+        seam.peers.collect { _ ->
+            // The emission only says the list changed. The challenges are marked first and the list
+            // read after, so every challenge at or below the mark was opened before this read (#3610).
+            // The emitted list was read before the mark and may already be stale: a sender that left
+            // and came back with a fresh Hello since would be "gone" in it, and its new challenge
+            // below the mark.
+            val mark = pendingChallenges.mark()
+            val reachable = seam.peers.value
             lock.withLock {
                 // A sender still waiting on its challenge is not a member, so no detector reports it
                 // lost. Its leaving the seam is the loss: forget its challenge (#3211). Only a sender
                 // that was reachable and no longer is — a Hello may arrive before a fabric lists its
-                // sender, and dropping on mere absence would forget that challenge at once.
-                for (gone in previous - reachable) pendingChallenges.drop(gone)
+                // sender, and dropping on mere absence would forget that challenge at once. And only a
+                // challenge opened before the list was read: the challenges are not under this lock,
+                // so a sender back with a fresh Hello while this waits for it opens a newer one, which
+                // belongs to its new link (#3610).
+                for (gone in previous - reachable) pendingChallenges.dropOpenedBy(gone, mark)
                 previous = reachable
                 if (closed) return@withLock
                 for (member in admittedById.values.toList()) {

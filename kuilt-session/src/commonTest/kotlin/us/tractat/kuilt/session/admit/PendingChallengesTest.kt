@@ -250,4 +250,42 @@ class PendingChallengesTest {
             { assertFalse(table.isCurrent(alice, bobs.generation), "a generation is bound to its sender") },
         )
     }
+
+    /** #3610: a drop keyed to a mark removes what was open then and keeps what was opened after. */
+    @Test
+    fun dropOpenedByKeepsAnEntryOpenedAfterTheMark() {
+        val before = table.mark()
+        val older = table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds)
+        val mark = table.mark()
+        val newer = table.open(alice, hello("alice"), byteArrayOf(2), now + 30.seconds)
+        table.open(bob, hello("bob"), byteArrayOf(3), now + 30.seconds)
+
+        table.dropOpenedBy(alice, mark)
+        val aliceKept = table.isCurrent(alice, newer)
+        table.dropOpenedBy(bob, mark)
+        val bobKept = table.retained == 2
+        table.dropOpenedBy(alice, table.mark())
+
+        assertAll(
+            { assertEquals(0L, before, "no generation is minted before the first open") },
+            { assertEquals(older, mark, "the mark is the newest generation minted") },
+            { assertTrue(aliceKept, "alice's entry opened after the mark survives a drop at that mark") },
+            { assertTrue(bobKept, "bob's entry, opened after the mark too, survives") },
+            { assertFalse(table.isCurrent(alice, newer), "a drop at a later mark removes it") },
+            { assertEquals(1, table.retained, "and only alice's") },
+        )
+    }
+
+    @Test
+    fun dropOpenedByRemovesAnEntryOpenedAtTheMark() {
+        val generation = table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds)
+        assertTrue(table.isCurrent(alice, generation), "precondition: the entry is open")
+
+        table.dropOpenedBy(alice, table.mark())
+
+        assertAll(
+            { assertFalse(table.isCurrent(alice, generation)) },
+            { assertEquals(0, table.retained) },
+        )
+    }
 }

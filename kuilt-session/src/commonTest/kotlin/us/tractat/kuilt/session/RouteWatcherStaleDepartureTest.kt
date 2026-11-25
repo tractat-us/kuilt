@@ -76,7 +76,7 @@ class RouteWatcherStaleDepartureTest {
                 val failed = joinerLog.since(0).filterIsInstance<MembershipEvent.AdmissionFailed>()
                 assertTrue(failed.isEmpty(), "bob's room does not fail its admission: $failed")
             },
-            { assertEquals(setOf(KEY_SEAT_HOST, bob), joiner.roster.value.map { it.id }.toSet(), "bob's room has the host") },
+            { assertEquals(setOf(KEY_SEAT_HOST), joiner.roster.value.map { it.id }.toSet(), "bob's room was admitted by the host") },
         )
         joiner.leave()
         host.leave()

@@ -121,10 +121,35 @@ internal class PendingChallenges(private val clock: () -> Instant) {
      *
      * Unconditional is correct there because those events arrive in order on the sender's own link: a
      * Goodbye is handled after every Hello the sender sent before it, so there is no newer entry the
-     * drop could wrongly remove. It is **not** correct after a decision that suspended — use [retire].
+     * drop could wrongly remove. It is **not** correct after a decision that suspended — use [retire] —
+     * nor for a departure read from the peer list, which is not ordered against the sender's frames —
+     * use [dropOpenedBy].
      */
     fun drop(sender: PeerId) {
         lock.withLock { entries.remove(sender) }
+    }
+
+    /**
+     * The newest generation any [open] has minted so far, or `0` before the first. Every entry opened
+     * before this call has a generation at or below it, and every entry opened after it one above, so
+     * a caller can name "the entries that existed when I looked" without holding the table's lock.
+     */
+    fun mark(): Long = lock.withLock { nextGeneration }
+
+    /**
+     * Removes [sender]'s entry only if it was opened at or before [mark] (see [mark]); a newer entry is
+     * kept.
+     *
+     * For a drop decided from something read at [mark] time that may be stale by the time the drop
+     * runs: the route watcher reads the peer list, finds a sender gone, and acts on it later. A sender
+     * that came back and said Hello in between has a newer entry, which belongs to its new link and
+     * must survive (#3610).
+     */
+    fun dropOpenedBy(sender: PeerId, mark: Long) {
+        lock.withLock {
+            val entry = entries[sender] ?: return@withLock
+            if (entry.pending.generation <= mark) entries.remove(sender)
+        }
     }
 
     /**
