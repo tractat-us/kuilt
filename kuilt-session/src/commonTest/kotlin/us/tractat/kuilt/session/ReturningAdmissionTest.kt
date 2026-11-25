@@ -72,27 +72,40 @@ class ReturningAdmissionTest {
     }
 
     /**
-     * The host's own store, whose scheme throws, while [failing], on checking a pass's signature: a
-     * platform provider that cannot run. Every other check — a joiner's proof — goes through.
+     * The host's own store, whose scheme counts every pass signature it is asked to check ([checks]),
+     * and throws on one, while [failing]: a platform provider that cannot run. Every other check — a
+     * joiner's proof — goes through uncounted.
+     *
+     * The count is what pins the host's cap on signature checks and its cheap-field filter, which no
+     * verdict shows: a pass checked and found bad, and a pass set aside unchecked, both leave the
+     * device vetted.
      */
     private class FailsPassChecks(private val inner: DeviceKeyStore) : DeviceKeyStore by inner {
         var failing = false
         var failed = 0
+        var checks = 0
 
         override val keyScheme: KeyScheme
             get() {
                 val scheme = inner.keyScheme
                 return object : KeyScheme by scheme {
                     override suspend fun verify(key: DidKey, message: ByteArray, signature: ByteArray): Boolean {
-                        if (failing && "kuilt/grant" in message.decodeToString()) {
-                            failed++
-                            error("the platform provider failed")
+                        if ("kuilt/grant" in message.decodeToString()) {
+                            checks++
+                            if (failing) {
+                                failed++
+                                error("the platform provider failed")
+                            }
                         }
                         return scheme.verify(key, message, signature)
                     }
                 }
             }
     }
+
+    /** This pass with its signature's last byte changed: the same fields, signed by nobody. */
+    private fun Grant.withForgedSignature(): Grant =
+        assertNotNull(Grant.decode(wire.also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }), "a forged signature still decodes")
 
     private fun RawHost.directWelcomesTo(peer: PeerId): List<AdmitMessage.Welcome> =
         sentTo(peer).welcomesFor(peer).filter { it.membership != null }
@@ -255,7 +268,8 @@ class ReturningAdmissionTest {
     @Test
     fun aGoodPassBehindManyThatCannotApplyIsStillFound() = runTest {
         val counted = Counted()
-        val host = rawHost(joiners = setOf(bob), admission = counted.admission)
+        val hostStore = FailsPassChecks(fakeKeyStore(HOST_DEVICE))
+        val host = rawHost(joiners = setOf(bob), store = hostStore, admission = counted.admission)
         host.admit(bob, bobKey, nonce = 1)
         val good = host.passesTo(bob).single()
         host.say(bob, AdmitMessage.Goodbye)
@@ -267,11 +281,51 @@ class ReturningAdmissionTest {
         val runOut = Grant.issue(hostSigner, bobKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now - 2, notAfter = now - 1)
         val anotherDevices = Grant.issue(hostSigner, carolKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
 
+        val checksBefore = hostStore.checks
         host.admit(bob, bobKey, nonce = 2, grants = otherRooms + runOut + anotherDevices + good)
 
         assertAll(
             { assertEquals(1, counted.asked.size, "the good pass is found behind eight that cannot apply") },
             { assertEquals(ReturnKind.Returning, host.directWelcomesTo(bob).last().returnKind) },
+            { assertEquals(1, hostStore.checks - checksBefore, "the eight are set aside on their fields: only the good pass's signature is checked") },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * Anyone sent a challenge may send a Proof, so the host checks at most four pass signatures from
+     * one, however many passes it carries. Six passes that the cheap fields cannot rule out — this
+     * host's, for this device and this room, not run out — with signatures nobody made cost four
+     * checks, and the device is vetted as a newcomer.
+     */
+    @Test
+    fun atMostFourPassSignaturesAreCheckedPerProof() = runTest {
+        val counted = Counted()
+        val hostStore = FailsPassChecks(fakeKeyStore(HOST_DEVICE))
+        val host = rawHost(joiners = setOf(bob), store = hostStore, admission = counted.admission)
+        val hostSigner = fakeDeviceKey(HOST_DEVICE)
+        val now = testScheduler.currentTime
+        val forged = (1..6).map {
+            Grant.issue(hostSigner, bobKey.id, GrantScope.Room(KEY_SEAT_ROOM.value), issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
+                .withForgedSignature()
+        }
+
+        val checksBefore = hostStore.checks
+        host.admit(bob, bobKey, nonce = 1, grants = forged)
+        val checks = hostStore.checks - checksBefore
+        val signedByTheHost = forged.count { it.isSignedByIssuer(hostStore.keyScheme) }
+
+        assertAll(
+            { assertEquals(6, forged.map { it.id.toList() }.toSet().size, "rig: six distinct passes") },
+            {
+                assertTrue(
+                    forged.all { it.issuer == host.hostKey && it.subject == bobKey.id && it.scope == GrantScope.Room(KEY_SEAT_ROOM.value) && it.notAfter > now },
+                    "rig: no field rules any of them out, so each would cost a check",
+                )
+            },
+            { assertEquals(0, signedByTheHost, "rig: none is signed by the host") },
+            { assertEquals(4, checks, "the host checks four signatures, not six") },
+            { assertEquals(listOf(bobKey.id), counted.keys(), "none is good: an ordinary admission") },
         )
         host.room.leave()
     }
