@@ -253,11 +253,9 @@ public class ShareLine internal constructor(
          * Each parent's [Family] is summed and placed here, once.
          *
          * Each competing parent is placed by the step a pick arriving there would take
-         * ([FairShareAllocator.place]) against [waiting], the view a pick's step reads. Every step
-         * runs on one fork of [memory], never on [memory] itself, and on [ledger] as it is: a step
-         * at one parent reads and writes only that parent's children and clock, so neither the
-         * order the parents are placed in nor the seats one of them writes changes what another
-         * reads.
+         * ([FairShareAllocator.place]) against [waiting], the view a pick's step reads, on [ledger]
+         * as it is. Placing reads [memory] and moves none of it, so the line never moves the wake
+         * memory it was taken from, and no parent's step sees another's.
          */
         fun over(
             ledger: EntitlementLedger,
@@ -275,8 +273,7 @@ public class ShareLine internal constructor(
                 parentOf[group] = record.parent
                 children.getOrPut(record.parent) { HashMap() }[group] = record
             }
-            val steps = memory.fork()
-            val families = children.mapValues { (parent, family) -> Family.of(family, steps.place(parent, ledger, waiting)) }
+            val families = children.mapValues { (parent, family) -> Family.of(family, memory.place(parent, ledger, waiting)) }
             return ShareLine(root, parentOf, families)
         }
     }

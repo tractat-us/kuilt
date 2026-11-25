@@ -32,8 +32,8 @@ public class LocalHeddleView internal constructor(
     private val epoch: Long,
     private val ledger: EntitlementLedger,
     /**
-     * The wake memory each throwaway engine starts from. It is only ever forked, never moved, so a
-     * view the engine builds over its own allocator leaves that allocator as it found it.
+     * The wake memory each throwaway engine starts from. It is only ever forked or copied from, never
+     * moved, so a view the engine builds over its own allocator leaves that allocator as it found it.
      */
     private val allocator: FairShareAllocator,
     private val capacity: Capacity,
@@ -281,7 +281,7 @@ public class LocalHeddleView internal constructor(
      */
     public fun shareLine(waiting: Set<GroupId>): ShareLine {
         val competing = ledger.reachable(ledger.belowCeilings(waiting, openBeneath, root, leasable), root, leasable)
-        // The line forks the wake memory it places each parent with, so the engine's own is never moved.
+        // Placing copies what each parent's step reads of the wake memory, so the engine's own is never moved.
         return ShareLine.over(ledger, root, competing, allocator, LocalHeddle.waitingOver(ledger, competing, policy.defaultReservation))
     }
 }

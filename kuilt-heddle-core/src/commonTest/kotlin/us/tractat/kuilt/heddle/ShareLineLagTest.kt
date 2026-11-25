@@ -174,7 +174,7 @@ class ShareLineLagTest {
             assertEquals(before, h.allocator.memory)
             val competing = ledger.reachable(waiting, h.root, Leasable.ByTopology(h.persist().lastApplied))
             val fork = h.allocator.fork()
-            for (parent in parentsOf(ledger, competing)) fork.place(parent, ledger, LocalHeddle.waitingOver(ledger, competing, 1L))
+            for (parent in parentsOf(ledger, competing)) fork.settle(parent, ledger, LocalHeddle.waitingOver(ledger, competing, 1L))
             if (fork.memory != before) stepsThatMove++
         }
         assertTrue(stepsThatMove > SEEDS, "lines whose steps move the memory they run on: $stepsThatMove")
@@ -210,10 +210,11 @@ class ShareLineLagTest {
     }
 
     /**
-     * The property the line rests on: the step at a parent reads the same whether the other
-     * parents' steps were taken first, in any order, on the same memory, or not at all. Measured
-     * before [ShareLine.lag] was built on it: 3,503 parents compared, 0 differed, 1,549 moved by
-     * their own step.
+     * The property the line rests on: placing a parent, on a copy of only its own children's
+     * memory, reads what the whole step a pick takes there reads, whether every other parent's
+     * step was taken first on the same memory, in any order, or none was. Measured on the whole
+     * step before [ShareLine.lag] was built on it: 3,503 parents compared, 0 differed, 1,549 moved
+     * by their own step.
      */
     @Test
     fun eachParentsStepIsIndependentOfTheOthers() {
@@ -225,13 +226,12 @@ class ShareLineLagTest {
             val view = LocalHeddle.waitingOver(ledger, competing, 1L)
             val parents = parentsOf(ledger, competing)
             for (parent in parents) {
-                val alone = h.allocator.fork().place(parent, ledger, view)
-                val unplaced = positionsOf(ledger, parent, h.allocator)
-                val afterOthers = h.allocator.fork().also { f -> parents.filter { it != parent }.shuffled(rng).forEach { f.place(it, ledger, view) } }
-                val placed = afterOthers.place(parent, ledger, view)
-                assertEquals(positionsOf(alone), positionsOf(placed), parent.value)
+                val placed = positionsOf(h.allocator.place(parent, ledger, view))
+                val afterOthers = h.allocator.fork().also { f -> parents.filter { it != parent }.shuffled(rng).forEach { f.settle(it, ledger, view) } }
+                val settled = afterOthers.settle(parent, ledger, view)
+                assertEquals(positionsOf(settled, parent, afterOthers), placed, parent.value)
                 compared++
-                if (positionsOf(alone) != unplaced) movedByItsStep++
+                if (placed != positionsOf(ledger, parent, h.allocator)) movedByItsStep++
             }
         }
         assertAll(

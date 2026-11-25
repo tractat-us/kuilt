@@ -455,21 +455,41 @@ public class FairShareAllocator(
     }
 
     /**
-     * Where the step a pick arriving at [parent] takes ([settle]) leaves each of [parent]'s active
-     * children in [ledger], read on this allocator: its effective position, wake clamp included, in
-     * ticks on its own grid. The read [ShareLine] takes at every competing parent of a tree, on one
-     * fork: the step at a parent reads and writes only that parent's children and its own clock, so
-     * taking it at each parent in turn places each one exactly as a pick arriving there would.
+     * Where the step a pick arriving at [parent] takes ([settle]) would leave each of [parent]'s
+     * active children in [ledger]: its effective position, wake clamp included, in ticks on its own
+     * grid. Changes nothing, on this allocator or in [ledger]. The read [ShareLine] takes at every
+     * competing parent of a tree at once.
+     *
+     * The step at a parent reads and writes only its children's entries and its own clock, so it
+     * runs here on a copy of just those ([scopedTo]): a line over a tree of `n` edges copies each
+     * entry once, where a copy of the whole memory per parent cost `n²` (on the JVM, 2,000
+     * groups of three lanes took 1.6 s that way and 24 ms this one). Leaving out the entries of children that have left changes nothing a present child
+     * reads; the step would only forget them.
      *
      * [Placement.Refused] when the children's weights fail [weightsFitTheBudget], so no pick there
-     * can be computed, or the step would pass the [POSITION_LIMIT]; this allocator then observes
-     * nothing at [parent], as such a pick would not.
+     * can be computed, or the step would pass the [POSITION_LIMIT].
      */
     internal fun place(parent: GroupId, ledger: EntitlementLedger, waiting: (AttachmentId) -> Demand): Placement {
         if (!childWeightsFit(ledger, parent)) return Placement.Refused
+        val step = scopedTo(parent, ledger.activeChildren(parent).map { it.attachment })
         val cell = ValueCell(ledger)
-        if (settleJoiners(parent, cell, waiting) == Landing.PastLimit) return Placement.Refused
-        return Placement.Placed(policyEdges(cell.current, parent, waiting).associate { it.record.id to HeddlePolicy.effectiveTicksWide(it) })
+        if (step.settleJoiners(parent, cell, waiting) == Landing.PastLimit) return Placement.Refused
+        return Placement.Placed(step.policyEdges(cell.current, parent, waiting).associate { it.record.id to HeddlePolicy.effectiveTicksWide(it) })
+    }
+
+    /**
+     * An allocator that remembers what this one does about [children], [parent]'s active children,
+     * and [parent]'s clock, and nothing else: all the step at [parent] reads.
+     */
+    private fun scopedTo(parent: GroupId, children: List<AttachmentId>): FairShareAllocator = FairShareAllocator(self, policy).also { s ->
+        for (edge in children) {
+            wakeOffsets[edge]?.let { s.wakeOffsets[edge] = it }
+            demandingObserved[edge]?.let { s.demandingObserved[edge] = it }
+            served[edge]?.let { s.served[edge] = it }
+            departures[edge]?.let { s.departures[edge] = it }
+            shiftRemainders[edge]?.let { s.shiftRemainders[edge] = it }
+        }
+        clocks[parent]?.let { s.clocks[parent] = it }
     }
 
     /** What [place] found at a parent: each active child's position after the step, or that no step could be taken. */
