@@ -314,6 +314,19 @@ Iain's ruling, plus corrections the 1.8 reviews showed the text above needs. Whe
 - **For #3615 and 1.9:** 1.8's cookbook sample `watchTheReturnSample` teaches `Recovered(host)` as "the seat was gone and this room was admitted afresh". That is Amendment D's interim. When #3615 lands its membership-comparison signal, that sample arm changes with it.
 - **Task 1.8's "`ResumeToken.kt`: remove `secret`"** is superseded by Decided 31: the type is deleted.
 
+## Amendment G — rulings of 2026-11-24 (during #3615's review, PR #3641)
+
+#3641 gives a fresh admission its own joiner-side signal, `MembershipEvent.Readmitted(self)`, and rebuilds the joiner's roster when the host's own `Welcome` closes the admission burst. Where these differ from the tasks or from Amendments A–F, these win.
+
+- **Amendment D's interim is over.** Its "until it lands, the joiner emits `Recovered(host)`" is history once #3641 merges. Amendment F's `watchTheReturnSample` bullet is done by #3641.
+- **A departure the joiner did not see gets its own `LeaveReason` (Iain, 2026-11-24).** A member dropped by the rebuild left while the joiner's link was down. `Normal` says the departure was intentional, and `PartitionExpired` says the joiner watched the link die. Neither is something the joiner knows. So the rebuild emits a new reason that claims only what the joiner observed: the member is gone. It breaks an exhaustive `when` in a consumer, for the same reason `Readmitted` does. That break is the point. #3641's fix round adds it.
+- **`Superseded`'s promise covers the members present for it.** The `LeaveReason.Superseded` KDoc, the `supersedeSeat` KDoc and the design doc's "Restored under the new id" row promise one `Left(old, Superseded(by))`, then `Joined(by)`. A joiner that was away hears `Joined(by)` from the burst, and the rebuild drops `old` later with the new reason. Those three texts are qualified to say so.
+- **A restore that re-sends the burst rebuilds too.** A `Farewell` fanned out to a seat held partitioned is lost on the dead link, just as it is for a released seat. The `Resumed` KDoc says the new-reason `Left`s may follow it.
+- **The conformance rows move to 1.9.** `RoomHarness` can only drop frames. A readmission needs the joiner's own seam torn and healed in place, which is the harness Amendment F gives 1.9. #3615 closes when its signal and rebuild merge, and its conformance done-when is carried by 1.9. Task 1.9 adds two rows on the tear-and-heal harness:
+  - `aReturnAfterTheSeatWentIsReadmitted`: `Readmitted(self)`, never `Recovered(host)`, and zero app calls.
+  - `aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage`. Its reference must be able to reach the ghost, or the row is vacuous. It also keeps a live bystander: one member who stays connected throughout is still listed after `Readmitted`.
+- **The spike #1637 probe's rewrite (Amendment F) counts `Readmitted` as a return ending**, along with `Recovered(host)`, `Resumed` and `HostLost`.
+
 ## Global Constraints
 
 - **Each task is one PR and one sub-issue of #3159.**
@@ -826,7 +839,7 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 
 ### Task 1.9: Slice-1 conformance rows and the rejoin route [after 1.8]
 
-> **Amended — read Amendment F, then Amendment A § 1.9; they override this task where they differ. `ResumeHarness` and `RoomResumeHarnessTest.kt` no longer exist after 1.8.**
+> **Amended — read Amendment G, then Amendment F, then Amendment A § 1.9; they override this task where they differ. `ResumeHarness` and `RoomResumeHarnessTest.kt` no longer exist after 1.8.**
 
 **Files:**
 - Modify: `kuilt-conformance/src/commonMain/.../RoomConformanceSuite.kt` (new cases, and `ResumeHarness` reshaped around keys), `InMemoryRoomConformanceTest.kt`, `RoomResumeHarnessTest.kt`, the skill's rejoin row, and `docs/agent-cookbook/session.md` (`## Rejoin & reconnect` and `## Device identity & return`).
