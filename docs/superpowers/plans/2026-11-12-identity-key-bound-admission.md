@@ -360,6 +360,17 @@ Iain's rulings, recorded as Decided 32 in the design. These win where they diffe
 - **`MemberIdentity.dedupKey` is deleted** in the same task, as its own commit, with the ABI dump diff named in the PR body.
 - **Amendment I's open question: the host key's first tab is decided by rules 6–7.** A joiner presenting the host's key with no joiner seats is `Returning` with a valid grant (0 policy calls), else an ordinary admission (1). A later tab of that key is an additional seat (1). The design's key → seat table already says this.
 
+## Amendment K — rulings of 2026-11-25 (during Task 2.4's review, PR #3699)
+
+2.4's code review and spec-conformance review. These win where they differ.
+
+- **Vet before releasing.** When a newcomer's admission would release a held seat (rule 3's different key on a partitioned id, or a revoked device's own seat), the room asks the policy first and releases the seat only in the pass that holds an `Admit`. A `Reject`, a failure or a timeout leaves the seat held, so an impostor the policy refuses evicts nobody. If the seat's member heals during vetting, the re-decide answers `KeyConflict`. (Controller ruling, from the code review; 2.4 shipped release-first.)
+- **A revoked device's connected seat is decided again at its own Hello** (Decided 14 says *present*; Decided 23 says decide again without the seat), and the seat leaves as `Left(old, PartitionExpired)`. `PartitionExpired`'s KDoc is widened to cover a held seat released at its own device's return or at a newcomer's admission under its id. A dedicated reason would tell bystanders about the app's revocation and needs a wire field; Iain may rule otherwise, and 2.5's bump is where it would ride.
+- **Revocation is checked in 2.4, not 2.6.** It keys on `Membership.admittedAtMs`, inherited across a takeover. 2.5's R2(i) uses the same instant. 2.6 keeps grant verification, `Returning` and the room-built `GrantTrust` (Decided 17), which 2.4 did not build because nothing reads it yet.
+- **`AdmissionRequest`** reads an empty `deviceId` as `null` in the class itself, and `admissionRequest(...)` has no `displayName` default. Its constructor stays `@SessionInternalApi`, so "the policy is never asked about a restore" holds through `newcomerRequest(SeatDecision.Newcomer, …)` by convention rather than as a type (Decided 26).
+- **`AdmissionDecision.Reject` refuses the `superseded` code** (Decided 32): the room would otherwise build an invalid wire `Reject` under the lock.
+- **Census P7 is a lazy expiry:** the pending entry lapses at its own deadline rather than being dropped explicitly. The effect is the same.
+
 ## Global Constraints
 
 - **Each task is one PR and one sub-issue of #3159.**
@@ -975,12 +986,12 @@ public class HostAdmission(public val policy: AdmissionPolicy, public val revoca
 > **Amended — read Amendment A § 2.4 first; it overrides this task where they differ.**
 
 **Files:**
-- Modify: `SeamRoom.kt` (`SeamRoomFactory.host`, `adopt(role: AdoptRole, …)`, `electLobby`, and the `Ordinary` arm), `Room.kt` (`RoomFactory.host(…, admission: HostAdmission)`), `SessionRole.kt` or a new `AdoptRole.kt`, `election/SeamElectionLobby.kt`, `KtorRoomHost`, `ServerCluster`, the `kuilt-nw` sites, `kuilt-game` samples, `kuilt-conformance`, `FakeRoomFactory`, and every host-side test (pass `HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())` (Decided 17)). Also `api/` everywhere.
+- Modify: `SeamRoom.kt` (`SeamRoomFactory.host`, `adopt(role: AdoptRole, …)`, `ElectionLobby.start` (P1), and the `Ordinary` arm), `Room.kt` (`RoomFactory.host(…, admission: HostAdmission)`), `SessionRole.kt` or a new `AdoptRole.kt`, `election/SeamElectionLobby.kt`, `KtorRoomHost`, `ServerCluster`, the `kuilt-nw` sites, `kuilt-game` samples, `kuilt-conformance`, `FakeRoomFactory`, and every host-side test (pass `HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())` (Decided 17)). Also `api/` everywhere.
 
 **Interfaces (produced):** `public sealed interface AdoptRole { public data class Host(public val admission: HostAdmission, public val roomId: RoomId? = null) : AdoptRole; public data object Joiner : AdoptRole }`. The old `require(roomId == null || role == Host)` goes, because the type now carries it.
 
 **Behaviour:**
-- On `SeatDecision.Ordinary`, the room calls `policy.decide`.
+- On a `SeatDecision.Newcomer` (`Ordinary` or `AdditionalSeat`, Amendment C), the room calls `policy.decide`.
 - `Reject(code)` sends `Reject(code)`.
 - A throw that is not this coroutine's cancellation (`ensureActive`) sends `Reject(AdmissionPolicyFailed)`, logs with the throwable, and leaves the room running.
 - A decision that comes back after the pending entry was overwritten or dropped is discarded.
@@ -1034,7 +1045,7 @@ public class HostAdmission(public val policy: AdmissionPolicy, public val revoca
   - `anyRoomGrantSurvivesHostRestartRoomGrantNeedsStableRoomId`: restart the host over the same `DeviceKeyStore`, once with `host(roomId = stable)` and once without.
   - `newHostAfterLobbyReElectionTreatsGrantAsUntrusted`: Decided 11.
   - `grantFromAnotherServersKeyIsUntrusted`: two hosts with distinct stores, as two cluster servers would have.
-  - `revokedSubjectsHeldSeatGoesToThePolicy`.
+  - `revokedSubjectsHeldSeatGoesToThePolicy`. *(Landed in 2.4 as `aRevokedDevicesHeldSeatGoesToThePolicy` and `aRevokedDevicesPartitionedSeatIsNotTakenOverUnderANewId`, Amendment K. 2.6 keeps grant verification, the `Returning` arm and Decided 17's room-built `GrantTrust`.)*
 - [ ] **Step 2: Watch them fail, implement, update `api/`, run the full build, then commit.** Commit: "session: a device inside its grant is re-admitted without vetting (#3159)".
 
 ### Task 2.7: Slice-2 conformance, refusal cases and docs [after 2.6, 2.2]

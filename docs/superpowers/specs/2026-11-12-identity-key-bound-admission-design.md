@@ -76,7 +76,11 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     not decompression; decompression stays the library's.
 14. **A revoked present member gets no refresh and no held-seat restore (Iain, planning R2).** The
     host stops re-issuing grants to a member whose subject was revoked after its current admission,
-    and a revoked device's held-seat restore falls through to ordinary admission.
+    and a revoked device's held-seat restore falls through to ordinary admission. That covers a
+    connected seat as well as a partitioned one. The seat is decided again at the device's own Hello
+    (Decided 12's "next return", not an eviction): the policy is asked first, and the seat is
+    released with `Left(old, PartitionExpired)` only once it admits (Amendment K). The admission
+    instant is inherited across a takeover, so a takeover cannot launder a revocation.
 16. **kuilt decompresses the point itself and imports it uncompressed on every target (Iain,
     2026-11-12).** Real Safari 27.0.1 and WebKit refuse a 33-byte compressed `importKey("raw")`
     (`DataError`); Chromium and Firefox accept it, and the 65-byte form works in all four (#3232's
@@ -414,13 +418,19 @@ public fun interface AdmissionPolicy {
 }
 ```
 
-`AdmissionRequest`: the verified `DidKey` (an `internal` constructor, like `ProvenResume`), display
-name, `deviceId`. `AdmissionDecision`: `Admit(grant: GrantTerms)` or `Reject(code)`. The room
-consults the key → seat table first; the policy sees only ordinary admissions.
+`AdmissionRequest`: the verified `DidKey`, display name (an unnamed joiner's is its peer id), and
+`deviceId` (absent and `""` both reach the policy as `null`); its constructor is
+`@SessionInternalApi` (Decided 26). `AdmissionDecision`: `Admit(grant: GrantTerms)` or
+`Reject(code)`, never the `superseded` code. The room consults the key → seat table first; the
+policy sees newcomers: ordinary admissions and additional seats (Amendment C), including a
+revoked device's seat. A seat the newcomer's admission would release is released only after the
+policy admits (Amendment K).
 
 Provided: `AdmissionPolicy.open(readmitFor = 1.hours)` — admits everyone with a room-scoped grant.
 
-The policy must answer within the joiner's `admitTimeout` (30 s). A slow human-in-the-loop vet
+The host bounds `decide` by the challenge's deadline (its `admitTimeout`). At expiry it sends
+nothing and the joiner times out (census P7); a throw gets a retryable
+`Reject(AdmissionPolicyFailed)`; an answer to a challenge no longer current is dropped (P6). A slow human-in-the-loop vet
 needs a `Pending` frame that extends the joiner's deadline — not in this slice.
 
 ### Membership and the wire
@@ -442,7 +452,8 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
 - The returning mark rides the bystander Welcome through `fanOutToOtherMembers`, keeping #1781's
   ordering against `Farewell`.
 - New refusal codes (bad proof, key conflict) override `retryable = false` and get `fromId` branches.
-  `HostFailed` (retryable) covers the host's own signing or checking failure.
+  `HostFailed` (retryable) covers the host's own signing or checking failure, and
+  `AdmissionPolicyFailed` (retryable) a policy that throws.
   No "keyless Hello" code: the `ProtocolVersion` gate already refuses every older peer.
 - `join`/`adopt` gain a `deviceId` parameter; today nothing sends one.
 - The host forgets a departed member's key and previous peer id once its last grant expires (from
