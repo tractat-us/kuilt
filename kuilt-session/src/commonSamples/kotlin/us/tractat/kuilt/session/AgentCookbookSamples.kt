@@ -397,8 +397,8 @@ public suspend fun hostAdmissionSample(
  *
  * Every room the factory makes proves this device's key when it says Hello, and the host hands back
  * the seat it holds for that key: after a torn link, through the room's own reconnect, and after an
- * app kill, through the launch's ordinary `join`. `RoomConformanceSuite`'s return rows hold every
- * room to it, counting the app's calls between the drop and the return.
+ * app kill, through the launch's ordinary `join`. `RoomConformanceSuite`'s return rows check that a
+ * room comes back by itself, through its own reconnect, inside a bounded wait.
  */
 public suspend fun returnIsAutomaticSample(
     loom: Loom,

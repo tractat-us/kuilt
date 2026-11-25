@@ -362,13 +362,17 @@ public abstract class RoomConformanceSuite {
     // ── (0) The friction bar: a device that comes back (#3159, Task 1.9) ─────
     //
     // Each row is one line of the host's key → seat table, reached through the device's own return:
-    // the room's reconnect after a torn link, or the one `join` a relaunched process makes. Each asserts
-    // the app made no other room or factory call between the drop and the return, through [AppCalls],
-    // and that the rig reached the state the row is about before reading the outcome.
+    // the room's reconnect after a torn link, or the one `join` a relaunched process makes, which is
+    // the only app call a row allows (plan Amendment H). What proves the return was the room's own is
+    // a bounded wait for it and, where a link healed, [ReturnDevice.heals]; [AppCalls] only stops the
+    // row itself from growing a call in the span. Each row also asserts the rig reached the state it is
+    // about before reading the outcome.
     //
     // Table row "new id, same key, seat held partitioned" has no tear-and-heal row: a seam healed in
     // place keeps its peer id (`Room.selfId` is the seam's, fixed for the room's life), so a device
-    // reaches the host under a new id only as a new room — [processRebuiltWithFreshIdRestores].
+    // reaches the host under a new id only as a new room — [processRebuiltWithFreshIdRestores]
+    // (Amendment H). "New id, same key, every seat connected" needs a second live process, which
+    // [ReturnDevice] has no hook for (#3656); `:kuilt-session` pins it meanwhile.
 
     /**
      * A device whose link tears and heals comes back to the seat the host held for it: the same id,

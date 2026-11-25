@@ -41,11 +41,11 @@ abstract interface us.tractat.kuilt.conformance/ReturnDevice { // us.tractat.kui
     abstract val heals // us.tractat.kuilt.conformance/ReturnDevice.heals|{}heals[0]
         abstract fun <get-heals>(): kotlin/Int // us.tractat.kuilt.conformance/ReturnDevice.heals.<get-heals>|<get-heals>(){}[0]
 
-    abstract fun restore() // us.tractat.kuilt.conformance/ReturnDevice.restore|restore(){}[0]
     abstract suspend fun drop() // us.tractat.kuilt.conformance/ReturnDevice.drop|drop(){}[0]
     abstract suspend fun impostor(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnDevice.impostor|impostor(){}[0]
     abstract suspend fun kill(kotlin/Boolean = ...) // us.tractat.kuilt.conformance/ReturnDevice.kill|kill(kotlin.Boolean){}[0]
     abstract suspend fun launch(kotlin/Boolean = ...): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnDevice.launch|launch(kotlin.Boolean){}[0]
+    abstract suspend fun restore() // us.tractat.kuilt.conformance/ReturnDevice.restore|restore(){}[0]
 }
 
 sealed interface us.tractat.kuilt.conformance/CancelledCallerFixture { // us.tractat.kuilt.conformance/CancelledCallerFixture|null[0]
@@ -1189,6 +1189,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     }
 
     // Targets: [apple]
+    final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat() // us.tractat.kuilt.conformance/RoomConformanceSuite.aDifferentKeyOnAPartitionedIdReleasesTheSeat|aDifferentKeyOnAPartitionedIdReleasesTheSeat(){}[0]
+
+    // Targets: [apple]
     final fun broadcastDeliversRoomFrameTaggedWithSender() // us.tractat.kuilt.conformance/RoomConformanceSuite.broadcastDeliversRoomFrameTaggedWithSender|broadcastDeliversRoomFrameTaggedWithSender(){}[0]
 
     // Targets: [apple]
@@ -1298,6 +1301,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
 
     // Targets: [apple]
     final fun theTeardownFaultReallyFires() // us.tractat.kuilt.conformance/RoomConformanceSuite.theTeardownFaultReallyFires|theTeardownFaultReallyFires(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aDifferentKeyOnAPartitionedIdReleasesTheSeat|aDifferentKeyOnAPartitionedIdReleasesTheSeat(){}[0]
 
     // Targets: [wasmJs]
     final fun broadcastDeliversRoomFrameTaggedWithSender(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.broadcastDeliversRoomFrameTaggedWithSender|broadcastDeliversRoomFrameTaggedWithSender(){}[0]

@@ -45,12 +45,12 @@ public suspend fun callerSuppliedRoomIdSample(
 
 | Away for… | What happens | What the host and the other members see |
 |---|---|---|
-| less than the host holds the seat (`HeartbeatConfig.reconnectWindow`, 60 s by default) | the same membership comes back, whether the link healed or the app was killed and reopened | `Resumed` under the same peer id; under a new one, `Left(old, LeaveReason.Superseded(by = new))` then `Joined(new)` |
+| less than the host holds the seat (`HeartbeatConfig.reconnectWindow`, 60 s by default, counted from when the host noticed the drop) | the same membership comes back, whether the link healed or the app was killed and reopened | under the same peer id, `Resumed` if the host had noticed the drop, otherwise nothing at all; under a new id while the old seat is partitioned, `Left(old, LeaveReason.Superseded(by = new))` then `Joined(new)`; while the old seat is still connected, a second seat, the old one leaving later |
 | longer | admitted afresh, and the room stays in session | `Left(old, PartitionExpired)` earlier, then `Joined` |
 
-The app makes no call between the drop and the return; the return rows of `RoomConformanceSuite`
-hold every room to that, counting the calls. After an app kill, the launch's ordinary `join` over
-the same store is the whole of it:
+The app makes no call between the drop and the return. The return rows of `RoomConformanceSuite`
+check that every room comes back by itself, through its own reconnect, inside a bounded wait. After
+an app kill, the launch's ordinary `join` over the same store is the whole of it:
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#returnIsAutomaticSample -->
 ```kotlin

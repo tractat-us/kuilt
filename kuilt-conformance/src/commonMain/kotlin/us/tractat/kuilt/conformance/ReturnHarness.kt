@@ -85,7 +85,7 @@ public class ReturnHarness(
  *
  * **What the rows prove with it, and what they cannot.** Every hook here acts on the fabric, never on
  * a room: none takes a [Room] or calls one. So a return the rows observe was driven by the room's own
- * reconnect, or by the one `join` a relaunched process makes, and the rows count both through the
+ * reconnect, or by the one `join` a relaunched process makes; the rows count their own calls on the
  * handles they hold. They cannot see a hook that keeps a room of its own and drives the return through
  * it — a harness written to cheat. [heals] is the counterweight: it counts the re-weaves the device's
  * rooms made themselves, so a row can assert its drop was answered by the room's own reconnect.
@@ -177,9 +177,11 @@ internal class EventTape(room: Room, scope: CoroutineScope) {
 }
 
 /**
- * Every call the rows make on a device's [RoomFactory] and on the [Room]s it returns — the friction
- * bar's counter (#3159): a device that comes back must cost its app no call between the drop and the
- * return.
+ * Every call the rows make on a device's [RoomFactory] and on the [Room]s it returns (#3159).
+ *
+ * This catches only the row's own code: a call a later edit adds between a drop and a return. It is
+ * not what proves a device came back by itself. That is the bounded wait for the return and the rig's
+ * [ReturnDevice.heals], which a return driven by the app would not move.
  *
  * Reads are not calls: [Room.roster], [Room.events] and the other flows observe a room without asking
  * it to do anything. Every method that does something is counted, including the ones that cannot
