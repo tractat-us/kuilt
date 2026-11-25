@@ -8,8 +8,8 @@
 # Why a script and not a `check`-wired task: the property is "KGP's check FAILS on this input", and a
 # Gradle task cannot run another task and observe its failure. Only a second invocation can. This is
 # the stamp-invariance shape (.github/scripts/stamp-invariance.sh): after the build, mutate an input,
-# re-run the real tasks in the warm daemon, judge the outcome. ci.yml runs it in build-jvm, last, so
-# it never sits between stamp invariance's two passes. A docs-only PR skips it, and cannot change the
+# re-run the real tasks in the warm daemon, judge the outcome. ci.yml runs it as build-jvm's last
+# Gradle step, so it never sits between stamp invariance's two passes. A docs-only PR skips it, and cannot change the
 # convention plugin or the KGP pin either.
 #
 # The subject is a REAL module through the REAL convention plugin, never a hand-configured KGP: a
@@ -19,7 +19,7 @@
 # has no `jvmMain` of its own, so the fixture can own that source set outright. The fixture is
 # planted in `jvmMain` on purpose: only the JVM compile reruns, never the Apple or wasm klibs.
 #
-# Three arms, in order, each asserting its rig fired:
+# Four arms, in order, each asserting its rig fired:
 #   1. baseline  — plant two public functions, `updateKotlinAbi`; the JVM dump must gain exactly
 #                  their block and the Android and klib dumps must not change.
 #   2. green     — `checkKotlinAbi` must EXECUTE (not SKIPPED, not UP-TO-DATE) and pass.
@@ -27,18 +27,28 @@
 #                  fail, on that task alone, against the committed dump, with a diff whose changed
 #                  lines are exactly those three changes. Any other line in the diff is a red for some
 #                  other reason and fails the control.
+#   4. wiring    — arms 1-3 prove `checkKotlinAbi` reds; this one proves the gate RUNS it. It reads
+#                  the `./gradlew build …` command out of build-jvm in ci.yml (so the two cannot drift
+#                  apart), dry-runs it with the same tasks and `-x` exclusions, and requires
+#                  `:kuilt-math:checkKotlinAbi` in the plan. The build reaches the check only through
+#                  KGP's `check` dependency, so an `-x checkKotlinAbi` there, or a KGP that stops
+#                  wiring `check`, would leave arms 1-3 green with the gate off.
 # The 2026-10-11 ruling named "removing a public member or changing its return type"; arm 3 does
 # both, plus the addition, in one run.
 #
 # Receipts, taken on macOS against KGP 2.4.21 by editing kuilt.kmp-library and running this script:
 #   - unmutated: OK, all three arms.
-#   - `abiValidation()` deleted: still OK, and correctly so. KGP also activates validation on any
-#     READ of `kotlin.abiValidation` ("call abiValidation(), abiValidation { ... } or read
-#     abiValidation property", its own deprecation text), and the off-macOS skip reads it. Deleting
-#     the call alone does not turn the gate off.
-#   - that call AND the skip's read removed: arm 1 red, `updateKotlinAbi` not found.
+#   - the `abiValidation()` call (kuilt.kmp-library.gradle.kts:33) deleted: still OK, and correctly
+#     so. The plugin has two switches. KGP also activates validation on any READ of
+#     `kotlin.abiValidation` ("call abiValidation(), abiValidation { ... } or read abiValidation
+#     property", its own deprecation text), and the off-macOS skip reads it (`val abi =
+#     kotlin.abiValidation`, :265). Deleting the call alone does not turn the gate off.
+#   - both switches removed, the call and the read: arm 1 red, `updateKotlinAbi` not found.
 #   - `checkKotlinAbi` skipped for every module (an over-matching skip): arm 2 red, SKIPPED.
 #   - `checkKotlinAbi`'s actions replaced by a no-op (a checker that compares nothing): arm 3 red.
+#   - `-x checkKotlinAbi` added to build-jvm's build step in ci.yml: arms 1-3 OK, arm 4 red.
+#   - TERM sent while arm 3's Gradle ran: exit 130, the Gradle client killed and reaped, the
+#     fixture and all three dumps restored.
 #
 # Everything is restored on exit, by copy from a backup rather than `git checkout`. The module's JVM
 # classes are left compiled from the fixture; the next build recompiles them.
@@ -96,6 +106,18 @@ restore() {
   rm -rf "$backup"
 }
 trap restore EXIT
+# Gradle runs in the background and is waited on, so a signal reaches this script while Gradle runs.
+# On INT or TERM the client is killed and waited for BEFORE the EXIT trap restores, or an orphaned
+# `./gradlew` could rewrite a dump after the restore.
+gpid=""
+on_signal() {
+  if [ -n "$gpid" ]; then
+    kill "$gpid" 2>/dev/null || true
+    wait "$gpid" 2>/dev/null || true
+  fi
+  exit 130
+}
+trap on_signal INT TERM
 
 mkdir -p "$logs" "$(dirname "$plant_file")"
 
@@ -106,7 +128,10 @@ gradle() {
   local log="$1"
   shift
   local status=0
-  ./gradlew "$@" --console=plain --no-watch-fs --no-build-cache ${extra[@]+"${extra[@]}"} >"$log" 2>&1 || status=$?
+  ./gradlew "$@" --console=plain --no-watch-fs --no-build-cache ${extra[@]+"${extra[@]}"} >"$log" 2>&1 &
+  gpid=$!
+  wait "$gpid" || status=$?
+  gpid=""
   return "$status"
 }
 extra=("$@")
@@ -179,5 +204,31 @@ actual_red="$(grep -E "^ *[-+]${tab}" "$red" | sed -E "s/^ *([-+])${tab}/${tab}\
   fail "arm 3: the reported diff is not exactly the fixture's three changes. Changed lines reported:
 ${actual_red:-<none>}" "$red"
 echo "abi-gate-control: arm 3 ok — ${check_task} failed naming the changed return type, the removal and the addition"
+
+# ── Arm 4: the gate runs the check ────────────────────────────────────────────────────────────────
+# Read build-jvm's build command out of ci.yml rather than copying it, so an edit to its task list or
+# its `-x` exclusions reaches this arm. Exactly one build-jvm step may run `./gradlew build`.
+ci_tokens="$logs/4-ci-command.txt"
+ruby -ryaml -rshellwords -e '
+  steps = YAML.load_file(".github/workflows/ci.yml").fetch("jobs").fetch("build-jvm").fetch("steps")
+  runs = steps.map { |s| s["run"].to_s.strip }.select { |r| r =~ /\A\.\/gradlew\s+build\b/ }
+  abort "abi-gate-control: expected one build-jvm step running ./gradlew build, found #{runs.size}" unless runs.size == 1
+  puts Shellwords.split(runs.first)
+' >"$ci_tokens" || fail "arm 4: could not read build-jvm's ./gradlew build command from .github/workflows/ci.yml."
+# Its tasks and flags, minus the daemon -D arguments and --max-workers, which this script's own
+# arguments supply so the warm daemon is reused.
+build_args=()
+while IFS= read -r token; do
+  case "$token" in
+    ./gradlew | -D* | --max-workers*) ;;
+    *) build_args+=("$token") ;;
+  esac
+done <"$ci_tokens"
+[ "${#build_args[@]}" -gt 0 ] || fail "arm 4: build-jvm's build command has no tasks."
+gradle "$logs/4-wiring.log" "${build_args[@]}" --dry-run ||
+  fail "arm 4: a dry run of build-jvm's build (${build_args[*]}) failed." "$logs/4-wiring.log"
+grep -qx "${check_task} SKIPPED" "$logs/4-wiring.log" ||
+  fail "arm 4: build-jvm's build (${build_args[*]}) does not run ${check_task}, so the PR gate checks no ABI." "$logs/4-wiring.log"
+echo "abi-gate-control: arm 4 ok — build-jvm's build (${build_args[*]}) runs ${check_task}"
 
 echo "abi-gate-control: OK in $(($(date +%s) - start))s; restoring ${module}"

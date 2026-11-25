@@ -399,10 +399,12 @@ jobs:
         # The build above ran checkKotlinAbi green on every module. This proves that green is a
         # verdict: it plants a JVM-only fixture in :kuilt-math, records it, then changes a return
         # type, removes a function and adds one, and requires checkKotlinAbi to fail naming exactly
-        # those three. It recompiles :kuilt-math's JVM sources and nothing else. LAST, because it
-        # leaves :kuilt-math compiled from the fixture, which would read as a re-run in the stamp
-        # invariance pass. Same daemon arguments, so the warm daemon is reused. Receipts and
-        # rationale are in the script's header.
+        # those three. It also dry-runs the build step above, read from this file, and requires
+        # :kuilt-math:checkKotlinAbi in its plan, so an `-x` there cannot switch the gate off
+        # unseen. It recompiles :kuilt-math's JVM sources and nothing else. The last Gradle step,
+        # because it leaves :kuilt-math compiled from the fixture, which would read as a re-run in
+        # the stamp invariance pass. Same daemon arguments, so the warm daemon is reused. Receipts
+        # and rationale are in the script's header.
         run: >-
           .github/scripts/abi-gate-control.sh --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
@@ -427,6 +429,7 @@ jobs:
             **/build/test-results/
             build/reports/kover/
             build/jstack-dumps/
+            build/abi-gate-control/
 
   # ── build-native ─────────────────────────────────────────────────────────
   # The wasm half of the build: the wasm test *executions*. Each task pulls in its
