@@ -209,6 +209,24 @@ class AdmitMessageTest {
     }
 
     /**
+     * v9 (#3222): a Welcome marking a device returning on its pass names the id it last held, and
+     * round-trips it; a Welcome that marks nothing writes no such field.
+     */
+    @Test
+    fun `a returning Welcome round-trips the id it names`() = runTest {
+        val plain = AdmitMessage.Welcome("peer-2", "Bob", "s-2", DidKey.parse(KEY_A))
+        val returning = plain.copy(returnKind = ReturnKind.Returning, previousPeerId = "peer-1")
+        assertAll(
+            { assertEquals(returning, AdmitMessage.decode(AdmitMessage.encode(returning))) },
+            { assertNotEquals(returning, returning.copy(previousPeerId = "peer-3")) },
+            { assertNotEquals(returning.hashCode(), returning.copy(previousPeerId = null).hashCode()) },
+            // Positive control for the absence below: the key IS visible when written.
+            { assertTrue("previousPeerId" in AdmitMessage.encode(returning).decodeToString()) },
+            { assertFalse("previousPeerId" in AdmitMessage.encode(plain).decodeToString(), "an unmarked Welcome wrote a previous id") },
+        )
+    }
+
+    /**
      * v8 (Decided 25, #3276): a Reject states whether its code is retryable, so an app's own code,
      * which the joiner does not know, keeps its meaning. A code the joiner knows keeps its own.
      */
