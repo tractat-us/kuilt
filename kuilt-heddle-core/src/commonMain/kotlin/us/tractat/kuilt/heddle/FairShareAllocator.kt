@@ -455,6 +455,33 @@ public class FairShareAllocator(
     }
 
     /**
+     * Where the step a pick arriving at [parent] takes ([settle]) leaves each of [parent]'s active
+     * children in [ledger], read on this allocator: its effective position, wake clamp included, in
+     * ticks on its own grid. The read [ShareLine] takes at every competing parent of a tree, on one
+     * fork: the step at a parent reads and writes only that parent's children and its own clock, so
+     * taking it at each parent in turn places each one exactly as a pick arriving there would.
+     *
+     * [Placement.Refused] when the children's weights fail [weightsFitTheBudget], so no pick there
+     * can be computed, or the step would pass the [POSITION_LIMIT]; this allocator then observes
+     * nothing at [parent], as such a pick would not.
+     */
+    internal fun place(parent: GroupId, ledger: EntitlementLedger, waiting: (AttachmentId) -> Demand): Placement {
+        if (!childWeightsFit(ledger, parent)) return Placement.Refused
+        val cell = ValueCell(ledger)
+        if (settleJoiners(parent, cell, waiting) == Landing.PastLimit) return Placement.Refused
+        return Placement.Placed(policyEdges(cell.current, parent, waiting).associate { it.record.id to HeddlePolicy.effectiveTicksWide(it) })
+    }
+
+    /** What [place] found at a parent: each active child's position after the step, or that no step could be taken. */
+    internal sealed interface Placement {
+        /** The step landed: each active child's effective position, by its edge, in ticks on its own grid. */
+        class Placed(val positions: Map<AttachmentId, Int128>) : Placement
+
+        /** The weights fail the budget, or the step would pass the [POSITION_LIMIT]. */
+        data object Refused : Placement
+    }
+
+    /**
      * Seat every unseated active child of [parent] in [ledger], at the joiners' front ([joinFront])
      * with the unseated as the joiners, **without** observing anything: the wake memory is left
      * exactly as it was. For a delegation that is not a pick, which must still never cross an
@@ -976,13 +1003,6 @@ public class FairShareAllocator(
         val past = if (extra > 0L) k - extra else -extra
         val remainder = if (past == 0L) null else ShiftRemainder(Int128.of(past), d)
         return Shift(maxOf(Int128.ZERO, ticks), remainder)
-    }
-
-    /** `(a · n) mod k`, in `[0, k)`, without forming `a · n`. */
-    private fun productMod(a: Int128, n: Long, k: Long): Long {
-        val am = (a % k).let { if (it < 0L) it + k else it }
-        val product = checkNotNull(mulDiv(Int128.of(am), n % k, 1L, Rounding.FLOOR)) { "two residues under $k multiply inside 128 bits" }
-        return product % k
     }
 
     /** [value], or an [ArithmeticException] naming the clock read when it overflowed 128 bits. */

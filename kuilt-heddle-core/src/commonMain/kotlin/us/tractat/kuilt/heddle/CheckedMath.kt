@@ -1,7 +1,9 @@
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.Rounding
 import us.tractat.kuilt.math.WideSum
+import us.tractat.kuilt.math.mulDiv
 import us.tractat.kuilt.math.minusOrNull
 import us.tractat.kuilt.math.negateOrNull
 import us.tractat.kuilt.math.plusOrNull
@@ -32,6 +34,13 @@ internal fun checkedNegate(a: Long): Long = a.negateOrNull() ?: throw Arithmetic
 
 /** Multiply [a] and [b], throwing [ArithmeticException] on `Long` overflow. */
 internal fun checkedMul(a: Long, b: Long): Long = a.timesOrNull(b) ?: throw ArithmeticException("Long overflow: $a * $b")
+
+/** `(a · n) mod k` for positive [n] and [k], in `[0, k)`, without forming `a · n`. */
+internal fun productMod(a: Int128, n: Long, k: Long): Long {
+    val am = (a % k).let { if (it < 0L) it + k else it }
+    val product = checkNotNull(mulDiv(Int128.of(am), n % k, 1L, Rounding.FLOOR)) { "two residues under $k multiply inside 128 bits" }
+    return product % k
+}
 
 /** This value as a `Long`, or [ArithmeticException] when it does not fit (design §10.12). */
 internal fun Int128.toLongExact(): Long =
