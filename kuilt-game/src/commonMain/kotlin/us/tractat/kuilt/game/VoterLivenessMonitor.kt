@@ -24,11 +24,22 @@ import kotlin.time.Instant
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.game.VoterLivenessMonitor")
 
-/**
- * A request to evict [voter], made while [detector] was the detector registered for it, or null
- * when none was (#3672). The eviction loop acts on it only while that is still so.
- */
-internal class EvictionRequest(val voter: NodeId, val detector: Job?)
+/** A request to the eviction loop to free [voter]'s seat. */
+internal sealed interface EvictionRequest {
+    val voter: NodeId
+
+    /**
+     * [detector] lost [voter]. A detector's report about the seat it was watching: it counts only
+     * while [detector] is still the one registered for [voter] (#3672).
+     */
+    class Lost(override val voter: NodeId, val detector: Job) : EvictionRequest
+
+    /**
+     * [voter] said it is leaving. Its own statement rather than a detector's report, so no detector
+     * is checked: it counts while [voter] is still a voter.
+     */
+    class Vacated(override val voter: NodeId) : EvictionRequest
+}
 
 /**
  * Watches over the live voter set for a hosted game and keeps it whole.
@@ -54,13 +65,13 @@ internal class EvictionRequest(val voter: NodeId, val detector: Job?)
  * Non-leader nodes receive [PartitionEvent.PeerLost] but take no action — Raft's commit-majority
  * gate means only the leader can commit the membership change.
  *
- * Every request names the detector that was watching the voter when it was made, and the eviction
- * loop acts on it only while that detector is still the voter's (#3672). A voter evicted while the
- * host still fills seats ([ReturnPolicy.Quorum]) can be admitted again and get a new detector, and a
- * request about his earlier seat can still be on its way: a second one queued beside the first (a
- * loss and a vacate), or one from a detector's collector that lost its thread before sending it.
+ * A loss names the detector that reported it, and the eviction loop acts on it only while that
+ * detector is still the voter's (#3672). A voter evicted while the host still fills seats
+ * ([ReturnPolicy.Quorum]) can be admitted again and get a new detector, and a loss about his earlier
+ * seat can still be on its way, from a detector's collector that lost its thread before sending it.
  * Acted on, it would evict a voter whose link is healthy, and the eviction loop's exclusion list
- * keeps him out of the seat for good.
+ * keeps him out of the seat for good. A vacate is the voter's own word, not a detector's, so it is
+ * checked only against the voter set.
  *
  * All coroutines launch on the injected [scope]; cancelling it tears them all down (the #1001-class
  * leak guard).
@@ -126,13 +137,13 @@ internal class VoterLivenessMonitor(
     internal fun detectorJobForTest(voter: NodeId): Job? = lock.withLock { detectorJobs[voter] }
 
     /**
-     * **Test-visibility.** Ask for [voter]'s eviction as the detector whose job is [detector] would.
-     * A test passes the job of a detector a rejoin has since replaced, to stand in for a request
-     * about the voter's earlier seat that reaches the eviction loop late (#3672). No production
-     * caller uses it.
+     * **Test-visibility.** Hand [request] to the eviction loop. A test passes a [EvictionRequest.Lost]
+     * naming a detector a rejoin has since replaced, to stand in for a loss about the voter's earlier
+     * seat that reaches the eviction loop late (#3672), or a [EvictionRequest.Vacated] the watcher
+     * would send. No production caller uses it.
      */
-    internal fun requestEvictionForTest(voter: NodeId, detector: Job) {
-        evictions.trySend(EvictionRequest(voter, detector))
+    internal fun requestEvictionForTest(request: EvictionRequest) {
+        evictions.trySend(request)
     }
 
     /**
@@ -166,8 +177,7 @@ internal class VoterLivenessMonitor(
      *
      * Polls [GamePresence.vacaters] on every Quilter state change (announced flow). When a new
      * vacater is seen that is a current voter, stops its detector and asks for its eviction, to
-     * bypass the reconnect window. The request names that detector, which stays registered until
-     * the eviction loop has checked the request against it.
+     * bypass the reconnect window. The detector stays registered until the eviction loop acts.
      */
     private suspend fun watchVacaters() {
         val seenVacaters = mutableSetOf<NodeId>()
@@ -178,9 +188,8 @@ internal class VoterLivenessMonitor(
             newVacaters.forEach { vacaterId ->
                 seenVacaters += vacaterId
                 // Stop pinging a voter that is leaving voluntarily.
-                val detector = lock.withLock { detectorJobs[vacaterId] }
-                detector?.cancel()
-                evictions.trySend(EvictionRequest(vacaterId, detector))
+                lock.withLock { detectorJobs[vacaterId] }?.cancel()
+                evictions.trySend(EvictionRequest.Vacated(vacaterId))
             }
         }
     }
@@ -193,9 +202,10 @@ internal class VoterLivenessMonitor(
      * If leadership has transferred by the time eviction fires, the new leader's own loop handles
      * the eviction — or the evicted peer's seat remains open until another PeerLost fires.
      *
-     * A request counts only while the detector it names is still the voter's, checked in the
+     * A loss counts only while the detector that reported it is still the voter's, checked in the
      * section that unregisters it (#3672). This loop is the only one that unregisters a detector or
-     * evicts a voter, so nothing can replace the detector between that check and the eviction.
+     * evicts a voter, so nothing can replace the detector between that check and the eviction. A
+     * vacate needs only the voter-set check.
      */
     private suspend fun evictAndReopenAdmission() {
         // Peers that have been evicted from the voter set — excluded from re-admission so a gracefully
@@ -209,16 +219,22 @@ internal class VoterLivenessMonitor(
             // Skip if already evicted (e.g. duplicate signal from detector + vacate).
             if (lostId !in membership.voters.value) continue
 
-            // Skip a request about an earlier seat: its detector has been unregistered since.
+            // Skip a loss about an earlier seat: the detector that reported it has been unregistered.
+            var stopped: Job? = null
             val current = lock.withLock {
-                (detectorJobs[lostId] === request.detector).also { if (it) detectorJobs.remove(lostId) }
+                val current = when (request) {
+                    is EvictionRequest.Lost -> detectorJobs[lostId] === request.detector
+                    is EvictionRequest.Vacated -> true
+                }
+                if (current) stopped = detectorJobs.remove(lostId)
+                current
             }
             if (!current) {
-                logger.debug { "eviction.stale-detector voter=${lostId.value}: the detector that asked no longer watches it" }
+                logger.debug { "eviction.stale-detector voter=${lostId.value}: the detector that lost it no longer watches it" }
                 continue
             }
             // Cancel the detector (if still running — vacate path cancels it first).
-            request.detector?.cancel()
+            stopped?.cancel()
 
             // Remove the dead voter and commit the shrunken config.
             evictedVoterIds += lostId
@@ -251,8 +267,8 @@ internal class VoterLivenessMonitor(
 /**
  * Launches a [HeartbeatPartitionDetector] for [voterId] and returns its [Job].
  *
- * On [PartitionEvent.PeerLost], asks [evictions] to evict [voterId], naming the returned [Job] as
- * the detector that asked, and stops.
+ * On [PartitionEvent.PeerLost], sends [evictions] an [EvictionRequest.Lost] naming the returned
+ * [Job] as the detector that lost [voterId], and stops.
  * [PartitionEvent.PeerUnresponsive] and [PartitionEvent.PeerRecovered] are no-ops at this layer
  * (Raft's own replication tracks liveness; the eviction gate is [PeerLost] only).
  *
@@ -281,7 +297,7 @@ internal fun CoroutineScope.launchDetectorFor(
         detector.start(this)
         detector.events.collect { event ->
             if (event is PartitionEvent.PeerLost) {
-                evictions.trySend(EvictionRequest(voterId, self))
+                evictions.trySend(EvictionRequest.Lost(voterId, self))
             }
         }
     }
