@@ -6,6 +6,9 @@ import us.tractat.kuilt.core.Pattern
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.RevocationList
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 
 /**
  * Structural contract test for [SeamRoomFactory.systemClock]: verifies that the factory
@@ -22,7 +25,7 @@ class SeamRoomFactorySystemClockTest {
     fun `systemClock factory produces a Host room`() = runBlocking {
         val loom = InMemoryLoom()
         val factory = SeamRoomFactory.systemClock(loom = loom, scope = this, deviceKeyStore = InMemoryDeviceKeyStore())
-        val room = factory.host(Pattern("SystemClockTest"))
+        val room = factory.host(Pattern("SystemClockTest"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         assertEquals(SessionRole.Host, room.role.value)
         room.leave()
     }

@@ -15,10 +15,13 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -77,7 +80,7 @@ class TwoPeerEagerPushTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0)).host(Pattern("agree"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0)).host(Pattern("agree"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1)).join(InMemoryTag("agree"))
             testScheduler.runCurrent()
 

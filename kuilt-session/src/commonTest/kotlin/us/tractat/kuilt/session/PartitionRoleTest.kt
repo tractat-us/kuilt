@@ -11,7 +11,10 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.FaultySeam
@@ -66,7 +69,7 @@ class PartitionRoleTest {
     @Test
     fun `host factory method assigns Host role`() = runTest {
         val factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock, fakeKeyStore(0), fastConfig)
-        val room = factory.host(Pattern("Alice"))
+        val room = factory.host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         assertEquals(SessionRole.Host, room.role.value)
         room.leave()
     }
@@ -77,7 +80,7 @@ class PartitionRoleTest {
     @Test
     fun `join factory method assigns Joiner role`() = runTest {
         val loom = InMemoryLoom()
-        SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), fastConfig).host(Pattern("Alice"))
+        SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), fastConfig).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val joinerRoom = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), fastConfig).join(InMemoryTag("Bob"))
         assertEquals(SessionRole.Joiner, joinerRoom.role.value)
         joinerRoom.leave()
@@ -109,6 +112,7 @@ class PartitionRoleTest {
             clock = clock,
             device = RoomDevice.of(fakeKeyStore(0)),
             heartbeatConfig = fastConfig,
+            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
         ).also { it.start() }
 
         // Joiner side: wrap the joiner's seam in FaultySeam so we can partition it.
@@ -174,6 +178,7 @@ class PartitionRoleTest {
             clock = clock,
             device = RoomDevice.of(fakeKeyStore(2)),
             heartbeatConfig = fastConfig,
+            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
         ).also { it.start() }
 
         val joinerRoom = SeamRoom(
@@ -240,6 +245,7 @@ class PartitionRoleTest {
             clock = clock,
             device = RoomDevice.of(fakeKeyStore(4)),
             heartbeatConfig = fastConfig,
+            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
         ).also { it.start() }
 
         val joinerRoom = SeamRoom(
@@ -318,6 +324,7 @@ class PartitionRoleTest {
             clock = clock,
             device = RoomDevice.of(fakeKeyStore(6)),
             heartbeatConfig = fastConfig,
+            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
         ).also { it.start() }
 
         SeamRoom(

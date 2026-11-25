@@ -28,9 +28,12 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
@@ -256,7 +259,7 @@ internal suspend fun TestScope.relayStar(
 
     val hostWire = WireTapSeam(fabric.serverLoom.host(Pattern(ROOM)), backgroundScope)
     val hostRoom = SeamRoomFactory(fabric.serverLoom, hostRoomScope, clock, fakeKeyStore(0), relayHeartbeat)
-        .adopt(hostWire, SessionRole.Host)
+        .adopt(hostWire, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())))
     val host = observe(hostRoom, hostWire)
 
     val joiners = mutableListOf<StarMember>()
@@ -266,7 +269,7 @@ internal suspend fun TestScope.relayStar(
         // it — mirroring LivenessRouteGateTest.star().
         val wire = WireTapSeam(loom.join(InMemoryTag(ROOM)), backgroundScope)
         val room = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index + 1), relayHeartbeat)
-            .adopt(wire, SessionRole.Joiner)
+            .adopt(wire, AdoptRole.Joiner)
         joiners += observe(room, wire)
         // Await THIS spoke's admission before starting the next, so admission order is loop order.
         hostRoom.roster.first { it.size == index + 1 }
@@ -374,12 +377,12 @@ internal suspend fun TestScope.meshTrio(): MeshTrio {
     // One factory per device, each with its own key store, so the three rooms are three devices.
     fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), relayHeartbeat)
 
-    val hostRoom = device(2).host(Pattern(ROOM))
+    val hostRoom = device(2).host(Pattern(ROOM), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
     val originRoom = device(3).join(InMemoryTag("origin"))
     hostRoom.roster.first { it.size == 1 }
 
     val subjectWire = WireTapSeam(loom.join(InMemoryTag("subject")), backgroundScope)
-    val subjectRoom = device(4).adopt(subjectWire, SessionRole.Joiner)
+    val subjectRoom = device(4).adopt(subjectWire, AdoptRole.Joiner)
     val subject = observe(subjectRoom, subjectWire)
 
     hostRoom.roster.first { it.size == 2 }

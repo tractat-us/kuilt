@@ -37,10 +37,13 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.admit.ReturnKind
 import us.tractat.kuilt.session.partition.JoinerOutcome
@@ -1313,6 +1316,7 @@ class ProvenRestoreConcurrencyTest {
             device = device,
             heartbeatConfig = config,
             reconnectControllerFactory = { _, scope, _ -> controller.also { it.scope = scope } },
+            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
         )
 
         suspend fun start(stage: StageTracker) {

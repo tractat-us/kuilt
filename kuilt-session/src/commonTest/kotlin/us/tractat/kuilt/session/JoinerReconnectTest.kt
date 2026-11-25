@@ -14,7 +14,10 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FlakyLifecycleLoom
 import us.tractat.kuilt.test.FlakyLifecycleSeam
 import us.tractat.kuilt.core.InMemoryLoom
@@ -102,6 +105,7 @@ class JoinerReconnectTest {
                 device = RoomDevice.of(fakeKeyStore(0)),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             ).also { it.start() }
 
             val clientId = PeerId("client")
@@ -180,6 +184,7 @@ class JoinerReconnectTest {
                 device = RoomDevice.of(fakeKeyStore(2)),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             ).also { it.start() }
 
             val clientId = PeerId("client")
@@ -261,6 +266,7 @@ class JoinerReconnectTest {
                 device = RoomDevice.of(fakeKeyStore(4)),
                 heartbeatConfig = hostConfig,
                 roomId = RoomId("room-1"),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             ).also { it.start() }
 
             val clientId = PeerId("client")
@@ -596,6 +602,7 @@ class JoinerReconnectTest {
                 device = RoomDevice.of(fakeKeyStore(8)),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             ).also { it.start() }
 
             // The joiner's live seam — torn to trigger the reconnect.
@@ -676,6 +683,7 @@ class JoinerReconnectTest {
             device = RoomDevice.of(fakeKeyStore(10)),
             heartbeatConfig = fastConfig,
             roomId = RoomId("room-1"),
+            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
         ).also { it.start() }
 
         val clientId = PeerId("client")

@@ -112,13 +112,17 @@ public suspend fun perSessionIdSample(room: Room) {
  *
  * Supplying an id does **not** make a host restart resumable: a restarted host has no roster and no
  * reconnect-window registry, so a device that comes back to it is admitted as a new member.
+ *
+ * Every host entry point takes the [HostAdmission] that decides who gets in;
+ * `HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())` lets everyone in.
  */
 public suspend fun callerSuppliedRoomIdSample(
     factory: RoomFactory,
     pattern: Pattern,
     lobbyCode: String,
+    admission: HostAdmission,
 ): RoomId {
-    val room = factory.host(pattern, roomId = RoomId(lobbyCode))
+    val room = factory.host(pattern, roomId = RoomId(lobbyCode), admission = admission)
     // Read back off the room, not off the variable you passed in: the room is the thing joiners
     // agree with, and on a joiner this same property is how you learn the value at all.
     return room.roomId.value ?: error("a host room knows its id at construction")
@@ -308,16 +312,17 @@ public suspend fun localFabricBannerSample(room: Room) {
  *
  * [ElectionLobby.awaitRoom] does not only return a [Room]. The peer that was hosting can leave the
  * roster, at which point this peer becomes the elected host — nothing has collapsed, and the
- * recovery is [ElectionLobby.start] on the **same** lobby, not a re-election.
+ * recovery is [ElectionLobby.start] on the **same** lobby, not a re-election. [admission] is what the
+ * room decides newcomers with if this peer ends up hosting.
  */
-public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room? =
+public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby, admission: HostAdmission): Room? =
     when (val outcome = lobby.awaitRoom(memberName = "Player 2")) {
         is ElectionOutcome.Adopted -> outcome.room
         // The hosting peer left and this peer is now the elected host, with the co-members still
         // parked in their own awaitRoom on the SAME seam — so they ack this freeze round at once.
         // Re-running electLobby(...) would start a SECOND lobby beside this one, which strands them on
         // most looms; calling leave() first would close the shared seam and collapse them.
-        ElectionOutcome.BecameHost -> lobby.start(memberName = "Player 2")
+        ElectionOutcome.BecameHost -> lobby.start(memberName = "Player 2", admission = admission)
         // A genuine mid-2PC collapse: the co-electors are gone. Retryable — leave this lobby, then
         // re-run electLobby(...). A lobby left open stays on the mesh and can hold a host's start().
         is ElectionOutcome.Torn -> {

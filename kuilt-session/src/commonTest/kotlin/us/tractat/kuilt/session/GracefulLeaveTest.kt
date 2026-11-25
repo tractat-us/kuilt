@@ -13,8 +13,11 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
@@ -59,6 +62,7 @@ class GracefulLeaveTest {
                 device = RoomDevice.of(fakeKeyStore(0)),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             ).also { it.start() }
 
             val (serverConn, clientConn) = connectionPair()

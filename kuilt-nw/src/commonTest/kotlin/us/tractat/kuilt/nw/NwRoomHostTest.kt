@@ -11,18 +11,21 @@ import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.Room
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 
 class NwRoomHostTest {
 
     @Test
     fun `start hands a Room to onRoom and suspends until cancelled`() = runTest {
         val loom = InMemoryLoom()
-        val host = NwRoomHost(loom, Pattern("test-room"), fakeKeyStore(0))
+        val host = NwRoomHost(loom, Pattern("test-room"), fakeKeyStore(0), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val received = CompletableDeferred<Room>()
 
         coroutineScope {
@@ -38,7 +41,7 @@ class NwRoomHostTest {
 
     @Test
     fun `start a second time on the same host throws`() = runTest {
-        val host = NwRoomHost(InMemoryLoom(), Pattern("dup"), fakeKeyStore(1))
+        val host = NwRoomHost(InMemoryLoom(), Pattern("dup"), fakeKeyStore(1), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
         coroutineScope {
             val firstStarted = CompletableDeferred<Unit>()

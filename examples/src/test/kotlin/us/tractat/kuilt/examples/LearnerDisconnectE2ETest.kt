@@ -19,9 +19,12 @@ import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorRoomHost
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
@@ -76,7 +79,7 @@ class LearnerDisconnectE2ETest {
      * on `main` before #3127 the learner is never removed, however long the wait.
      */
     private fun disconnectTest(goAway: suspend (CoroutineScope, ClusterClient) -> Unit) = testApplication {
-        val host = KtorRoomHost(application, path, serverPeerId, roomPattern, InMemoryDeviceKeyStore())
+        val host = KtorRoomHost(application, path, serverPeerId, roomPattern, InMemoryDeviceKeyStore(), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         coroutineScope {
             val serverScope = CoroutineScope(coroutineContext + Job())
             val cluster = serverScope.serverCluster(

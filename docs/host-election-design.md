@@ -58,9 +58,10 @@ blocking hazards (seam-close-kills-the-mesh, admit-rehandshake churn, double `in
 // The missing primitive: adopt an ALREADY-WOVEN Seam into a Room with an explicit role.
 // No re-weave. The Room owns the seam's lifetime from here (leave() closes it — correct, because
 // the seam is handed over exactly once). Makes SeamRoom construction publicly reachable.
+// The role carries what only a host needs: AdoptRole.Host(admission, roomId) or AdoptRole.Joiner.
 public suspend fun SeamRoomFactory.adopt(
     seam: Seam,
-    role: SessionRole,
+    role: AdoptRole,
     memberName: String? = null,
     roomKey: String? = null,
 ): Room
@@ -80,9 +81,10 @@ public interface ElectionLobby {
 
     /**
      * HOST-ONLY. Close the lobby and begin the session: run the freeze/ack round, then adopt.
-     * Throws [NotElectedHostException] if this peer is not currently `host`.
+     * Throws [NotElectedHostException] if this peer is not currently `host`. [admission] decides who
+     * the adopted room lets in; only the host's call takes one, so a member never supplies a policy.
      */
-    public suspend fun start(memberName: String? = null, deviceId: String? = null): Room
+    public suspend fun start(memberName: String? = null, deviceId: String? = null, admission: HostAdmission): Room
 
     /**
      * Await the session. On a MEMBER: suspend until the host's freeze arrives, ack it, adopt.

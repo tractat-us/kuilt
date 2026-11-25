@@ -38,14 +38,20 @@ public annotation class AdmissionTestApi
  * No proof is checked: the request carries [key] as if the joiner had signed for it. Take a real key
  * from `DeviceKey.generate().id`, or `DidKey.parse` a fixed one.
  *
+ * The fields arrive as the room's own request carries them: [displayName] is what the joiner's `join`
+ * was given as its member name, or its peer id when it was given none, and an empty [deviceId] is
+ * none, as `AdmissionRequest` reads it. So there is no default name: the room never sends an empty
+ * one for a joiner that gave none.
+ *
  * @param key The device key the newcomer proved, as the policy will see it.
- * @param displayName The name the newcomer asked to be shown under. Unverified in production too.
+ * @param displayName The name the newcomer asked to be shown under: its member name, or its peer id.
+ *   Unverified in production too.
  * @param deviceId The app's own device id, or `null` when the joiner sent none.
  * @sample us.tractat.kuilt.session.test.admissionPolicyTestSample
  */
 @AdmissionTestApi
 public fun admissionRequest(
     key: DidKey,
-    displayName: String = "",
+    displayName: String,
     deviceId: String? = null,
 ): AdmissionRequest = AdmissionRequest(key, displayName, deviceId)

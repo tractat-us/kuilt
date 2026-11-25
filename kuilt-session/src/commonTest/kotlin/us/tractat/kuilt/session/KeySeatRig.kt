@@ -21,11 +21,14 @@ import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectController
@@ -333,12 +336,13 @@ internal class RawHost(
     }
 }
 
-/** A [RawHost] for [joiners], on device [HOST_DEVICE], with an observed controller. */
+/** A [RawHost] for [joiners], on device [HOST_DEVICE], with an observed controller, deciding newcomers with [admission]. */
 internal suspend fun TestScope.rawHost(
     joiners: Set<PeerId>,
     hold: ObservedHold = ObservedHold(),
     store: DeviceKeyStore = fakeKeyStore(HOST_DEVICE),
     clock: () -> Instant = virtualClock(),
+    admission: HostAdmission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
 ): RawHost {
     val seam = FakeSeam(selfId = KEY_SEAT_HOST, initialPeers = setOf(KEY_SEAT_HOST) + joiners)
     val room = SeamRoomFactory(
@@ -349,7 +353,7 @@ internal suspend fun TestScope.rawHost(
         heartbeatConfig = KEY_SEAT_HEARTBEAT,
         admitTimeout = KEY_SEAT_ADMIT_TIMEOUT,
         reconnectControllerFactory = hold.factory,
-    ).adopt(seam, SessionRole.Host, memberName = "Host", roomId = KEY_SEAT_ROOM)
+    ).adopt(seam, AdoptRole.Host(admission, roomId = KEY_SEAT_ROOM), memberName = "Host")
     val events = EventLog(room, backgroundScope)
     testScheduler.runCurrent()
     return RawHost(this, seam, room, hold, events, fakeDidKey(HOST_DEVICE))
@@ -467,6 +471,7 @@ internal suspend fun TestScope.boardRoom(
     seam: Seam = board.plug(id),
     reweave: (suspend () -> Seam)? = null,
     name: String = id.value,
+    admission: HostAdmission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
 ): Room = SeamRoomFactory(
     loom = InMemoryLoom(),
     scope = scope,
@@ -477,8 +482,7 @@ internal suspend fun TestScope.boardRoom(
     reconnectControllerFactory = hold?.factory,
 ).adopt(
     seam,
-    role,
+    if (role == SessionRole.Host) AdoptRole.Host(admission, roomId = KEY_SEAT_ROOM) else AdoptRole.Joiner,
     memberName = name,
-    roomId = if (role == SessionRole.Host) KEY_SEAT_ROOM else null,
     reweave = reweave,
 )

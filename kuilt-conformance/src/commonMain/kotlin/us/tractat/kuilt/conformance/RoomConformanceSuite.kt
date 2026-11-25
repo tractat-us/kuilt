@@ -29,6 +29,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
@@ -55,6 +56,8 @@ import us.tractat.kuilt.session.RoomFrame
 import us.tractat.kuilt.session.RoomFramePrefix
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
@@ -383,7 +386,8 @@ public abstract class RoomConformanceSuite {
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = returnHarnessOrDeclaredGap("a healed link restores the held seat under the same id")
                 ?: return@runTest
-            val host = h.hostFactory.host(h.hostPattern)
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
             val device = h.newDevice()
             val app = AppCalls()
             val joiner = app.factory(device.launch()).join(h.joinTag)
@@ -396,6 +400,7 @@ public abstract class RoomConformanceSuite {
                 val joinerTape = EventTape(joiner, backgroundScope)
                 val callsAtDrop = app.snapshot()
                 val healsAtDrop = device.heals
+                val vettedAtDrop = vetting.keys()
 
                 device.drop()
                 host.awaitRoster("the host holds the dropped device's seat Partitioned") { roster ->
@@ -416,6 +421,8 @@ public abstract class RoomConformanceSuite {
                     { assertEquals(listOf("join"), callsAtDrop, "rig: the call counter saw the launch's join") },
                     { assertEquals(callsAtDrop, callsAtReturn, "the app made no room or factory call between drop and return") },
                     { assertTrue(device.heals > healsAtDrop, "rig: the device's own reconnect healed its seam (heals ${device.heals}, was $healsAtDrop)") },
+                    { assertEquals(listOf(key), vettedAtDrop, "rig: the policy vetted the device once, when it first joined") },
+                    { assertEquals(vettedAtDrop, vetting.keys(), "a restore never asks the admission policy") },
                     { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(me)), hostEdges, "the host restores the seat: one Resumed, no Left or Joined") },
                     { assertEquals(listOf(me), back.map { it.id }, "one seat, the same one") },
                     { assertEquals(key, back.single().key, "under the key it was admitted with") },
@@ -443,7 +450,8 @@ public abstract class RoomConformanceSuite {
     public fun resumeWithinWindowFiresResumed(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = returnHarnessOrDeclaredGap("Resumed fires once per partition") ?: return@runTest
-            val host = h.hostFactory.host(h.hostPattern)
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
             val device = h.newDevice()
             val app = AppCalls()
             val joiner = app.factory(device.launch()).join(h.joinTag)
@@ -456,6 +464,7 @@ public abstract class RoomConformanceSuite {
                 val hostTape = EventTape(host, backgroundScope)
                 val joinerTape = EventTape(joiner, backgroundScope)
                 val callsAtFirstDrop = app.snapshot()
+                val vettedAtFirstDrop = vetting.keys()
                 val counts = mutableListOf<Pair<Int, Int>>()
                 repeat(2) { episode ->
                     device.drop()
@@ -505,6 +514,8 @@ public abstract class RoomConformanceSuite {
                     { assertEquals(key, back.single().key, "under the device's key") },
                     { assertEquals(callsAtFirstDrop + "join", app.snapshot(), "the relaunch's join is the app's only call") },
                     { assertTrue(hostTape.edges().none { it is MembershipEvent.Joined || it is MembershipEvent.Left }, "no departure and no new member: ${hostTape.edges()}") },
+                    { assertEquals(listOf(key), vettedAtFirstDrop, "rig: the policy vetted the device once, when it first joined") },
+                    { assertEquals(vettedAtFirstDrop, vetting.keys(), "no restore asked the admission policy: two healed links and a relaunch") },
                 )
             } finally {
                 live.leave()
@@ -527,7 +538,8 @@ public abstract class RoomConformanceSuite {
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = returnHarnessOrDeclaredGap("a different key on a connected member's id is refused")
                 ?: return@runTest
-            val host = h.hostFactory.host(h.hostPattern)
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
             val victimDevice = h.newDevice()
             val app = AppCalls()
             val victim = app.factory(victimDevice.launch()).join(h.joinTag)
@@ -540,6 +552,7 @@ public abstract class RoomConformanceSuite {
                 val hostTape = EventTape(host, backgroundScope)
                 val victimTape = EventTape(victim, backgroundScope)
                 val callsBefore = app.snapshot()
+                val vettedBefore = vetting.keys()
 
                 val arrived = victimDevice.impostor().join(h.joinTag).also { impostor = it }
                 val impostorTape = EventTape(arrived, backgroundScope)
@@ -554,6 +567,8 @@ public abstract class RoomConformanceSuite {
                     { assertEquals(key, seatAtRefusal?.key, "the seat keeps the member's key") },
                     { assertEquals(emptyList(), edgesAtRefusal, "the host neither drops the member nor admits the impostor") },
                     { assertTrue(impostorTape.events().none { it is MembershipEvent.Joined }, "the impostor never entered a roster") },
+                    { assertEquals(listOf(key), vettedBefore, "rig: the policy vetted the member once, when it first joined") },
+                    { assertEquals(vettedBefore, vetting.keys(), "a key conflict is refused before the admission policy is asked") },
                 )
 
                 val healsBeforeReturn = victimDevice.heals
@@ -599,7 +614,8 @@ public abstract class RoomConformanceSuite {
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = returnHarnessOrDeclaredGap("a different key on a partitioned member's id releases the seat")
                 ?: return@runTest
-            val host = h.hostFactory.host(h.hostPattern)
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
             val device = h.newDevice()
             val app = AppCalls()
             val first = app.factory(device.launch()).join(h.joinTag)
@@ -617,6 +633,7 @@ public abstract class RoomConformanceSuite {
                 }
                 val partitionedAt = testScheduler.currentTime
                 val callsAtKill = app.snapshot()
+                val vettedAtKill = vetting.keys()
                 val second = app.factory(device.impostor()).join(h.joinTag).also { cleared = it }
                 val after = host.awaitRoster("the id is seated again, under a new key") { roster ->
                     roster.any { it.id == me && it.key != oldKey && it.liveness == Liveness.Connected }
@@ -645,6 +662,11 @@ public abstract class RoomConformanceSuite {
                     { assertTrue(after.none { it.key == oldKey }, "the old key holds no seat: ${after.map { it.id to it.key }}") },
                     { assertTrue(hostTape.events().none { it is MembershipEvent.Resumed }, "a new key is never a restore") },
                     { assertTrue(seen.isNotEmpty(), "the newcomer is admitted, not refused") },
+                    { assertEquals(listOf(oldKey), vettedAtKill, "rig: the policy vetted the old key once, when it first joined") },
+                    {
+                        val newKey = after.single { it.id == me }.key
+                        assertEquals(vettedAtKill + newKey, vetting.keys(), "the newcomer is an ordinary admission: the policy is asked once, about its new key")
+                    },
                 )
             } finally {
                 cleared?.leave()
@@ -662,7 +684,8 @@ public abstract class RoomConformanceSuite {
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = returnHarnessOrDeclaredGap("a rebuilt process with the same id restores the held seat")
                 ?: return@runTest
-            val host = h.hostFactory.host(h.hostPattern)
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
             val device = h.newDevice()
             val app = AppCalls()
             val first = app.factory(device.launch()).join(h.joinTag)
@@ -674,6 +697,7 @@ public abstract class RoomConformanceSuite {
                 val key = admitted.single { it.id == me }.key
                 val hostTape = EventTape(host, backgroundScope)
                 val callsAtKill = app.snapshot()
+                val vettedAtKill = vetting.keys()
 
                 device.kill()
                 host.awaitRoster("the host holds the dead process's seat Partitioned") { roster ->
@@ -690,6 +714,8 @@ public abstract class RoomConformanceSuite {
                 assertAll(
                     { assertEquals(me, second.selfId, "rig: the rebuilt process presents the same id") },
                     { assertEquals(callsAtKill + "join", callsAtReturn, "the relaunch's join is the app's only call") },
+                    { assertEquals(listOf(key), vettedAtKill, "rig: the policy vetted the device once, when it first joined") },
+                    { assertEquals(vettedAtKill, vetting.keys(), "a restore never asks the admission policy") },
                     { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(me)), hostTape.edges(), "one Resumed, no Left or Joined") },
                     { assertEquals(listOf(me), back.map { it.id }, "one seat, the same one") },
                     { assertEquals(key, back.single().key, "under the device's key") },
@@ -713,7 +739,8 @@ public abstract class RoomConformanceSuite {
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = returnHarnessOrDeclaredGap("a rebuilt process with a fresh id inherits the held seat")
                 ?: return@runTest
-            val host = h.hostFactory.host(h.hostPattern)
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
             val device = h.newDevice()
             val bystander = h.newDevice().launch().join(h.joinTag)
             val app = AppCalls()
@@ -729,6 +756,7 @@ public abstract class RoomConformanceSuite {
                 val hostTape = EventTape(host, backgroundScope)
                 val bystanderTape = EventTape(bystander, backgroundScope)
                 val callsAtKill = app.snapshot()
+                val vettedAtKill = vetting.keys()
 
                 device.kill()
                 host.awaitRoster("the host holds the dead process's seat Partitioned") { roster ->
@@ -752,6 +780,8 @@ public abstract class RoomConformanceSuite {
                     { assertEquals(expected, bystanderTape.edges().map { it.edge() }, "a member present for it hears the same pair") },
                     { assertEquals(listOf(key), after.filter { it.id == fresh || it.id == old }.map { it.key }, "the key holds one seat") },
                     { assertTrue(hostTape.edges().none { it is MembershipEvent.Left && it.reason == LeaveReason.PartitionExpired }, "the seat was inherited, not let go") },
+                    { assertTrue(key in vettedAtKill, "rig: the policy vetted the device when it first joined: $vettedAtKill") },
+                    { assertEquals(vettedAtKill, vetting.keys(), "a takeover under a new id is a restore: the admission policy is not asked") },
                 )
             } finally {
                 rebuilt?.leave()
@@ -775,7 +805,8 @@ public abstract class RoomConformanceSuite {
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = returnHarnessOrDeclaredGap("a second live process on one key gets an additional seat")
                 ?: return@runTest
-            val host = h.hostFactory.host(h.hostPattern)
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
             val device = h.newDevice()
             val app = AppCalls()
             val first = app.factory(device.launch()).join(h.joinTag)
@@ -787,6 +818,7 @@ public abstract class RoomConformanceSuite {
                 val key = admitted.single { it.id == one }.key
                 val hostTape = EventTape(host, backgroundScope)
                 val firstTape = EventTape(first, backgroundScope)
+                val vettedBeforeTab = vetting.keys()
 
                 val tab = app.factory(device.launchBeside()).join(h.joinTag).also { second = it }
                 val two = tab.selfId
@@ -808,6 +840,8 @@ public abstract class RoomConformanceSuite {
                     { assertTrue(firstTape.events().none { it is MembershipEvent.Left || it is MembershipEvent.HostLost }, "the first process was never displaced: ${firstTape.events()}") },
                     { assertTrue(tabTape.events().none { it is MembershipEvent.Left || it is MembershipEvent.HostLost }, "nor the second: ${tabTape.events()}") },
                     { assertEquals(listOf("join", "join"), callsWhileBoth, "each process's own join is the app's only call") },
+                    { assertEquals(listOf(key), vettedBeforeTab, "rig: the policy vetted the first process when it joined") },
+                    { assertEquals(listOf(key, key), vetting.keys(), "an additional seat is a new membership: the admission policy is asked once more") },
                 )
 
                 device.kill()
@@ -859,15 +893,17 @@ public abstract class RoomConformanceSuite {
      * the first is connected, gets an additional seat. A member present for both hears two `Joined`s,
      * and still lists the host under its own id and key.
      *
-     * What the first tab's admission is *called* is open for slice 2 (plan Amendment I: rules 6–7, or
-     * an additional seat), so the row asserts the seat and not which admission path made it.
+     * Each tab is a new membership, so the host's admission policy is asked once about each (#3220).
+     * The first tab is decided by rules 6–7 (plan Amendment J): with no grant yet, an ordinary
+     * admission. The second is an additional seat, which the policy vets too (Amendment C).
      */
     @Test
     public fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = returnHarnessOrDeclaredGap("a joiner presenting the host's own key gets a joiner seat")
                 ?: return@runTest
-            val host = h.hostFactory.host(h.hostPattern)
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
             val bystander = h.newDevice().launch().join(h.joinTag)
             val app = AppCalls()
             var firstTab: Room? = null
@@ -880,6 +916,7 @@ public abstract class RoomConformanceSuite {
                 val bystanderKey = host.roster.value.single { it.id == bystander.selfId }.key
                 val hostTape = EventTape(host, backgroundScope)
                 val bystanderTape = EventTape(bystander, backgroundScope)
+                val vettedBeforeTabs = vetting.keys()
 
                 val tab1 = app.factory(h.hostTab()).join(h.joinTag).also { firstTab = it }
                 val tab1Tape = EventTape(tab1, backgroundScope)
@@ -888,7 +925,10 @@ public abstract class RoomConformanceSuite {
                 advanceTimeBy(h.hostHeartbeat.timeout + h.hostHeartbeat.reconnectWindow)
                 runCurrent()
                 val firstSeat = host.roster.value.singleOrNull { it.id == tab1.selfId }
+                val vettedAfterFirstTab = vetting.keys()
                 assertAll(
+                    { assertEquals(listOf(bystanderKey), vettedBeforeTabs, "rig: the policy vetted the bystander when it joined") },
+                    { assertEquals(listOf(bystanderKey, hostKey), vettedAfterFirstTab, "the first tab is an ordinary admission: the policy is asked about the host's key once") },
                     { assertTrue(tab1Tape.events().none { it is MembershipEvent.AdmissionFailed }, "the host's first tab is not refused: ${tab1Tape.events()}") },
                     { assertEquals(Liveness.Connected, firstSeat?.liveness, "the host's first tab holds a connected joiner seat: ${host.roster.value}") },
                     { assertTrue(firstSeat == null || firstSeat.key == hostKey, "rig: the first tab proved the host's own key: ${firstSeat?.key}") },
@@ -918,6 +958,7 @@ public abstract class RoomConformanceSuite {
                     { assertTrue(bystander.roster.value.map { it.id }.containsAll(tabs), "the bystander lists both tabs: ${bystander.roster.value.map { it.id }}") },
                     { assertTrue(tab2.roster.value.any { it.id == tab1.selfId }, "the second tab lists the first") },
                     { assertEquals(listOf("join", "join"), app.snapshot(), "each tab's own join is the app's only call") },
+                    { assertEquals(vettedAfterFirstTab + hostKey, vetting.keys(), "the second tab is an additional seat: the policy is asked once more") },
                 )
             } finally {
                 secondTab?.leave()
@@ -937,18 +978,20 @@ public abstract class RoomConformanceSuite {
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = returnHarnessOrDeclaredGap("a return after the seat went is readmitted") ?: return@runTest
             h.requireReadmissionReachable()
-            val host = h.hostFactory.host(h.hostPattern)
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
             val device = h.newDevice()
             val app = AppCalls()
             val joiner = app.factory(device.launch()).join(h.joinTag)
             try {
                 val me = joiner.selfId
-                host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == me } }
+                val key = host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == me } }.single { it.id == me }.key
                 joiner.awaitRoster("the device sees the host") { it.isNotEmpty() }
                 val hostTape = EventTape(host, backgroundScope)
                 val joinerTape = EventTape(joiner, backgroundScope)
                 val callsAtDrop = app.snapshot()
                 val healsAtDrop = device.heals
+                val vettedAtDrop = vetting.keys()
 
                 device.drop()
                 host.awaitRoster("the host lets the dropped device's seat go") { roster -> roster.none { it.id == me } }
@@ -969,6 +1012,8 @@ public abstract class RoomConformanceSuite {
                     { assertEquals(listOf<MembershipEvent>(MembershipEvent.Readmitted(me)), joinerEvents.filterIsInstance<MembershipEvent.Readmitted>(), "one Readmitted, naming this room") },
                     { assertTrue(joinerEvents.none { it is MembershipEvent.Recovered }, "a readmission is never Recovered(host): $joinerEvents") },
                     { assertTrue(joinerEvents.none { it is MembershipEvent.Resumed || it is MembershipEvent.HostLost }, "neither restored nor ended: $joinerEvents") },
+                    { assertEquals(listOf(key), vettedAtDrop, "rig: the policy vetted the device once, when it first joined") },
+                    { assertEquals(listOf(key, key), vetting.keys(), "with its seat gone and no grant, the device is a newcomer again: the policy is asked once more") },
                     {
                         assertEquals(
                             listOf("Left(${me.value}, ${LeaveReason.PartitionExpired})", "Joined(${me.value})"),
@@ -1002,7 +1047,8 @@ public abstract class RoomConformanceSuite {
             val h = returnHarnessOrDeclaredGap("a readmitted joiner drops a peer who left during the outage")
                 ?: return@runTest
             h.requireReadmissionReachable()
-            val host = h.hostFactory.host(h.hostPattern)
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
             val hostTape = EventTape(host, backgroundScope)
             val stayer = h.newDevice().launch().join(h.joinTag)
             val leaver = h.newDevice().launch().join(h.joinTag)
@@ -1083,7 +1129,8 @@ public abstract class RoomConformanceSuite {
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = returnHarnessOrDeclaredGap("an away joiner hears a supersede through its roster rebuild")
                 ?: return@runTest
-            val host = h.hostFactory.host(h.hostPattern)
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
             val rebuiltDevice = h.newDevice()
             val firstProcess = rebuiltDevice.launch().join(h.joinTag)
             val awayDevice = h.newDevice()
@@ -1176,7 +1223,7 @@ public abstract class RoomConformanceSuite {
     public fun hostFactoryAssignsHostRole(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val room = h.hostFactory.host(Pattern("Alice"))
+            val room = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             assertEquals(SessionRole.Host, room.role.value, "host() must produce SessionRole.Host")
             assertTrue(room.selfId.value.isNotBlank(), "selfId must be non-blank")
             room.leave()
@@ -1188,7 +1235,7 @@ public abstract class RoomConformanceSuite {
     public fun joinFactoryAssignsJoinerRole(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            h.hostFactory.host(Pattern("Alice"))
+            h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joiner = h.joinerFactory.join(InMemoryTag("Bob"))
             assertEquals(SessionRole.Joiner, joiner.role.value, "join() must produce SessionRole.Joiner")
             joiner.leave()
@@ -1208,12 +1255,12 @@ public abstract class RoomConformanceSuite {
     public fun hostRoomKnowsItsRoomIdAtConstruction(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val first = h.hostFactory.host(Pattern("Alice"))
+            val first = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val firstId = first.roomId.value
             assertTrue(firstId != null, "a host room must know its RoomId at construction")
             first.leave()
 
-            val second = h.hostFactory.host(Pattern("Alice"))
+            val second = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             assertTrue(
                 second.roomId.value != firstId,
                 "a RoomId must name one room, not the host: two rooms shared $firstId",
@@ -1234,7 +1281,7 @@ public abstract class RoomConformanceSuite {
     public fun joinerLearnsHostRoomIdOnAdmission(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val host = h.hostFactory.host(Pattern("Alice"))
+            val host = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joiner = h.joinerFactory.join(InMemoryTag("Alice"))
             val beforeAdmission = joiner.roomId.value
 
@@ -1264,7 +1311,7 @@ public abstract class RoomConformanceSuite {
     public fun membersAppearUnderTheirOwnMemberName(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val host = h.hostFactory.host(Pattern("Alice's game"), memberName = "Alice")
+            val host = h.hostFactory.host(Pattern("Alice's game"), memberName = "Alice", admission = openAdmission())
             val joiner = h.joinerFactory.join(InMemoryTag("Alice's game"), memberName = "Bob")
 
             val hostRoster = host.awaitRoster("roster.size == 1 — Bob is admitted") { it.size == 1 }
@@ -1289,7 +1336,7 @@ public abstract class RoomConformanceSuite {
     public fun rosterIsEmptyBeforeAnyHandshake(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             assertEquals(
                 emptySet<Member>(),
                 hostRoom.roster.value,
@@ -1304,7 +1351,7 @@ public abstract class RoomConformanceSuite {
     public fun broadcastDeliversRoomFrameTaggedWithSender(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
 
             hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
@@ -1339,7 +1386,7 @@ public abstract class RoomConformanceSuite {
     public fun incomingFromHoldsFramesAMemberSentBeforeCollection(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
 
             val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
@@ -1378,7 +1425,7 @@ public abstract class RoomConformanceSuite {
     public fun incomingFromHoldsEachMembersFramesApart(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val first = h.joinerFactory.join(InMemoryTag("Bob"), memberName = "Bob")
             val firstId = hostRoom.awaitRoster("roster.size == 1 — the first joiner is admitted") { it.size == 1 }.single().id
             val second = h.joinerFactory.join(InMemoryTag("Bob"), memberName = "Carol")
@@ -1415,7 +1462,7 @@ public abstract class RoomConformanceSuite {
     public fun incomingFromHoldsAFullInboxUnclaimed(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
@@ -1436,7 +1483,7 @@ public abstract class RoomConformanceSuite {
     public fun incomingFromClaimedAfterAnUnclaimedOverflowFailsNamingTheLoss(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
@@ -1476,7 +1523,7 @@ public abstract class RoomConformanceSuite {
     public fun incomingFromClaimedOverflowDeliversTheHeldFramesThenFails(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
@@ -1503,7 +1550,7 @@ public abstract class RoomConformanceSuite {
     public fun incomingFromCompletesWhenTheMemberLeaves(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
@@ -1550,7 +1597,7 @@ public abstract class RoomConformanceSuite {
     public fun incomingFromForAPeerWithNoAdmissionCompletes(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
 
             val got = mutableListOf<RoomFrame>()
             val failure = hostRoom.awaitEnd(hostRoom.incomingFrom(PeerId("never-admitted")), got, "a peer that was never admitted")
@@ -1568,7 +1615,7 @@ public abstract class RoomConformanceSuite {
     public fun incomingFromRefusesAConcurrentCollectorAndResumesASequentialOne(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
@@ -1622,7 +1669,7 @@ public abstract class RoomConformanceSuite {
     public fun incomingFromCollectionCancelledAsAFrameArrivesLeavesItForTheNext(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
@@ -1660,7 +1707,7 @@ public abstract class RoomConformanceSuite {
     public fun incomingFromCompletesWhenTheRoomItselfLeaves(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
@@ -1719,7 +1766,7 @@ public abstract class RoomConformanceSuite {
     public fun incomingFromCollectionCancelledBetweenTakeAndHandOverLosesNothing(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
@@ -1767,7 +1814,7 @@ public abstract class RoomConformanceSuite {
     public fun leaveEmptiesAHostsRosterBeforeItCompletesAMembersReader(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
@@ -1782,7 +1829,7 @@ public abstract class RoomConformanceSuite {
     public fun leaveEmptiesAJoinersRosterBeforeItCompletesTheHostsReader(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
             val hostId = joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }.single().id
@@ -1800,7 +1847,7 @@ public abstract class RoomConformanceSuite {
             val faultyLoom = h.faults.injectorOrDeclaredGap("HostLost empties the roster before completing the host's reader")
                 ?: return@runTest
 
-            h.hostFactory.host(Pattern("Alice"))
+            h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             val hostId = joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }.single().id
 
@@ -1849,7 +1896,7 @@ public abstract class RoomConformanceSuite {
     public fun channelStateTornAfterLeave(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
@@ -1912,7 +1959,7 @@ public abstract class RoomConformanceSuite {
     public fun leaveNormalFiresLeftEventAndShrinksRoster(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
 
             hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
@@ -1936,7 +1983,7 @@ public abstract class RoomConformanceSuite {
     public fun rejoinAfterLeaveWorks(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
 
             val firstJoiner = h.joinerFactory.join(InMemoryTag("Bob"), memberName = "Bob")
             hostRoom.awaitRoster("roster.size == 1 — Bob's first join is admitted") { it.size == 1 }
@@ -1983,7 +2030,7 @@ public abstract class RoomConformanceSuite {
             val faultyLoom = h.faults.injectorOrDeclaredGap("Partitioned/Recovered fire on liveness transitions")
                 ?: return@runTest
 
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
 
@@ -2045,7 +2092,7 @@ public abstract class RoomConformanceSuite {
             val faultyLoom = h.faults.injectorOrDeclaredGap("HostLost is terminal and broadcast after it is a no-op")
                 ?: return@runTest
 
-            h.hostFactory.host(Pattern("Alice"))
+            h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
 
@@ -2069,7 +2116,7 @@ public abstract class RoomConformanceSuite {
     public fun memberThatLeftNoLongerReceivesFrames(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
 
             hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
@@ -2125,7 +2172,7 @@ public abstract class RoomConformanceSuite {
     public fun leaveIsIdempotent(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Alice"))
 
             hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
@@ -2159,7 +2206,7 @@ public abstract class RoomConformanceSuite {
     public fun leaveDoesNotReportFailureAsCancellation(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val joinerRoom = h.joinerFactory.join(InMemoryTag("Alice"))
 
             hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
@@ -2234,7 +2281,7 @@ public abstract class RoomConformanceSuite {
             // One room, purely so the fabric is joinable; the two links measured below are woven
             // straight off the injector and no Room owns either. See the KDoc — this is what makes
             // the exactly-once claims measurements of the fixture rather than of the reference.
-            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val hostRoom = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val failingSeam = faultyLoom.join(InMemoryTag("Alice"))
             val slowSeam = faultyLoom.join(InMemoryTag("Alice"))
 
@@ -2313,7 +2360,7 @@ public abstract class RoomConformanceSuite {
                 h.faults.injectorOrDeclaredGap("leave() stays idempotent when the transport's teardown fails")
                     ?: return@runTest
 
-            val room = h.hostFactory.host(Pattern("Alice"))
+            val room = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val seam = faultyLoom.requireLink()
             seam.setTeardownFault(TeardownFault.Fails(IllegalStateException(INJECTED_TEARDOWN_FAILURE)))
 
@@ -2368,7 +2415,7 @@ public abstract class RoomConformanceSuite {
                 h.faults.injectorOrDeclaredGap("leave() mints no cancellation when the transport's teardown suspends")
                     ?: return@runTest
 
-            val room = h.hostFactory.host(Pattern("Alice"))
+            val room = h.hostFactory.host(Pattern("Alice"), admission = openAdmission())
             val seam = faultyLoom.requireLink()
             seam.setTeardownFault(TeardownFault.Slow(SLOW_TEARDOWN))
 
@@ -2397,6 +2444,12 @@ public abstract class RoomConformanceSuite {
                 },
             )
         }
+
+    /**
+     * An admission that lets everyone in, for the rows that are not about who gets in: every host
+     * entry point needs one (#3220). A fresh one per call, so no row shares another's revocations.
+     */
+    private fun openAdmission(): HostAdmission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())
 
     // ── Declared gaps ─────────────────────────────────────────────────────────
 
@@ -2760,8 +2813,8 @@ public abstract class RoomConformanceSuite {
         )
         val nextJoinerDevice = atomic(1)
         val joinerFactory = object : RoomFactory {
-            override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
-                factory(nextJoinerDevice.getAndIncrement()).host(pattern, memberName, roomId)
+            override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?, admission: HostAdmission): Room =
+                factory(nextJoinerDevice.getAndIncrement()).host(pattern, memberName, roomId, admission)
 
             override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room =
                 factory(nextJoinerDevice.getAndIncrement()).join(tag, memberName, deviceId)

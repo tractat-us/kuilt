@@ -10,9 +10,12 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -46,7 +49,7 @@ class HostAuthoritativeLeaveTest {
             // One factory per device: each room is its own device, with its own key.
             fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
 
-            val hostRoom = device(0).host(Pattern("Host"))
+            val hostRoom = device(0).host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joiner1Room = device(1).join(InMemoryTag("Joiner1"))
             val joiner2Room = device(2).join(InMemoryTag("Joiner2"))
 
@@ -94,10 +97,10 @@ class HostAuthoritativeLeaveTest {
             // One factory per device: each room is its own device, with its own key.
             fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
 
-            val hostRoom = device(0).host(Pattern("Host"))
+            val hostRoom = device(0).host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joiner1Room = device(1).join(InMemoryTag("Joiner1"))
             val joiner2Seam = loom.join(InMemoryTag("Joiner2"))
-            val joiner2Room = device(2).adopt(joiner2Seam, SessionRole.Joiner)
+            val joiner2Room = device(2).adopt(joiner2Seam, AdoptRole.Joiner)
 
             hostRoom.roster.first { it.size == 2 }
             joiner1Room.roster.first { it.size == 2 }

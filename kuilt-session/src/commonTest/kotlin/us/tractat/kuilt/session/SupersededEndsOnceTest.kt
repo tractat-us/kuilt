@@ -40,7 +40,7 @@ class SupersededEndsOnceTest {
             fakeKeyStore(1),
             heartbeatConfig = KEY_SEAT_HEARTBEAT,
             admitTimeout = KEY_SEAT_ADMIT_TIMEOUT,
-        ).adopt(seam, SessionRole.Joiner, memberName = "A") as SeamRoom
+        ).adopt(seam, AdoptRole.Joiner, memberName = "A") as SeamRoom
         val log = EventLog(room, backgroundScope)
         testScheduler.runCurrent()
         val hello = seam.broadcasts.mapNotNull { AdmitMessage.decode(it) as? AdmitMessage.Hello }.single()

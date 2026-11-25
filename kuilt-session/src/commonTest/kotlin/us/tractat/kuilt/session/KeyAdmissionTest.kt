@@ -26,12 +26,15 @@ import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.FakeKeyOperation
 import us.tractat.kuilt.identity.test.FakeKeyScheme
 import us.tractat.kuilt.identity.test.fakeDeviceKey
 import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.RoomId
@@ -75,7 +78,7 @@ class KeyAdmissionTest {
     ): Pair<FakeSeam, Room> {
         val seam = FakeSeam(selfId = hostId, initialPeers = setOf(hostId) + joiners)
         val room = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock(), store, admitTimeout = ADMIT_TIMEOUT)
-            .adopt(seam, SessionRole.Host, memberName = "Host", roomId = ROOM)
+            .adopt(seam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), roomId = ROOM), memberName = "Host")
         runCurrent()
         return seam to room
     }
@@ -123,8 +126,8 @@ class KeyAdmissionTest {
         val joinerStore = fakeKeyStore(1)
         val hostSeam = AdmitTap(loom.weave(Rendezvous.New(Pattern("room"))))
         val joinerSeam = AdmitTap(loom.weave(Rendezvous.Existing(InMemoryTag("room"))))
-        val host = SeamRoomFactory(loom, backgroundScope, clock(), hostStore).adopt(hostSeam, SessionRole.Host, memberName = "Host")
-        val joiner = SeamRoomFactory(loom, backgroundScope, clock(), joinerStore).adopt(joinerSeam, SessionRole.Joiner, memberName = "Bob")
+        val host = SeamRoomFactory(loom, backgroundScope, clock(), hostStore).adopt(hostSeam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())), memberName = "Host")
+        val joiner = SeamRoomFactory(loom, backgroundScope, clock(), joinerStore).adopt(joinerSeam, AdoptRole.Joiner, memberName = "Bob")
 
         val joinerOnHost = host.roster.first { it.size == 1 }.single()
         val hostOnJoiner = joiner.roster.first { it.isNotEmpty() }.single()
@@ -268,9 +271,9 @@ class KeyAdmissionTest {
             }
         }
 
-        val host = SeamRoomFactory(loom, backgroundScope, clock(), hostStore).adopt(hostSeam, SessionRole.Host, memberName = "Host")
+        val host = SeamRoomFactory(loom, backgroundScope, clock(), hostStore).adopt(hostSeam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())), memberName = "Host")
         val joiner = SeamRoomFactory(loom, backgroundScope, clock(), fakeKeyStore(1))
-            .adopt(joinerSeam, SessionRole.Joiner, memberName = "Bob")
+            .adopt(joinerSeam, AdoptRole.Joiner, memberName = "Bob")
 
         val hostOnJoiner = joiner.roster.first { it.isNotEmpty() }.single()
         host.roster.first { it.size == 1 }
@@ -449,7 +452,7 @@ class KeyAdmissionTest {
         val (hostSeam, host) = hostRoom(joiners = setOf(bob))
         val bobSeam = FakeSeam(selfId = bob, initialPeers = setOf(bob, mallory))
         val joiner = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock(), fakeKeyStore(1), admitTimeout = ADMIT_TIMEOUT)
-            .adopt(bobSeam, SessionRole.Joiner, memberName = "Bob")
+            .adopt(bobSeam, AdoptRole.Joiner, memberName = "Bob")
         runCurrent()
 
         val bobsHello = bobSeam.broadcasts.mapNotNull { AdmitMessage.decode(it) }.filterIsInstance<AdmitMessage.Hello>().single()
@@ -549,7 +552,7 @@ class KeyAdmissionTest {
     fun joinerPresentingTheHostsKeyIsAdmitted() = runTest {
         val loom = InMemoryLoom()
         val shared = fakeKeyStore(0)
-        val host = SeamRoomFactory(loom, backgroundScope, clock(), shared).host(Pattern("room"), memberName = "Host")
+        val host = SeamRoomFactory(loom, backgroundScope, clock(), shared).host(Pattern("room"), memberName = "Host", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val tab = SeamRoomFactory(loom, backgroundScope, clock(), shared).join(InMemoryTag("room"), memberName = "Tab")
 
         val tabOnHost = host.roster.first { it.size == 1 }.single()
@@ -571,7 +574,7 @@ class KeyAdmissionTest {
     ): Triple<FakeSeam, Room, AdmitMessage.Hello> {
         val seam = FakeSeam(selfId = bob, initialPeers = setOf(bob) + peers)
         val room = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock(), fakeKeyStore(1), admitTimeout = ADMIT_TIMEOUT)
-            .adopt(seam, SessionRole.Joiner, memberName = "Bob", deviceId = deviceId)
+            .adopt(seam, AdoptRole.Joiner, memberName = "Bob", deviceId = deviceId)
         runCurrent()
         val hello = seam.broadcasts.mapNotNull { AdmitMessage.decode(it) }.filterIsInstance<AdmitMessage.Hello>().single()
         return Triple(seam, room, hello)

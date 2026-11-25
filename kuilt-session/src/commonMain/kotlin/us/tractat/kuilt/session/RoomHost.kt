@@ -11,6 +11,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.HostAdmission
 import kotlin.time.Clock
 import kotlin.time.Instant
 
@@ -62,6 +63,7 @@ public interface RoomHost : AutoCloseable {
  * @param pattern the session [Pattern] (session name) to advertise.
  * @param deviceKeyStore this device's key store, handed to the [SeamRoomFactory] the host builds.
  *   Required: see [SeamRoomFactory] for why, and what to pass.
+ * @param admission decides who the hosted room lets in: see [RoomFactory.host].
  * @param clock time source for partition detection; defaults to wall-clock
  *   [kotlin.time.Clock.System]. Inject a virtual clock in tests.
  * @param heartbeatConfig partition-detection timing.
@@ -70,6 +72,7 @@ public class LoomRoomHost(
     private val loom: Loom,
     private val pattern: Pattern,
     private val deviceKeyStore: DeviceKeyStore,
+    private val admission: HostAdmission,
     private val clock: () -> Instant = { Clock.System.now() },
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
 ) : RoomHost {
@@ -89,7 +92,7 @@ public class LoomRoomHost(
                 deviceKeyStore = deviceKeyStore,
                 heartbeatConfig = heartbeatConfig,
             )
-            val room: Room = factory.host(pattern)
+            val room: Room = factory.host(pattern, admission = admission)
             try {
                 onRoom(room)
                 awaitCancellation()

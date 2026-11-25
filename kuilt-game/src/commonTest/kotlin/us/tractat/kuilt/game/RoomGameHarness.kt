@@ -10,11 +10,15 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.AdoptRole
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FaultyLoom
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
@@ -67,9 +71,9 @@ internal suspend fun adopt3PeerMeshRoom(
     val s3 = faulty.weave(Rendezvous.Existing(InMemoryTag("g")))
 
     val memberDeferred = listOf(s2, s3).mapIndexed { index, seam ->
-        scope.async { factory(device = index + 1).adopt(seam, SessionRole.Joiner, memberName = seam.selfId.value) }
+        scope.async { factory(device = index + 1).adopt(seam, AdoptRole.Joiner, memberName = seam.selfId.value) }
     }
-    val hostRoom = factory(device = 0).adopt(s1, SessionRole.Host, memberName = "Host")
+    val hostRoom = factory(device = 0).adopt(s1, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())), memberName = "Host")
     val members = memberDeferred.map { it.await() }
 
     // Host admitted both members → detectors are running for each.

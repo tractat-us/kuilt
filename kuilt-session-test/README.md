@@ -43,7 +43,7 @@ Each side's roster is seeded with the other as a `Liveness.Connected` member. `b
 
 ```kotlin
 val factory = FakeRoomFactory()
-val room = factory.host(Pattern("alice"))
+val room = factory.host(Pattern("alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 // room.selfId == PeerId("alice"), room.role.value == SessionRole.Host
 ```
 

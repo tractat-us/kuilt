@@ -11,7 +11,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
@@ -56,8 +59,8 @@ class RehostedRoomAdmissionTest {
                 deviceKeyStore = fakeKeyStore(0),
             )
 
-            hostFactory.host(Pattern("t")).leave()
-            val rehosted = hostFactory.host(Pattern("t"))
+            hostFactory.host(Pattern("t"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())).leave()
+            val rehosted = hostFactory.host(Pattern("t"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val joinerFactory =
                 SeamRoomFactory(

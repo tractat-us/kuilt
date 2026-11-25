@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.identity.Challenge
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeDeviceKey
 import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
@@ -21,6 +22,7 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.session.AdmissionFailure
 import us.tractat.kuilt.session.AdmitTap
+import us.tractat.kuilt.session.AdoptRole
 import us.tractat.kuilt.session.EventLog
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
@@ -31,7 +33,9 @@ import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoom
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.admit.ReturnKind
 import us.tractat.kuilt.session.describe
@@ -235,7 +239,7 @@ class ReHelloReconnectTest {
             deviceKeyStore = fakeKeyStore(1),
             heartbeatConfig = joinerConfig,
             admitTimeout = 1.seconds,
-        ).adopt(link, SessionRole.Joiner, memberName = "Bob", reweave = { link })
+        ).adopt(link, AdoptRole.Joiner, memberName = "Bob", reweave = { link })
         val s = Scripted(this, fake, link, joiner)
         testScheduler.runCurrent()
         assertEquals(1, s.broadcastHellos().size, "rig: the joiner said its first Hello")
@@ -961,9 +965,9 @@ class ReHelloReconnectTest {
         val host = SeamRoomFactory(
             base, backgroundScope, virtualClock(), fakeKeyStore(0),
             heartbeatConfig = hostConfig, reconnectControllerFactory = hold.factory,
-        ).adopt(hostTap, SessionRole.Host, memberName = "Host", roomId = roomId)
+        ).adopt(hostTap, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), roomId = roomId), memberName = "Host")
         val joiner = SeamRoomFactory(base, backgroundScope, virtualClock(), fakeKeyStore(1), heartbeatConfig = joinerConfig)
-            .adopt(link, SessionRole.Joiner, memberName = "Bob", reweave = { link })
+            .adopt(link, AdoptRole.Joiner, memberName = "Bob", reweave = { link })
         testScheduler.runCurrent()
         assertEquals(1, host.roster.value.size, "rig: the joiner was admitted")
         return RealPair(hostTap, host, joiner, path, link, hold)

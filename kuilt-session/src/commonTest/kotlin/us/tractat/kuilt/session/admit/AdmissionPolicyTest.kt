@@ -17,6 +17,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.microseconds
@@ -51,6 +52,37 @@ class AdmissionPolicyTest {
         assertAll(
             { assertEquals(roomDefault, forA) },
             { assertEquals(roomDefault, forB) },
+        )
+    }
+
+    /**
+     * The proof signs a missing device id as `""`, so a joiner sending `""` and one sending nothing
+     * cannot be told apart. The request settles it in its own constructor (#3220): `""` is none,
+     * whoever builds the request, so a policy branching on `deviceId == null` sees one value.
+     */
+    @Test
+    fun anEmptyDeviceIdIsNone() = keysTest { a, _ ->
+        assertAll(
+            { assertNull(AdmissionRequest(a, "Ada", deviceId = "").deviceId) },
+            { assertNull(AdmissionRequest(a, "Ada", deviceId = null).deviceId) },
+            { assertEquals("phone-1", AdmissionRequest(a, "Ada", deviceId = "phone-1").deviceId) },
+        )
+    }
+
+    /**
+     * `"superseded"` is the room's alone: it rides with the successor that took the seat (Decided
+     * 32), so a policy refusing with it would make the room build a `Reject` it cannot send. The
+     * decision refuses it by id, an app's own `Unknown("superseded")` included.
+     */
+    @Test
+    fun aPolicyCannotRefuseAsSuperseded() {
+        val refused = assertFailsWith<IllegalArgumentException> { AdmissionDecision.Reject(RejectCode.Unknown("superseded")) }
+        assertAll(
+            { assertTrue(refused.message.orEmpty().contains("superseded"), "names the code: ${refused.message}") },
+            { assertFailsWith<IllegalArgumentException> { AdmissionDecision.Reject(RejectCode.Superseded) } },
+            // The control: every other code still builds.
+            { assertEquals(RejectCode.Unknown("blocked"), AdmissionDecision.Reject(RejectCode.Unknown("blocked")).code) },
+            { assertEquals<RejectCode>(RejectCode.KeyConflict, AdmissionDecision.Reject(RejectCode.KeyConflict).code) },
         )
     }
 

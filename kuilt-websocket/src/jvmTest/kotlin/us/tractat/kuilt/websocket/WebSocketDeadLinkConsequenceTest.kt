@@ -46,6 +46,7 @@ import us.tractat.kuilt.core.fabric.Mesh
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.core.fabric.identified
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -62,6 +63,8 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 
 /**
  * What a closed WebSocket session does to the layers above [Connection], on real sessions: a real
@@ -184,7 +187,7 @@ class WebSocketDeadLinkConsequenceTest {
         val hubSeam = loom.host(Pattern(ROOM))
         // A slow pinger so a heartbeat cannot land in the window and do the eviction under test.
         val quietPinger = HeartbeatConfig(interval = 60.seconds, timeout = 1.seconds, reconnectWindow = 1.seconds)
-        val room = SeamRoomFactory.systemClock(loom, rigScope, InMemoryDeviceKeyStore(), heartbeatConfig = quietPinger).host(Pattern(ROOM))
+        val room = SeamRoomFactory.systemClock(loom, rigScope, InMemoryDeviceKeyStore(), heartbeatConfig = quietPinger).host(Pattern(ROOM), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
         val memberScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val base = CapturingLoom(spokeLoom())

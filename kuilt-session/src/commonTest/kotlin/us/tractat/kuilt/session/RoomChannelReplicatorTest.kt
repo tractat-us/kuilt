@@ -22,6 +22,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
@@ -30,6 +31,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 
 /**
  * Integration: a [Quilter] running over [Room.channel] converges correctly
@@ -100,7 +103,7 @@ class RoomChannelReplicatorTest {
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(0)).host(Pattern("Alice"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(0)).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(1)).join(InMemoryTag("Bob"))
 
             // Wait for admit handshake on both sides
@@ -136,7 +139,7 @@ class RoomChannelReplicatorTest {
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(2)).host(Pattern("Alice"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(2)).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             // Connect a raw seam that never sends Hello (never admitted)
             val unadmitted = loom.join(InMemoryTag("Unadmitted"))
@@ -179,7 +182,7 @@ class RoomChannelReplicatorTest {
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(3)).host(Pattern("Alice"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(3)).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             // Connect a raw seam that never sends Hello (never admitted).
             val unadmitted = loom.join(InMemoryTag("Unadmitted"))

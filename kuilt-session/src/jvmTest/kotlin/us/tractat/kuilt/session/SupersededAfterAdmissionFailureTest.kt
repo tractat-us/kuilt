@@ -74,7 +74,7 @@ class SupersededAfterAdmissionFailureTest {
             val seam = HandSeam(self, host)
             try {
                 val room = SeamRoomFactory(InMemoryLoom(), scope, { Clock.System.now() }, fakeKeyStore(1))
-                    .adopt(seam, SessionRole.Joiner, memberName = "A") as SeamRoom
+                    .adopt(seam, AdoptRole.Joiner, memberName = "A") as SeamRoom
                 val hello = withTimeout(STEP.seconds) { seam.hellos.first { it.isNotEmpty() } }.single()
                 val nonce = checkNotNull(hello.joinerNonce) { "a current Hello carries a nonce" }
 

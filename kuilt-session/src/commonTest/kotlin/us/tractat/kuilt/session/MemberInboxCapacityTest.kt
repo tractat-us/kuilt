@@ -11,7 +11,10 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -39,7 +42,7 @@ class MemberInboxCapacityTest {
                 clock,
                 fakeKeyStore(0),
                 memberInboxCapacity = 0,
-            ).host(Pattern("Alice"))
+            ).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joiner = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1)).join(InMemoryTag("Alice"))
             host.roster.first { it.size == 1 }
 
@@ -66,7 +69,7 @@ class MemberInboxCapacityTest {
                 clock,
                 fakeKeyStore(2),
                 memberInboxCapacity = 0,
-            ).host(Pattern("Alice"))
+            ).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joiner = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(3)).join(InMemoryTag("Alice"))
             val joinerId = host.roster.first { it.size == 1 }.single().id
 
@@ -103,7 +106,7 @@ class MemberInboxCapacityTest {
                 clock,
                 fakeKeyStore(5),
                 memberInboxCapacity = 2,
-            ).host(Pattern("Alice"))
+            ).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joiner = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(6)).join(InMemoryTag("Alice"))
             val joinerId = host.roster.first { it.size == 1 }.single().id
 
@@ -134,7 +137,7 @@ class MemberInboxCapacityTest {
                 clock,
                 fakeKeyStore(7),
                 memberInboxCapacity = 2,
-            ).host(Pattern("Alice"))
+            ).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joiner = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(8)).join(InMemoryTag("Alice"))
             val joinerId = host.roster.first { it.size == 1 }.single().id
 

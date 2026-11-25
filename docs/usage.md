@@ -111,7 +111,11 @@ or mDNS fabrics in production:
 val factory: RoomFactory = SeamRoomFactory.systemClock(loom, scope, deviceKeyStore)
 
 // Host a room (this peer becomes the Host) or join one (becomes a Joiner).
-val room: Room = factory.host(Pattern(sessionName = "alice", maxPeers = 4))
+val room: Room = factory.host(
+    Pattern(sessionName = "alice", maxPeers = 4),
+    // Who gets in: this lets everyone in. Write your own AdmissionPolicy to decide.
+    admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
+)
 // val room = factory.join(someTag)   // on the joining peer
 
 // The roster holds admitted members only — never raw, unidentified peers.
@@ -143,8 +147,9 @@ the consumer decides what to do (tear down, start a new session, etc.).
 
 **Reconnect/resume.** Keep the existing room after a transport tear. A
 `SeamRoomFactory` joiner says Hello again automatically within the host's reconnect
-window, and the device key its Hello proves restores the held seat; there is no
-token and nothing to call. The loom must heal the same seam instance with the same
+window, and the device key its Hello proves restores the held seat, unless the
+device was revoked since it was admitted (then the host's `AdmissionPolicy` decides
+it afresh at that Hello); there is no token and nothing to call. The loom must heal the same seam instance with the same
 `selfId`; `MuxClientLoom` and `NwLoom` provide this. A loom that returns a new seam
 leaves the old room torn and reconnect ends in `HostLost`. A rebuilt room needs
 no token: its `Hello` proves the device key, and a host still holding the seat under
@@ -530,6 +535,7 @@ val host = KtorRoomHost(
     serverPeerId = PeerId("server-1"),
     pattern = Pattern("cluster-room"),
     deviceKeyStore = serverKeyStore,          // this server's key; each server has its own
+    admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), // who each room lets in
 )
 
 val serverScope = CoroutineScope(coroutineContext + Job())

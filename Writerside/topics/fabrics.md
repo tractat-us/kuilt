@@ -168,7 +168,11 @@ reconnect behavior), add `kuilt-session`.
 ```kotlin
 // The store holds this device's key. Every room the factory makes shares it.
 val factory: RoomFactory = SeamRoomFactory.systemClock(loom, scope, deviceKeyStore)
-val room: Room = factory.host(Pattern(sessionName = "alice", maxPeers = 4))
+val room: Room = factory.host(
+    Pattern(sessionName = "alice", maxPeers = 4),
+    // Who gets in: this lets everyone in. Write your own AdmissionPolicy to decide.
+    admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
+)
 
 scope.launch { room.roster.collect { members -> render(members) } }
 scope.launch { room.events.collect { event -> handle(event) } }

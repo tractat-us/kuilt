@@ -15,7 +15,10 @@ import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.identity.KeyScheme
+import us.tractat.kuilt.identity.RevocationList
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.RoomId
@@ -50,7 +53,7 @@ class RealKeyAdmitTest {
         val loom = InMemoryLoom()
         val hostStore = InMemoryDeviceKeyStore()
         val bobStore = InMemoryDeviceKeyStore()
-        val host = factory(loom, backgroundScope, hostStore).host(Pattern("HostA"), memberName = "HostA")
+        val host = factory(loom, backgroundScope, hostStore).host(Pattern("HostA"), memberName = "HostA", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val bob = factory(loom, backgroundScope, bobStore).join(InMemoryTag("Bob"), memberName = "Bob")
 
         val bobOnHost = host.roster.first { it.size == 1 }.single()
@@ -78,7 +81,7 @@ class RealKeyAdmitTest {
         val hostId = PeerId("host")
         val seam = FakeSeam(selfId = hostId, initialPeers = setOf(hostId, bob))
         val room = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock = { Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = InMemoryDeviceKeyStore())
-            .adopt(seam, SessionRole.Host, memberName = "Host", roomId = RoomId("room-1"))
+            .adopt(seam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), roomId = RoomId("room-1")), memberName = "Host")
         runCurrent()
         val hello = AdmitMessage.Hello(
             displayName = "Bob",

@@ -10,7 +10,10 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.FakeLoom
 import us.tractat.kuilt.test.FakeSeam
@@ -58,8 +61,8 @@ class RoomIdentityTest {
         runTest {
             val f = factory(FakeLoom(), backgroundScope)
 
-            val first = f.host(Pattern(DEVICE))
-            val second = f.host(Pattern(DEVICE))
+            val first = f.host(Pattern(DEVICE), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
+            val second = f.host(Pattern(DEVICE), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             assertAll(
                 { assertNotNull(first.roomId.value, "a host knows its room id at construction") },
@@ -79,8 +82,8 @@ class RoomIdentityTest {
         runTest {
             val f = factory(FakeLoom(), backgroundScope)
 
-            val first = f.adopt(FakeSeam(selfId = PeerId(DEVICE)), SessionRole.Host)
-            val second = f.adopt(FakeSeam(selfId = PeerId(DEVICE)), SessionRole.Host)
+            val first = f.adopt(FakeSeam(selfId = PeerId(DEVICE)), AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())))
+            val second = f.adopt(FakeSeam(selfId = PeerId(DEVICE)), AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())))
 
             assertNotEquals(
                 first.roomId.value,
@@ -97,8 +100,8 @@ class RoomIdentityTest {
     @Test
     fun `two factories sharing one clock and one device still mint different room ids`() =
         runTest {
-            val first = factory(FakeLoom(), backgroundScope).host(Pattern(DEVICE))
-            val second = factory(FakeLoom(), backgroundScope).host(Pattern(DEVICE))
+            val first = factory(FakeLoom(), backgroundScope).host(Pattern(DEVICE), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
+            val second = factory(FakeLoom(), backgroundScope).host(Pattern(DEVICE), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             assertNotEquals(first.roomId.value, second.roomId.value)
         }
@@ -109,7 +112,7 @@ class RoomIdentityTest {
     fun `host uses the caller-supplied room id verbatim`() =
         runTest {
             val supplied = RoomId("table-7")
-            val room = factory(FakeLoom(), backgroundScope).host(Pattern(DEVICE), roomId = supplied)
+            val room = factory(FakeLoom(), backgroundScope).host(Pattern(DEVICE), roomId = supplied, admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             assertEquals(supplied, room.roomId.value, "a supplied RoomId must not be overwritten by a mint")
         }
@@ -119,7 +122,7 @@ class RoomIdentityTest {
         runTest {
             val supplied = RoomId("table-9")
             val room = factory(FakeLoom(), backgroundScope)
-                .adopt(FakeSeam(selfId = PeerId(DEVICE)), SessionRole.Host, roomId = supplied)
+                .adopt(FakeSeam(selfId = PeerId(DEVICE)), AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), roomId = supplied))
 
             assertEquals(supplied, room.roomId.value, "a supplied RoomId must not be overwritten by a mint")
         }
@@ -138,8 +141,8 @@ class RoomIdentityTest {
             val lobbyCode = RoomId("table-7")
             val f = factory(FakeLoom(), backgroundScope)
 
-            val first = f.host(Pattern(DEVICE), roomId = lobbyCode)
-            val second = f.host(Pattern(DEVICE), roomId = lobbyCode)
+            val first = f.host(Pattern(DEVICE), roomId = lobbyCode, admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
+            val second = f.host(Pattern(DEVICE), roomId = lobbyCode, admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             assertAll(
                 { assertEquals(lobbyCode, first.roomId.value) },
@@ -147,22 +150,8 @@ class RoomIdentityTest {
             )
         }
 
-    @Test
-    fun `adopt rejects a room id supplied for a joiner`() =
-        runTest {
-            val f = factory(FakeLoom(), backgroundScope)
-
-            val failure = assertFailsWith<IllegalArgumentException> {
-                f.adopt(FakeSeam(selfId = PeerId(DEVICE)), SessionRole.Joiner, roomId = RoomId("table-7"))
-            }
-
-            // Silently ignoring it is the worse failure: a caller supplying an id would get a
-            // DIFFERENT identity than it asked for and fork its durable records with no signal.
-            assertTrue(
-                failure.message.orEmpty().contains("roomId applies to a host adopt"),
-                "expected the host-only contract in the message, got: ${failure.message}",
-            )
-        }
+    // A joiner adopt cannot carry a room id at all: `AdoptRole.Joiner` has no field for one, so the
+    // `require` this file used to pin is a type now (#3220).
 
     // ── The mint's own parts ──────────────────────────────────────────────────
 
@@ -175,7 +164,7 @@ class RoomIdentityTest {
     @Test
     fun `a minted room id carries the clock's instant`() =
         runTest {
-            val room = factory(FakeLoom(), backgroundScope).host(Pattern(DEVICE))
+            val room = factory(FakeLoom(), backgroundScope).host(Pattern(DEVICE), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val id = assertNotNull(room.roomId.value).value
             assertTrue(
@@ -191,9 +180,9 @@ class RoomIdentityTest {
             var now = FROZEN
             val f = SeamRoomFactory(FakeLoom(), backgroundScope, clock = { now }, deviceKeyStore = fakeKeyStore(nextDevice++))
 
-            val first = assertNotNull(f.host(Pattern(DEVICE)).roomId.value).value
+            val first = assertNotNull(f.host(Pattern(DEVICE), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())).roomId.value).value
             now = FROZEN + 5.seconds
-            val second = assertNotNull(f.host(Pattern(DEVICE)).roomId.value).value
+            val second = assertNotNull(f.host(Pattern(DEVICE), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())).roomId.value).value
 
             assertAll(
                 { assertTrue(first.startsWith("$DEVICE-room-${FROZEN.toEpochMilliseconds()}-"), first) },
@@ -214,7 +203,7 @@ class RoomIdentityTest {
             val loom = InMemoryLoom()
             val f = factory(loom, backgroundScope)
 
-            val hostRoom = f.host(Pattern(SESSION))
+            val hostRoom = f.host(Pattern(SESSION), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = f.join(InMemoryTag(SESSION))
             val beforeAdmission = joinerRoom.roomId.value
 
@@ -247,7 +236,7 @@ class RoomIdentityTest {
             val loom = InMemoryLoom()
             val f = factory(loom, backgroundScope)
 
-            val hostRoom = f.host(Pattern(SESSION))
+            val hostRoom = f.host(Pattern(SESSION), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = f.join(InMemoryTag(SESSION))
 
             joinerRoom.roster.first { it.isNotEmpty() }

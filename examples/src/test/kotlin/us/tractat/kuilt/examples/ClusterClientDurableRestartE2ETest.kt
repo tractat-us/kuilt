@@ -23,6 +23,7 @@ import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.AutoSerialRefusedException
 import us.tractat.kuilt.raft.ClientIdCollisionException
@@ -31,6 +32,8 @@ import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorRoomHost
@@ -108,6 +111,7 @@ class ClusterClientDurableRestartE2ETest {
             serverPeerId = serverPeerId,
             pattern = Pattern("durable-restart-room"),
             deviceKeyStore = InMemoryDeviceKeyStore(),
+            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
         )
         coroutineScope {
             val serverScope = CoroutineScope(coroutineContext + Job())

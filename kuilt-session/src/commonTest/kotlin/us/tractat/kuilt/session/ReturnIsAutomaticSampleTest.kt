@@ -19,7 +19,10 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
@@ -49,7 +52,7 @@ class ReturnIsAutomaticSampleTest {
             scope = backgroundScope,
             clock = virtualClock(),
             deviceKeyStore = fakeKeyStore(HOST_DEVICE),
-        ).host(Pattern(SESSION))
+        ).host(Pattern(SESSION), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val hostLog = EventLog(host, backgroundScope)
         backgroundScope.launch { whoCameBackSample(host) }
         val store = fakeKeyStore(1)

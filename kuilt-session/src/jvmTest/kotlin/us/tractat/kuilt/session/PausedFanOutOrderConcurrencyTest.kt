@@ -31,11 +31,14 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeDeviceKey
 import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ProvenResume
@@ -199,6 +202,7 @@ class PausedFanOutOrderConcurrencyTest {
             heartbeatConfig = heartbeat,
             roomId = RoomId("room-3625"),
             reconnectControllerFactory = { _, _, _ -> policy },
+            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
         )
         private val release = CountDownLatch(1)
         private val parked = CompletableDeferred<Unit>()

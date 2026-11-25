@@ -34,16 +34,19 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.nw.NwLoom
 import us.tractat.kuilt.nw.appleNwLoom
+import us.tractat.kuilt.session.AdoptRole
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
-import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.election.ElectionOutcome
 import kotlin.coroutines.cancellation.CancellationException
@@ -360,12 +363,12 @@ public class ConnectivitySuite {
             hop("peers=2 host=${lobby.host.value.value.take(8)} self=${lobby.selfId.value.take(8)} amHost=$amHost")
             val room = withTimeout(ELECTION_TIMEOUT) {
                 if (amHost) {
-                    lobby.start(memberName = role)
+                    lobby.start(memberName = role, admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
                 } else {
                     when (val outcome = lobby.awaitRoom(memberName = role)) {
                         is ElectionOutcome.Adopted -> outcome.room
                         // The elected host walked out mid-election: start() on this SAME lobby (#1483).
-                        ElectionOutcome.BecameHost -> lobby.start(memberName = role)
+                        ElectionOutcome.BecameHost -> lobby.start(memberName = role, admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
                         is ElectionOutcome.Torn -> error("lobby collapsed mid-election: ${outcome.reason}")
                     }
                 }
@@ -705,7 +708,7 @@ public class ConnectivitySuite {
         val heal: (suspend () -> Seam)? = if (amHost) null else ({ seam })
         val room = factory.adopt(
             seam = seam,
-            role = if (amHost) SessionRole.Host else SessionRole.Joiner,
+            role = if (amHost) AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) else AdoptRole.Joiner,
             memberName = role,
             roomKey = ROOM_KEY,
             reweave = heal,
@@ -1260,7 +1263,7 @@ public class ConnectivitySuite {
         val heal: (suspend () -> Seam)? = if (amHost) null else ({ seam })
         val room = factory.adopt(
             seam = seam,
-            role = if (amHost) SessionRole.Host else SessionRole.Joiner,
+            role = if (amHost) AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) else AdoptRole.Joiner,
             memberName = role,
             roomKey = ROOM_KEY,
             reweave = heal,

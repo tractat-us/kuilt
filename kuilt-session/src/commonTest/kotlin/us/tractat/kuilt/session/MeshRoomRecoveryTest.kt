@@ -11,8 +11,11 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -78,9 +81,9 @@ class MeshRoomRecoveryTest {
         // rooms one device, which the key-to-seat table reads as one key holding three seats.
         fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), config)
 
-        val host = device(0).host(Pattern("Host"))
+        val host = device(0).host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-        val droppedRoom = device(1).adopt(droppedLink, SessionRole.Joiner)
+        val droppedRoom = device(1).adopt(droppedLink, AdoptRole.Joiner)
         val survivor = device(2).join(InMemoryTag("Survivor"))
 
         host.roster.first { it.size == 2 }
@@ -283,9 +286,9 @@ class MeshRoomRecoveryTest {
                 reconnectControllerFactory = controllerFactory,
             )
 
-            val host = device(0).host(Pattern("Host"))
+            val host = device(0).host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-            val droppedRoom = device(1).adopt(droppedLink, SessionRole.Joiner)
+            val droppedRoom = device(1).adopt(droppedLink, AdoptRole.Joiner)
             val survivor = device(2).join(InMemoryTag("Survivor"))
             host.roster.first { it.size == 2 }
             droppedRoom.roster.first { it.size == 2 }

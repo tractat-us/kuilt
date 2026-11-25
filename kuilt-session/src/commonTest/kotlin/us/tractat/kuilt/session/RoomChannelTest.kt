@@ -10,7 +10,10 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -57,7 +60,7 @@ class RoomChannelTest {
         hostName: String = "Alice",
         joinerName: String = "Bob",
     ): Pair<Room, Room> {
-        val host = factory(loom, scope).host(Pattern(hostName))
+        val host = factory(loom, scope).host(Pattern(hostName), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val joiner = factory(loom, scope).join(InMemoryTag(joinerName))
         host.roster.first { it.size == 1 }
         joiner.roster.first { it.isNotEmpty() }
@@ -87,7 +90,7 @@ class RoomChannelTest {
     fun `unadmitted peer does not appear in channel peers`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = loom()
-            val host = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val host = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val rawSeam = loom.join(InMemoryTag("RawPeer"))
             testScheduler.advanceUntilIdle()
@@ -107,7 +110,7 @@ class RoomChannelTest {
     fun `channel peers starts with only self`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = loom()
-            val host = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val host = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             assertEquals(setOf(host.selfId), host.channel("data").peers.value)
 
@@ -118,7 +121,7 @@ class RoomChannelTest {
     fun `channel peers updates when joiner is admitted`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = loom()
-            val host = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val host = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val hostChannel = host.channel("data")
 
             assertEquals(setOf(host.selfId), hostChannel.peers.value)
@@ -179,7 +182,7 @@ class RoomChannelTest {
     fun `channel incoming does not deliver frames from unadmitted peer`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = loom()
-            val host = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val host = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val received = mutableListOf<ByteArray>()
             val collectJob = launch {
@@ -235,7 +238,7 @@ class RoomChannelTest {
     fun `channel is idempotent - same id returns same Seam instance`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = loom()
-            val host = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val host = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val ch1 = host.channel("data")
             val ch2 = host.channel("data")
@@ -268,7 +271,7 @@ class RoomChannelTest {
     fun `channel selfId matches room selfId`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = loom()
-            val host = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val host = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             assertEquals(host.selfId, host.channel("data").selfId)
 

@@ -14,8 +14,11 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.election.ElectionOutcome
 import us.tractat.kuilt.session.election.SeamElectionLobby
 import us.tractat.kuilt.session.election.electHost
@@ -90,7 +93,7 @@ class MeshRoomPartitionTest {
             val memberLobbies = lobbies.filter { it.selfId != electedHost }
 
             val memberRooms = memberLobbies.map { async { it.awaitRoom(memberName = it.selfId.value) } }
-            val hostRoom = hostLobby.start(memberName = "Host")
+            val hostRoom = hostLobby.start(memberName = "Host", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             memberRooms.map { assertIs<ElectionOutcome.Adopted>(it.await()).room }
 
             // Host admitted both members → detectors are running for each.

@@ -11,12 +11,16 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.RoomFrame
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Duration
 
@@ -206,6 +210,33 @@ internal class EventTape(room: Room, scope: CoroutineScope) {
 }
 
 /**
+ * The host's admission policy for a return row (#3220): it admits everyone, as
+ * [AdmissionPolicy.open] does, and records the key of every newcomer it is asked about, oldest first.
+ *
+ * The friction bar is also a count of vetting. A restore — the same seat back, under the same id or a
+ * new one — never asks the policy; a release of a seat to a different key, a seat gone, and an
+ * additional seat for a second live process are new memberships, which it asks about once each (plan
+ * Amendments C, H and J). The rows read [keys] before and after their return to say which happened.
+ */
+internal class VettingCount {
+    private val lock = reentrantLock()
+    private val asked = mutableListOf<DidKey>()
+    private val open = AdmissionPolicy.open()
+
+    /** What a row hosts its room with. */
+    val admission: HostAdmission = HostAdmission(
+        policy = AdmissionPolicy { request ->
+            lock.withLock { asked += request.key }
+            open.decide(request)
+        },
+        revocations = RevocationList.inMemory(),
+    )
+
+    /** The key of every newcomer the policy was asked about so far, oldest first. */
+    fun keys(): List<DidKey> = lock.withLock { asked.toList() }
+}
+
+/**
  * Every call the rows make on a device's [RoomFactory] and on the [Room]s it returns (#3159).
  *
  * This catches only the row's own code: a call a later edit adds between a drop and a return. It is
@@ -226,9 +257,9 @@ internal class AppCalls {
     private fun record(call: String) = lock.withLock { made += call }
 
     fun factory(inner: RoomFactory): RoomFactory = object : RoomFactory {
-        override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room {
+        override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?, admission: HostAdmission): Room {
             record("host")
-            return CountedRoom(inner.host(pattern, memberName, roomId))
+            return CountedRoom(inner.host(pattern, memberName, roomId, admission))
         }
 
         override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room {

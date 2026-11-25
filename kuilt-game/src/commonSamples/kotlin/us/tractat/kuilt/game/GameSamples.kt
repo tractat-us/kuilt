@@ -27,6 +27,7 @@ import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.identity.DeviceKeyStore
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
@@ -35,6 +36,8 @@ import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.random.Random
@@ -466,7 +469,7 @@ internal fun sampleGameOverRoom(newDevice: () -> DeviceKeyStore) = runTest(Stand
     fun factory() = SeamRoomFactory(loom, backgroundScope, clock, newDevice())
 
     // Two peers form one room; the host hands its room to gameOverRoom.
-    val hostRoom = factory().host(Pattern("my-game"))
+    val hostRoom = factory().host(Pattern("my-game"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
     backgroundScope.launch { factory().join(InMemoryTag("my-game")) }
     hostRoom.roster.first { it.size == 1 }
 

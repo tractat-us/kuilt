@@ -16,7 +16,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Instant
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 
 class RoomEventsReplayTest {
 
@@ -31,7 +34,7 @@ class RoomEventsReplayTest {
     @Test
     fun `a late events subscriber still receives a join emitted before it subscribed`() = runTest {
         val loom = InMemoryLoom()
-        val host = LoomRoomHost(loom, Pattern("server"), fakeKeyStore(0), clock = zeroClock)
+        val host = LoomRoomHost(loom, Pattern("server"), fakeKeyStore(0), clock = zeroClock, admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val hostRoomReady = CompletableDeferred<Room>()
         val hostJob = backgroundScope.launch { host.start { room -> hostRoomReady.complete(room) } }
         val hostRoom = hostRoomReady.await()

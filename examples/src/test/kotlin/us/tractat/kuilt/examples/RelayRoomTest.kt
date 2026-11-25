@@ -13,6 +13,7 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.InMemoryRaftStorage
@@ -21,6 +22,8 @@ import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.SeamRaftTransport
 import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorRoomHost
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
@@ -97,6 +100,7 @@ class RelayRoomTest {
                 serverPeerId = serverPeerId,
                 pattern = roomPattern,
                 deviceKeyStore = InMemoryDeviceKeyStore(),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             )
 
             // Carries the learner ClusterConfig from the server's onRoom callback to the

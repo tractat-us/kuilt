@@ -20,10 +20,13 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
@@ -124,7 +127,7 @@ class NwRejoinTest {
                     heartbeat,
                 )
             val (host, joiner) = coroutineScope {
-                val h = async { hostFactory.host(Pattern("session")) }
+                val h = async { hostFactory.host(Pattern("session"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) }
                 val j = async { joinerFactory.join(tag) }
                 h.await() to j.await()
             }

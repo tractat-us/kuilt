@@ -17,10 +17,13 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -82,7 +85,7 @@ class TwoCrdtChannelIsolationTest {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
 
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(0)).host(Pattern("Host"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(0)).host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(1)).join(InMemoryTag("Joiner"))
 
             hostRoom.roster.first { it.size == 1 }
@@ -147,7 +150,7 @@ class TwoCrdtChannelIsolationTest {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
 
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(2)).host(Pattern("Host"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(2)).host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(3)).join(InMemoryTag("Joiner"))
 
             hostRoom.roster.first { it.size == 1 }

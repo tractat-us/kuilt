@@ -18,6 +18,7 @@ import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.raft.ClientSessionTable
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
@@ -25,6 +26,8 @@ import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorRoomHost
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
@@ -204,8 +207,8 @@ class ClusterClientFailoverE2ETest {
             val clientNodeId = NodeId("cluster-client-failover")
 
             // Two relay front-ends on the same test application, distinct paths + identities.
-            val hostA = KtorRoomHost(application, pathA, serverPeerIdA, roomPattern, InMemoryDeviceKeyStore())
-            val hostB = KtorRoomHost(application, pathB, serverPeerIdB, roomPattern, InMemoryDeviceKeyStore())
+            val hostA = KtorRoomHost(application, pathA, serverPeerIdA, roomPattern, InMemoryDeviceKeyStore(), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
+            val hostB = KtorRoomHost(application, pathB, serverPeerIdB, roomPattern, InMemoryDeviceKeyStore(), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             // Pin the loom's selfPeerId to clientNodeId so the client keeps a stable wire
             // identity across the failover reconnect (the #544 prerequisite).

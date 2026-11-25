@@ -11,7 +11,10 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.election.LobbyMessage
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -38,8 +41,8 @@ class AdoptTest {
             val joinerSeam = loom.weave(Rendezvous.Existing(InMemoryTag("s")))
 
             val f = factory(loom, backgroundScope)
-            val hostRoom = f.adopt(hostSeam, SessionRole.Host, memberName = "Alice")
-            val joinerRoom = f.adopt(joinerSeam, SessionRole.Joiner, memberName = "Bob")
+            val hostRoom = f.adopt(hostSeam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())), memberName = "Alice")
+            val joinerRoom = f.adopt(joinerSeam, AdoptRole.Joiner, memberName = "Bob")
 
             val hostRoster = hostRoom.roster.first { it.size == 1 }
             val joinerRoster = joinerRoom.roster.first { it.size == 1 }
@@ -73,8 +76,8 @@ class AdoptTest {
             val joinerSeam = loom.weave(Rendezvous.Existing(InMemoryTag("s")))
 
             val f = factory(loom, backgroundScope)
-            val hostRoom = f.adopt(hostSeam, SessionRole.Host, memberName = "Alice")
-            val joinerRoom = f.adopt(joinerSeam, SessionRole.Joiner, memberName = "Bob")
+            val hostRoom = f.adopt(hostSeam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())), memberName = "Alice")
+            val joinerRoom = f.adopt(joinerSeam, AdoptRole.Joiner, memberName = "Bob")
 
             // Handshake completes: the joiner has admitted the host, so an app frame from the host
             // would route to incoming (an unadmitted sender would be dropped for a different reason).
