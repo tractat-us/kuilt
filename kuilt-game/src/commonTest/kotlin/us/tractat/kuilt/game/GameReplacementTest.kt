@@ -28,6 +28,7 @@ import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -232,6 +233,91 @@ class GameReplacementTest {
         val replacement = backgroundScope.gameJoin(replacementRaw, raftConfig = fastRaftConfig(seed = 4L))
         awaitVoterCount(host.node, expectedCount = 3)
         assertIs<RaftRole.Follower>(replacement.node.role.value)
+    }
+
+    /**
+     * #3689: an eviction must not reopen the spectator gallery's door by accident.
+     *
+     * Spectators are disabled, so the first spectator is refused and the host publishes `:sc` once.
+     * Then a voter leaves, and the eviction reopens admission and closes it again around the
+     * replacement. A spectator arriving after that must be refused, not left to time out: the
+     * spectator manager has exited, so the host never writes the mark a second time.
+     *
+     * The late spectator connects only once admission has closed again. Connected while the seat is
+     * open, it could be taken for the replacement voter before its spectate declaration lands,
+     * which is a separate race and not this test's subject.
+     */
+    @Test
+    fun spectatorsStayClosedAcrossAnEviction() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val loom = InMemoryLoom()
+        val (hostRaw, j1Raw, leavingRaw) = seats(loom, 3)
+
+        val livenessConfig = fastLivenessConfig()
+        var nowMs = 0L
+        val clock = { Instant.fromEpochMilliseconds(nowMs) }
+
+        val hostDeferred = async {
+            backgroundScope.gameHost(
+                hostRaw,
+                peerCount = 3,
+                raftConfig = fastRaftConfig(seed = 1L),
+                livenessConfig = livenessConfig,
+                clock = clock,
+            )
+        }
+        val j1Deferred = async { backgroundScope.gameJoin(j1Raw, raftConfig = fastRaftConfig(seed = 2L)) }
+        val leavingDeferred = async { backgroundScope.gameJoin(leavingRaw, raftConfig = fastRaftConfig(seed = 3L)) }
+
+        val host = hostDeferred.await()
+        j1Deferred.await()
+        val leaving = leavingDeferred.await()
+        val hostPresence = host.lobbyPresence!!
+
+        // The gallery is closed: the first spectator is refused, which is what publishes `:sc`.
+        val firstSpectator = loom.join(InMemoryTag("first-spectator"))
+        assertFailsWith<SpectatorsClosedException> {
+            backgroundScope.gameSpectate(
+                firstSpectator,
+                raftConfig = fastRaftConfig(seed = 5L),
+                spectateAdmissionTimeout = 200.milliseconds,
+            )
+        }
+        val slotBeforeEviction = hostPresence.selfSlot()?.value
+
+        // Evict through a graceful leave, and wait for the reopen to land.
+        leaving.leave()
+        runCurrent()
+        val halfWindowMs = livenessConfig.reconnectWindow.inWholeMilliseconds / 2
+        nowMs = halfWindowMs
+        advanceTimeBy(halfWindowMs)
+        runCurrent()
+        awaitVoterCount(host.node, expectedCount = 2)
+        hostPresence.admissionClosed.first { it == null }
+
+        // The replacement takes the seat, and the eviction closes admission again.
+        val replacementRaw = loom.join(InMemoryTag("replacement"))
+        backgroundScope.gameJoin(replacementRaw, raftConfig = fastRaftConfig(seed = 4L))
+        awaitVoterCount(host.node, expectedCount = 3)
+        hostPresence.admissionClosed.first { it != null }
+
+        val lateSpectator = loom.join(InMemoryTag("late-spectator"))
+        val outcome = assertFails {
+            backgroundScope.gameSpectate(
+                lateSpectator,
+                raftConfig = fastRaftConfig(seed = 6L),
+                spectateAdmissionTimeout = 200.milliseconds,
+            )
+        }
+
+        assertAll(
+            {
+                assertTrue(
+                    slotBeforeEviction?.endsWith(":sc") == true,
+                    "precondition: the host slot must carry :sc before the eviction, was $slotBeforeEviction",
+                )
+            },
+            { assertIs<SpectatorsClosedException>(outcome, "a spectator after the eviction must be refused, got $outcome") },
+        )
     }
 
     /**

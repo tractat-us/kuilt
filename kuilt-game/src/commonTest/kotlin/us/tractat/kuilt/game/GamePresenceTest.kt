@@ -16,6 +16,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -145,4 +146,76 @@ class GamePresenceTest {
 
             assertEquals(voters, presence.admissionClosed.value)
         }
+
+    /**
+     * #3689: reopening admission must not erase the spectators-closed mark.
+     *
+     * An eviction calls [GamePresence.declareAdmissionOpen], and the spectator manager publishes
+     * `:sc` only once and then exits, so nothing would put the mark back. A spectator arriving
+     * later would then wait out its backstop instead of being refused.
+     */
+    @Test
+    fun admissionOpenKeepsSpectatorsClosedMark() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val loom = InMemoryLoom()
+        val presence = GamePresence(seats(loom, 1).single(), backgroundScope)
+
+        presence.declareHost()
+        presence.declareSpectatorsClosed()
+        testScheduler.advanceUntilIdle()
+        val beforeReopen = presence.selfSlot()
+
+        presence.declareAdmissionOpen()
+        testScheduler.advanceUntilIdle()
+        val afterReopen = presence.selfSlot()
+
+        assertAll(
+            { assertEquals("host:sc", beforeReopen?.value, "precondition: the board must carry :sc before the reopen") },
+            { assertEquals("host:sc", afterReopen?.value, "a reopen on an open, closed-to-spectators slot changes nothing") },
+            { assertEquals(beforeReopen?.clock, afterReopen?.clock, "a no-op reopen must not publish a new declaration") },
+            { assertTrue(presence.spectatorsClosed.value, "spectators must stay closed after the reopen") },
+        )
+    }
+
+    /**
+     * #3689, the eviction's whole sequence on the host slot: closed with `:sc`, reopened by the
+     * eviction, then closed again with the refreshed voter set. The mark must survive both writes,
+     * and the reopen must still reopen.
+     */
+    @Test
+    fun spectatorsClosedMarkSurvivesReopenAndReclose() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val loom = InMemoryLoom()
+        val presence = GamePresence(seats(loom, 1).single(), backgroundScope)
+        val first = setOf(NodeId("a"), NodeId("b"))
+        val refreshed = setOf(NodeId("a"), NodeId("c"))
+
+        presence.declareHost()
+        presence.declareAdmissionClosed(first)
+        presence.declareSpectatorsClosed()
+        testScheduler.advanceUntilIdle()
+        val closedSlot = presence.selfSlot()?.value
+
+        presence.declareAdmissionOpen()
+        testScheduler.advanceUntilIdle()
+        val reopenedSlot = presence.selfSlot()?.value
+        val reopenedAdmission = presence.admissionClosed.value
+        val reopenedSpectators = presence.spectatorsClosed.value
+
+        presence.declareAdmissionClosed(refreshed)
+        testScheduler.advanceUntilIdle()
+
+        assertAll(
+            {
+                assertTrue(
+                    closedSlot != null && closedSlot.startsWith("admission-closed:") && closedSlot.endsWith(":sc"),
+                    "precondition: the board must carry admission-closed with :sc before the reopen, was $closedSlot",
+                )
+            },
+            { assertEquals("host:sc", reopenedSlot, "the reopen writes host and keeps :sc") },
+            { assertEquals(null, reopenedAdmission, "the reopen must still reopen admission") },
+            { assertTrue(reopenedSpectators, "spectators must stay closed while admission is open") },
+            { assertEquals(refreshed, presence.admissionClosed.value, "the re-close publishes the refreshed voter set") },
+            { assertTrue(presence.spectatorsClosed.value, "spectators must stay closed after the re-close") },
+            { assertTrue(presence.selfSlot()?.value?.endsWith(":sc") == true, "the re-closed slot keeps :sc") },
+        )
+    }
 }
