@@ -198,20 +198,22 @@ class QuilterSolicitedFullStateTest {
         }
 
     /**
-     * Bounce: two replicas on a 2 s FIFO link with a 1 s tick, both writing every 3 s, offset, for
-     * two minutes, then quiet. Neither side ever lacks anything the other cannot send it as a delta,
-     * so every whole state either is a first contact or answers a [QuiltMessage.FullStateRequest]:
-     * `wholeStates <= 2 + requests`. A push-back is neither, and on the code before #3629 each
-     * dominated-digest backstop request started a chain of them. When writes stop, the replicas
-     * converge within the lag and a tick.
+     * Bounce: two replicas on a 2 s FIFO link with a 1 s tick settle for 10 s, then both write
+     * every 3 s, offset, for two minutes, then go quiet. Neither ever lacks anything the other
+     * cannot send it as a delta, so each whole state sent during the churn answers a
+     * [QuiltMessage.FullStateRequest], and those come only from the 30 s dominated-digest
+     * backstop, at most one per link per run: `churnWholeStates <= churnRequests`, about 6. A
+     * push-back answers no request. Before #3629 every backstop request started a chain of them,
+     * since under writes more often than twice the lag every push-back lands behind in turn.
+     * When writes stop, the replicas converge within the lag and a tick.
      */
     @Test
     fun churnOnALaggedLinkBouncesNoWholeStates() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-        val rig = laggedPair(this, writers = 2)
+        val rig = laggedPair(this)
 
         assertAll(
-            { assertTrue(rig.requests > 0, "rig: the backstop must have asked at least once (${rig.counts})") },
-            { assertTrue(rig.wholeStates <= 2 + rig.requests, "no whole state is a push-back (${rig.counts})") },
+            { assertTrue(rig.churnRequests > 0, "rig: the backstop must have asked at least once (${rig.counts})") },
+            { assertTrue(rig.churnWholeStates <= rig.churnRequests, "no whole state is a push-back (${rig.counts})") },
             { assertEquals(rig.a.state.value, rig.b.state.value, "converged within lag + a tick (${rig.counts})") },
             { assertEquals(rig.a.stateRootForTest(), rig.b.stateRootForTest(), "with equal roots") },
         )
@@ -220,17 +222,19 @@ class QuilterSolicitedFullStateTest {
     private class LaggedPair(
         val a: Quilter<GSet<String>>,
         val b: Quilter<GSet<String>>,
-        val wholeStates: Int,
-        val requests: Int,
+        val churnWholeStates: Int,
+        val churnRequests: Int,
     ) {
-        val counts get() = "wholeStates=$wholeStates requests=$requests"
+        val counts get() = "churnWholeStates=$churnWholeStates churnRequests=$churnRequests"
     }
 
     /**
-     * Two replicas over [LagSeam]s, [writers] of them writing every 3 s for two minutes (offset by
-     * 1.5 s), then [LAG] plus a tick of quiet. Counts the whole states and requests both sent.
+     * Two replicas over [LagSeam]s. After [SETTLE], each writes every 3 s, offset by 1.5 s, for two
+     * minutes; then [LAG] plus a tick of quiet. Counts the whole states and requests both sent
+     * after [SETTLE]. The settle keeps out the whole states every join sends before the first
+     * digest crosses the link (a first contact and the unproven-peer fallback of each tick).
      */
-    private suspend fun laggedPair(scope: TestScope, writers: Int): LaggedPair = with(scope) {
+    private suspend fun laggedPair(scope: TestScope): LaggedPair = with(scope) {
         val loom = InMemoryLoom()
         val now = { testScheduler.currentTime }
         val seamA = LagSeam(loom.host(Pattern("lag")), LAG, backgroundScope, now)
@@ -239,27 +243,30 @@ class QuilterSolicitedFullStateTest {
         val a = quilterOn(seamA, config, GSet.empty())
         val b = quilterOn(seamB, config, GSet.empty())
         testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(SETTLE)
+        val settled = seamA.sent.size to seamB.sent.size
 
         repeat(40) { i ->
             a.apply(Patch(GSet.of("a$i")))
             testScheduler.advanceTimeBy(1500.milliseconds)
-            if (writers > 1) b.apply(Patch(GSet.of("b$i")))
+            b.apply(Patch(GSet.of("b$i")))
             testScheduler.advanceTimeBy(1500.milliseconds)
         }
         testScheduler.advanceTimeBy(LAG + 1.seconds)
         testScheduler.runCurrent()
-        val frames = seamA.sent + seamB.sent
-        println("#3629 bounce writers=$writers: " + frames.groupingBy { it::class.simpleName }.eachCount())
+        val churn = seamA.sent.drop(settled.first) + seamB.sent.drop(settled.second)
+        println("#3629 bounce, after settling: " + churn.groupingBy { it::class.simpleName }.eachCount())
         LaggedPair(
             a = a,
             b = b,
-            wholeStates = frames.count { it is QuiltMessage.FullState },
-            requests = frames.count { it is QuiltMessage.FullStateRequest },
+            churnWholeStates = churn.count { it is QuiltMessage.FullState },
+            churnRequests = churn.count { it is QuiltMessage.FullStateRequest },
         )
     }
 
     private companion object {
         val LAG: Duration = 2.seconds
+        val SETTLE: Duration = 10.seconds
     }
 }
 

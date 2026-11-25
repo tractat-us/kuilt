@@ -16,12 +16,16 @@ package us.tractat.kuilt.quilter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -152,8 +156,11 @@ class QuilterTest {
 
     /**
      * A [QuiltMessage.FullState] whose state is dominated by the receiver's current state
-     * must not trigger any state change — the idempotence guard introduced for #737 — and
-     * the receiver must instead push its own state back so the lagging sender heals (#828).
+     * must not trigger any state change — the idempotence guard introduced for #737. The
+     * receiver asked for this one, so it answers with its digest rather than its own whole
+     * state (#3629), and the lagging sender heals by asking for what the digest shows it lacks.
+     * An unasked behind state still draws the whole state at once (#828), which
+     * `QuilterSolicitedFullStateTest` pins beside this.
      *
      * ## Why the setup has to work this hard (#2002)
      *
@@ -174,15 +181,16 @@ class QuilterTest {
      * 1. Gate open: A and B converge to 8 over the ordinary delta path.
      * 2. Gate closed ([BroadcastGateSeam]): A applies +7 alone. A is 15, B is stranded at 8 —
      *    a *genuine* dominated state (B's own 3 is already inside A's 15), not an empty one.
-     * 3. Exactly one tick, on B only (A's interval is set far outside the window), so the
-     *    exchange runs in the direction that puts the dominated FullState **into A**:
-     *    B `RootDigest` → A's root differs → A `FullStateRequest` → B `FullState(8)` → A.
+     * 3. One tick, on B only (A's interval is set far outside the window), so the exchange
+     *    runs in the direction that puts the dominated FullState **into A**:
+     *    B digest → A asks → B `FullState(8)` → A. A's guard sees `merged == current`, leaves
+     *    A at 15, and sends B its vector digest, not its state. B's vector shows A's +7 missing,
+     *    so B asks by [QuiltMessage.Resend], which A answers by broadcast, and the gate drops it.
+     * 4. One more tick on B. The same exchange, but B's Resend is still open, so B asks A for
+     *    its whole state, which A's digest armed A to grant. B heals to 15.
      *
-     * A's guard sees `merged == current` and must (a) leave A at 15 and (b) take the
-     * `else if` branch, pushing A's own state back to B. That push-back is B's **only**
-     * route to 15 — the broadcast gate is shut and A never ticks — so `repB == 15` is a
-     * direct assertion on the guard, and deleting either the guard or the reconcile
-     * strands B at 8.
+     * A whole state from A is B's **only** route to 15, so B still at 8 after step 3 says A
+     * pushed nothing back, and B at 15 after step 4 says the digest's armed grant works.
      */
     @Test
     fun dominatedFullStateIsIdempotentAndNewInfoIsPreserved() = runTest(UnconfinedTestDispatcher()) {
@@ -192,7 +200,7 @@ class QuilterTest {
 
         // A's delta broadcasts are silenced from step 2 on; sendTo (anti-entropy) stays live.
         var deltaPathClosed = false
-        val seamA = BroadcastGateSeam(rawSeamA) { deltaPathClosed }
+        val seamA = SendLogSeam(BroadcastGateSeam(rawSeamA) { deltaPathClosed })
 
         // Only B ticks inside the test window: A's interval is an order of magnitude beyond it.
         // fullStateRetryLimit = 0 so no first-contact retry can heal B behind the guard's back.
@@ -200,7 +208,7 @@ class QuilterTest {
         // write that young and unacked is indistinguishable from one still in flight, so by
         // default A skips a few rounds before asking (#3617). That skip has its own tests, and a
         // partition, where the write is older than the interval, is answered at once
-        // (QuilterFullStateBoundTest). This test is about the push-back and wants it on the first round.
+        // (QuilterFullStateBoundTest). This test is about the behind state and wants it on the first round.
         // dominatedDigestBackstop = ZERO for the same reason: B's vector digest shows nothing A
         // lacks, so by default A asks nothing and leaves B to ask on A's own tick, which falls
         // outside this window (#3622, QuilterVectorDigestTest).
@@ -243,19 +251,27 @@ class QuilterTest {
             "premise: the delta path must be dead, or the anti-entropy exchange below proves nothing",
         )
 
-        // 3. One tick, B only. B's dominated FullState(8) lands on A.
+        // 3. One tick, B only. B's dominated FullState(8) lands on A, which answers with a digest.
+        val beforeRound = seamA.sentTo.size
         testScheduler.advanceTimeBy(ANTI_ENTROPY_MS + 1)
         testScheduler.advanceUntilIdle()
+        val round = seamA.sentTo.drop(beforeRound)
+        val bAfterRound = repB.state.value.value
 
-        assertEquals(
-            15L,
-            repA.state.value.value,
-            "A must ignore B's dominated FullState(8) and stay at 15",
-        )
-        assertEquals(
-            15L,
-            repB.state.value.value,
-            "B must heal to 15 via the guard's push-back — the only route open to it",
+        // 4. One more tick on B: its Resend is still open, so it asks A for the whole state.
+        val beforeHeal = seamA.sentTo.size
+        testScheduler.advanceTimeBy(ANTI_ENTROPY_MS)
+        testScheduler.advanceUntilIdle()
+        val heal = seamA.sentTo.drop(beforeHeal)
+
+        assertAll(
+            { assertEquals(15L, repA.state.value.value, "A must ignore B's dominated FullState(8) and stay at 15") },
+            { assertTrue(round.any { it is QuiltMessage.FullStateRequest }, "rig: A must have asked B for its state") },
+            { assertEquals(0, round.count { it is QuiltMessage.FullState }, "A pushes no whole state back") },
+            { assertEquals(1, round.count { it is QuiltMessage.VectorDigest }, "A answers with its vector digest") },
+            { assertEquals(8L, bAfterRound, "so B is still at 8 after that round") },
+            { assertEquals(1, heal.count { it is QuiltMessage.FullState }, "B asks, and A's armed grant ships one") },
+            { assertEquals(15L, repB.state.value.value, "B heals to 15 through the digest") },
         )
 
         // Converged: the roots now match, so the next tick ships a digest and no state at all
@@ -289,5 +305,15 @@ class QuilterTest {
             repA.pendingDeltasForTest.isEmpty(),
             "pendingDeltas should be empty after universal ack but was: ${repA.pendingDeltasForTest.keys}",
         )
+    }
+}
+
+/** Records, decoded, every frame sent to a single peer through it. */
+private class SendLogSeam(private val delegate: Seam) : Seam by delegate {
+    val sentTo = mutableListOf<QuiltMessage<GCounter>>()
+
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        sentTo += Cbor.decodeFromByteArray(gcounterSer(), payload)
+        delegate.sendTo(peer, payload)
     }
 }
