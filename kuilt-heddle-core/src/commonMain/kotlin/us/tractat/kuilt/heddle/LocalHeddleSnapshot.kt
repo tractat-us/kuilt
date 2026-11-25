@@ -95,6 +95,13 @@ public class LocalHeddleSnapshot internal constructor(
             }
         }
         for (persisted in open) persisted.requireConsistent(root, epoch, ledger)
+        // The books balance as the engine keeps them after every call (#3261). A total the engine
+        // reads that leaves `Long` is corrupt bytes too, never a thrown `ArithmeticException`.
+        try {
+            requireBalanced(ledger, open)
+        } catch (overflow: ArithmeticException) {
+            throw IllegalArgumentException("a total in the ledger leaves Long: ${overflow.message}", overflow)
+        }
         // No gauge is folded above its edge's issuance (#3353): only the fold rebase of a development
         // build between #3355 and slice 7 wrote one, and a delegation over it would throw later.
         for (edge in ledger.gaugedEdges()) {
@@ -204,6 +211,53 @@ public class LocalHeddleSnapshot internal constructor(
 
         /** Every format this release reads, oldest first: only its own. */
         public val SUPPORTED_FORMAT_VERSIONS: List<Int> = listOf(FORMAT_VERSION)
+    }
+}
+
+/**
+ * Throws [IllegalArgumentException] unless [ledger] and the [open] leases over it balance as every
+ * engine's books do after every call, and [ArithmeticException] when a total the engine reads
+ * leaves `Long` (#3261). Restored past any of these, the engine's first charge would overspend or
+ * overflow where no engine call can:
+ * - each edge is charged, returned plus spent, no more than was issued across it, and its spend is
+ *   not below zero;
+ * - each group holds, for each writer, no less than nothing;
+ * - each parent's active children's weights fit the weight budget [LocalHeddle.apply] keeps;
+ * - the leases across each edge reserve no more than is outstanding on it.
+ *
+ * None of these is a fixed cap. [LocalHeddle.MAX_RESERVATION] bounds one reservation or extension,
+ * not a lease, which [LocalHeddle.extend] adds to; and a counter at `Long.MAX_VALUE` is one the
+ * lifetime limit lets running work reach, so neither is refused here.
+ */
+private fun requireBalanced(ledger: EntitlementLedger, open: List<PersistedLease>) {
+    ledger.mintedTotal()
+    ledger.leafSpentTotal()
+    val outstanding = HashMap<AttachmentId, Long>()
+    for (edge in ledger.allEdges().sorted()) {
+        val summary = checkNotNull(ledger.edge(edge)) { "${edge.value} is in the ledger but has no summary" }
+        require(summary.spent >= 0L) { "${edge.value} has spent ${summary.spent}, less than nothing" }
+        val charged = checkedAdd(summary.returned, summary.spent)
+        require(charged <= summary.issued) {
+            "${edge.value} is charged $charged, returned and spent, past the ${summary.issued} issued across it"
+        }
+        outstanding[edge] = summary.issued - charged
+    }
+    val replicas = ledger.allReplicas().sorted()
+    for (group in ledger.allGroups().sorted()) {
+        for (replica in replicas) {
+            val held = ledger.holdings(group, replica)
+            require(held >= 0L) { "${group.value} holds $held for ${replica.value}, less than nothing" }
+        }
+        val weights = ledger.activeChildren(group).mapNotNull { ledger.record(it.attachment)?.weight }
+        require(weightsFitTheBudget(weights)) { "the weights of ${group.value}'s active children, $weights, do not fit the weight budget" }
+    }
+    val reserved = LinkedHashMap<AttachmentId, Long>()
+    for (persisted in open) {
+        for (edge in persisted.path) reserved[edge] = checkedAdd(reserved[edge] ?: 0L, persisted.lease.reserved)
+    }
+    for ((edge, sum) in reserved) {
+        val left = outstanding[edge] ?: 0L
+        require(sum <= left) { "the leases across ${edge.value} reserve $sum, more than the $left outstanding on it" }
     }
 }
 
