@@ -19,24 +19,28 @@ import kotlin.test.assertTrue
  * v7 (#3215) retires the `Resume` frame, and every answer names the Hello it answers, so a v6 joiner,
  * which reads neither, is refused too.
  *
+ * v8 (#3221) issues a pass on the direct Welcome, renews it while the member is connected, and says
+ * on every Reject whether its code is retryable. A v7 joiner keeps no pass and would retry an app's
+ * terminal refusal, so it is refused.
+ *
  * A version-less peer predates #1569 and stays locked out, as it has been since v2 (#1994).
  */
 class ProtocolVersionTest {
 
     @Test
-    fun `the version line is 7`() {
+    fun `the version line is 8`() {
         assertAll(
-            { assertEquals(7, ProtocolVersion.CURRENT) },
-            { assertEquals(7, ProtocolVersion.MIN_SUPPORTED) },
-            { assertEquals(7, ProtocolVersion.MAX_SUPPORTED) },
+            { assertEquals(8, ProtocolVersion.CURRENT) },
+            { assertEquals(8, ProtocolVersion.MIN_SUPPORTED) },
+            { assertEquals(8, ProtocolVersion.MAX_SUPPORTED) },
         )
     }
 
     @Test
-    fun `only version 7 is admitted`() {
+    fun `only version 8 is admitted`() {
         assertAll(
             // Positive control: a gate that refused everything would satisfy the negatives.
-            { assertTrue(ProtocolVersion.isSupported(7)) },
+            { assertTrue(ProtocolVersion.isSupported(8)) },
             { assertFalse(ProtocolVersion.isSupported(null)) },
             { assertFalse(ProtocolVersion.isSupported(1)) },
             { assertFalse(ProtocolVersion.isSupported(2), "a v2 peer sends no device key") },
@@ -44,7 +48,8 @@ class ProtocolVersionTest {
             { assertFalse(ProtocolVersion.isSupported(4), "a v4 peer reads no restored seat") },
             { assertFalse(ProtocolVersion.isSupported(5), "a v5 peer reads no supersession") },
             { assertFalse(ProtocolVersion.isSupported(6), "a v6 peer checks no answer against its Hello") },
-            { assertFalse(ProtocolVersion.isSupported(8)) },
+            { assertFalse(ProtocolVersion.isSupported(7), "a v7 peer keeps no pass, and retries an app's terminal refusal") },
+            { assertFalse(ProtocolVersion.isSupported(9)) },
         )
     }
 }

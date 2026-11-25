@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -54,9 +55,11 @@ import org.kotlincrypto.random.CryptoRand
 import us.tractat.kuilt.identity.AdmissionProof
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.session.admit.AdmissionDecision
 import us.tractat.kuilt.session.admit.AdmissionRequest
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.GrantIssuer
 import us.tractat.kuilt.session.admit.GrantTerms
 import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.KeyAdmission
@@ -618,12 +621,12 @@ private class DetachedMember(private val inbox: MemberInbox?) {
  * - [id] is opaque, sent on the member's direct `Welcome`; a restore keeps it and every other seating
  *   mints a new one.
  * - [admittedAtMs] is when the host admitted it, in epoch milliseconds: what a revocation's cutoff is
- *   compared with, so a device revoked after this instant gets no held-seat restore (Decided 14). A
- *   takeover under a new id inherits it, as it inherits the seat, so a takeover cannot launder a
+ *   compared with, so a device revoked after this instant gets no held-seat restore and no further
+ *   pass (Decided 14). A takeover under a new id inherits it, as it inherits the seat, so a takeover cannot launder a
  *   revocation.
- * - [terms] are the ones the host's policy admitted it on, kept for the pass 2.5 issues it. Null when
- *   no policy was asked: a device let back in on its grant (2.6), whose presented terms are carried
- *   forward instead.
+ * - [terms] are the ones the host's policy admitted it on, and every pass it is issued carries them
+ *   (#3221). Null when no policy was asked: a device let back in on its grant (2.6), whose presented
+ *   terms are carried forward instead.
  */
 private class Membership(val id: String, val admittedAtMs: Long, val terms: GrantTerms?)
 
@@ -939,6 +942,14 @@ internal class SeamRoom(
      * Bounded by the live roster, so a fabric that mints a fresh id per connection does not grow it.
      */
     private val memberships = mutableMapOf<PeerId, Membership>()
+
+    /**
+     * **Host only.** Each member's pass-renewal loop ([renewGrants], #3221), started once its direct
+     * `Welcome` is sent and restarted by every later one. Guarded by [lock]; a loop leaves with its
+     * membership ([detachMember]) and with the room ([leave]), so `grantRenewals.keys ⊆
+     * memberships.keys` whenever [lock] is free.
+     */
+    private val grantRenewals = mutableMapOf<PeerId, Job>()
     private val _roster = MutableStateFlow<Set<Member>>(emptySet())
     override val roster: StateFlow<Set<Member>> = _roster.asStateFlow()
 
@@ -1825,6 +1836,9 @@ internal class SeamRoom(
             is AdmitMessage.Reject -> {
                 if (_role.value == SessionRole.Joiner) handleReject(sender, msg)
             }
+            is AdmitMessage.GrantRenewal -> {
+                if (_role.value == SessionRole.Joiner) handleGrantRenewal(sender, msg)
+            }
             null -> { /* malformed frame — ignore */ }
         }
     }
@@ -2191,9 +2205,10 @@ internal class SeamRoom(
 
     /**
      * What a joiner is sent once it is seated: its [member] entry, the members it did not know
-     * ([existing]), and the id of the membership it holds ([memberships], #3215).
+     * ([existing]), and the membership it holds ([memberships], #3215): its id, and the admission
+     * instant and terms its pass is issued on (#3221).
      */
-    private class AdmissionBurst(val member: Member, val existing: List<Member>, val membership: String)
+    private class AdmissionBurst(val member: Member, val existing: List<Member>, val membership: Membership)
 
     /**
      * **Host only; the critical section of [seatProvenJoiner].** Decide against the seats as they are
@@ -2613,7 +2628,7 @@ internal class SeamRoom(
         // retry whose earlier attempt the host already answered, or a restart faster than the host's
         // detector — was never seen to go, so there is nothing to announce.
         if (endedPause) emitEvent(MembershipEvent.Resumed(held.id))
-        val burst = if (owesBurst) AdmissionBurst(member, admittedById.values.filter { it.id != held.id }, membershipOf(held.id).id) else null
+        val burst = if (owesBurst) AdmissionBurst(member, admittedById.values.filter { it.id != held.id }, membershipOf(held.id)) else null
         return SeatOutcome.Restored(burst, endedPause = endedPause, decidedAtMs = decidedAtMs)
     }
 
@@ -2639,7 +2654,7 @@ internal class SeamRoom(
      * **Under [lock].** Add a new member for [joinerPeerId], from [keyed]: the Hello its joiner sent,
      * and the key it proved, which becomes [Member.key] and rides every Welcome that names the joiner.
      * [terms] are what the policy gave it, recorded with its membership for the pass it is to be
-     * issued (2.5); null for a membership no policy was asked about. It is admitted at [admittedAtMs].
+     * issued (#3221); null for a membership no policy was asked about. It is admitted at [admittedAtMs].
      */
     private fun admitNewMember(joinerPeerId: PeerId, keyed: KeyedHello, terms: GrantTerms?, admittedAtMs: Long): SeatOutcome.Admitted {
         val hello = keyed.hello
@@ -2687,11 +2702,11 @@ internal class SeamRoom(
         supersededIds.forget(joinerPeerId)
         // Minted in the SAME critical section that admits the member, keeping the invariant on
         // [memberships]. `closed`: addToRoster admitted nobody, so there is no member to name.
-        val id = newMembershipId()
-        if (!closed) memberships[joinerPeerId] = Membership(id, admittedAtMs, terms)
+        val membership = Membership(newMembershipId(), admittedAtMs, terms)
+        if (!closed) memberships[joinerPeerId] = membership
         // No-op once closed: [fanOutToOtherMembers] checks [closed] too, and addToRoster admitted nobody.
         fanOutToOtherMembers(joinerPeerId, rosterWelcome(member))
-        return SeatOutcome.Admitted(AdmissionBurst(member, existing, id))
+        return SeatOutcome.Admitted(AdmissionBurst(member, existing, membership))
     }
 
     /**
@@ -2736,11 +2751,25 @@ internal class SeamRoom(
      * The roster copy to the other members is not sent here. [admitMember] enqueues it on their
      * fan-out lanes in the section that admits, before this first suspends (#3630). A restored seat
      * sends no roster copy at all, since every other member already holds it.
+     *
+     * The direct Welcome carries the member's pass back in ([AdmitMessage.Welcome.grant], #3221),
+     * issued here on its membership's terms, and its renewals start once the burst is sent
+     * ([startGrantRenewals]). Every seating sends one: an admission, a restore and a takeover alike,
+     * so a member's pass is always dated from its latest Welcome. A pass that fails to sign leaves
+     * this Welcome without one, and the renewals start all the same.
      */
     private suspend fun sendAdmissionBurst(burst: AdmissionBurst, answers: ByteArray, returnKind: ReturnKind?) {
         val member = burst.member
         val welcome = rosterWelcome(member)
-        val direct = AdmitMessage.encode(welcome.copy(returnKind = returnKind, answers = answers, membership = burst.membership))
+        val issued = issueGrant(member.id, member.key, burst.membership)
+        val direct = AdmitMessage.encode(
+            welcome.copy(
+                returnKind = returnKind,
+                answers = answers,
+                membership = burst.membership.id,
+                grant = (issued as? PassIssue.Issued)?.grant?.wire,
+            ),
+        )
         runCatchingCancellable { seam.sendTo(member.id, direct) }
 
         for (existing in burst.existing) {
@@ -2774,6 +2803,90 @@ internal class SeamRoom(
             ),
         )
         runCatchingCancellable { seam.sendTo(member.id, hostIntro) }
+        if (issued !is PassIssue.Withheld) startGrantRenewals(member.id, member.key, burst.membership)
+    }
+
+    /** What [issueGrant] made of one membership's pass. */
+    private sealed interface PassIssue {
+        /** Signed: send it. */
+        class Issued(val grant: Grant) : PassIssue
+
+        /**
+         * None is owed, now or later: the membership has no terms (no policy was asked about it), or
+         * its device was revoked after it was admitted ([GrantIssuer.mayIssue], Decided 14).
+         */
+        data object Withheld : PassIssue
+
+        /** Owed, but signing failed on this platform: logged, and tried again at the next renewal. */
+        data object Failed : PassIssue
+    }
+
+    /**
+     * **Host only; outside [lock].** The pass [subject]'s membership is to be issued now (#3221). A
+     * failure to sign is logged here and answered [PassIssue.Failed], so the Welcome goes without a
+     * pass rather than unsent.
+     */
+    private suspend fun issueGrant(peerId: PeerId, subject: DidKey, membership: Membership): PassIssue {
+        val terms = membership.terms ?: return PassIssue.Withheld
+        val cutoff = checkNotNull(admission) { "only a host issues passes" }.revocations.notBefore(subject)
+        if (!GrantIssuer.mayIssue(membership.admittedAtMs, cutoff)) {
+            logger.info { "room.grant.withheld peer=${peerId.value}: its device was revoked after it was admitted" }
+            return PassIssue.Withheld
+        }
+        return try {
+            PassIssue.Issued(GrantIssuer.issue(device.key, subject, terms, signedRoomId(), clock().toEpochMilliseconds()))
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            logger.warn(failure) { "room.grant.issue-failed peer=${peerId.value}" }
+            PassIssue.Failed
+        }
+    }
+
+    /**
+     * **Host only.** Renew [peerId]'s pass every half of its [membership]'s term from now on (#3221),
+     * replacing any renewals an earlier Welcome to it started. Nothing for a term that never ends
+     * ([GrantIssuer.refreshPeriodMillis]), and nothing when [membership] is no longer the one [peerId]
+     * holds: it left, or a newer admission holds the id, while the burst was sent.
+     */
+    private fun startGrantRenewals(peerId: PeerId, subject: DidKey, membership: Membership) {
+        val terms = membership.terms ?: return
+        val periodMs = GrantIssuer.refreshPeriodMillis(terms) ?: return
+        val membershipId = membership.id
+        lock.withLock {
+            if (closed || memberships[peerId]?.id != membershipId) return
+            grantRenewals.remove(peerId)?.cancel()
+            grantRenewals[peerId] = scope.launch { renewGrants(peerId, subject, membershipId, periodMs) }
+        }
+    }
+
+    /**
+     * **Host only.** One membership's renewal loop: every [periodMs], a fresh pass on its direct lane as
+     * an [AdmitMessage.GrantRenewal], while the member is [Liveness.Connected] (#3221).
+     *
+     * A renewal that falls due while the host holds the member as partitioned waits for the member's
+     * next contact and goes then, so the member gets nothing while it is away and its pass counts down
+     * from its last contact, as `readmitFor` promises. It stops for good when the membership ends —
+     * [detachMember] cancels it — and when the device is revoked after this membership's admission
+     * (Decided 14, R2(i)): a revoked present member keeps its seat (Decided 12) but its pass runs out.
+     * A failure to sign skips one renewal and tries again a period later.
+     */
+    private suspend fun renewGrants(peerId: PeerId, subject: DidKey, membershipId: String, periodMs: Long) {
+        while (true) {
+            delay(periodMs)
+            // Until the member is connected again, or gone; a gone member's loop is cancelled anyway.
+            _roster.first { roster -> roster.none { it.id == peerId && it.liveness != Liveness.Connected } }
+            val membership = lock.withLock { memberships[peerId]?.takeIf { it.id == membershipId } } ?: return
+            when (val issued = issueGrant(peerId, subject, membership)) {
+                is PassIssue.Issued ->
+                    runCatchingCancellable { seam.sendTo(peerId, AdmitMessage.encode(AdmitMessage.GrantRenewal(issued.grant.wire))) }
+                        .onFailure { logger.debug { "room.grant.renewal-unsent peer=${peerId.value}: $it" } }
+                PassIssue.Withheld -> {
+                    logger.info { "room.grant.renewals-stopped peer=${peerId.value}" }
+                    return
+                }
+                PassIssue.Failed -> Unit
+            }
+        }
     }
 
     /** The first admission's Hello, broadcast: this joiner does not know its host yet. */
@@ -3013,15 +3126,80 @@ internal class SeamRoom(
     private fun handleWelcome(sender: PeerId, welcome: AdmitMessage.Welcome) {
         // Members a closing burst dropped (#3615): their inboxes are closed once the lock is released.
         val dropped = mutableListOf<DetachedMember>()
+        var pass: IssuedPass? = null
         // One critical section: whether the Welcome answers the latest Hello, and the flight that
         // Hello's attempt owns, are read together, as a Reject's are, so a new Hello cannot be minted
         // between the two (review round 2 on #3614).
         val closed = lock.withLock {
-            acceptWelcome(sender, welcome, dropped)?.let { restored -> closeReconnect(sender, restored) }
+            acceptWelcome(sender, welcome, dropped)?.let { restored ->
+                // The Welcome answering the latest Hello carries this member's pass (#3221), issued
+                // by the sender whose challenge this joiner verified: acceptWelcome checked both. It
+                // names that Hello, so the pass on it is fresh, never a replay.
+                pass = welcome.grant?.let { wire -> verifiedHostKeys[sender]?.let { IssuedPass(sender, wire, it, fresh = true) } }
+                closeReconnect(sender, restored)
+            }
         }
         dropped.forEach { it.close() }
+        // Kept detached, as a Reject's failure is handled: checking and keeping it suspend.
+        pass?.let { scope.launch { keepPass(it) } }
         val (flight, verdict) = closed ?: return
         flight?.complete(verdict)
+    }
+
+    /**
+     * A pass a host sent this joiner: [wire] from [sender], whose proven key is [hostKey]. [fresh]: it
+     * came on the `Welcome` answering this joiner's latest Hello, so it cannot be a replay
+     * ([DeviceKeyStore.keepFreshGrant]); a renewal names no Hello and is not.
+     */
+    private class IssuedPass(val sender: PeerId, val wire: ByteArray, val hostKey: DidKey, val fresh: Boolean)
+
+    /**
+     * **Joiner only.** A pass renewed by the host while this member is connected (#3221). Taken only
+     * from the identified host, as a `Farewell` is, and checked against the key that host's challenge
+     * proved ([verifiedHostKeys]).
+     */
+    private fun handleGrantRenewal(sender: PeerId, renewal: AdmitMessage.GrantRenewal) {
+        val hostKey = lock.withLock { verifiedHostKeys[sender]?.takeIf { sender == hostPeerId } }
+        if (hostKey == null) {
+            logger.info { "room.grant.dropped from=${sender.value}: not this room's host" }
+            return
+        }
+        scope.launch { keepPass(IssuedPass(sender, renewal.grant, hostKey, fresh = false)) }
+    }
+
+    /**
+     * **Joiner only.** Keep [pass] in this device's store if it is one: it decodes, names the host that
+     * sent it as issuer and this device as subject, and carries the issuer's signature, checked in
+     * this room's scheme. Anything else is dropped and logged (#3221). The store keeps the newest per
+     * issuer and scope ([DeviceKeyStore.keepGrant]), so an older or replayed renewal changes nothing.
+     * The pass on the `Welcome` is kept freshly ([DeviceKeyStore.keepFreshGrant]): it also replaces a
+     * held pass its host would refuse as dated in the future (Decided 24, Amendment G).
+     *
+     * A throw from the check or the store is logged here: on Kotlin/Native an escape from this
+     * launched coroutine aborts the process.
+     */
+    private suspend fun keepPass(pass: IssuedPass) {
+        val grant = Grant.decode(pass.wire)
+        val fault = when {
+            grant == null -> "it does not decode"
+            grant.issuer != pass.hostKey -> "another key issued it"
+            grant.subject != device.key.id -> "it names another device"
+            else -> null
+        }
+        if (grant == null || fault != null) {
+            logger.info { "room.grant.dropped from=${pass.sender.value}: $fault" }
+            return
+        }
+        try {
+            if (!grant.isSignedByIssuer(device.scheme)) {
+                logger.info { "room.grant.dropped from=${pass.sender.value}: its issuer did not sign it" }
+                return
+            }
+            if (pass.fresh) device.store.keepFreshGrant(grant) else device.store.keepGrant(grant)
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            logger.warn(failure) { "room.grant.keep-failed from=${pass.sender.value}" }
+        }
     }
 
     /**
@@ -5208,6 +5386,8 @@ internal class SeamRoom(
         if (admittedById.remove(peerId) == null) return null
         // A member's detector goes with it, so none outlives the membership it watches.
         stopDetector(peerId)
+        // So do its pass renewals (#3221): the next membership under the id starts its own.
+        grantRenewals.remove(peerId)?.cancel()
         discardLanes(peerId)
         // Reaped with the member so a long-lived room does not accumulate an entry per peer
         // that ever left. refineWindow's Partitioned gate rejects an announcement for a gone member.
@@ -5255,6 +5435,9 @@ internal class SeamRoom(
 
     /** Test-visibility: the members a host `Welcome` has named since this joiner's latest Hello (#3615). */
     internal fun namedSinceHelloForTest(): Set<PeerId> = lock.withLock { namedSinceHello.toSet() }
+
+    /** Test-visibility: whether this host is renewing [peerId]'s pass (#3221). */
+    internal fun renewsPassForTest(peerId: PeerId): Boolean = lock.withLock { grantRenewals[peerId]?.isActive == true }
 
     /** Test-visibility: how many membership ids this host holds — one per current member (#3215). */
     internal fun heldMembershipCount(): Int = lock.withLock { memberships.size }
@@ -5671,6 +5854,8 @@ internal class SeamRoom(
             windowOpenedEpisodeMs.clear()
             // With the members it belongs to, keeping `memberships.keys == admittedById.keys`.
             memberships.clear()
+            grantRenewals.values.forEach { it.cancel() }
+            grantRenewals.clear()
             supersededIds.clear()
             _roster.value = emptySet()
             _rosterPeers.value = setOf(selfId)

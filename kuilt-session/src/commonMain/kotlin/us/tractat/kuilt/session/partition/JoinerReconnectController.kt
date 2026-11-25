@@ -284,9 +284,10 @@ internal sealed interface JoinerOutcome {
      * serve" and "I haven't noticed your drop yet" were one value — and the last of those is
      * *transient*, the one case where re-joining fresh is the wrong move.
      *
-     * **Branch on [code], not [message]:** the text is for a human reading a log. Treat an
-     * unrecognised code as retryable — [RejectCode.retryable] already defaults that way, and a host
-     * that predates typed codes surfaces [RejectCode.Unknown].
+     * **Branch on [code], not [message]:** the text is for a human reading a log. Read
+     * [RejectCode.retryable], which carries the sender's value: an unrecognised code surfaces as
+     * [RejectCode.Unknown] with the retryability its sender stated (v8, Decided 25), and retryable when
+     * it stated none.
      *
      * [code] is deliberately **required**. A default would let a fake answer `Refused("nope")`,
      * whose [RejectCode.Unspecified] is retryable, and quietly satisfy a test asking whether a
