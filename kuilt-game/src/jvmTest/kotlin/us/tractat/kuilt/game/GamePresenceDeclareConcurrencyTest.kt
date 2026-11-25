@@ -74,7 +74,7 @@ class GamePresenceDeclareConcurrencyTest {
 
     /**
      * A compound `read-decide-declare` must decide on the state it publishes against, so the two
-     * monotone host signals — admission-closed and spectators-closed — can never erase each other.
+     * host signals — admission-closed and spectators-closed — can never erase each other.
      *
      * [GamePresence.declareSpectatorsClosed] and [GamePresence.declareAdmissionClosed] both run
      * on the host, from two independent coroutines ([launchSpectatorManagement] and
@@ -128,6 +128,55 @@ class GamePresenceDeclareConcurrencyTest {
         )
     }
 
+    /**
+     * #3689: the eviction's reopen races the spectator manager the same way the close does, and
+     * must keep the spectators-closed mark it did not write.
+     *
+     * [GamePresence.declareAdmissionOpen] runs on [VoterLivenessMonitor]'s eviction loop while
+     * [GamePresence.declareSpectatorsClosed] runs on [launchSpectatorManagement]. The reopen
+     * decides whether to keep `:sc` from the board; read outside the critical section, it can
+     * read a board without the mark, lose the race to the spectator manager, and then publish
+     * `host` over `host:sc`.
+     */
+    @Test
+    fun racingReopenNeverErasesSpectatorsClosed() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val voters = setOf(NodeId("peer-1"), NodeId("peer-2"))
+        val erased = mutableListOf<String>()
+
+        repeat(SIGNAL_RACE_ROUNDS) { round ->
+            val seam = InMemoryLoom().host(Pattern("presence-reopen-race-$round"))
+            val presence = GamePresence(seam, backgroundScope, expectVirtualTime = true)
+            presence.declareHost()
+            presence.declareAdmissionClosed(voters)
+
+            val startLine = CyclicBarrier(SIGNAL_RACERS * 2)
+            (0 until SIGNAL_RACERS).flatMap { i ->
+                listOf(
+                    thread(name = "spectators-closed-$round-$i") {
+                        startLine.await()
+                        presence.declareSpectatorsClosed()
+                    },
+                    thread(name = "admission-open-$round-$i") {
+                        startLine.await()
+                        presence.declareAdmissionOpen()
+                    },
+                )
+            }.forEach { it.join() }
+
+            // Every reopen ran, so whichever order the threads took the slot ends open; the
+            // question is only whether the mark survived the reopens that followed it.
+            val slot = presence.selfSlot()?.value
+            if (slot != "host:sc") erased += "round $round: $slot"
+        }
+
+        assertEquals(
+            emptyList(),
+            erased,
+            "a reopen erased the spectators-closed mark in ${erased.size} of $SIGNAL_RACE_ROUNDS rounds: " +
+                "${erased.take(5)}",
+        )
+    }
+
     private companion object {
         /**
          * Enough concurrency to make a collision overwhelmingly likely without making the
@@ -137,8 +186,8 @@ class GamePresenceDeclareConcurrencyTest {
         const val DECLARES_PER_THREAD = 200
 
         /**
-         * The compound race is one-shot per round — both signals are monotone, so a round's
-         * window cannot be re-armed on the same board. Rounds are cheap (a fresh in-memory loom,
+         * The compound race is one-shot per round — neither racer retracts what the other
+         * published, so a round's window cannot be re-armed on the same board. Rounds are cheap (a fresh in-memory loom,
          * no virtual time advanced) and each is an independent chance to catch the interleaving.
          */
         const val SIGNAL_RACE_ROUNDS = 200
