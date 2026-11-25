@@ -66,6 +66,17 @@ public sealed interface ReturnFixture {
  *
  * Rooms run on the test scheduler, so the rows wait in **virtual** time. A harness whose fabric does
  * real I/O cannot use these rows as written.
+ *
+ * That includes a device keeping the pass its host's `Welcome` carried: a room keeps it in work it
+ * schedules after handling the `Welcome`, and a row that is about to kill the process waits for it by
+ * running the test scheduler's pending work once the device sees its host. A harness whose rooms keep
+ * the pass anywhere else — another dispatcher, a key store that waits on real I/O — loses it to the
+ * kill. The relaunch then has nothing to present, and the pass rows red on the admission policy being
+ * asked: `returnInsideGrantNoVetting`, the in-term arm of `expiredGrantIsVetted`, and the last arm of
+ * `revokedSubjectIsVetted`.
+ *
+ * The rows read the host's clock only off the host's own roster (a partition's `since`), so the
+ * harness's clock may start wherever it likes; it has to move with the test scheduler.
  */
 public class ReturnHarness(
     /** The host's device. The rows call [RoomFactory.host] on it exactly once. */

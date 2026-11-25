@@ -54,6 +54,7 @@ class PlantedPassRefusalTest {
         val deviceKey: DidKey,
         val roomId: String,
         val plantedPerProof: List<List<Grant>>,
+        val roomsOwnPerProof: List<List<ByteArray>>,
         val vetted: List<DidKey>,
         val joins: List<MembershipEvent.Joined>,
         val seat: Member?,
@@ -80,6 +81,7 @@ class PlantedPassRefusalTest {
                 deviceKey = seated.single { it.id == joiner.selfId }.key,
                 roomId = checkNotNull(host.roomId.value) { "a host room knows its id" }.value,
                 plantedPerProof = planting.plantedPerProof(),
+                roomsOwnPerProof = planting.roomsOwnPerProof(),
                 vetted = vetting.keys(),
                 joins = hostTape.events().filterIsInstance<MembershipEvent.Joined>().filter { it.member.id == joiner.selfId },
                 seat = host.roster.value.singleOrNull { it.id == joiner.selfId },
@@ -90,9 +92,14 @@ class PlantedPassRefusalTest {
         }
     }
 
-    /** The one pass a row planted, after asserting the device sent exactly one Proof and it carried exactly that pass. */
+    /**
+     * The one pass a row planted, after asserting the device sent exactly one Proof, its room put no
+     * pass of its own in it, and the planting added exactly one: so the host saw that pass and no other.
+     */
     private fun Outcome.plantedPass(): Grant {
         assertEquals(1, plantedPerProof.size, "rig: the device sent one Proof, and the planting rewrote it: $plantedPerProof")
+        assertEquals(listOf(0), roomsOwnPerProof.map { it.size }, "rig: a fresh device's room presented no pass of its own")
+        assertEquals(1, plantedPerProof.single().size, "rig: the planting added exactly one pass: ${plantedPerProof.single()}")
         return plantedPerProof.single().single()
     }
 

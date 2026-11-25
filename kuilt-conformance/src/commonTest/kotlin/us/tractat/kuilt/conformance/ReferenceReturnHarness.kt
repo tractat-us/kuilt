@@ -263,9 +263,13 @@ internal val REFERENCE_JOINER_HEARTBEAT = HeartbeatConfig(
 internal class PassPlanting(private val passes: suspend (proof: AdmissionProof, sender: DidKey) -> List<Grant>) {
     private val lock = reentrantLock()
     private val planted = mutableListOf<List<Grant>>()
+    private val presentedByTheRoom = mutableListOf<List<ByteArray>>()
 
     /** The passes planted in each Proof the device sent, oldest Proof first. */
     fun plantedPerProof(): List<List<Grant>> = lock.withLock { planted.toList() }
+
+    /** The passes the device's room itself put in each of those Proofs, before any were planted. */
+    fun roomsOwnPerProof(): List<List<ByteArray>> = lock.withLock { presentedByTheRoom.toList() }
 
     /** [loom] with every Proof its seams send rewritten, for a device whose key is in [store]. */
     fun over(loom: Loom, store: DeviceKeyStore): Loom = object : Loom by loom {
@@ -288,7 +292,10 @@ internal class PassPlanting(private val passes: suspend (proof: AdmissionProof, 
         val proof = AdmitMessage.decode(payload) as? AdmitMessage.Proof ?: return payload
         val statement = checkNotNull(AdmissionProof.decode(proof.statement)) { "the room sent a Proof whose statement does not decode" }
         val extra = passes(statement, store.deviceKey().id)
-        lock.withLock { planted += extra }
+        lock.withLock {
+            planted += extra
+            presentedByTheRoom += proof.grants
+        }
         return AdmitMessage.encode(AdmitMessage.Proof(proof.statement, proof.grants + extra.map { it.wire }))
     }
 }

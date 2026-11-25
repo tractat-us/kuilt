@@ -1105,6 +1105,7 @@ public abstract class RoomConformanceSuite {
                 val joinerTape = EventTape(joiner, backgroundScope)
                 val stayerTape = EventTape(stayer, backgroundScope)
                 val callsAtDrop = app.snapshot()
+                val vettedAtDrop = vetting.keys()
 
                 device.drop()
                 host.awaitRoster("the host holds the dropped device's seat Partitioned") { roster ->
@@ -1143,6 +1144,8 @@ public abstract class RoomConformanceSuite {
                     { assertTrue(joinerEvents.none { it is MembershipEvent.Left && it.peerId == bystander }, "the bystander never left the device's roster") },
                     { assertTrue(stayerTape.events().none { it is MembershipEvent.Partitioned && it.peerId == host.selfId }, "rig: the bystander never lost the host") },
                     { assertTrue(hostTape.events().none { it is MembershipEvent.Partitioned && it.peerId == bystander }, "rig: the host never lost the bystander") },
+                    { assertEquals(3, vettedAtDrop.size, "rig: the policy vetted each of the three devices once, when it first joined: $vettedAtDrop") },
+                    { assertEquals(vettedAtDrop, vetting.keys(), "the readmission is on the device's pass: the policy is not asked again") },
                 )
             } finally {
                 joiner.leave()
@@ -1187,6 +1190,7 @@ public abstract class RoomConformanceSuite {
                 val awayTape = EventTape(away, backgroundScope)
                 val callsAtDrop = app.snapshot()
                 val healsAtDrop = awayDevice.heals
+                val vettedAtDrop = vetting.keys()
 
                 // The member goes away, and the other device's process dies.
                 awayDevice.drop()
@@ -1250,6 +1254,8 @@ public abstract class RoomConformanceSuite {
                     { assertTrue(old !in rosterAtReturn && new in rosterAtReturn, "no ghost of the old id once it is back: $rosterAtReturn") },
                     { assertTrue(away.roster.value.none { it.id == old }, "nor later: ${away.roster.value.map { it.id }}") },
                     { assertEquals(callsAtDrop, app.snapshot(), "the away member's app made no call between drop and return") },
+                    { assertEquals(2, vettedAtDrop.size, "rig: the policy vetted each device once, when it first joined: $vettedAtDrop") },
+                    { assertEquals(vettedAtDrop, vetting.keys(), "a takeover and a restore: the policy is not asked about either") },
                 )
             } finally {
                 successor?.leave()
@@ -1432,9 +1438,14 @@ public abstract class RoomConformanceSuite {
                 val hostTape = EventTape(host, backgroundScope)
 
                 device.kill()
+                // The host's own clock, read off its roster: the instant it saw the seat go silent. The
+                // host renews a pass only while the seat is connected, so every pass the device holds
+                // was issued at or before it, and one past it voids them all.
+                val silentSince = host.awaitRoster("the host holds the first process's seat Partitioned") { roster ->
+                    roster.any { it.id == one && it.liveness is Liveness.Partitioned }
+                }.single { it.id == one }.liveness.let { (it as Liveness.Partitioned).since }
                 host.awaitRoster("the host lets the first process's seat go") { roster -> roster.none { it.id == one } }
-                // After the seat went, so after every pass the device was issued while it was connected.
-                val cutoff = testScheduler.currentTime
+                val cutoff = silentSince.toEpochMilliseconds() + 1
                 vetting.revocations.revoke(key, notBefore = cutoff)
                 val second = app.factory(device.launch()).join(h.joinTag).also { live = it }
                 val two = second.selfId
@@ -1451,7 +1462,7 @@ public abstract class RoomConformanceSuite {
                 val marks = hostTape.events().filterIsInstance<MembershipEvent.Joined>().associate { it.member.id to it.returning }
                 assertAll(
                     { assertEquals(listOf(key), vettedAtFirst, "rig: the policy vetted the device once, when it first joined") },
-                    { assertEquals(cutoff, vetting.revocations.notBefore(key), "rig: the device is revoked from after its seat went") },
+                    { assertEquals(cutoff, vetting.revocations.notBefore(key), "rig: the device is revoked from just after the host saw its seat go silent") },
                     { assertEquals(vettedAtFirst + key, vettedOnTheVoidPass, "a pass issued before the revocation is void: the policy is asked once, about the device's key") },
                     { assertTrue(two in marks && marks[two] == null, "an ordinary admission, not marked as a return: $marks") },
                     { assertEquals(vettedOnTheVoidPass, vetting.keys(), "the pass that admission gave is dated after the cutoff: the next return is unvetted") },
