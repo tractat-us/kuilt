@@ -27,6 +27,9 @@ package us.tractat.kuilt.heddle
  *    then every old child [Removed]. [Topology.diff] refuses a change of root: it is a new tree,
  *    not an edit of the running one.
  *
+ * [history] says which of these a change is, so an editor warns from it rather than sorting the
+ * arms itself.
+ *
  * @property path the child indices from the root to the node this change concerns; `[]` only for
  *   [RootRenamed]. Every index is `>= 0`.
  * @property names the names along [path], starting with the root's, so it always holds one more
@@ -36,6 +39,61 @@ package us.tractat.kuilt.heddle
 public sealed interface TopologyChange {
     public val path: List<Int>
     public val names: List<String>
+
+    /**
+     * What [LocalHeddle.apply] does to fairness history when it lands this change: [SaveEffect.LOST]
+     * for a change that costs a group its history, the one to warn about before saving;
+     * [SaveEffect.KEPT] for one that costs nobody any; and [SaveEffect.NEW_TREE] for the one `apply`
+     * throws on, which an editor refuses to save rather than warns about.
+     *
+     * Read from the two trees alone, so it answers for what *may* be lost. A [TemplateRemoved] is
+     * [SaveEffect.LOST] whether or not the app has attached any children under that group yet, since
+     * a tree cannot say.
+     *
+     * One change is one cause. A child whose weight and ceiling both changed is a [WeightChanged],
+     * [SaveEffect.LOST], beside a [CeilingChanged], [SaveEffect.KEPT]: the child loses its history to
+     * the first, and the second costs it nothing more.
+     *
+     * @sample us.tractat.kuilt.heddle.sampleTopologyChangeHistory
+     */
+    public val history: SaveEffect
+        get() = when (this) {
+            is RootRenamed -> SaveEffect.NEW_TREE
+            is Removed, is WeightChanged, is TemplateRemoved -> SaveEffect.LOST
+            is TemplateChanged -> if (before.weight == after.weight) SaveEffect.KEPT else SaveEffect.LOST
+            is Added, is LaneBecameGroup, is GroupBecameLane, is CeilingChanged, is TemplateAdded -> SaveEffect.KEPT
+        }
+
+    /**
+     * What a [TopologyChange] costs in fairness history; see [TopologyChange.history]. Three
+     * answers, because an editor does three things: saves, warns, or refuses.
+     *
+     * Its sibling for one edit of a document is [TopologyEdit.History], which has six answers.
+     *
+     * @sample us.tractat.kuilt.heddle.sampleTopologyChangeHistory
+     */
+    public enum class SaveEffect {
+        /**
+         * Nobody loses history: an [Added] child, which has none yet, a change of kind, a ceiling,
+         * a new template, or a template whose weight is the same.
+         */
+        KEPT,
+
+        /**
+         * A group loses its history. A [Removed] child drains and retires with everything beneath
+         * it; a [WeightChanged] child restarts its share at its parent's front; a [TemplateRemoved]
+         * closes every child the app attached under that group, for good; and a [TemplateChanged]
+         * with a new weight restarts every attached child's share.
+         */
+        LOST,
+
+        /**
+         * A [RootRenamed]: a new tree, not an edit of the running one. [LocalHeddle.apply] and
+         * [Topology.diff] throw [IllegalArgumentException] for it, so an editor refuses the save
+         * rather than warning about it.
+         */
+        NEW_TREE,
+    }
 
     /**
      * The root was renamed from [before] to [after]. Addressed at `[]`, under the new name.

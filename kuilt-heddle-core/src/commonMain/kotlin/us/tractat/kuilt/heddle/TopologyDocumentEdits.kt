@@ -38,7 +38,8 @@ public sealed interface TopologyEdit {
      *   the warning to show before saving: edits add up and cancel out, so a rename and the
      *   rename back are [History.REPLACED] twice and change nothing. What a save will cost is
      *   `loaded.changesTo(candidate)` ([Topology.changesTo]), the tree the editor started from
-     *   against the edited one read back with [Topology.from].
+     *   against the edited one read back with [Topology.from], each change saying through
+     *   [TopologyChange.history] whether it loses history.
      */
     public data class Edited(
         public val document: TopologyDocument,
@@ -88,8 +89,9 @@ public sealed interface TopologyEdit {
      * a rename and the rename back, an add and then a remove, or a new weight and then the old one
      * are two edits each and no change at all. The warning before saving is
      * `loaded.changesTo(candidate)` ([Topology.changesTo]), which compares the tree the editor
-     * started from with the one it is about to save. Each value is the shape [Topology.changesTo]
-     * gives for that edit alone, between valid trees.
+     * started from with the one it is about to save, and whose every change answers
+     * [TopologyChange.history]. Each value here is the shape [Topology.changesTo] gives for that
+     * edit alone, between valid trees.
      */
     public enum class History {
         /** Nothing loses history: a ceiling, an edit that changes nothing, or a reorder among siblings. */
