@@ -84,8 +84,9 @@ internal suspend fun sampleDeviceKeyStore() {
     val now = 1_700_000_000_000L
     val first = Grant.issue(host, me.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 3_600_000)
     val renewed = Grant.issue(host, me.id, GrantScope.AnyRoomOfIssuer, issuedAt = now + 1_800_000, notAfter = now + 5_400_000)
-    store.keepGrant(renewed)
-    store.keepGrant(first) // older than the one held from this host: ignored
+    store.keepGrant(first)
+    store.keepGrant(renewed) // newer than the one held from this host: replaces it
+    store.keepGrant(renewed) // issued at the same instant as the one held: ignored
     check(store.grants() == listOf(renewed))
 }
 

@@ -31,13 +31,15 @@ public interface DeviceKeyStore {
      * when [grant] is newer by [Grant.issuedAt]. One host key can host many rooms, so a pass into
      * `Room("A")` and one into `Room("B")` from the same issuer are both kept, and so is a grant from
      * another issuer. A grant that is not newer — older, or issued at the same instant — is ignored,
-     * so a replayed or reordered copy can never displace the grant already held.
+     * so a replayed or reordered copy cannot displace the grant already held.
      *
      * One exception: a held grant dated more than [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS] after
      * [grant] gives way to it. Its issuer issued [grant] by its own clock, so it would refuse the held
      * one as [GrantVerdict.NotYetValid]: a pass issued while that clock ran ahead. Kept, it would
      * shut out every fresh pass until its date came near, and the device would be vetted on every
-     * return meanwhile.
+     * return meanwhile. The cost is the converse case, which the store cannot tell from this one
+     * without a clock: a copy more than the allowance older than the held grant, replayed or
+     * delivered late, displaces it too.
      *
      * The store does not check the grant: whether it is signed, names this device or is still good
      * is the room's question when the grant is presented.

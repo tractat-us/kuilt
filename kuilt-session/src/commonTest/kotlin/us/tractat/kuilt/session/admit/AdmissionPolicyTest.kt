@@ -234,12 +234,13 @@ class AdmissionPolicyTest {
         assertAll(
             { assertEquals(forever, before) },
             {
-                // The joiner's view of the refusal is the wire's: the id alone, rebuilt as Unknown, retryable.
+                // The joiner's view of the refusal is the wire's: the id and its retryability (v8,
+                // Decided 25), rebuilt as Unknown, and terminal as the app meant it.
                 val code = assertIs<AdmissionDecision.Reject>(refused).code
                 val seenByJoiner = AdmitMessage.Reject("not welcome", code, answers = null).code
                 assertEquals("not-welcome", code.id)
-                assertEquals(RejectCode.Unknown("not-welcome"), seenByJoiner)
-                assertEquals(true, seenByJoiner.retryable)
+                assertEquals(RejectCode.Unknown("not-welcome", retryable = false), seenByJoiner)
+                assertEquals(false, seenByJoiner.retryable)
             },
             { assertEquals(forever, friend) },
             { assertEquals(forever, unblocked) },
