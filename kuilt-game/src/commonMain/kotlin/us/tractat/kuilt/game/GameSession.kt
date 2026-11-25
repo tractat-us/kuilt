@@ -46,6 +46,11 @@ public open class GameSession internal constructor(
      * live membership/liveness stream.
      */
     internal val lobbyPresence: GamePresence? = null,
+    /**
+     * **Test-visibility.** The host's [VoterLivenessMonitor], non-null only on a [gameHost] session
+     * with liveness monitoring on. No production caller reads it.
+     */
+    internal val livenessMonitor: VoterLivenessMonitor? = null,
 ) {
     /**
      * Returns the application [Seam] for the channel named [name], idempotent per name.

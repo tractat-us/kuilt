@@ -98,6 +98,16 @@ internal class VoterLivenessMonitor(
         scope.launch { evictAndReopenAdmission() }
     }
 
+    /** **Test-visibility.** The job of the detector registered for [voter], or null. */
+    internal fun detectorJobForTest(voter: NodeId): Job? = detectorJobs[voter]
+
+    /**
+     * **Test-visibility.** Ask for [voter]'s eviction as the detector whose job is [detector] would.
+     */
+    internal fun requestEvictionForTest(voter: NodeId, detector: Job) {
+        evictions.trySend(voter)
+    }
+
     private fun launchLivenessFan() {
         scope.launch { heartbeatSeam.incoming.collect { rawLiveness.emit(it) } }
     }
