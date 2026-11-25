@@ -49,6 +49,7 @@ import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.FramesLost
 import us.tractat.kuilt.session.MembershipEvent
+import us.tractat.kuilt.session.ReturningMark
 import us.tractat.kuilt.session.ReconnectReason
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFactory
@@ -67,6 +68,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -895,7 +897,9 @@ public abstract class RoomConformanceSuite {
      *
      * Each tab is a new membership, so the host's admission policy is asked once about each (#3220).
      * The first tab is decided by rules 6–7 (plan Amendment J): with no grant yet, an ordinary
-     * admission. The second is an additional seat, which the policy vets too (Amendment C).
+     * admission. The second is an additional seat, which the policy vets too (Amendment C). Once both
+     * have left, a third tab is decided by rules 6–7 again, now holding the pass the others kept, so it
+     * comes back unvetted and marked as the device returning (#3222): the policy's 0-call arm.
      */
     @Test
     public fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat(): TestResult =
@@ -908,6 +912,7 @@ public abstract class RoomConformanceSuite {
             val app = AppCalls()
             var firstTab: Room? = null
             var secondTab: Room? = null
+            var thirdTab: Room? = null
             try {
                 val hostId = host.selfId
                 host.awaitRoster("the bystander is admitted") { roster -> roster.any { it.id == bystander.selfId } }
@@ -960,7 +965,28 @@ public abstract class RoomConformanceSuite {
                     { assertEquals(listOf("join", "join"), app.snapshot(), "each tab's own join is the app's only call") },
                     { assertEquals(vettedAfterFirstTab + hostKey, vetting.keys(), "the second tab is an additional seat: the policy is asked once more") },
                 )
+
+                // Once both tabs have gone, the host's key holds no joiner seat, so its next tab is
+                // decided by rules 6–7 again: this time with the pass the first two were given, which
+                // they kept in the store they share with the host. A return on it is not vetted (#3222).
+                val vettedWithTwoTabs = vetting.keys()
+                tab2.leave()
+                tab1.leave()
+                host.awaitRoster("both tabs have left") { roster -> roster.none { it.id in tabs } }
+                val tab3 = app.factory(h.hostTab()).join(h.joinTag).also { thirdTab = it }
+                host.awaitRoster("the host's third tab holds a seat") { roster -> roster.any { it.id == tab3.selfId && it.liveness == Liveness.Connected } }
+                bystander.awaitRoster("the bystander lists the third tab") { roster -> roster.any { it.id == tab3.selfId } }
+                val hostMark = hostTape.events().filterIsInstance<MembershipEvent.Joined>().singleOrNull { it.member.id == tab3.selfId }?.returning
+                val bystanderMark = bystanderTape.events().filterIsInstance<MembershipEvent.Joined>().singleOrNull { it.member.id == tab3.selfId }?.returning
+                assertAll(
+                    { assertEquals(vettedWithTwoTabs, vetting.keys(), "the third tab comes back on its pass: the policy is not asked") },
+                    { assertNotNull(hostMark, "the host marks it as the device returning") },
+                    { assertTrue(hostMark?.previousId == null || hostMark.previousId in tabs, "naming a tab's old id, if any: ${hostMark?.previousId}") },
+                    { assertEquals(hostMark, bystanderMark, "a member present for it hears the same mark") },
+                    { assertEquals(hostKey, host.roster.value.singleOrNull { it.id == tab3.selfId }?.key, "rig: the third tab proved the host's own key") },
+                )
             } finally {
+                thirdTab?.leave()
                 secondTab?.leave()
                 firstTab?.leave()
                 bystander.leave()
@@ -972,6 +998,10 @@ public abstract class RoomConformanceSuite {
      * A device whose link heals only after the host let its seat go is admitted afresh, and its room
      * says so: `Readmitted(self)`, never `Recovered(host)` (plan Amendment G). The room stays in
      * session, the host sees the old membership leave and a new one join, and the app makes no call.
+     *
+     * The device still holds the pass its first admission gave it, good for an hour, so the new
+     * membership is a return on it (#3222): the policy is not asked again, and the host's `Joined`
+     * marks the same device returning under the id whose seat just went.
      */
     @Test
     public fun aReturnAfterTheSeatWentIsReadmitted(): TestResult =
@@ -1013,7 +1043,14 @@ public abstract class RoomConformanceSuite {
                     { assertTrue(joinerEvents.none { it is MembershipEvent.Recovered }, "a readmission is never Recovered(host): $joinerEvents") },
                     { assertTrue(joinerEvents.none { it is MembershipEvent.Resumed || it is MembershipEvent.HostLost }, "neither restored nor ended: $joinerEvents") },
                     { assertEquals(listOf(key), vettedAtDrop, "rig: the policy vetted the device once, when it first joined") },
-                    { assertEquals(listOf(key, key), vetting.keys(), "with its seat gone and no grant, the device is a newcomer again: the policy is asked once more") },
+                    { assertEquals(listOf(key), vetting.keys(), "with its seat gone and its pass good, the device comes back unvetted") },
+                    {
+                        assertEquals(
+                            listOf(ReturningMark(previousId = me)),
+                            hostTape.events().filterIsInstance<MembershipEvent.Joined>().map { it.returning },
+                            "the host marks the new membership as the same device returning",
+                        )
+                    },
                     {
                         assertEquals(
                             listOf("Left(${me.value}, ${LeaveReason.PartitionExpired})", "Joined(${me.value})"),
