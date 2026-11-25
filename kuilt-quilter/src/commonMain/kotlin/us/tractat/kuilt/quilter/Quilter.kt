@@ -1460,7 +1460,17 @@ public class Quilter<S : Quilted<S>>(
      *     turn: the pair bounced whole states until one landed equal, and on bee's rig those
      *     push-backs were most of the whole-state traffic. The digest lets the sender ask for
      *     exactly what it lacks: nothing, a [QuiltMessage.Resend], or, through the armed grant,
-     *     our whole state. That heal is one hop longer than a push-back.
+     *     our whole state. The receive cursor is resynced first, so the digest's vector
+     *     carries the sender's own seq.
+     *
+     *     How long the heal takes depends on what the digest shows. When it shows the gap the
+     *     heal is one hop longer than a push-back: the sender's request, then our state. When
+     *     it does not, the heal waits for the next digest exchange on this pair, or for the
+     *     sender's [QuilterConfig.dominatedDigestBackstop]. That happens two ways. A gap in our
+     *     own deltas is asked for by [QuiltMessage.Resend], whose answer is broadcast and can be
+     *     lost the same way the original was. And our vector can understate what we hold, when
+     *     another replica's writes reached us inside a third peer's whole state, which raises
+     *     only that peer's cursor, so the sender's vector can seem to dominate ours.
      *
      *   A first contact is normally unasked. A request needs a digest from the sender on the
      *   current link, and the link's departure ([forgetLink]) clears it, so the first contact
@@ -1468,7 +1478,7 @@ public class Quilter<S : Quilted<S>>(
      *   the peer restarts under the same [PeerId] while a request to its old run is still
      *   inside [QuilterConfig.fullStateRequestTimeout], and the departure never reaches
      *   [onPeersChanged], as when [Seam.peers] conflates a leave and a rejoin. It still heals,
-     *   one hop later, through the digest's armed grant.
+     *   through the digest's armed grant, on the bound above.
      * - **Incoming equals our state exactly** (`msg.state == current`): steady-state tick,
      *   no-op. No push-back here — avoids a FullState storm when all peers are already equal.
      *
@@ -1486,17 +1496,22 @@ public class Quilter<S : Quilted<S>>(
         replicaOf[sender] = msg.sender
         val current = _state.value
         val merged = current.piece(msg.state)
+        // When msg.state == current the sender is already up to date, and nothing goes back.
+        val senderBehind = merged == current && msg.state != current
         if (merged != current) {
             _state.value = merged
             recomputeDeliveredLocal()
-        } else if (msg.state != current) {
-            // Sender is strictly behind. A state we asked for gets our digests, and the sender asks
-            // for our whole state only if they show it lacks something (#3629); one we did not ask
-            // for, such as a first contact, gets our whole state at once (#828). When
-            // msg.state == current the sender is already up to date, and nothing goes back.
+        }
+        // Before answering, so the digest's vector carries the sender's own seq (#3629). A
+        // digest that understates it reads to the sender as us lacking its writes, and the
+        // sender then waits out the dominated-digest backstop instead of asking at once.
+        resyncReceiveCursor(sender, msg.sender, msg.upThrough)
+        if (senderBehind) {
+            // A state we asked for gets our digests, and the sender asks for our whole state only
+            // if they show it lacks something (#3629); one we did not ask for, such as a first
+            // contact, gets our whole state at once (#828).
             if (solicited) sendDigestsTo(sender) else sendFullStateTo(sender)
         }
-        resyncReceiveCursor(sender, msg.sender, msg.upThrough)
     }
 
     /**

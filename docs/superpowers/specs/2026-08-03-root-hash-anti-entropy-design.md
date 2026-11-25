@@ -187,8 +187,13 @@ arriving every 60 s. Each of these was traced and survives:
   Both heal directions still work. Since #3629 that answer is the receiver's digests with the grant
   armed, not its whole state, because the receiver asked for the state that landed behind: on a
   lagged link under churn the whole state landed behind in turn and the pair bounced whole states.
-  The heal now takes one more hop, the sender's request for what the digest shows it lacks. A behind
-  state nobody asked for, such as a first contact, still draws the whole state at once (#828).
+  When the digest shows the sender's gap, the heal takes one more hop: the sender's request, then
+  the state. When it does not, the heal waits for the next digest exchange on that pair, or for the
+  sender's dominated-digest backstop. Two things hide a gap. A gap in the receiver's own deltas is
+  asked for by `Resend`, whose answer is broadcast and can be lost the same way the original was.
+  And the receiver's vector can understate what it holds, when a replica's writes reached it inside
+  a third peer's whole state. A behind state nobody asked for, such as a first contact, still draws
+  the whole state at once (#828).
 - **Sender-side GC.** The match branch's ack drives `onAck` → `ackedThrough` →
   `recomputeUniversalAck` → `gcPendingDeltas` identically. (That ack is also why a converged round
   is two frames rather than one — see the cost table's footnote.)
