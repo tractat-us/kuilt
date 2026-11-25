@@ -130,10 +130,12 @@ public sealed interface AdmissionDecision {
     /**
      * Turn the newcomer away with [code].
      *
-     * The joiner sees only [RejectCode.id]: the wire carries the id, and the joiner rebuilds the code
-     * with [RejectCode.fromId]. So kuilt's own codes arrive whole, but an app's own code — [RejectCode]
-     * is open, so a policy may refuse with one — arrives as [RejectCode.Unknown] with the same id, and
-     * that is treated as retryable whatever the app's code says.
+     * The joiner sees the code's [RejectCode.id] and its [RejectCode.retryable]: the wire carries both
+     * (v8, Decided 25), and the joiner rebuilds the code with [RejectCode.fromWire]. So kuilt's own
+     * codes arrive whole, and an app's own code — [RejectCode] is open, so a policy may refuse with
+     * one — arrives as [RejectCode.Unknown] with the same id and retryability: a terminal one stays
+     * terminal, and a reconnecting device stops saying Hello. An app code that reuses one of kuilt's
+     * ids arrives as kuilt's code, with kuilt's retryability.
      *
      * **Not [RejectCode.Superseded].** That code tells a joiner another process of its own device took
      * its seat, and the room sends it only with the successor that took it

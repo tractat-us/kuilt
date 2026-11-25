@@ -23,7 +23,10 @@ public interface DeviceKeyStore {
     /** This device's key: created on first call, the same on every call after. */
     public suspend fun deviceKey(): DeviceKey
 
-    /** The grants this device holds: the newest per issuer and scope. Not secret — useless without the key. */
+    /**
+     * The grants this device holds: the newest per issuer and scope, but for a post-dated one a fresh
+     * pass replaced ([keepFreshGrant]). Not secret — useless without the key.
+     */
     public suspend fun grants(): List<Grant>
 
     /**
