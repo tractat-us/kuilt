@@ -8948,43 +8948,53 @@ tasks.register<Exec>("verifyCapabilityProbeManifest") {
     commandLine("python3", ".github/scripts/capability-probes.py", "--self-test")
 }
 
+// Every root source-scan guard, in one task, so a run can ask for them without `check`'s compile and
+// test graph. They take seconds, and the local gate in AGENTS.md runs them beside
+// `jvmTest macosArm64Test`; before this, a bare `runCatching` passed that gate and went red in CI.
+// `check` depends on this task rather than on the list, so a guard added here reaches both.
+tasks.register("rootGuards") {
+    group = "verification"
+    description = "Run every root source-scan guard that `check` runs."
+    dependsOn("verifyCapabilityProbeManifest")
+    dependsOn("forbidBareSeamStateFlow")
+    dependsOn("forbidBareLaunchIn")
+    dependsOn("verifyTestResultParity")
+    dependsOn("forbidUnboundedSwatchDelivery")
+    dependsOn("forbidBoltRejoiningTheLattice")
+    dependsOn("forbidNotNullAssertionInUnresolvedSource")
+    dependsOn("forbidLintFrontendSkew")
+    dependsOn("forbidCleanGateMeasurementSkew")
+    dependsOn("forbidSourcelessKmpTarget")
+    dependsOn("forbidPortProbeRebind")
+    dependsOn("verifyDocCitations")
+    dependsOn("forbidUncitedDocCodeBlock")
+    dependsOn("verifyModuleDocLinks")
+    dependsOn("verifySampleLinks")
+    dependsOn("verifySamplesAreRun")
+    dependsOn("verifyModuleTable")
+    dependsOn("verifyFamilyRules")
+    dependsOn("verifySkillDescriptionBudget")
+    dependsOn("verifySkillBodyBudget")
+    dependsOn("verifySkillReferences")
+    dependsOn("verifySeamHarnessCoverage")
+    dependsOn("forbidRunCatchingCancellableUnderNonCancellable")
+    dependsOn("forbidCancellationRethrowAroundBound")
+    dependsOn("forbidBareRunCatching")
+    dependsOn("forbidKotlinAssert")
+    dependsOn("forbidProductionDispatcherInTests")
+    dependsOn("forbidHashOrderedSeededDraw")
+    dependsOn("forbidRuntimeSelfSkippingProbe")
+    dependsOn("forbidCancellationSwallowingCatch")
+    dependsOn("forbidTightRunTestTimeout")
+    dependsOn("forbidCoroutineLaunchDuringConstruction")
+    dependsOn("forbidSuspendCallUnderLock")
+    dependsOn("forbidDemotedFieldTrail")
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
-        dependsOn(rootProject.tasks.named("verifyCapabilityProbeManifest"))
-        dependsOn(rootProject.tasks.named("forbidBareSeamStateFlow"))
-        dependsOn(rootProject.tasks.named("forbidBareLaunchIn"))
-        dependsOn(rootProject.tasks.named("verifyTestResultParity"))
-        dependsOn(rootProject.tasks.named("forbidUnboundedSwatchDelivery"))
-        dependsOn(rootProject.tasks.named("forbidBoltRejoiningTheLattice"))
-        dependsOn(rootProject.tasks.named("forbidNotNullAssertionInUnresolvedSource"))
-        dependsOn(rootProject.tasks.named("forbidLintFrontendSkew"))
-        dependsOn(rootProject.tasks.named("forbidCleanGateMeasurementSkew"))
-        dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
-        dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
-        dependsOn(rootProject.tasks.named("verifyDocCitations"))
-        dependsOn(rootProject.tasks.named("forbidUncitedDocCodeBlock"))
-        dependsOn(rootProject.tasks.named("verifyModuleDocLinks"))
-        dependsOn(rootProject.tasks.named("verifySampleLinks"))
-        dependsOn(rootProject.tasks.named("verifySamplesAreRun"))
-        dependsOn(rootProject.tasks.named("verifyModuleTable"))
-        dependsOn(rootProject.tasks.named("verifyFamilyRules"))
-        dependsOn(rootProject.tasks.named("verifySkillDescriptionBudget"))
-        dependsOn(rootProject.tasks.named("verifySkillBodyBudget"))
-        dependsOn(rootProject.tasks.named("verifySkillReferences"))
-        dependsOn(rootProject.tasks.named("verifySeamHarnessCoverage"))
-        dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
-        dependsOn(rootProject.tasks.named("forbidCancellationRethrowAroundBound"))
-        dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
-        dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
-        dependsOn(rootProject.tasks.named("forbidProductionDispatcherInTests"))
-        dependsOn(rootProject.tasks.named("forbidHashOrderedSeededDraw"))
-        dependsOn(rootProject.tasks.named("forbidRuntimeSelfSkippingProbe"))
-        dependsOn(rootProject.tasks.named("forbidCancellationSwallowingCatch"))
-        dependsOn(rootProject.tasks.named("forbidTightRunTestTimeout"))
-        dependsOn(rootProject.tasks.named("forbidCoroutineLaunchDuringConstruction"))
-        dependsOn(rootProject.tasks.named("forbidSuspendCallUnderLock"))
-        dependsOn(rootProject.tasks.named("forbidDemotedFieldTrail"))
+        dependsOn(rootProject.tasks.named("rootGuards"))
     }
 }
 

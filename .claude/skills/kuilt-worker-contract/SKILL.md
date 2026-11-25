@@ -101,8 +101,9 @@ evidence.
   the Android variants nor Kotlin/Native nor wasm — and several subclasses of the conformance suites
   live in `appleTest` and `wasmJsTest`, so a new abstract member's compile break **cannot** appear in
   `jvmTest`. PR CI runs the full `./gradlew build` on Linux, so a local one repeats it. Locally,
-  run `./gradlew jvmTest macosArm64Test --no-watch-fs` across the whole project with the cache
-  on: the cache re-runs only what your change reaches, and the Apple tests are the one thing CI
+  run `./gradlew jvmTest macosArm64Test rootGuards --no-watch-fs` across the whole project with
+  the cache on (`rootGuards` is the root source-scan guards, which no test task reaches): the
+  cache re-runs only what your change reaches, and the Apple tests are the one thing CI
   cannot run before merge (AGENTS.md § *Build & test commands*).
 
 - **There is no linter (#2540).** `detekt` and `detektAll` are not tasks — a brief or a doc telling
@@ -111,7 +112,7 @@ evidence.
   `forbidBareRunCatching`, `forbidPortProbeRebind`, `verifyDocCitations`, and siblings). Because they
   are source scans rather than a linter's per-source-set task graph, they cover **every** source set on
   **every** platform — `appleMain`, `commonTest` and `spike/` included — so there is no reach caveat to
-  state. `./gradlew check` runs them all; each has a header comment saying what it does and does not see.
+  state. `./gradlew rootGuards` runs them all; each has a header comment saying what it does and does not see.
 
 - **The build cache can serve a stale `FROM-CACHE` success** for a test-compile task whose source is
   broken. A cache hit on a task whose inputs you did not change is fine. If a test-compile task
