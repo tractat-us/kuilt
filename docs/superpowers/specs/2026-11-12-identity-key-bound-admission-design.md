@@ -198,6 +198,19 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
       1.8 or 1.9. That includes the #1593 citations on `Room.roomId` and `RoomFactory.host`, and the
       spike's #1637 probe (census P13).
 
+32. **The protection is restated, a superseded id's Hello gets a named `Reject`, and
+    `MemberIdentity.dedupKey` goes (Iain, 2026-11-25, #3662).**
+    - Decided 18 stands. A bystander can take a *partitioned* member's id on a fabric with
+      self-chosen peer ids, and *What this protects against* now says so. Seat-decision rule 3 is
+      unchanged. Closing the gap needs channel binding, which is tracked separately.
+    - Gate finding I1: the Hello gate answers a Hello under a superseded id and its superseded key
+      with a `Reject` naming it (`answers` = its nonce) under a new terminal code, instead of
+      `Farewell(supersededBy)`. The joiner already honours a named `Reject` before admission. It
+      ends `Left(self, LeaveReason.Superseded(by))`, as Decided 19 promises. This changes the v7
+      wire, so it lands before v0.7.7.
+    - The public `MemberIdentity.dedupKey` is deleted. Nothing in kuilt or its known consumers
+      reads it, and naming a device is `Member.key`'s job.
+
 ## Goals
 
 - A device that drops and comes back — link heal or process restart — is restored to its held seat,
@@ -222,11 +235,16 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
 ## What this protects against, and what it does not
 
 - **Protected:** a bystander in the room — who knows every peer id, the room id and every key —
-  cannot resume as, return as, or lock out another member. A captured proof cannot be replayed.
-  **⚠ Under ruling (#3662):** the lock-out half is false on a fabric with self-chosen peer ids. A
-  bystander presenting a *partitioned* member's id under its own key releases that seat (Decided 18),
-  and the member's return then meets a connected seat under another key and is refused
-  `KeyConflict`. The slice-1 gate found this; the protected/not-protected wording is #3662's to settle.
+  cannot resume as or return as another member. A bystander presenting a **connected** member's id
+  under its own key is refused `KeyConflict`, and that member keeps its seat. A captured proof
+  cannot be replayed.
+- **Not protected (Decided 32):** on a fabric with self-chosen peer ids, a bystander presenting a
+  **partitioned** member's id under its own key releases that seat and is admitted under the id
+  (Decided 18). When the member's link heals, its return meets a connected seat under another key
+  and is refused `KeyConflict`. Every member knows who is partitioned, so this needs no guessing.
+  An app must name a device by `Member.key`, never by its peer id: bystanders see
+  `Left(id, PartitionExpired)` then `Joined(id)` under a different key. Closing it needs
+  authenticated peer ids, the channel binding below.
 - **Not protected:** an active relay sitting on the victim's own link over an unauthenticated
   fabric. Peer ids are self-chosen on WebSocket and star fabrics, so such a relay can forward a
   challenge and its answer. Closing that needs channel binding (a TLS exporter from #3157, or
@@ -413,7 +431,8 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
   naming an older one (Amendment G). The direct `Welcome` also carries the seat's opaque `membership`
   id, minted at every admission and at a takeover under a new id, and kept through a same-id restore:
   a matching id is a restore, any other a fresh admission. A superseded id's Hello is answered with
-  `Farewell(supersededBy)`, which names no Hello (#3662 weighs replacing it with a named `Reject`).
+  a `Reject` that names it (`answers` = its nonce) under a terminal superseded code, so a new
+  process of a superseded device ends `Left(self, Superseded(by))` instead of timing out (Decided 32).
 - The returning mark rides the bystander Welcome through `fanOutToOtherMembers`, keeping #1781's
   ordering against `Farewell`.
 - New refusal codes (bad proof, key conflict) override `retryable = false` and get `fromId` branches.
