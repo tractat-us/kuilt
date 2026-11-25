@@ -468,7 +468,9 @@ public sealed interface AdmitMessage {
      * [statement] is the wire form of a signed `us.tractat.kuilt.identity.AdmissionProof`, carried
      * opaque like [Challenge.statement]. [grants] are the wire forms of the grants this device holds
      * from the challenging host, each a signed `us.tractat.kuilt.identity.Grant`; empty when it holds
-     * none, and nothing reads them yet. Compared by content, element by element.
+     * none. Sent since v9 (#3222): a host that finds one good, and holds no seat for the device, lets
+     * it back in without asking its admission policy. A host checks at most the first few. Compared by
+     * content, element by element.
      */
     @Serializable
     @SerialName("proof")
