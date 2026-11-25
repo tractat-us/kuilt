@@ -69,8 +69,8 @@ public sealed interface TopologyEdit {
     public data class DuplicateName(override val path: List<Int>, public val name: String) : Refused
 
     /**
-     * The edit needs a child, and the path is `[]`, the root. The root has no weight and no
-     * ceiling in a document, and no parent to be removed from or moved away from.
+     * The edit needs a node the root is not, and the path is `[]`. The root has no weight, no
+     * ceiling and no template in a document, and no parent to be removed from or moved away from.
      */
     public data object AtRoot : Refused {
         override val path: List<Int> get() = emptyList()
@@ -94,19 +94,30 @@ public sealed interface TopologyEdit {
      * edit alone, between valid trees.
      */
     public enum class History {
-        /** Nothing loses history: a ceiling, an edit that changes nothing, or a reorder among siblings. */
+        /**
+         * Nothing loses history: a ceiling, an edit that changes nothing, a reorder among siblings,
+         * or a template added, or changed in a way that keeps every attached child's ([setTemplate]).
+         */
         KEPT,
 
         /**
          * The node keeps its name and its place, but its share restarts: a new weight is a new edge,
          * so the node rejoins its parent's front. What lies beneath it keeps its history.
+         *
+         * From [setTemplate], the nodes are the children attached at the level whose template weight
+         * changed, each with a new edge at the new weight. The group keeps its own share.
          */
         SHARE_RESTARTS,
 
         /** A new child, with no history. Nothing already in the tree loses any. */
         STARTS_EMPTY,
 
-        /** The child and everything beneath it drain and retire, and their history goes with them. */
+        /**
+         * The child and everything beneath it drain and retire, and their history goes with them.
+         *
+         * From [setTemplate], the children are those attached under the template, or under the
+         * nested template, that the edit takes away. The group and its declared children keep theirs.
+         */
         DRAINS,
 
         /**
@@ -137,8 +148,7 @@ public sealed interface TopologyEdit {
  */
 public fun TopologyDocument.setWeight(path: List<Int>, weight: String): TopologyEdit =
     editChild(path) { node ->
-        val same = node.weight == weight || parseWeightText(node.weight)?.let { it == parseWeightText(weight) } == true
-        node.with(weight = weight) to if (same) TopologyEdit.History.KEPT else TopologyEdit.History.SHARE_RESTARTS
+        node.with(weight = weight) to if (sameWeight(node.weight, weight)) TopologyEdit.History.KEPT else TopologyEdit.History.SHARE_RESTARTS
     }
 
 /**
@@ -261,8 +271,38 @@ public fun TopologyDocument.move(path: List<Int>, parent: List<Int>): TopologyEd
     return TopologyEdit.Edited(removed.withChildren(landed) { it + node }, landed + index, history)
 }
 
-/** Not yet implemented: refuses every edit, so the tests that pin it compile and red. */
-public fun TopologyDocument.setTemplate(path: List<Int>, template: TopologyDocument.ChildTemplate?): TopologyEdit = TopologyEdit.AtRoot
+/**
+ * Sets the template of the group at [path] to [template], replacing the whole of the old one,
+ * nested templates included; `null` removes it. A template is what lets the app attach children to
+ * the group while it runs, and says what each one gets (see [TopologyDocument.ChildTemplate]). To
+ * change one field, pass a `copy` of the group's own. Nothing in [template] is checked here;
+ * [Topology.from] reports a bad weight or a negative ceiling at the group's path.
+ *
+ * The history is what the edit does to the children attached under the template:
+ * - [TopologyEdit.History.KEPT] for a template added, the same template again, a new ceiling at
+ *   any level, or a nested template added, which turns each attached leaf into a group that keeps
+ *   its history;
+ * - [TopologyEdit.History.SHARE_RESTARTS] for a new weight at any level, which restarts the share
+ *   of every child attached at that level;
+ * - [TopologyEdit.History.DRAINS] for a template removed, or a nested one, which closes every child
+ *   attached under it. It wins over a new weight in the same edit.
+ *
+ * Weights compare as [setWeight]'s do, so `"3/2"` for `"6/4"` is the same weight.
+ *
+ * Refused with [TopologyEdit.AtRoot] for `[]`, since a document's root carries no template,
+ * [TopologyEdit.NoSuchNode], or [TopologyEdit.NotAGroup] for a lane.
+ *
+ * @sample us.tractat.kuilt.heddle.sampleTopologyDocumentEdits
+ */
+public fun TopologyDocument.setTemplate(path: List<Int>, template: TopologyDocument.ChildTemplate?): TopologyEdit {
+    if (path.isEmpty()) return TopologyEdit.AtRoot
+    val group = when (val node = nodeAt(path)) {
+        null -> return TopologyEdit.NoSuchNode(path)
+        is Lane -> return TopologyEdit.NotAGroup(path)
+        is Group -> node
+    }
+    return TopologyEdit.Edited(replaced(path, group.copy(template = template)), path, templateHistory(group.template, template))
+}
 
 // ── walking and rebuilding ──────────────────────────────────────────────────────────────────────
 
@@ -347,6 +387,26 @@ private fun List<Int>.shiftedPast(removed: List<Int>): List<Int> {
     val depth = removed.size - 1
     val sharesParent = size > depth && subList(0, depth) == removed.subList(0, depth)
     return if (sharesParent && this[depth] > removed[depth]) toMutableList().also { it[depth] -= 1 } else this
+}
+
+/** Whether two weights written as text are the same weight: the same text, or an equal ratio. */
+private fun sameWeight(before: String, after: String): Boolean =
+    before == after || parseWeightText(before)?.let { it == parseWeightText(after) } == true
+
+/**
+ * What a template going from [before] to [after] does to the children attached under it, a level
+ * at a time: a level gone drains its children, which outweighs a new weight anywhere; a new weight
+ * restarts the shares at its level; a level added or a ceiling keeps them.
+ */
+private fun templateHistory(before: TopologyDocument.ChildTemplate?, after: TopologyDocument.ChildTemplate?): TopologyEdit.History {
+    if (before == null) return TopologyEdit.History.KEPT
+    if (after == null) return TopologyEdit.History.DRAINS
+    val nested = templateHistory(before.template, after.template)
+    return when {
+        nested == TopologyEdit.History.DRAINS -> nested
+        !sameWeight(before.weight, after.weight) -> TopologyEdit.History.SHARE_RESTARTS
+        else -> nested
+    }
 }
 
 private fun Node.with(name: String = this.name, weight: String = this.weight, maxConcurrent: Long? = this.maxConcurrent): Node =
