@@ -589,6 +589,10 @@ public abstract class RoomConformanceSuite {
      * admits the newcomer as an ordinary new member under the new key (Decided 18, 23): the old
      * membership leaves `PartitionExpired`, a new one joins, and the old key holds nothing. The only
      * app call is the relaunch's `join`.
+     *
+     * An expired hold followed by an ordinary admission emits the same two events, so the row also
+     * times it: the newcomer is seated well inside the host's hold, which the hold's own timer could
+     * not have ended. The release came from the newcomer's Proof.
      */
     @Test
     public fun aDifferentKeyOnAPartitionedIdReleasesTheSeat(): TestResult =
@@ -608,19 +612,27 @@ public abstract class RoomConformanceSuite {
                 val hostTape = EventTape(host, backgroundScope)
 
                 device.kill()
-                val held = host.awaitRoster("the host holds the dead process's seat Partitioned") { roster ->
+                host.awaitRoster("the host holds the dead process's seat Partitioned") { roster ->
                     roster.any { it.id == me && it.liveness is Liveness.Partitioned }
                 }
+                val partitionedAt = testScheduler.currentTime
                 val callsAtKill = app.snapshot()
                 val second = app.factory(device.impostor()).join(h.joinTag).also { cleared = it }
                 val after = host.awaitRoster("the id is seated again, under a new key") { roster ->
                     roster.any { it.id == me && it.key != oldKey && it.liveness == Liveness.Connected }
                 }
+                val seatedAfter = (testScheduler.currentTime - partitionedAt).milliseconds
                 val seen = second.awaitRoster("the newcomer is admitted and sees the host") { it.isNotEmpty() }
                 runCurrent() // let the events that announce the admission reach the tapes
                 assertAll(
                     { assertEquals(me, second.selfId, "rig: the newcomer presents the old id") },
-                    { assertTrue(held.single { it.id == me }.liveness is Liveness.Partitioned, "rig: the seat was partitioned when the newcomer arrived") },
+                    {
+                        assertTrue(
+                            seatedAfter < h.hostHeartbeat.reconnectWindow,
+                            "the seat was released at the Proof, not by its hold expiring: seated $seatedAfter after " +
+                                "the seat went Partitioned, against a ${h.hostHeartbeat.reconnectWindow} hold",
+                        )
+                    },
                     { assertEquals(callsAtKill + "join", app.snapshot(), "the relaunch's join is the app's only call") },
                     {
                         assertEquals(

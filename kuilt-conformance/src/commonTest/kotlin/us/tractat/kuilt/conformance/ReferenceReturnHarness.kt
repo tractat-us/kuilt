@@ -5,6 +5,7 @@ package us.tractat.kuilt.conformance
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.core.CloseReason
@@ -121,7 +122,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
         return object : ReturnDevice {
             override suspend fun launch(reusePeerId: Boolean): RoomFactory {
                 val previous = current.value
-                check(previous == null || previous.scope.coroutineContext[Job]?.isActive == false) {
+                check(previous == null || !previous.scope.coroutineContext.job.isActive) {
                     "kill() the running process before launching another"
                 }
                 val launch = launches.incrementAndGet()
@@ -155,7 +156,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
 
             override suspend fun impostor(): RoomFactory {
                 val victim = checkNotNull(current.value) { "no process whose id an impostor could present" }
-                if (victim.scope.coroutineContext[Job]?.isActive == true) {
+                if (victim.scope.coroutineContext.job.isActive) {
                     victim.muted.value = true
                     victim.down.value = true
                     victim.displaced.value = true
