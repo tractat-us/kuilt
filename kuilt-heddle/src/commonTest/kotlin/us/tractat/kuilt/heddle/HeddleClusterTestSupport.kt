@@ -363,9 +363,10 @@ internal class GovernedCluster(
 internal suspend fun TestScope.governedCluster(size: Int, quantum: Long, cap: Long): GovernedCluster {
     val ids = (1..size).map { NodeId("g$it") }
     val clusterConfig = ClusterConfig(voters = ids.toSet())
-    // The sim's default factory reseeds a restarted node exactly as it seeded the first, so its
-    // `ClientIdentity.Auto` id comes back the same and its first forward collides with the old
-    // incarnation's at the leader. A real process draws a fresh id; one seed per start models that (#3425).
+    // One seed per start, so a restarted peer's `ClientIdentity.Auto` id is new, as a real process's
+    // is. The sim's default factory now does the same (#3425), but its first starts are seeded
+    // `baseSeed + nodeIndex` and these are not: the acceptance arms, and the mutation table #3418
+    // recorded, were measured on these trajectories, so moving to the default would move every arm.
     var starts = 0L
     val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope) { id, transport, storage, child ->
         val seed = MULTI_NODE_SIM_SEED + ids.indexOf(id) + 1_000L * starts++
