@@ -3,6 +3,8 @@
 package us.tractat.kuilt.conformance
 
 import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.job
@@ -19,11 +21,15 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.identity.AdmissionProof
 import us.tractat.kuilt.identity.DeviceKeyStore
+import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
@@ -55,8 +61,11 @@ import kotlin.time.Instant
  *
  * The host runs a short hold ([REFERENCE_HOST_HEARTBEAT]) and a device a long reconnect window
  * ([REFERENCE_JOINER_HEARTBEAT]), so a joiner is still trying when the host lets its seat go.
+ *
+ * With [planting], every device's Proof also carries the passes it plants (`PlantedPassRefusalTest`);
+ * the host's own room, its tabs and the impostors are left alone.
  */
-internal fun TestScope.referenceReturnHarness(): ReturnHarness {
+internal fun TestScope.referenceReturnHarness(planting: PassPlanting? = null): ReturnHarness {
     val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) { "runTest supplies a dispatcher" }
     val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
     val source = InMemoryConnectionSource()
@@ -74,7 +83,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
 
     // One process: its own scope, its own client loom and its own link, under one peer id, over the
     // key store of the device it runs on.
-    class Process(val peerId: PeerId, store: DeviceKeyStore) {
+    class Process(val peerId: PeerId, store: DeviceKeyStore, planting: PassPlanting? = null) {
         val scope = CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job]))
         // Atomics, not plain vars: the rig is driven from the test body and read from the rooms'
         // own coroutines, and nothing here may lean on the test dispatcher being single-threaded.
@@ -103,7 +112,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
         }
         val mux = MuxClientLoom(base, Rendezvous.New(Pattern("base")), scope, ::sessionNameOf)
         val factory: RoomFactory = SeamRoomFactory(
-            loom = mux,
+            loom = planting?.over(mux, store) ?: mux,
             scope = scope,
             clock = clock,
             deviceKeyStore = store,
@@ -143,7 +152,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
                     else -> PeerId("device-$index.$launch")
                 }
                 previous?.let { priorHeals.addAndGet(it.heals()) }
-                return Process(id, store).also { current.value = it }.factory
+                return Process(id, store, planting).also { current.value = it }.factory
             }
 
             override suspend fun launchBeside(): RoomFactory {
@@ -151,7 +160,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
                 check(running.scope.coroutineContext.job.isActive) { "the process launch() started has ended; launch() again" }
                 // Its own link and peer id, on this device's key store; never `current`, so the
                 // other hooks keep acting on the first process.
-                return Process(PeerId("device-$index.beside-${besides.incrementAndGet()}"), store).factory
+                return Process(PeerId("device-$index.beside-${besides.incrementAndGet()}"), store, planting).factory
             }
 
             override suspend fun kill(socketCloses: Boolean) {
@@ -234,3 +243,46 @@ internal val REFERENCE_JOINER_HEARTBEAT = HeartbeatConfig(
     timeout = 200.milliseconds,
     reconnectWindow = 1_000.milliseconds,
 )
+
+/**
+ * Passes put into a device's Proof beside the ones its room chose to present (#3223): the hook the
+ * reference rig alone has, for the refusals a real joiner cannot reach. A joiner presents only its
+ * host's passes for this room or for every room of that host's, and keeps only passes naming its own
+ * key, so a pass for another room, for another device, or from another host never leaves a real
+ * device. This does it on the wire instead: it rewrites each Proof the device sends, keeping the
+ * signed statement the room made and appending what [passes] returns for it.
+ *
+ * Deliberately not on [ReturnHarness] or [RoomConformanceSuite]: a published hook that puts arbitrary
+ * passes into a Proof is a forging tool, which a harness over a real fabric has no way to offer.
+ *
+ * [passes] gets the statement the joiner signed, which names the room and the host's key, and the key
+ * of the device sending it. Every Proof it rewrote is counted, and every pass it planted kept, so a
+ * row can assert its pass really was presented rather than pass on a Proof that never carried it.
+ */
+internal class PassPlanting(private val passes: suspend (proof: AdmissionProof, sender: DidKey) -> List<Grant>) {
+    private val lock = reentrantLock()
+    private val planted = mutableListOf<List<Grant>>()
+
+    /** The passes planted in each Proof the device sent, oldest Proof first. */
+    fun plantedPerProof(): List<List<Grant>> = lock.withLock { planted.toList() }
+
+    /** [loom] with every Proof its seams send rewritten, for a device whose key is in [store]. */
+    fun over(loom: Loom, store: DeviceKeyStore): Loom = object : Loom by loom {
+        override suspend fun weave(rendezvous: Rendezvous): Seam {
+            val seam = loom.weave(rendezvous)
+            return object : Seam by seam {
+                override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+                    seam.sendTo(peer, rewrite(payload, store))
+                }
+            }
+        }
+    }
+
+    private suspend fun rewrite(payload: ByteArray, store: DeviceKeyStore): ByteArray {
+        val proof = AdmitMessage.decode(payload) as? AdmitMessage.Proof ?: return payload
+        val statement = checkNotNull(AdmissionProof.decode(proof.statement)) { "the room sent a Proof whose statement does not decode" }
+        val extra = passes(statement, store.deviceKey().id)
+        lock.withLock { planted += extra }
+        return AdmitMessage.encode(AdmitMessage.Proof(proof.statement, proof.grants + extra.map { it.wire }))
+    }
+}
