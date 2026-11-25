@@ -29,6 +29,9 @@ class ReHelloAdmissionTest {
     private val bob2 = PeerId("bob-2")
     private val bobDevice = fakeDeviceKey(1)
 
+    /** The joiner nonce [RawHost.hello] mints from [n]. */
+    private fun nonce(n: Byte) = ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE) { n }
+
     /**
      * Inherited obligation 1: the joiner said Hello twice — a retry — and answered the first
      * challenge before the second reached it. That proof names a host nonce the host no longer holds
@@ -87,7 +90,8 @@ class ReHelloAdmissionTest {
     /**
      * Inherited obligation 3: the direct `Farewell(supersededBy)` of Decided 19 usually goes into the
      * dead link it was written for. So the host remembers the superseded id, and when that process's
-     * reconnect says Hello again it is answered with the same `Farewell`, not challenged — or the
+     * reconnect says Hello again it is refused as superseded, naming that Hello and the successor
+     * (Decided 32), not challenged — or the
      * process would be admitted to a second seat of its key and the old membership would be back.
      * A Hello under that id with **another** key is another device, and is challenged as usual.
      */
@@ -111,7 +115,7 @@ class ReHelloAdmissionTest {
         h.say(bob1, h.hello("bob-1", fakeDidKey(2), nonce = 4))
 
         assertAll(
-            { assertEquals(listOf<AdmitMessage>(AdmitMessage.Farewell(bob1.value, supersededBy = bob2.value)), answer, "the superseded process is told, not challenged") },
+            { assertEquals(listOf<AdmitMessage>(AdmitMessage.Reject.superseded(bob2.value, nonce(3))), answer, "the superseded process is told, not challenged") },
             { assertEquals(challengesToBob1 + 1, h.challengesTo(bob1).size, "another device under that id is challenged as usual") },
             { assertEquals(listOf(bob2), h.room.roster.value.map { it.id }, "one membership, bob-2's") },
         )
@@ -142,7 +146,7 @@ class ReHelloAdmissionTest {
         h.say(bob1, h.proof(early, bobDevice, bob1))
 
         assertAll(
-            { assertEquals(listOf<AdmitMessage>(AdmitMessage.Farewell(bob1.value, supersededBy = bob2.value)), h.sentTo(bob1).drop(sentToBob1)) },
+            { assertEquals(listOf<AdmitMessage>(AdmitMessage.Reject.superseded(bob2.value, nonce(3))), h.sentTo(bob1).drop(sentToBob1)) },
             { assertEquals(listOf(bob2), h.room.roster.value.map { it.id }, "the superseded process is not seated") },
             { assertTrue(h.events.since(mark).none { it is MembershipEvent.Joined && it.member.id == bob1 }) },
         )
@@ -173,7 +177,7 @@ class ReHelloAdmissionTest {
             { assertEquals(challengesToBob1 + 1, h.challengesTo(bob1).size, "bob-1 is challenged") },
             {
                 assertTrue(
-                    h.sentTo(bob1).drop(sentToBob1).none { it is AdmitMessage.Farewell },
+                    h.sentTo(bob1).drop(sentToBob1).none { it is AdmitMessage.Farewell || it is AdmitMessage.Reject },
                     "bob-1 is not told it was superseded by an id that has gone: ${h.sentTo(bob1).drop(sentToBob1)}",
                 )
             },
@@ -201,7 +205,7 @@ class ReHelloAdmissionTest {
         h.say(bob1, h.proof(early, bobDevice, bob1))
 
         assertAll(
-            { assertTrue(h.sentTo(bob1).drop(sentToBob1).none { it is AdmitMessage.Farewell }, "bob-1 is not told: ${h.sentTo(bob1).drop(sentToBob1)}") },
+            { assertTrue(h.sentTo(bob1).drop(sentToBob1).none { it is AdmitMessage.Farewell || it is AdmitMessage.Reject }, "bob-1 is not told: ${h.sentTo(bob1).drop(sentToBob1)}") },
             { assertEquals(listOf(bob1), h.room.roster.value.map { it.id }, "bob-1 is seated") },
         )
         h.room.leave()

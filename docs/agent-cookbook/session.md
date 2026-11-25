@@ -91,10 +91,11 @@ identity. A member that was away hears `Joined(new)` on its return and drops `ol
 may hold several seats.
 
 **A peer id belongs to one process, so never reuse a superseded one under the same key.** While the
-new id holds the seat, the host answers every Hello from the old id with `Farewell(supersededBy)`,
-and the room behind it ends with `Left(self, LeaveReason.Superseded(by = new))`. The host cannot tell
-the old process from a new one reusing its id, so both are told. Once the new id's seat is gone, the
-old id is admitted like any other. Nothing expires on a timer.
+new id holds the seat, the host refuses every Hello from the old id under that key as superseded,
+and the room behind it ends with `Left(self, LeaveReason.Superseded(by = new))`, at once and without
+an admission timeout. The host cannot tell the old process from a new one reusing its id, so both
+are told, admitted before or not. Once the new id's seat is gone, the old id is admitted like any
+other. Nothing expires on a timer.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#watchTheReturnSample -->
 ```kotlin

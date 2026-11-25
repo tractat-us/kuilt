@@ -687,19 +687,21 @@ public final class us/tractat/kuilt/session/admit/AdmitMessage$Proof$Companion {
 
 public final class us/tractat/kuilt/session/admit/AdmitMessage$Reject : us/tractat/kuilt/session/admit/AdmitMessage {
 	public static final field Companion Lus/tractat/kuilt/session/admit/AdmitMessage$Reject$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;[B)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;[BILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;[BLjava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;[BLjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;[B)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()[B
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;[B)Lus/tractat/kuilt/session/admit/AdmitMessage$Reject;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/session/admit/AdmitMessage$Reject;Ljava/lang/String;Ljava/lang/String;[BILjava/lang/Object;)Lus/tractat/kuilt/session/admit/AdmitMessage$Reject;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;[BLjava/lang/String;)Lus/tractat/kuilt/session/admit/AdmitMessage$Reject;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/admit/AdmitMessage$Reject;Ljava/lang/String;Ljava/lang/String;[BLjava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/admit/AdmitMessage$Reject;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAnswers ()[B
 	public final fun getCode ()Lus/tractat/kuilt/session/admit/RejectCode;
 	public final fun getCodeId ()Ljava/lang/String;
 	public final fun getReason ()Ljava/lang/String;
+	public final fun getSupersededBy ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -717,6 +719,7 @@ public final synthetic class us/tractat/kuilt/session/admit/AdmitMessage$Reject$
 
 public final class us/tractat/kuilt/session/admit/AdmitMessage$Reject$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+	public final fun superseded (Ljava/lang/String;[B)Lus/tractat/kuilt/session/admit/AdmitMessage$Reject;
 }
 
 public final class us/tractat/kuilt/session/admit/AdmitMessage$Unpaused : us/tractat/kuilt/session/admit/AdmitMessage {
@@ -869,6 +872,12 @@ public final class us/tractat/kuilt/session/admit/RejectCode$ProtocolMismatch : 
 
 public final class us/tractat/kuilt/session/admit/RejectCode$RoomMismatch : us/tractat/kuilt/session/admit/RejectCode {
 	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$RoomMismatch;
+	public fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
+}
+
+public final class us/tractat/kuilt/session/admit/RejectCode$Superseded : us/tractat/kuilt/session/admit/RejectCode {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$Superseded;
 	public fun getId ()Ljava/lang/String;
 	public fun getRetryable ()Z
 }

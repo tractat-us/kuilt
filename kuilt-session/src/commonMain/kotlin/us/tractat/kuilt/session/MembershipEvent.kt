@@ -37,7 +37,13 @@ public sealed interface MembershipEvent {
     /** A new peer completed the admit handshake and entered the roster. */
     public data class Joined(val member: Member) : MembershipEvent
 
-    /** A peer left the room (clean leave or transport disconnect after admission). */
+    /**
+     * A peer left the room: a clean leave, or a transport disconnect after admission. One naming this
+     * room itself with [LeaveReason.Superseded] ends it, and a joiner can end that way before it was
+     * ever admitted: a new process reusing a superseded peer id under the same key, refused at its
+     * first Hello (Decided 32). It is then the room's only terminal event, in place of
+     * [AdmissionFailed].
+     */
     public data class Left(val peerId: PeerId, val reason: LeaveReason) : MembershipEvent
 
     /**
@@ -260,6 +266,10 @@ public sealed interface MembershipEvent {
      * left the consumer waiting on [Room.roster] forever with no signal.
      *
      * [reason] separates an active host refusal from silence — see [AdmissionFailure].
+     *
+     * A refusal and silence are two of the three ways a never-admitted joiner ends. The third is not
+     * this event: a joiner refused because its peer id was superseded under its own key ends
+     * `Left(self, LeaveReason.Superseded(by))` instead ([Left]), and a room ends one way only.
      */
     public data class AdmissionFailed(val reason: AdmissionFailure, val at: Instant) : MembershipEvent
 }

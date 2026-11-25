@@ -801,7 +801,7 @@ internal class JoinerResumeMachine(
      * The Hello is minted after the wait, in the critical section that checks the flight still owns
      * the slot, so its nonce is the one a challenge must echo from the moment it goes. A room told
      * it was superseded after that section and before the send still sends this one Hello; the
-     * host answers it with the same `Farewell(supersededBy)`, which a room already ending ignores.
+     * host answers it with a superseded `Reject`, which a room already ending ignores.
      */
     private suspend fun sendToHost(flight: CompletableDeferred<JoinerOutcome>): Boolean {
         val hostId = host.hostPeer() ?: return false

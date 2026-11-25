@@ -278,7 +278,7 @@ class SupersededMembershipTest {
      * Inherited obligation 3 (#3159, Task 1.7): A's link is dead **both ways** when B supersedes it,
      * so the direct `Farewell(supersededBy)` of Decided 19 goes into the dead link and A never hears
      * it. When A's link comes back its reconnect says Hello again — and the host, which remembers the
-     * superseded id, answers that Hello with the same `Farewell` instead of a challenge. A ends with
+     * superseded id, refuses that Hello as superseded instead of challenging it (Decided 32). A ends with
      * `Left(self, Superseded(by = B))` after exactly one Hello, and the host keeps one membership.
      */
     @Test
@@ -366,11 +366,13 @@ class SupersededMembershipTest {
         assertEquals(setOf(b), host.roster.value.map { it.id }.toSet(), "rig: B took A's seat over")
 
         val helloMark = board.sent(from = a, to = KEY_SEAT_HOST).size
-        val relaunched = boardRoom(board, a, shared, SessionRole.Joiner)
+        val relaunchedSeam = board.plug(a)
+        val relaunched = boardRoom(board, a, shared, SessionRole.Joiner, seam = relaunchedSeam)
         val relaunchedLog = EventLog(relaunched, backgroundScope)
         testScheduler.advanceTimeBy(KEY_SEAT_ADMIT_TIMEOUT / 10)
         testScheduler.runCurrent()
         val promptly = relaunchedLog.since(0)
+        val closedPromptly = relaunchedSeam.state.value is us.tractat.kuilt.core.SeamState.Torn
         testScheduler.advanceTimeBy(KEY_SEAT_ADMIT_TIMEOUT * 10)
         testScheduler.runCurrent()
         val fromRelaunched = board.sent(from = a, to = KEY_SEAT_HOST).drop(helloMark)
@@ -382,7 +384,7 @@ class SupersededMembershipTest {
             { assertEquals(listOf(superseded(a, by = b)), everything.filterIsInstance<MembershipEvent.Left>(), everything.render()) },
             { assertEquals(1, fromRelaunched.count { it is AdmitMessage.Hello }, "one Hello, never another: ${fromRelaunched.map { it::class.simpleName }}") },
             { assertEquals(0, fromRelaunched.count { it is AdmitMessage.Proof }, "the host challenged nothing") },
-            { assertTrue(relaunched.roster.value.isEmpty(), "the relaunched room has ended") },
+            { assertTrue(closedPromptly, "the relaunched room closed its seam at once") },
             { assertEquals(setOf(b), host.roster.value.map { it.id }.toSet(), "one membership, B's") },
         )
         roomB.leave()

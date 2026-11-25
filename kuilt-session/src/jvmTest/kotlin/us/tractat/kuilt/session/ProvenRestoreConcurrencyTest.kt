@@ -699,7 +699,7 @@ class ProvenRestoreConcurrencyTest {
      *
      * Either the old process restores its own seat first, and the new id then gets a seat of its own
      * beside it (Decided 30), or the new id takes the seat over first, and the old process must then be
-     * **told**, never seated: the host answers its exchange with `Farewell(supersededBy)` whether the
+     * **told**, never seated: the host refuses its exchange as superseded (Decided 32) whether the
      * Hello came in after the takeover (the Hello gate) or before it (the Proof-time check, read under
      * the lock that recorded the takeover). A single thread cannot put the old exchange's decision
      * after the takeover's record and before its own seat, which is the window the Proof-time check
@@ -755,11 +755,11 @@ class ProvenRestoreConcurrencyTest {
                         stage.at("round $round: awaiting the new id's seat") { rig.snapshot() }
                         rig.awaitEdge(fresh)
                         rig.awaitIntros(fresh, introsFresh + 1)
-                        // The old exchange's own answer: its restored seat, or the Farewell telling it.
+                        // The old exchange's own answer: its restored seat, or the superseded Reject telling it.
                         withTimeoutOrNull(STALL_GRACE) {
-                            rig.sent.first { frames ->
+                            rig.sent.first {
                                 rig.events.value.any { it is MembershipEvent.Resumed && it.peerId == old } ||
-                                    frames.count { (to, m) -> to == old && m is AdmitMessage.Farewell && m.supersededBy == fresh.value } >= 2
+                                    rig.toldSupersededTo(old, by = fresh) >= 2
                             }
                         }
                         rig.quiesce(stage, round)
@@ -769,7 +769,7 @@ class ProvenRestoreConcurrencyTest {
                         }
                         val oldRestored = rig.events.value.any { it is MembershipEvent.Resumed && it.peerId == old }
                         val oldJoinedAgain = rig.events.value.any { it is MembershipEvent.Joined && it.member.id == old }
-                        val toldOld = rig.supersededFarewellsTo(old)
+                        val toldOld = rig.toldSupersededTo(old)
                         val good = when {
                             supersededByFresh -> !rig.room.isAdmitted(old) && !oldJoinedAgain && toldOld >= 2 && rig.room.isAdmitted(fresh)
                             oldRestored -> rig.room.isAdmitted(old) && rig.room.isAdmitted(fresh) && toldOld == 0
@@ -1227,25 +1227,36 @@ class ProvenRestoreConcurrencyTest {
 
         /**
          * A Hello from [peer] under bob's key, and the challenge it drew — or null when the host
-         * answered it with `Farewell(supersededBy)` instead, as it does a superseded id (#3159, Task 1.7).
+         * refused it as superseded instead, as it does a superseded id (#3159, Task 1.7; Decided 32).
          *
-         * Decided by whichever answer arrives first, never by a clock. The Hello gate tells [peer] only
-         * once its successor holds the seat, and the takeover has already sent [peer] its own
-         * `Farewell` by then, so the gate's answer is the second: [TOLD_BY_GATE]. A Hello challenged
-         * before the takeover sees the takeover's `Farewell` too, but never a second one until it
-         * proves, so one `Farewell` alone decides nothing.
+         * Decided by whichever answer arrives first, never by a clock. The takeover's own direct
+         * `Farewell` decides nothing: a Hello challenged before the takeover sees it too. Only the
+         * superseded `Reject` is the gate's answer, and a challenged Hello draws one only once it proves.
          */
         suspend fun helloOrTold(peer: PeerId): AdmitMessage.Challenge? = coroutineScope {
             inbound.send(Swatch(AdmitMessage.encode(currentHello(peer.value, sessionId = peer.value, key = TEST_KEY_A)), sender = peer))
-            val told = async { sent.first { supersededFarewellsTo(peer) >= TOLD_BY_GATE } }
+            val told = async { sent.first { supersededRejectsTo(peer) >= 1 } }
             select<AdmitMessage.Challenge?> {
                 challengesFor(peer).onReceive { it }
                 told.onAwait { null }
             }.also { told.cancel() }
         }
 
-        fun supersededFarewellsTo(peer: PeerId): Int =
-            sent.value.count { (to, m) -> to == peer && m is AdmitMessage.Farewell && m.peerId == peer.value && m.supersededBy != null }
+        /**
+         * How often [peer] was told it was superseded, by [by] when named: the takeover's direct
+         * `Farewell` (Decided 19) and every superseded `Reject` of its Hellos (Decided 32).
+         */
+        fun toldSupersededTo(peer: PeerId, by: PeerId? = null): Int = sent.value.count { (to, m) ->
+            val successor = when (m) {
+                is AdmitMessage.Farewell -> m.supersededBy.takeIf { m.peerId == peer.value }
+                is AdmitMessage.Reject -> m.supersededBy
+                else -> null
+            }
+            to == peer && successor != null && (by == null || successor == by.value)
+        }
+
+        fun supersededRejectsTo(peer: PeerId): Int =
+            sent.value.count { (to, m) -> to == peer && m is AdmitMessage.Reject && m.code == RejectCode.Superseded }
 
         /** Every admit frame the host sent, in send order, since the round began. */
         val sent = MutableStateFlow<List<Pair<PeerId, AdmitMessage>>>(emptyList())
@@ -1482,8 +1493,6 @@ class ProvenRestoreConcurrencyTest {
         /** Up to about as long as the room takes to handle a frame, so the two arrivals overlap. */
         const val STALE_WELCOME_SPIN_NANOS = 20_000L
 
-        /** The superseded `Farewell`s an old id has had once the Hello gate told it: the takeover's, then the gate's. */
-        const val TOLD_BY_GATE = 2
         val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
         /** Each arm takes under 40 s on a dev Mac; the cap is a wedge backstop with room for a slower runner. */
         val ARM_CAP = 3.minutes

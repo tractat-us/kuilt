@@ -37,7 +37,9 @@ public sealed interface LeaveReason {
      * names `by`, which it hears as `Joined(by)`, and its roster rebuild later drops `old` with
      * [Unobserved], since it never saw the takeover. The superseded room itself, if it is still
      * running, sees `Left(self, Superseded(by))` and then ends: it never says Hello again, so two
-     * processes of one device cannot take a seat back and forth.
+     * processes of one device cannot take a seat back and forth. A new process of the device that
+     * reuses the old id under the same key, while `by` holds the seat, ends the same way at its first
+     * Hello, before it was ever admitted.
      */
     public data class Superseded(val by: PeerId) : LeaveReason
 
