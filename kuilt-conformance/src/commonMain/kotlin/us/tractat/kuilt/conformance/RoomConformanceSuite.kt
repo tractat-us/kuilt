@@ -976,13 +976,15 @@ public abstract class RoomConformanceSuite {
                 val tab3 = app.factory(h.hostTab()).join(h.joinTag).also { thirdTab = it }
                 host.awaitRoster("the host's third tab holds a seat") { roster -> roster.any { it.id == tab3.selfId && it.liveness == Liveness.Connected } }
                 bystander.awaitRoster("the bystander lists the third tab") { roster -> roster.any { it.id == tab3.selfId } }
+                runCurrent() // let the events that announce the return reach the tapes
                 val hostMark = hostTape.events().filterIsInstance<MembershipEvent.Joined>().singleOrNull { it.member.id == tab3.selfId }?.returning
-                val bystanderMark = bystanderTape.events().filterIsInstance<MembershipEvent.Joined>().singleOrNull { it.member.id == tab3.selfId }?.returning
+                val bystanderJoins = bystanderTape.events().filterIsInstance<MembershipEvent.Joined>().filter { it.member.id == tab3.selfId }
+                val bystanderMark = bystanderJoins.singleOrNull()?.returning
                 assertAll(
                     { assertEquals(vettedWithTwoTabs, vetting.keys(), "the third tab comes back on its pass: the policy is not asked") },
                     { assertNotNull(hostMark, "the host marks it as the device returning") },
                     { assertTrue(hostMark?.previousId == null || hostMark.previousId in tabs, "naming a tab's old id, if any: ${hostMark?.previousId}") },
-                    { assertEquals(hostMark, bystanderMark, "a member present for it hears the same mark") },
+                    { assertEquals(hostMark, bystanderMark, "a member present for it hears the same mark: $bystanderJoins") },
                     { assertEquals(hostKey, host.roster.value.singleOrNull { it.id == tab3.selfId }?.key, "rig: the third tab proved the host's own key") },
                 )
             } finally {
