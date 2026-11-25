@@ -737,7 +737,7 @@ public fun raftSimTest(
 internal fun simNodeSeed(baseSeed: Long, nodeIndex: Int, start: Int): Long {
     require(nodeIndex >= 0) { "nodeIndex must be non-negative, was $nodeIndex" }
     require(start >= 0) { "start must be non-negative, was $start" }
-    return baseSeed + nodeIndex + start * RESTART_SEED_STRIDE
+    return baseSeed + nodeIndex + start * (RESTART_SEED_STRIDE + 2) // MUTANT (c)
 }
 
 /** The 64-bit golden-ratio constant: odd, so multiplying by it is a bijection on [Long]. */
