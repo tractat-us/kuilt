@@ -36,7 +36,21 @@ class TopologyDocumentEditsPropertyTest {
     private val weightOf = mapOf("1" to Weight.ONE, "2" to Weight.of(2), "3/2" to Weight.of(3, 2), "6/4" to Weight.of(3, 2))
     private val weights = weightOf.keys.toList()
     private val ceilings = listOf(null, 0L, 2L)
-    private val templates = listOf(null, null, TopologyDocument.ChildTemplate(), TopologyDocument.ChildTemplate("2", 1L))
+    private val templates = listOf(null, null, TopologyDocument.ChildTemplate(), TopologyDocument.ChildTemplate("2", 1L)) + nestedTemplates()
+
+    /**
+     * Nested templates, which trees start with and [setTemplate] draws from beside the flat ones.
+     * They differ in every way that tells the histories apart: `"3/2"` beside `"6/4"` is a weight
+     * that reads the same, `1L` beside `null` a ceiling alone, and the one-, two- and three-level
+     * forms of one chain a level added or gone.
+     */
+    private fun nestedTemplates() = listOf(
+        TopologyDocument.ChildTemplate("3/2", template = TopologyDocument.ChildTemplate("1")),
+        TopologyDocument.ChildTemplate("6/4", 1L, TopologyDocument.ChildTemplate("1", 2L)),
+        TopologyDocument.ChildTemplate("3/2"),
+        TopologyDocument.ChildTemplate("3/2", template = TopologyDocument.ChildTemplate("2", template = TopologyDocument.ChildTemplate())),
+        TopologyDocument.ChildTemplate("2", template = TopologyDocument.ChildTemplate("1")),
+    )
 
     @Test
     fun anEditIsTheModelsEditAndReadsBackAsTheModelsTree() {
@@ -44,6 +58,7 @@ class TopologyDocumentEditsPropertyTest {
         val outcomes = HashMap<String, Int>()
         val histories = HashMap<TopologyEdit.History, Int>()
         val agreements = HashMap<TopologyEdit.History, Int>()
+        val templateAgreements = HashMap<TopologyEdit.History, Int>()
         var validTrees = 0
         var invalidTrees = 0
         var startedWithDuplicate = 0
@@ -55,6 +70,7 @@ class TopologyDocumentEditsPropertyTest {
             val (label, actual, expected) = drawAndApply(before, model, r)
             val outcome = if (expected is TopologyEdit.Edited) "$label:edited" else expected::class.simpleName ?: "?"
             outcomes[outcome] = (outcomes[outcome] ?: 0) + 1
+            if (label == "template" && expected !is TopologyEdit.Edited) outcomes["template:$outcome"] = (outcomes["template:$outcome"] ?: 0) + 1
             if (actual != expected) {
                 failures += "seed $seed $label\n  before   $before\n  actual   $actual\n  expected $expected"
                 continue
@@ -72,6 +88,7 @@ class TopologyDocumentEditsPropertyTest {
                 if (readBefore is TopologyParse.Valid && read is TopologyParse.Valid) {
                     val changes = readBefore.topology.changesTo(read.topology)
                     agreements[expected.history] = (agreements[expected.history] ?: 0) + 1
+                    if (label == "template") templateAgreements[expected.history] = (templateAgreements[expected.history] ?: 0) + 1
                     if (!expected.history.agreesWith(changes)) {
                         failures += "seed $seed $label: history ${expected.history}, but changesTo lists $changes"
                     }
@@ -83,8 +100,10 @@ class TopologyDocumentEditsPropertyTest {
         }
         // Each floor is about half what the generator reaches on the JVM, so a generator that
         // stopped reaching an arm reds, and one that drifted a little does not.
-        val tally = listOf("weight", "ceiling", "add", "remove", "rename", "move").map { "$it:edited" to (outcomes["$it:edited"] ?: 0) to 50 } +
+        val tally = listOf("weight", "ceiling", "add", "remove", "rename", "move", "template").map { "$it:edited" to (outcomes["$it:edited"] ?: 0) to 50 } +
             listOf("NoSuchNode", "NotAGroup", "DuplicateName", "AtRoot", "IntoItself").map { it to (outcomes[it] ?: 0) to 50 } +
+            listOf("NoSuchNode", "NotAGroup", "AtRoot").map { "template:$it" to (outcomes["template:$it"] ?: 0) to 50 } +
+            templateHistories.map { "template ${it.name} against changesTo" to (templateAgreements[it] ?: 0) to 20 } +
             TopologyEdit.History.entries.map { it.name to (histories[it] ?: 0) to 30 } +
             TopologyEdit.History.entries.map { "${it.name} against changesTo" to (agreements[it] ?: 0) to 30 } +
             listOf("against changesTo" to agreements.values.sum() to 500) +
@@ -103,7 +122,9 @@ class TopologyDocumentEditsPropertyTest {
     /** Draws one edit, applies it to [before] with the edit code and to [model] by hand. */
     private fun drawAndApply(before: TopologyDocument, model: M, r: Random): Drawn {
         val path = drawPath(model, r)
-        return when (r.nextInt(7)) {
+        // A template edit lands only on a group, and loses history only on one that has a template, so
+        // it is drawn twice as often as the others to reach every history against changesTo.
+        return when (r.nextInt(9)) {
             0 -> {
                 val weight = weights.draw(r)
                 Drawn("weight", before.setWeight(path, weight), model.expectChild(path) { node ->
@@ -127,6 +148,10 @@ class TopologyDocumentEditsPropertyTest {
             4 -> {
                 val name = names.draw(r)
                 Drawn("rename", before.rename(path, name), model.expectRename(path, name))
+            }
+            5, 6 -> {
+                val template = templates.draw(r)
+                Drawn("template", before.setTemplate(path, template), model.expectTemplate(path, template))
             }
             else -> {
                 val target = drawPath(model, r)
@@ -158,15 +183,23 @@ class TopologyDocumentEditsPropertyTest {
      */
     private fun TopologyEdit.History.agreesWith(changes: List<TopologyChange>): Boolean {
         val kinds = changes.map { it.kind }
+        val template = changes.singleOrNull()?.takeIf { it.kind.startsWith("template") }
         return when (this) {
-            TopologyEdit.History.KEPT -> kinds.isEmpty() || kinds == listOf("ceiling")
-            TopologyEdit.History.SHARE_RESTARTS -> kinds == listOf("weight")
+            TopologyEdit.History.KEPT -> kinds.isEmpty() || kinds == listOf("ceiling") || template?.history == TopologyChange.SaveEffect.KEPT
+            // A template edit that loses history either restarts the attached children's shares,
+            // keeping every level, or drains the children of a level it takes away.
+            TopologyEdit.History.SHARE_RESTARTS -> kinds == listOf("weight") ||
+                (template is TopologyChange.TemplateChanged && template.history == TopologyChange.SaveEffect.LOST && template.after.levels >= template.before.levels)
             TopologyEdit.History.STARTS_EMPTY -> kinds == listOf("added")
-            TopologyEdit.History.DRAINS -> kinds == listOf("removed")
+            TopologyEdit.History.DRAINS -> kinds == listOf("removed") || kinds == listOf("template removed") ||
+                (template is TopologyChange.TemplateChanged && template.after.levels < template.before.levels)
             TopologyEdit.History.REPLACED -> kinds.sorted() == listOf("added", "removed")
             TopologyEdit.History.NEW_TREE -> kinds.firstOrNull() == "root" && kinds.drop(1).all { it == "added" || it == "removed" }
         }
     }
+
+    /** How many templates deep this chain goes: `1` for a template with no nested one. */
+    private val Topology.ChildTemplate.levels: Int get() = 1 + (template?.levels ?: 0)
 
     private val TopologyChange.kind: String
         get() = when (this) {
@@ -191,7 +224,7 @@ class TopologyDocumentEditsPropertyTest {
         var max: Long?,
         val group: Boolean,
         val children: MutableList<M>,
-        val template: TopologyDocument.ChildTemplate?,
+        var template: TopologyDocument.ChildTemplate?,
     ) {
         companion object {
             fun root(name: String, children: List<M>) = M(name, "1", null, group = true, children.toMutableList(), template = null)
@@ -247,6 +280,26 @@ class TopologyDocumentEditsPropertyTest {
         return edited(path.dropLast(1), TopologyEdit.History.DRAINS)
     }
 
+    /**
+     * The history of the node's template going to [template], read off the two chains as lists
+     * rather than recursively: a level gone drains, else a weight that reads differently at a level
+     * both have restarts shares, else nothing is lost.
+     */
+    private fun M.expectTemplate(path: List<Int>, template: TopologyDocument.ChildTemplate?): TopologyEdit {
+        if (path.isEmpty()) return TopologyEdit.AtRoot
+        val node = at(path) ?: return TopologyEdit.NoSuchNode(path)
+        if (!node.group) return TopologyEdit.NotAGroup(path)
+        val before = generateSequence(node.template) { it.template }.toList()
+        val after = generateSequence(template) { it.template }.toList()
+        node.template = template
+        val history = when {
+            after.size < before.size -> TopologyEdit.History.DRAINS
+            before.indices.any { weightOf.getValue(before[it].weight) != weightOf.getValue(after[it].weight) } -> TopologyEdit.History.SHARE_RESTARTS
+            else -> TopologyEdit.History.KEPT
+        }
+        return edited(path, history)
+    }
+
     private fun M.expectRename(path: List<Int>, newName: String): TopologyEdit {
         val node = at(path) ?: return TopologyEdit.NoSuchNode(path)
         if (path.isEmpty()) {
@@ -295,14 +348,19 @@ class TopologyDocumentEditsPropertyTest {
                 name,
                 weightOf.getValue(weight),
                 children.map { it.toTopologyNode() },
-                template?.let { Topology.ChildTemplate(weightOf.getValue(it.weight), it.maxConcurrent) },
+                template?.toTopologyTemplate(),
                 max,
             )
         } else {
             Topology.Lane(name, weightOf.getValue(weight), max)
         }
 
+    private fun TopologyDocument.ChildTemplate.toTopologyTemplate(): Topology.ChildTemplate =
+        Topology.ChildTemplate(weightOf.getValue(weight), maxConcurrent, template?.toTopologyTemplate())
+
     // ── generators ──────────────────────────────────────────────────────────────────────────────
+
+    private val templateHistories = listOf(TopologyEdit.History.KEPT, TopologyEdit.History.SHARE_RESTARTS, TopologyEdit.History.DRAINS)
 
     private fun <T> List<T>.draw(r: Random): T = this[r.nextInt(size)]
 
