@@ -328,6 +328,19 @@ Iain's ruling, plus corrections the 1.8 reviews showed the text above needs. Whe
 - **Task 2.5 owns a post-dated pass's recovery (#3300's review).** `DeviceKeyStore.keeping` replaces a held grant only with a strictly later `issuedAt` (Decided 21). So a device holding a `NotYetValid` pass drops the fresh pass that ordinary admission gives it, and every return is ordinary admission until the bad pass's date. 2.5 decides the remedy: either `keeping` treats a held grant dated beyond the allowance as replaceable, or the room tells the joiner to drop a grant it refused as `NotYetValid`. The recommendation is the first, since it needs no new frame.
 - **The spike #1637 probe's rewrite (Amendment F) counts `Readmitted` as a return ending**, along with `Recovered(host)`, `Resumed` and `HostLost`.
 
+## Amendment H — rulings of 2026-11-24 (during Task 1.9's review, PR #3645)
+
+1.9's spec review confirmed two errors in Task 1.9 and Amendment F. These win where they differ.
+
+- **`returnRestoresHeldSeatNewId` is not a row.** A seam healed in place keeps its peer id: `SeamRoom`'s reconnect loom must heal the same seam instance, and `Room.selfId` is fixed for the room's life. So a device reaches the host under a new id only as a new room. The table row "new id, same key, held partitioned" is carried by `processRebuiltWithFreshIdRestores`, which asserts `Left(old, Superseded(by))` then `Joined(by)` on the host and on a bystander.
+- **Amendment F's "the existing `RoomHarness` supplies" the `processRebuilt*` rows is wrong.** They need a rebuilt room on the **same** `DeviceKeyStore`, a kill without a goodbye, and control of the relaunched peer id. `RoomHarness`'s `joinerFactory` mints a new device per `join` (Amendment A § 1.4–1.6), so both rows run on 1.9's return harness with the others.
+- **The friction bar allows a relaunch's own `join`.** Each row asserts zero room or factory calls by the app between drop and return. The one exception is a row whose process is killed and relaunched: it allows exactly that launch's ordinary `join`, the call an app makes on every launch.
+- **1.9's files** are `RoomConformanceSuite.kt` (new rows and the abstract `newReturnHarness`, a source break for every subclass), `ReturnHarness.kt` (commonMain, public: `ReturnFixture`, `ReturnHarness`, `ReturnDevice`, `AppCalls`), `ReferenceReturnHarness.kt` (commonTest), `InMemoryRoomConformanceTest.kt`, the skill's rejoin row, the cookbook and spike scenario 7.
+- **Two more rows from the key → seat table.** The design's friction bar asks for a row per line, and the plan named five.
+  - "Same id, different key, seat **partitioned** → seat released, ordinary admission" (Decided 18, 23) is added to 1.9 as `aDifferentKeyOnAPartitionedIdReleasesTheSeat`. It is reachable on the return harness through `kill()` then `impostor()`. The case is a key store cleared on a device whose id persisted.
+  - "New id, same key, every seat connected → additional seat" (Decided 30) needs a hook for a second live process, which `ReturnDevice` lacks. It is #3656, outside slice 1, and stays pinned in `:kuilt-session` meanwhile.
+- **Amendment G's spike bullet, made executable:** the episode matcher ends on `Readmitted(self)`, and the readmission SKIP arm reads that event as well as `resume.ok … restored=false`.
+
 ## Global Constraints
 
 - **Each task is one PR and one sub-issue of #3159.**
@@ -840,7 +853,7 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 
 ### Task 1.9: Slice-1 conformance rows and the rejoin route [after 1.8]
 
-> **Amended — read Amendment G, then Amendment F, then Amendment A § 1.9; they override this task where they differ. `ResumeHarness` and `RoomResumeHarnessTest.kt` no longer exist after 1.8.**
+> **Amended — read Amendment H, then Amendment G, then Amendment F, then Amendment A § 1.9; they override this task where they differ. `ResumeHarness` and `RoomResumeHarnessTest.kt` no longer exist after 1.8.**
 
 **Files:**
 - Modify: `kuilt-conformance/src/commonMain/.../RoomConformanceSuite.kt` (new cases, and `ResumeHarness` reshaped around keys), `InMemoryRoomConformanceTest.kt`, `RoomResumeHarnessTest.kt`, the skill's rejoin row, and `docs/agent-cookbook/session.md` (`## Rejoin & reconnect` and `## Device identity & return`).
