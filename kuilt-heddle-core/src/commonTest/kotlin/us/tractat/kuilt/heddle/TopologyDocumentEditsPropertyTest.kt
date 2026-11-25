@@ -116,7 +116,7 @@ class TopologyDocumentEditsPropertyTest {
                 val ceiling = ceilings.draw(r)
                 Drawn("ceiling", before.setMaxConcurrent(path, ceiling), model.expectChild(path) { node ->
                     node.max = ceiling
-                    TopologyEdit.History.SHARE_RESTARTS
+                    TopologyEdit.History.KEPT
                 })
             }
             2 -> {
