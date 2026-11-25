@@ -520,19 +520,22 @@ abstract class us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite { // 
     final fun aCorruptKeyIsReplacedNotFatal() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aCorruptKeyIsReplacedNotFatal|aCorruptKeyIsReplacedNotFatal(){}[0]
 
     // Targets: [apple]
+    final fun aFreshPassReplacesOneDatedBeyondTheAllowance() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aFreshPassReplacesOneDatedBeyondTheAllowance|aFreshPassReplacesOneDatedBeyondTheAllowance(){}[0]
+
+    // Targets: [apple]
     final fun aKeyIsMadeOnceAndSignsUnderItsOwnName() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aKeyIsMadeOnceAndSignsUnderItsOwnName|aKeyIsMadeOnceAndSignsUnderItsOwnName(){}[0]
 
     // Targets: [apple]
     final fun aKeyThatFailsItsSelfTestIsReplaced() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aKeyThatFailsItsSelfTestIsReplaced|aKeyThatFailsItsSelfTestIsReplaced(){}[0]
 
     // Targets: [apple]
-    final fun aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne|aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne(){}[0]
-
-    // Targets: [apple]
     final fun aRestartKeepsTheKeyOrForgetsIt() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aRestartKeepsTheKeyOrForgetsIt|aRestartKeepsTheKeyOrForgetsIt(){}[0]
 
     // Targets: [apple]
     final fun anInterruptedKeyWriteLeavesTheStoreReadable() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.anInterruptedKeyWriteLeavesTheStoreReadable|anInterruptedKeyWriteLeavesTheStoreReadable(){}[0]
+
+    // Targets: [apple]
+    final fun anOlderRenewalNeverDisplacesTheHeldPass() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.anOlderRenewalNeverDisplacesTheHeldPass|anOlderRenewalNeverDisplacesTheHeldPass(){}[0]
 
     // Targets: [apple]
     final fun anUnreadableKeyIsRefusedNotReplaced() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.anUnreadableKeyIsRefusedNotReplaced|anUnreadableKeyIsRefusedNotReplaced(){}[0]
@@ -565,19 +568,22 @@ abstract class us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite { // 
     final fun aCorruptKeyIsReplacedNotFatal(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aCorruptKeyIsReplacedNotFatal|aCorruptKeyIsReplacedNotFatal(){}[0]
 
     // Targets: [wasmJs]
+    final fun aFreshPassReplacesOneDatedBeyondTheAllowance(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aFreshPassReplacesOneDatedBeyondTheAllowance|aFreshPassReplacesOneDatedBeyondTheAllowance(){}[0]
+
+    // Targets: [wasmJs]
     final fun aKeyIsMadeOnceAndSignsUnderItsOwnName(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aKeyIsMadeOnceAndSignsUnderItsOwnName|aKeyIsMadeOnceAndSignsUnderItsOwnName(){}[0]
 
     // Targets: [wasmJs]
     final fun aKeyThatFailsItsSelfTestIsReplaced(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aKeyThatFailsItsSelfTestIsReplaced|aKeyThatFailsItsSelfTestIsReplaced(){}[0]
 
     // Targets: [wasmJs]
-    final fun aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne|aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne(){}[0]
-
-    // Targets: [wasmJs]
     final fun aRestartKeepsTheKeyOrForgetsIt(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aRestartKeepsTheKeyOrForgetsIt|aRestartKeepsTheKeyOrForgetsIt(){}[0]
 
     // Targets: [wasmJs]
     final fun anInterruptedKeyWriteLeavesTheStoreReadable(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.anInterruptedKeyWriteLeavesTheStoreReadable|anInterruptedKeyWriteLeavesTheStoreReadable(){}[0]
+
+    // Targets: [wasmJs]
+    final fun anOlderRenewalNeverDisplacesTheHeldPass(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.anOlderRenewalNeverDisplacesTheHeldPass|anOlderRenewalNeverDisplacesTheHeldPass(){}[0]
 
     // Targets: [wasmJs]
     final fun anUnreadableKeyIsRefusedNotReplaced(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.anUnreadableKeyIsRefusedNotReplaced|anUnreadableKeyIsRefusedNotReplaced(){}[0]

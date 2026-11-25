@@ -426,15 +426,21 @@ class GrantIssueTest {
         val bobAnsweredCarol = board.sent(from = bob, to = carol).any { it is AdmitMessage.Proof }
         renew(carol, later(carolDevice).wire)
         val afterForgeries = bobStore.grants()
-        val genuine = later(hostDevice)
+        // An hour ahead, so the older renewal below is more than the skew allowance behind it.
+        val genuine = Grant.issue(hostDevice, bobId, room, now() + 1.hours.inWholeMilliseconds, now() + 2.hours.inWholeMilliseconds)
         renew(KEY_SEAT_HOST, genuine.wire)
         val afterGenuine = bobStore.grants()
+        // A genuine but older renewal, replayed or late: a renewal names no Hello, so it never
+        // displaces the pass held, however far behind it is (Decided 21).
+        renew(KEY_SEAT_HOST, later(hostDevice).wire)
+        val afterOlderRenewal = bobStore.grants()
 
         assertAll(
             { assertEquals(1, welcomed.size, "rig: Bob holds the pass his Welcome carried") },
             { assertTrue(bobAnsweredCarol, "rig: Bob answered Carol's stray challenge, so he holds her key as proven") },
             { assertEquals(welcomed, afterForgeries, "none of them displaced it") },
             { assertEquals(listOf(genuine), afterGenuine, "control: a genuine renewal from the host is kept") },
+            { assertEquals(listOf(genuine), afterOlderRenewal, "an older renewal, however far behind, leaves it held") },
         )
         joiner.leave()
         host.leave()
