@@ -102,8 +102,8 @@ class TopologyDocumentEditsPropertyTest {
         // stopped reaching an arm reds, and one that drifted a little does not.
         val tally = listOf("weight", "ceiling", "add", "remove", "rename", "move", "template").map { "$it:edited" to (outcomes["$it:edited"] ?: 0) to 50 } +
             listOf("NoSuchNode", "NotAGroup", "DuplicateName", "AtRoot", "IntoItself").map { it to (outcomes[it] ?: 0) to 50 } +
-            listOf("NoSuchNode", "NotAGroup", "AtRoot").map { "template:$it" to (outcomes["template:$it"] ?: 0) to 15 } +
-            templateHistories.map { "template ${it.name} against changesTo" to (templateAgreements[it] ?: 0) to 15 } +
+            listOf("NoSuchNode", "NotAGroup", "AtRoot").map { "template:$it" to (outcomes["template:$it"] ?: 0) to 50 } +
+            templateHistories.map { "template ${it.name} against changesTo" to (templateAgreements[it] ?: 0) to 20 } +
             TopologyEdit.History.entries.map { it.name to (histories[it] ?: 0) to 30 } +
             TopologyEdit.History.entries.map { "${it.name} against changesTo" to (agreements[it] ?: 0) to 30 } +
             listOf("against changesTo" to agreements.values.sum() to 500) +
@@ -122,7 +122,9 @@ class TopologyDocumentEditsPropertyTest {
     /** Draws one edit, applies it to [before] with the edit code and to [model] by hand. */
     private fun drawAndApply(before: TopologyDocument, model: M, r: Random): Drawn {
         val path = drawPath(model, r)
-        return when (r.nextInt(8)) {
+        // A template edit lands only on a group, and loses history only on one that has a template, so
+        // it is drawn twice as often as the others to reach every history against changesTo.
+        return when (r.nextInt(9)) {
             0 -> {
                 val weight = weights.draw(r)
                 Drawn("weight", before.setWeight(path, weight), model.expectChild(path) { node ->
@@ -147,7 +149,7 @@ class TopologyDocumentEditsPropertyTest {
                 val name = names.draw(r)
                 Drawn("rename", before.rename(path, name), model.expectRename(path, name))
             }
-            5 -> {
+            5, 6 -> {
                 val template = templates.draw(r)
                 Drawn("template", before.setTemplate(path, template), model.expectTemplate(path, template))
             }
