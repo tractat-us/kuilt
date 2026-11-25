@@ -1048,7 +1048,8 @@ internal fun sampleMinimalEditor() {
 
     // Meanwhile another admin saves a new weight for heavy.
     val theirs = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(3)), Topology.Lane("light")))
-    check(heddle.apply(theirs, generation = 1L, startedFrom = startedFrom) is ApplyOutcome.Applied)
+    val theirSave = heddle.apply(theirs, generation = 1L, startedFrom = startedFrom)
+    check(theirSave is ApplyOutcome.Applied && theirSave.result.refusals.isEmpty())
 
     // Checked apply. Saved as it stands, the edit would undo theirs, so it is refused and changes nothing.
     val refused = heddle.apply(candidate, generation = 2L, startedFrom = startedFrom)
@@ -1061,6 +1062,6 @@ internal fun sampleMinimalEditor() {
     val redone = (Topology.from(document) as TopologyParse.Valid).topology
     check(startedFrom.changesTo(redone).none { it is TopologyChange.WeightChanged })
     check(heddle.previewApply(redone, generation = 2L, startedFrom = startedFrom) is PreviewOutcome.Previewed)
-    check(heddle.apply(redone, generation = 2L, startedFrom = startedFrom) is ApplyOutcome.Applied)
-    check(heddle.topology == redone)
+    val saved = heddle.apply(redone, generation = 2L, startedFrom = startedFrom)
+    check(saved is ApplyOutcome.Applied && saved.result.refusals.isEmpty())
 }

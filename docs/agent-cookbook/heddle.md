@@ -518,7 +518,8 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
 
     // Meanwhile another admin saves a new weight for heavy.
     val theirs = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(3)), Topology.Lane("light")))
-    check(heddle.apply(theirs, generation = 1L, startedFrom = startedFrom) is ApplyOutcome.Applied)
+    val theirSave = heddle.apply(theirs, generation = 1L, startedFrom = startedFrom)
+    check(theirSave is ApplyOutcome.Applied && theirSave.result.refusals.isEmpty())
 
     // Checked apply. Saved as it stands, the edit would undo theirs, so it is refused and changes nothing.
     val refused = heddle.apply(candidate, generation = 2L, startedFrom = startedFrom)
@@ -531,8 +532,8 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
     val redone = (Topology.from(document) as TopologyParse.Valid).topology
     check(startedFrom.changesTo(redone).none { it is TopologyChange.WeightChanged })
     check(heddle.previewApply(redone, generation = 2L, startedFrom = startedFrom) is PreviewOutcome.Previewed)
-    check(heddle.apply(redone, generation = 2L, startedFrom = startedFrom) is ApplyOutcome.Applied)
-    check(heddle.topology == redone)
+    val saved = heddle.apply(redone, generation = 2L, startedFrom = startedFrom)
+    check(saved is ApplyOutcome.Applied && saved.result.refusals.isEmpty())
 ```
 
 - **The page's state is two values:** the tree it loaded (`startedFrom`) and the document being
@@ -540,7 +541,8 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
   a rename and the rename back show no change at all.
 - **The sample warns on `Removed` only, because that is the one its edit makes.** A real page
   warns on every change that loses history, which also takes in `WeightChanged`,
-  `TemplateRemoved`, a `TemplateChanged` with a new weight, and `RootRenamed`.
+  `TemplateRemoved`, and a `TemplateChanged` with a new weight. A page refuses a root rename before
+  it previews, because `apply` throws on it.
 - **Preview and save with the same `generation`**, and preview again after a reload: the tree the
   preview was taken against has gone.
 - **A save refused as `TreeChanged` changed nothing.** The page does not retry it blind. It lists
