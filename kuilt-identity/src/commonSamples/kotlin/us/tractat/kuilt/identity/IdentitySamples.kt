@@ -106,6 +106,10 @@ internal suspend fun sampleGrantTrust() {
     check(trust.verify(pass, host.id, "table-7", now + 60_000) == GrantVerdict.WrongSubject)
     check(trust.verify(pass, phone.id, "table-7", now + 3_600_000) == GrantVerdict.Expired)
 
+    // Too early: a pass dated more than five minutes past the clock, issued while it ran ahead.
+    val postDated = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = now + 600_000, notAfter = now + 3_600_000)
+    check(trust.verify(postDated, phone.id, "table-7", now) == GrantVerdict.NotYetValid)
+
     // The phone is lost: revoke it. A pass issued exactly at the cutoff stays good, so the cutoff is
     // one past the clock, or one issued in this same millisecond would slip through.
     val lostAt = now + 120_000

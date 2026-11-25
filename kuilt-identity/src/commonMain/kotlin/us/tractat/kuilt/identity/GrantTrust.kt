@@ -106,6 +106,7 @@ public class GrantTrust @IdentityInternalApi constructor(
         grant.subject != subject -> GrantVerdict.WrongSubject
         !grant.scope.covers(roomId) -> GrantVerdict.WrongScope
         grant.isRevoked() -> GrantVerdict.Revoked
+        grant.isPostDatedAt(now) -> GrantVerdict.NotYetValid
         grant.isExpiredAt(now) -> GrantVerdict.Expired
         else -> GrantVerdict.Valid
     }

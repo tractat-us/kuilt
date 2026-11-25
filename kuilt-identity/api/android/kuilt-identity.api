@@ -143,12 +143,17 @@ public final class us/tractat/kuilt/identity/GrantScope$Room : us/tractat/kuilt/
 }
 
 public final class us/tractat/kuilt/identity/GrantTrust {
+	public static final field CLOCK_SKEW_ALLOWANCE_MILLIS J
+	public static final field Companion Lus/tractat/kuilt/identity/GrantTrust$Companion;
 	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/identity/RevocationList;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/identity/RevocationList;Lus/tractat/kuilt/identity/KeyScheme;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun getHostKey-UjzFoJQ ()Ljava/lang/String;
 	public final fun getRevocations ()Lus/tractat/kuilt/identity/RevocationList;
 	public fun toString ()Ljava/lang/String;
 	public final fun verify-EJOZgSw (Lus/tractat/kuilt/identity/Grant;Ljava/lang/String;Ljava/lang/String;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/identity/GrantTrust$Companion {
 }
 
 public abstract interface class us/tractat/kuilt/identity/GrantVerdict {
@@ -163,6 +168,13 @@ public final class us/tractat/kuilt/identity/GrantVerdict$BadSignature : us/trac
 
 public final class us/tractat/kuilt/identity/GrantVerdict$Expired : us/tractat/kuilt/identity/GrantVerdict {
 	public static final field INSTANCE Lus/tractat/kuilt/identity/GrantVerdict$Expired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/GrantVerdict$NotYetValid : us/tractat/kuilt/identity/GrantVerdict {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/GrantVerdict$NotYetValid;
 	public fun equals (Ljava/lang/Object;)Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;

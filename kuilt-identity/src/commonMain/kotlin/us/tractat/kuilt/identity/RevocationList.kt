@@ -66,7 +66,9 @@ public class RevocationList private constructor(
      * Use `now + 1`. When you know the latest `issuedAt` you gave [subject], use the later of that
      * plus one and `now + 1`: that also catches a grant issued while the clock ran ahead and was then
      * set back. With only the clock, that case is not handled: a cutoff read after the clock stepped
-     * backwards can fall before a grant issued ahead of it, and that grant stays good.
+     * backwards can fall before a grant issued ahead of it, and that grant stays good. [GrantTrust]
+     * refuses it as [GrantVerdict.NotYetValid] while it is dated more than
+     * [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS] ahead, but not once the clock nears its date.
      *
      * A grant issued at or after the cutoff works, so a pass handed out from the cutoff on lets the
      * device back.

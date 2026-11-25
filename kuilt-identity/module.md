@@ -35,7 +35,7 @@ because it names the device's key and is useless without it.
 
 The check. When a device shows a grant, `GrantTrust` decides whether it is good in this room now:
 issued and signed by this host's own key, naming the device that proved it holds that key, for this
-room, not revoked, not run out. The answer is a `GrantVerdict`, `Valid` or the first thing wrong. A
+room, not revoked, not dated more than five minutes ahead of the host's clock, not run out. The answer is a `GrantVerdict`, `Valid` or the first thing wrong. A
 host that no longer wants a device back on an old pass revokes it in its `RevocationList`: every
 grant issued to that key before the cutoff stops working, and a fresh one issued after works again.
 Revoking voids passes; it is not a ban. A revoked device that knocks again is a newcomer, and the
