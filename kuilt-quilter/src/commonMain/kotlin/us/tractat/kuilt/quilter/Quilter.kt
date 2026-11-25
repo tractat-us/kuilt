@@ -925,13 +925,21 @@ public class Quilter<S : Quilted<S>>(
         // [everSentUsDigest] from this side's point of view, so withholding it from unproven peers
         // — the shape #2006's discussion first reached for — would wedge every peer unproven
         // forever and revert #1955 outright, in both directions at once.
+        sendDigestsTo(peer)
+        if (peer !in everSentUsDigest) sendUnprovenPeerFullState(peer)
+    }
+
+    /**
+     * Ships [peer] the digests the tick sends, each arming the grant: the vector digest, and the
+     * root digest beside it unless [peer] has proven it reads vector digests. Under [lock].
+     */
+    private fun sendDigestsTo(peer: PeerId) {
         // The vector digest first, so a current peer has latched [everSentUsVector] for us before
         // the root digest beside it arrives and can ignore that one. A peer that has never sent us
         // a vector digest also gets the root digest, which an older build can read and answer.
         sendVectorDigestTo(peer, armGrant = true)
         if (peer in everSentUsVector) return
         sendRootDigestTo(peer)
-        if (peer !in everSentUsDigest) sendUnprovenPeerFullState(peer)
     }
 
     /**
@@ -1406,17 +1414,34 @@ public class Quilter<S : Quilted<S>>(
      * Three cases:
      * - **Incoming advances our state** (`merged != current`): merge, recompute delivered.
      * - **Incoming is strictly behind** (`merged == current && msg.state != current`): the
-     *   sender is lagging. Push our full state back to it immediately so it heals without
-     *   waiting for the anti-entropy backstop. This is the fix for the reconnect timing
-     *   gap (#828): the reconnecting Quilter sends its own empty first-contact FullState
-     *   (from `onPeersChanged → sendFullStateTo(hub)`) *after* its collector has subscribed,
-     *   so that FullState is guaranteed to reach the hub; the hub sees an empty/lagging state
-     *   and pushes its full history back in response. Prompt, not anti-entropy-cadence.
+     *   sender is lagging, and what goes back depends on whether we asked for the state.
+     *   - **Unasked**: push our whole state back at once, so the sender heals without waiting
+     *     for anti-entropy. This is the fix for the reconnect timing gap (#828): the
+     *     reconnecting Quilter sends its own empty first-contact FullState (from
+     *     `onPeersChanged → sendFullStateTo(hub)`) *after* its collector has subscribed, so that
+     *     FullState is guaranteed to reach the hub; the hub sees an empty/lagging state and
+     *     pushes its full history back in response. Prompt, not anti-entropy-cadence.
+     *   - **Asked for** (our [outstandingRequest] names the sender): send the sender our digests
+     *     with the grant armed, as the tick does, and not our whole state (#3629). On a lagged
+     *     link under churn, a requested state usually lands behind only because our newest
+     *     writes are still crossing to the sender, and our whole state would land behind it in
+     *     turn: the pair bounced whole states until one landed equal, and on bee's rig those
+     *     push-backs were most of the whole-state traffic. The digest lets the sender ask for
+     *     exactly what it lacks: nothing, a [QuiltMessage.Resend], or, through the armed grant,
+     *     our whole state. That heal is one hop longer than a push-back.
+     *
+     *   A first contact is normally unasked. A request needs a digest from the sender on the
+     *   current link, and the link's departure ([forgetLink]) clears it, so the first contact
+     *   of a peer that rejoins arrives with no request to it. One case misreads it as asked:
+     *   the peer restarts under the same [PeerId] while a request to its old run is still
+     *   inside [QuilterConfig.fullStateRequestTimeout], and the departure never reaches
+     *   [onPeersChanged], as when [Seam.peers] conflates a leave and a rejoin. It still heals,
+     *   one hop later, through the digest's armed grant.
      * - **Incoming equals our state exactly** (`msg.state == current`): steady-state tick,
      *   no-op. No push-back here — avoids a FullState storm when all peers are already equal.
      *
-     * `sendFullStateTo` is called under [lock] but internally schedules the suspending send
-     * via `scope.launch` (outside the lock), so this call is safe and non-suspending.
+     * Both answers are called under [lock] but schedule their suspending sends via
+     * `scope.launch` (outside the lock), so this call is safe and non-suspending.
      *
      * Whatever the merge outcome, the heal also resynchronises the receive watermark
      * ([resyncReceiveCursor]) — a FullState is a statement that the sender's history through
@@ -1424,7 +1449,8 @@ public class Quilter<S : Quilted<S>>(
      * and the sender's ack bookkeeping must all reflect it.
      */
     private fun onFullState(sender: PeerId, msg: QuiltMessage.FullState<S>) {
-        if (outstandingRequest?.peer == sender) clearOutstandingRequest()
+        val solicited = outstandingRequest?.peer == sender
+        if (solicited) clearOutstandingRequest()
         replicaOf[sender] = msg.sender
         val current = _state.value
         val merged = current.piece(msg.state)
@@ -1432,10 +1458,11 @@ public class Quilter<S : Quilted<S>>(
             _state.value = merged
             recomputeDeliveredLocal()
         } else if (msg.state != current) {
-            // Sender is strictly behind: push our full state back so it heals promptly.
-            // When msg.state == current the sender is already up to date — no push-back,
-            // avoiding a FullState storm when all peers are already equal.
-            sendFullStateTo(sender)
+            // Sender is strictly behind. A state we asked for gets our digests, and the sender asks
+            // for our whole state only if they show it lacks something (#3629); one we did not ask
+            // for, such as a first contact, gets our whole state at once (#828). When
+            // msg.state == current the sender is already up to date, and nothing goes back.
+            if (solicited) sendDigestsTo(sender) else sendFullStateTo(sender)
         }
         resyncReceiveCursor(sender, msg.sender, msg.upThrough)
     }
