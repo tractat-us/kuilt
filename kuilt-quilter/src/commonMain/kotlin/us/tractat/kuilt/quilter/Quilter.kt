@@ -47,11 +47,13 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.Quilter")
  * [QuiltMessage.VectorDigest] carrying one of them ends the run toward
  * [QuilterConfig.dominatedDigestBackstop] (#3629).
  *
- * A root is recorded whenever one is computed, at least once per digest sent or received, so with
- * a 1 s tick the ring spans the last 16 states that lived through a digest: several times the
- * lag of any link a whole state should cross, against a peer that is one lag behind. Each
- * dominated digest compares against all of them, 16 longs, cheaper than the root it is checked
- * beside. Larger buys reach only for a peer that has stalled, which is the case the backstop is for.
+ * A root is recorded each time one is computed for a state not already in the ring, which is at
+ * most once per digest sent or received. So the ring turns over once per distinct state that lived
+ * through a digest, not once per tick, and on a busy hub digesting several peers while the state
+ * churns that can be faster than once a second. 16 covers the lag of a link a whole state should
+ * cross on a quiet replica, and less on a busy one, where the ring then misses and the backstop
+ * asks as it did before #3629, never worse. Each dominated digest compares against all of them,
+ * 16 longs, cheaper than the root it is checked beside.
  */
 internal const val RECENT_ROOTS: Int = 16
 
@@ -143,8 +145,9 @@ public data class QuilterConfig(
      * one asks for the whole state anyway, through the same bounds as any other request. A matched
      * digest, a request sent, or a digest that shows something we lack ends the run. So does a
      * digest whose root is one of this replica's own last few roots (#3629): the sender then holds
-     * a state we once held, which has nothing we lack, so a lagging reader of a writer is not
-     * asked every interval. A sender whose root matches none of them still reaches the backstop.
+     * a state we once held, which has nothing we lack, so a lagging reader of a writer is no
+     * longer asked once per backstop period. A sender whose root matches none of them still
+     * reaches the backstop.
      * Only roots this replica computed, for a digest it sent or received, are remembered, and
      * under churn from more than one writer the sender's state is rarely one we held. `0` asks
      * every time, as a [QuiltMessage.RootDigest] mismatch does.
@@ -504,6 +507,12 @@ public class Quilter<S : Quilted<S>>(
      */
     private val recentRoots: ArrayDeque<Long> = ArrayDeque(RECENT_ROOTS)
 
+    /** How many dominated digests [recentRoots] matched, ending their run. Under [lock]. */
+    private var recentRootHits: Long = 0L
+
+    /** Exposed internally so a test can prove a dominated digest matched a past root. */
+    internal val recentRootHitsForTest: Long get() = lock.withLock { recentRootHits }
+
     /**
      * The one [QuiltMessage.FullStateRequest] this replica has in flight, or `null` when it has
      * none (#3617). One per replica, not one per peer: a per-peer cap still lets every lagging peer
@@ -592,6 +601,9 @@ public class Quilter<S : Quilted<S>>(
      * independent hand-written mirrors of [stateRoot]'s expression existed before, and a mirror that
      * drifts pins itself, not this function. `QuilterStateRootGoldenVectorTest` keeps one
      * deliberately — that is its whole job — and asserts it against *this* value.
+     *
+     * Not a pure read: like every [stateRoot] call it records the root in [recentRoots], so a
+     * test calling it adds a root that production would only have recorded at a digest.
      */
     internal fun stateRootForTest(): Long = lock.withLock { stateRoot() }
 
@@ -1600,6 +1612,7 @@ public class Quilter<S : Quilted<S>>(
             ours.dominates(seen) && ours != seen -> {
                 if (msg.root in recentRoots) {
                     // A state we once held: nothing we lack, so the run ends (#3629).
+                    recentRootHits++
                     dominatedSince.remove(sender)
                     return
                 }
