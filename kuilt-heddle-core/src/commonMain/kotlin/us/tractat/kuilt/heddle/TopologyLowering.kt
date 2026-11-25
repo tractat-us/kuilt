@@ -227,7 +227,7 @@ internal fun pathOf(group: GroupId): ParsedGroupId? {
     var attached = false
     val names = segments.mapIndexed { index, segment ->
         val marked = segment.startsWith(ATTACHED_MARKER)
-        if (marked && (index != segments.lastIndex)) return null
+        if (marked && (index < 2 || index != segments.lastIndex)) return null
         attached = marked
         val name = unescapeSegment(if (marked) segment.substring(1) else segment) ?: return null
         if (name.isEmpty()) return null
