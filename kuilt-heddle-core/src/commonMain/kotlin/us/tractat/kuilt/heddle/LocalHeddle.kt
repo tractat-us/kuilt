@@ -642,7 +642,8 @@ public class LocalHeddle private constructor(
      * [extend], [complete], [cancel], [reconcileCapacity], [apply], [attach] and [detach], whatever
      * the call returns, since a refused [acquire] may still move the wake memory. Never moved by a
      * read ([topology], [snapshot], [persist], [previewPicks], [previewApply], [explain],
-     * [entitlement], [reconcileLeases]), nor by a call that throws, which changes nothing. Costs one
+     * [entitlement], [reconcileLeases]), nor by a call that throws, which changes nothing, nor by a
+     * checked [apply] refused as [ApplyOutcome.TreeChanged], which reads [topology] and stops. Costs one
      * field read: compare it with the revision the last pass saw before copying anything.
      *
      * Read it as you read the rest of the engine, under the caller's scheduling lock. It is not
@@ -666,9 +667,9 @@ public class LocalHeddle private constructor(
      *
      * An admin page editing the tree reads it when the edit starts, and writes it out with
      * [Topology.toDocument] for the editor. Before applying, `startedFrom.changesTo(candidate)`
-     * ([Topology.changesTo]) lists what the edit changes, and comparing `startedFrom` with this
-     * property again tells whether someone else applied a tree in between. [revision] cannot tell
-     * that: every [acquire] moves it.
+     * ([Topology.changesTo]) lists what the edit changes, and the checked [apply], given
+     * `startedFrom`, applies only if nobody else applied a tree in between: it compares `startedFrom`
+     * with this property. [revision] cannot tell that: every [acquire] moves it.
      *
      * Never absent, since every engine a caller can build has a tree. Reading it changes nothing and
      * does not move [revision]. Read it under the caller's scheduling lock, like the rest of the
@@ -1178,13 +1179,70 @@ public class LocalHeddle private constructor(
      * @sample us.tractat.kuilt.heddle.sampleLocalReload
      */
     public fun apply(new: Topology, generation: Long): ApplyResult = atomically {
-        require(new.groupId() == root) {
-            "the topology's root ${new.groupId().value} is not this engine's ${root.value}: a change of root is not a reload"
-        }
+        requireRoot(new)
         val steps = Topology.diff(new, ledger, generation)
         // Before the run, so the swap forgets what [new] does not want, not what the old topology did not.
         leasable = Leasable.ByTopology(new)
         run(steps, Attribution.CHILD)
+    }
+
+    /**
+     * [apply] [new] at [generation], but only if [topology] is still [startedFrom], the tree the
+     * edit was made from: the save of an admin page that two people may edit at once. When someone
+     * applied another tree in between, it applies nothing and returns [ApplyOutcome.TreeChanged]
+     * naming the running tree; otherwise it returns [ApplyOutcome.Applied] with exactly what
+     * [apply] returns.
+     *
+     * **It compares trees, not revisions.** [revision] moves on every [acquire], so a save checked
+     * against it would be refused on any engine that granted a lease while the admin was editing.
+     * Leases, charges, capacity and [attach] or [detach] leave [topology] as it is, so none of them
+     * refuses a save; only an [apply] of a tree unequal to [startedFrom] does. Trees are compared
+     * whole and in the order written, the same equality [Topology] has.
+     *
+     * A refused save is a read: it changes nothing, [revision] included, and [persist] returns the
+     * same snapshot after it as before.
+     *
+     * @param startedFrom the [topology] the edit was read from, before anyone changed it.
+     * @throws IllegalArgumentException as [apply] does, whether or not the tree has changed: [new]'s
+     *   root is not [root], or [generation] is negative.
+     * @sample us.tractat.kuilt.heddle.sampleCheckedApply
+     */
+    public fun apply(new: Topology, generation: Long, startedFrom: Topology): ApplyOutcome {
+        requireReload(new, generation)
+        return treeChangedSince(startedFrom) ?: ApplyOutcome.Applied(apply(new, generation))
+    }
+
+    /**
+     * What the checked [apply] of [new] at [generation] from [startedFrom] would do now:
+     * [ApplyOutcome.TreeChanged] exactly when it would refuse, and otherwise
+     * [PreviewOutcome.Previewed] with what the unchecked [previewApply] returns. A read, like that
+     * one, whichever it returns.
+     *
+     * Both answer for the engine as it is when called. A tree applied between this preview and the
+     * save still refuses the save, so a page that previewed need not compare trees itself.
+     *
+     * @throws IllegalArgumentException as [apply] does, whether or not the tree has changed.
+     * @sample us.tractat.kuilt.heddle.sampleCheckedApply
+     */
+    public fun previewApply(new: Topology, generation: Long, startedFrom: Topology): PreviewOutcome {
+        requireReload(new, generation)
+        return treeChangedSince(startedFrom) ?: PreviewOutcome.Previewed(previewApply(new, generation))
+    }
+
+    /** The refusal a checked [apply] or [previewApply] makes when [topology] is no longer [startedFrom], or `null` to go ahead. */
+    private fun treeChangedSince(startedFrom: Topology): ApplyOutcome.TreeChanged? =
+        topology.takeIf { it != startedFrom }?.let { ApplyOutcome.TreeChanged(it) }
+
+    /** What [apply] refuses by throwing, checked before a checked call compares trees, so that a stale tree never hides a caller's mistake. */
+    private fun requireReload(new: Topology, generation: Long) {
+        requireRoot(new)
+        require(generation >= 0L) { "a generation is >= 0, was $generation" }
+    }
+
+    private fun requireRoot(new: Topology) {
+        require(new.groupId() == root) {
+            "the topology's root ${new.groupId().value} is not this engine's ${root.value}: a change of root is not a reload"
+        }
     }
 
     /**
