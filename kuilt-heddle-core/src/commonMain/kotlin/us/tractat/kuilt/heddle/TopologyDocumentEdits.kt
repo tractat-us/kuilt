@@ -261,6 +261,9 @@ public fun TopologyDocument.move(path: List<Int>, parent: List<Int>): TopologyEd
     return TopologyEdit.Edited(removed.withChildren(landed) { it + node }, landed + index, history)
 }
 
+/** Not yet implemented: refuses every edit, so the tests that pin it compile and red. */
+public fun TopologyDocument.setTemplate(path: List<Int>, template: TopologyDocument.ChildTemplate?): TopologyEdit = TopologyEdit.AtRoot
+
 // ── walking and rebuilding ──────────────────────────────────────────────────────────────────────
 
 /** Edits the child at [path] in place, refusing the root and a missing node. */

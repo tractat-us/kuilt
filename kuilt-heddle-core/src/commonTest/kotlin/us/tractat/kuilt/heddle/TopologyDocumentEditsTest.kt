@@ -2,6 +2,7 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.heddle.TopologyDocument.Group
 import us.tractat.kuilt.heddle.TopologyDocument.Lane
+import us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate as Template
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -112,6 +113,73 @@ class TopologyDocumentEditsTest {
             { assertEquals(TopologyProblem.Kind.DUPLICATE_NAME, problem.kind) },
             { assertEquals(TopologyDocument("pool", listOf(Lane("batch"), Lane("nightly"))), fixed.document) },
             { assertIs<TopologyParse.Valid>(Topology.from(fixed.document)) },
+        )
+    }
+
+    @Test
+    fun aTemplateIsReplacedWholeAndNullRemovesIt() {
+        val nested = Template("2", 4L, Template("1"))
+        val added = assertIs<TopologyEdit.Edited>(doc.setTemplate(listOf(1), nested))
+        val flat = assertIs<TopologyEdit.Edited>(added.document.setTemplate(listOf(1), Template("2", 4L)))
+        val removed = assertIs<TopologyEdit.Edited>(added.document.setTemplate(listOf(1), null))
+        val expected = TopologyDocument("pool", listOf(doc.children[0], Group("hobby", children = listOf(Lane("batch")), template = nested)))
+        assertAll(
+            { assertEquals(TopologyEdit.Edited(expected, listOf(1), TopologyEdit.History.KEPT), added) },
+            // Passing a template without its nested one removes the nested one: the whole template is replaced.
+            { assertEquals(Template("2", 4L), (flat.document.children[1] as Group).template) },
+            { assertEquals(TopologyEdit.History.DRAINS, flat.history) },
+            { assertEquals(TopologyEdit.Edited(doc, listOf(1), TopologyEdit.History.DRAINS), removed) },
+        )
+    }
+
+    @Test
+    fun aTemplateEditReadsWhatItDoesToTheAttachedChildren() {
+        val before = Template("3/2", 1L, Template("1"))
+        val start = assertIs<TopologyEdit.Edited>(doc.setTemplate(listOf(1), before)).document
+        fun historyOf(after: Template?) = assertIs<TopologyEdit.Edited>(start.setTemplate(listOf(1), after)).history
+        assertAll(
+            { assertEquals(TopologyEdit.History.KEPT, historyOf(before), "the same template") },
+            { assertEquals(TopologyEdit.History.KEPT, historyOf(Template("6/4", 1L, Template("1"))), "an equal ratio") },
+            { assertEquals(TopologyEdit.History.KEPT, historyOf(Template("3/2", 5L, Template("1", 2L))), "ceilings at both levels") },
+            { assertEquals(TopologyEdit.History.KEPT, historyOf(Template("3/2", 1L, Template("1", template = Template()))), "a level added") },
+            { assertEquals(TopologyEdit.History.SHARE_RESTARTS, historyOf(Template("2", 1L, Template("1"))), "the attached weight") },
+            { assertEquals(TopologyEdit.History.SHARE_RESTARTS, historyOf(Template("3/2", 1L, Template("2"))), "the nested weight") },
+            { assertEquals(TopologyEdit.History.DRAINS, historyOf(Template("2", 1L)), "a new weight and a level gone: the drain wins") },
+            { assertEquals(TopologyEdit.History.DRAINS, historyOf(null), "the template gone") },
+            { assertEquals(TopologyEdit.History.KEPT, assertIs<TopologyEdit.Edited>(doc.setTemplate(listOf(0), null)).history, "none, and none again") },
+        )
+    }
+
+    @Test
+    fun aNestedTemplateRoundTripsThroughTopology() {
+        val edited = assertIs<TopologyEdit.Edited>(doc.setTemplate(listOf(0), Template("2", 3L, Template("3/2", template = Template()))))
+        val read = assertIs<TopologyParse.Valid>(Topology.from(edited.document))
+        val expected = Topology.ChildTemplate(Weight.of(2), 3L, Topology.ChildTemplate(Weight.of(3, 2), template = Topology.ChildTemplate(Weight.ONE)))
+        assertAll(
+            { assertEquals(expected, (read.topology.children[0] as Topology.Group).template) },
+            { assertEquals(edited.document, read.topology.toDocument()) },
+        )
+    }
+
+    @Test
+    fun aTemplateIsRefusedAtTheRootOnALaneAndWhereNothingIs() {
+        assertAll(
+            // A document's root has no template to set: TopologyDocument holds only its name and children.
+            { assertEquals(TopologyEdit.AtRoot, doc.setTemplate(emptyList(), Template())) },
+            { assertEquals(TopologyEdit.NotAGroup(listOf(0, 0)), doc.setTemplate(listOf(0, 0), Template())) },
+            { assertEquals(TopologyEdit.NoSuchNode(listOf(0, 0, 0)), doc.setTemplate(listOf(0, 0, 0), Template())) },
+            { assertEquals(TopologyEdit.NoSuchNode(listOf(2)), doc.setTemplate(listOf(2), null)) },
+            { assertEquals(TopologyEdit.NoSuchNode(listOf(-1)), doc.setTemplate(listOf(-1), null)) },
+        )
+    }
+
+    @Test
+    fun aTemplateIsCheckedForShapeNotValues() {
+        val edited = assertIs<TopologyEdit.Edited>(doc.setTemplate(listOf(1), Template("three", -1L)))
+        val problems = (Topology.from(edited.document) as TopologyParse.Invalid).problems
+        assertAll(
+            { assertEquals(setOf(TopologyProblem.Kind.INVALID_WEIGHT, TopologyProblem.Kind.NEGATIVE_MAX_CONCURRENT), problems.map { it.kind }.toSet()) },
+            { assertEquals(setOf(listOf(1)), problems.map { it.path }.toSet()) },
         )
     }
 
