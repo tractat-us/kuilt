@@ -222,6 +222,8 @@ public class LocalHeddleSnapshot internal constructor(
  * - each edge is charged, returned plus spent, no more than was issued across it, and its spend is
  *   not below zero;
  * - each group holds, for each writer, no less than nothing;
+ * - what is spent, over every leaf and every forgotten edge, and what every group holds come to no
+ *   more than was ever minted;
  * - each parent's active children's weights fit the weight budget [LocalHeddle.apply] keeps;
  * - the leases across each edge reserve no more than is outstanding on it.
  *
@@ -230,8 +232,6 @@ public class LocalHeddleSnapshot internal constructor(
  * lifetime limit lets running work reach, so neither is refused here.
  */
 private fun requireBalanced(ledger: EntitlementLedger, open: List<PersistedLease>) {
-    ledger.mintedTotal()
-    ledger.leafSpentTotal()
     val outstanding = HashMap<AttachmentId, Long>()
     for (edge in ledger.allEdges().sorted()) {
         val summary = checkNotNull(ledger.edge(edge)) { "${edge.value} is in the ledger but has no summary" }
@@ -243,13 +243,20 @@ private fun requireBalanced(ledger: EntitlementLedger, open: List<PersistedLease
         outstanding[edge] = summary.issued - charged
     }
     val replicas = ledger.allReplicas().sorted()
+    var heldEverywhere = 0L
     for (group in ledger.allGroups().sorted()) {
         for (replica in replicas) {
             val held = ledger.holdings(group, replica)
             require(held >= 0L) { "${group.value} holds $held for ${replica.value}, less than nothing" }
+            heldEverywhere = checkedAdd(heldEverywhere, held)
         }
         val weights = ledger.activeChildren(group).mapNotNull { ledger.record(it.attachment)?.weight }
         require(weightsFitTheBudget(weights)) { "the weights of ${group.value}'s active children, $weights, do not fit the weight budget" }
+    }
+    val minted = ledger.mintedTotal()
+    val spent = ledger.leafSpentTotal()
+    require(checkedAdd(spent, heldEverywhere) <= minted) {
+        "the ledger has spent $spent and holds $heldEverywhere, more than the $minted ever minted"
     }
     val reserved = LinkedHashMap<AttachmentId, Long>()
     for (persisted in open) {

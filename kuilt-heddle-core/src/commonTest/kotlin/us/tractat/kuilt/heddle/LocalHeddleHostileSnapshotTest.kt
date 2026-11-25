@@ -11,8 +11,9 @@ import kotlin.test.fail
 /**
  * A snapshot holding values no engine could have written is [RestoreResult.Corrupt] at decode, and
  * one that decodes restores and runs (#3261). Every bound below is one the engine keeps after every
- * call: its checked arithmetic keeps each ledger total within `Long`, a charge never takes an edge
- * past what was issued across it, a spend never takes a group below nothing, and a lease reserves
+ * call: its checked arithmetic keeps each ledger total within `Long`, nothing is spent that was not
+ * minted, a charge never takes an edge past what was issued across it, a spend never takes a group
+ * below nothing, [LocalHeddle.apply] keeps each parent's weights in the budget, and a lease reserves
  * only what its path still holds. A bound decode adds beyond those would refuse a snapshot a real
  * engine wrote, so none is added: a lease's [Lease.reserved] above [LocalHeddle.MAX_RESERVATION] is
  * one an engine writes, after an extension, and a counter at `Long.MAX_VALUE` is one the lifetime
@@ -44,19 +45,20 @@ class LocalHeddleHostileSnapshotTest {
     }
 
     /**
-     * The root's minted supply is a sum the engine keeps in `Long`. Two mints whose sum is
-     * `Long.MAX_VALUE` restore and run; one more unit is corrupt, as is a counter whose two writers'
-     * slots sum past `Long`, which `decode` threw on as an `ArithmeticException` before (#3261).
+     * The root's minted supply is a sum the engine keeps in `Long`. In the rich golden, taken at
+     * epoch 1, a second mint from that epoch bringing the sum to `Long.MAX_VALUE` restores and
+     * runs; one more unit is corrupt, as is a counter whose two writers' slots sum past `Long`,
+     * which `decode` threw on as an `ArithmeticException` before (#3261).
      */
     @Test
     fun aLedgerTotalPastLongIsCorrupt() {
-        val mint = "\"minted\":{\"local#0\":{\"root\":\"root\",\"holder\":\"local\",\"amount\":56}}"
+        val mint = "\"minted\":{\"local#0\":{\"root\":\"root\",\"holder\":\"local\",\"amount\":18}}"
         fun withSecondMint(amount: Long) =
-            edited(GOLDEN_FORMAT_1, mint, mint.dropLast(1) + ",\"local#1\":{\"root\":\"root\",\"holder\":\"local\",\"amount\":$amount}}")
+            edited(GOLDEN_FORMAT_1_RICH, mint, mint.dropLast(1) + ",\"local#1\":{\"root\":\"root\",\"holder\":\"local\",\"amount\":$amount}}")
         val issuedB = "\"root/b@1:1#0\":{\"counts\":{\"local\":1}}"
         assertAll(
-            restoresAndRuns(withSecondMint(Long.MAX_VALUE - 56), "two mints summing to Long.MAX_VALUE"),
-            corruptFor(withSecondMint(Long.MAX_VALUE - 55), "leaves Long"),
+            restoresAndRuns(withSecondMint(Long.MAX_VALUE - 18), "two mints summing to Long.MAX_VALUE"),
+            corruptFor(withSecondMint(Long.MAX_VALUE - 17), "leaves Long"),
             corruptFor(edited(GOLDEN_FORMAT_1, issuedB, "\"root/b@1:1#0\":{\"counts\":{\"local\":1,\"other\":${Long.MAX_VALUE}}}"), "leaves Long"),
         )
     }
@@ -75,6 +77,27 @@ class LocalHeddleHostileSnapshotTest {
             { assertEquals(EdgeSummary(x, issued = 4L, returned = 4L, spent = 0L), atBound, "the rig: x is at the bound, returned and spent equal to issued") },
             restoresAndRuns(GOLDEN_FORMAT_1_RICH, "the rich golden, x at the bound"),
             corruptFor(past, "past the 4 issued"),
+        )
+    }
+
+    /**
+     * Everything minted is still held somewhere or has been spent, so the two together never come to
+     * more than was minted. The rich golden is exactly at that bound: 18 minted, 3 spent by its
+     * forgotten `t2` and 15 held. A fold of 4 is corrupt. A fold of 18, which alone spends no more
+     * than was minted, is corrupt too: checking the spend alone let it restore, and the engine's
+     * first completion then took the spend past the mint.
+     */
+    @Test
+    fun spendingAndHoldingMoreThanWasMintedIsCorrupt() {
+        val golden = assertIs<RestoreResult.Restored>(LocalHeddle.decode(GOLDEN_FORMAT_1_RICH, Json)).snapshot.ledger
+        val held = golden.allGroups().sumOf { golden.holdings(it, LOCAL) }
+        val leafSpend = "\"leafSpend\":{\"local\":3}"
+        fun spending(amount: Long) = edited(GOLDEN_FORMAT_1_RICH, leafSpend, "\"leafSpend\":{\"local\":$amount}")
+        assertAll(
+            { assertEquals(Triple(18L, 3L, 15L), Triple(golden.mintedTotal(), golden.leafSpentTotal(), held), "the rig: 18 minted, 3 spent, 15 held") },
+            restoresAndRuns(GOLDEN_FORMAT_1_RICH, "the rich golden, at the bound"),
+            corruptFor(spending(4L), "spent 4 and holds 15, more than the 18 ever minted"),
+            corruptFor(spending(18L), "spent 18 and holds 15, more than the 18 ever minted"),
         )
     }
 
@@ -179,7 +202,8 @@ class LocalHeddleHostileSnapshotTest {
     /**
      * What [decoded] reaches. A decoded snapshot that can be restored is restored twice, and each
      * engine runs one arm: an acquire then every lease completed at its reservation, or every lease
-     * completed one past it, an overrun, then an acquire. Any throw fails the test, naming [name].
+     * completed one past it, an overrun, then an acquire. Then it persists, which checks its books
+     * again. Any throw fails the test, naming [name].
      */
     private fun outcomeOf(name: String, decoded: RestoreResult): Outcome = when (decoded) {
         is RestoreResult.Corrupt -> Outcome.CORRUPT
@@ -221,6 +245,8 @@ class LocalHeddleHostileSnapshotTest {
                 engine.complete(lease.id, cost, waiting = groups)
             }
             if (!acquireFirst) engine.acquire(groups, groups, startedAt = 0L)
+            // What it ran to is a snapshot too, so it persists: its books still balance.
+            engine.persist()
         } catch (failure: Exception) {
             fail("$name: restored, then threw on \"$arm\": $failure", failure)
         }
@@ -255,7 +281,6 @@ class LocalHeddleHostileSnapshotTest {
             }
             label to (numbers.size to Outcome.entries.associateWith { reached[it] ?: 0 })
         }
-        println("W3261-COUNTS $counts")
         assertEquals(EXPECTED_COUNTS, counts)
     }
 
@@ -267,6 +292,18 @@ class LocalHeddleHostileSnapshotTest {
         )
 
         /** Per golden: how many numbers it holds, and how many edits reached each outcome. */
-        val EXPECTED_COUNTS: Map<String, Pair<Int, Map<Outcome, Int>>> = emptyMap()
+        val EXPECTED_COUNTS: Map<String, Pair<Int, Map<Outcome, Int>>> = mapOf(
+            "GOLDEN_FORMAT_1" to (27 to counts(corrupt = 107, unsupported = 2, noLaterEpoch = 1, capacityRefused = 2, survived = 91)),
+            "GOLDEN_FORMAT_1_RICH" to (94 to counts(corrupt = 386, unsupported = 2, noLaterEpoch = 1, capacityRefused = 2, survived = 331)),
+            "GOLDEN_FORMAT_1_ORIGIN" to (35 to counts(corrupt = 141, unsupported = 2, noLaterEpoch = 1, capacityRefused = 2, survived = 121)),
+        )
+
+        fun counts(corrupt: Int, unsupported: Int, noLaterEpoch: Int, capacityRefused: Int, survived: Int): Map<Outcome, Int> = mapOf(
+            Outcome.CORRUPT to corrupt,
+            Outcome.UNSUPPORTED to unsupported,
+            Outcome.NO_LATER_EPOCH to noLaterEpoch,
+            Outcome.CAPACITY_REFUSED to capacityRefused,
+            Outcome.SURVIVED to survived,
+        )
     }
 }
