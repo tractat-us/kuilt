@@ -39,11 +39,11 @@ public sealed interface FailureReason {
      * The host actively rejected the resume with an `AdmitMessage.Reject`, carrying its raw
      * [message] and structured [code].
      *
-     * Branch on [code], not [message]: the text is for a human reading a log. A host that
-     * predates typed codes (or one whose code this build does not know) surfaces
-     * [RejectCode.Unknown], and such a refusal is **not** a claim that the token was permanently
-     * rejected — it may well be a window that had not opened yet (the fast-reconnect race), which
-     * the joiner retried to its deadline before giving up. When [RejectCode.retryable] is false
+     * Branch on [code], not [message]: the text is for a human reading a log. A code this build does
+     * not know surfaces as [RejectCode.Unknown], carrying the retryability its sender stated (v8,
+     * Decided 25), or retryable when it stated none. A retryable refusal is **not** a claim that the
+     * device was turned away for good: the joiner retried it to its deadline before giving up. When
+     * [RejectCode.retryable] is false — one of kuilt's terminal codes, or an app's own that says so —
      * the refusal *is* terminal, and the joiner surfaces it without waiting out the window.
      *
      * kuilt still cannot type the host's *intent* beyond the codes it defines — an

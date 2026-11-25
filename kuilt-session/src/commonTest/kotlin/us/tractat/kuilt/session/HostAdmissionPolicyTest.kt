@@ -132,8 +132,8 @@ class HostAdmissionPolicyTest {
     }
 
     /**
-     * An admission records nothing the joiner can see yet (2.5 issues the pass), so what is pinned
-     * here is that `Admit` seats the newcomer: one `Joined`, one direct `Welcome`.
+     * `Admit` seats the newcomer: one `Joined`, one direct `Welcome`. The pass its terms buy is
+     * `GrantIssueTest`'s.
      */
     @Test
     fun policyAdmitSeatsTheNewcomer() = runTest {
@@ -231,6 +231,34 @@ class HostAdmissionPolicyTest {
     }
 
     // ── A policy that misbehaves ─────────────────────────────────────────────
+
+    /**
+     * A policy may refuse with a code that reuses one of kuilt's ids under the other retryability:
+     * `RejectCode.Unknown("room-mismatch")`, retryable, where kuilt's room mismatch is terminal. The
+     * Reject still goes, stating the policy's retryability, and the room keeps admitting. The joiner
+     * reads the id as the code it knows, which keeps this build's retryability (Decided 25). Built
+     * under the room lock after the challenge is retired, a Reject that refused this shape would
+     * throw out of a launched coroutine, which aborts a Kotlin/Native process and answers nobody.
+     */
+    @Test
+    fun aPolicyCodeReusingAKuiltIdIsStillSentAndTheRoomSurvives() = runTest {
+        val lookalike = RejectCode.Unknown(RejectCode.RoomMismatch.id)
+        val recorded = Recorded { request -> if (request.key == bobKey.id) AdmissionDecision.Reject(lookalike) else admitAll }
+        val host = rawHost(joiners = setOf(bob, carol), admission = recorded.admission)
+
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+
+        val rejects = host.rejectsTo(bob)
+        assertAll(
+            { assertEquals(listOf(bobKey.id, carolKey.id), recorded.keys(), "rig: the policy was asked about both") },
+            { assertEquals(1, rejects.size, "Bob is refused: $rejects") },
+            { assertEquals(RejectCode.RoomMismatch.id, rejects.singleOrNull()?.codeId) },
+            { assertEquals(true, rejects.singleOrNull()?.retryable, "stating the policy's retryability") },
+            { assertEquals<RejectCode?>(RejectCode.RoomMismatch, rejects.singleOrNull()?.code, "which the joiner reads as the code it knows") },
+            { assertTrue(host.room.roster.value.any { it.id == carol }, "the room survives: Carol is admitted after") },
+        )
+    }
 
     /**
      * A policy that throws refuses that joiner retryably, logs, and leaves the room running: the next

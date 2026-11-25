@@ -100,9 +100,14 @@ public class FileDeviceKeyStore internal constructor(
 
     override suspend fun grants(): List<Grant> = exclusively { readGrants() }
 
-    override suspend fun keepGrant(grant: Grant): Unit = exclusively {
+    override suspend fun keepGrant(grant: Grant): Unit = keep(grant, fresh = false)
+
+    @IdentityInternalApi
+    override suspend fun keepFreshGrant(grant: Grant): Unit = keep(grant, fresh = true)
+
+    private suspend fun keep(grant: Grant, fresh: Boolean): Unit = exclusively {
         val current = readGrants()
-        val next = current.keeping(grant)
+        val next = current.keeping(grant, fresh)
         if (next !== current) grantStore.write(GRANTS, StoredGrants.encode(next))
     }
 

@@ -38,11 +38,9 @@ public sealed interface GrantVerdict {
      * since been set back. The pass is refused rather than trusted, and the device goes through
      * ordinary admission, which the host's policy may refuse.
      *
-     * The device keeps the bad pass meanwhile. A [DeviceKeyStore] replaces a held grant only with
-     * one whose [Grant.issuedAt] is strictly later, so the fresh pass ordinary admission hands the
-     * device is dropped, and every return goes through ordinary admission until the bad pass's date
-     * comes near. This is latent while no room checks a presented pass; identity task 2.5 (#3221),
-     * which wires grants into the room, owns the remedy.
+     * The fresh pass ordinary admission hands the device replaces the bad one, although it is older:
+     * a room keeps the pass on its `Welcome` with [DeviceKeyStore.keepFreshGrant], which gives up a
+     * held grant dated beyond this allowance past it (#3221).
      */
     public data object NotYetValid : GrantVerdict
 

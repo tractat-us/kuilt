@@ -104,10 +104,15 @@ internal class WebCryptoDeviceKeyStore(
 
     override suspend fun grants(): List<Grant> = exclusively { grantMedium.use { readGrants(it) } }
 
-    override suspend fun keepGrant(grant: Grant): Unit = exclusively {
+    override suspend fun keepGrant(grant: Grant): Unit = keep(grant, fresh = false)
+
+    @IdentityInternalApi
+    override suspend fun keepFreshGrant(grant: Grant): Unit = keep(grant, fresh = true)
+
+    private suspend fun keep(grant: Grant, fresh: Boolean): Unit = exclusively {
         grantMedium.use { grants ->
             val current = readGrants(grants)
-            val next = current.keeping(grant)
+            val next = current.keeping(grant, fresh)
             if (next !== current) grants.write(GRANTS, StoredGrants.encode(next))
         }
     }

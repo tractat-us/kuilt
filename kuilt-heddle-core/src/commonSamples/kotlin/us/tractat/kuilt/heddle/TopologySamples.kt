@@ -406,6 +406,12 @@ internal fun sampleTopologyDocumentEdits() {
     check(back is TopologyEdit.Edited && back.history == TopologyEdit.History.REPLACED)
     document = back.document
 
+    // A template lets the app attach children to hobby while it runs, here two levels deep.
+    // Adding one costs nobody history; removing it later would drain the attached children.
+    val attaching = document.setTemplate(listOf(1), TopologyDocument.ChildTemplate("2", template = TopologyDocument.ChildTemplate()))
+    check(attaching is TopologyEdit.Edited && attaching.history == TopologyEdit.History.KEPT)
+    document = attaching.document
+
     // An edit that would give two siblings one name is refused, naming the sibling that has it.
     val refused = document.addChild(listOf(0), TopologyDocument.Lane("batch"))
     check(refused == TopologyEdit.DuplicateName(listOf(0, 1), "batch"))
@@ -413,8 +419,12 @@ internal fun sampleTopologyDocumentEdits() {
     // The warning before saving compares with the tree the editor loaded: the round trip is gone.
     val candidate = Topology.from(document)
     check(candidate is TopologyParse.Valid)
+    val attached = Topology.ChildTemplate(Weight.of(2), template = Topology.ChildTemplate(Weight.ONE))
     check(
         running.changesTo(candidate.topology) ==
-            listOf(TopologyChange.WeightChanged(listOf(0, 1), listOf("pool", "acme", "batch"), Weight.ONE, Weight.of(2))),
+            listOf(
+                TopologyChange.WeightChanged(listOf(0, 1), listOf("pool", "acme", "batch"), Weight.ONE, Weight.of(2)),
+                TopologyChange.TemplateAdded(listOf(1), listOf("pool", "hobby"), attached),
+            ),
     )
 }

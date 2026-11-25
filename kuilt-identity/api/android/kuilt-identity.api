@@ -65,6 +65,7 @@ public abstract interface class us/tractat/kuilt/identity/DeviceKeyStore {
 	public abstract fun deviceKey (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getKeyScheme ()Lus/tractat/kuilt/identity/KeyScheme;
 	public abstract fun grants (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun keepFreshGrant (Lus/tractat/kuilt/identity/Grant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun keepGrant (Lus/tractat/kuilt/identity/Grant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
@@ -73,6 +74,7 @@ public final class us/tractat/kuilt/identity/DeviceKeyStore$Companion {
 
 public final class us/tractat/kuilt/identity/DeviceKeyStore$DefaultImpls {
 	public static fun getKeyScheme (Lus/tractat/kuilt/identity/DeviceKeyStore;)Lus/tractat/kuilt/identity/KeyScheme;
+	public static fun keepFreshGrant (Lus/tractat/kuilt/identity/DeviceKeyStore;Lus/tractat/kuilt/identity/Grant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class us/tractat/kuilt/identity/DidKey {
@@ -224,6 +226,7 @@ public final class us/tractat/kuilt/identity/InMemoryDeviceKeyStore : us/tractat
 	public fun deviceKey (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getKeyScheme ()Lus/tractat/kuilt/identity/KeyScheme;
 	public fun grants (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun keepFreshGrant (Lus/tractat/kuilt/identity/Grant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun keepGrant (Lus/tractat/kuilt/identity/Grant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 

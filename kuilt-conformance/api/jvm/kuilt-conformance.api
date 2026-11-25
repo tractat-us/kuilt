@@ -106,10 +106,12 @@ public abstract class us/tractat/kuilt/conformance/DeviceKeyStoreConformanceSuit
 	public fun <init> ()V
 	public final fun aClearedKeyStartsAsANewDevice ()V
 	public final fun aCorruptKeyIsReplacedNotFatal ()V
+	public final fun aFreshPassReplacesOneDatedBeyondTheAllowance ()V
 	public final fun aKeyIsMadeOnceAndSignsUnderItsOwnName ()V
 	public final fun aKeyThatFailsItsSelfTestIsReplaced ()V
 	public final fun aRestartKeepsTheKeyOrForgetsIt ()V
 	public final fun anInterruptedKeyWriteLeavesTheStoreReadable ()V
+	public final fun anOlderRenewalNeverDisplacesTheHeldPass ()V
 	public final fun anUnreadableKeyIsRefusedNotReplaced ()V
 	public final fun concurrentFirstCallsAgreeOnOneKey ()V
 	public final fun corruptGrantsAreDroppedNotFatal ()V

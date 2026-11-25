@@ -48,6 +48,9 @@ public class InMemoryDeviceKeyStore private constructor(
 
     override suspend fun keepGrant(grant: Grant): Unit = mutex.withLock { held = held.keeping(grant) }
 
+    @IdentityInternalApi
+    override suspend fun keepFreshGrant(grant: Grant): Unit = mutex.withLock { held = held.keeping(grant, fresh = true) }
+
     internal companion object {
         /**
          * A store that calls [beforeKeyIsMade] each time it is about to make a key: the conformance
