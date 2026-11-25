@@ -49,7 +49,11 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.session.partition.De
  *   The ordering above assumes the instants handed to this controller do not run backwards. A wall
  *   clock can step back, and then a recovery reported after the step, at an instant before the held
  *   window opened, leaves that window armed: its expiry is refused by a room that holds the member
- *   connected, but it is not disarmed.
+ *   connected, but it is not disarmed. A step back inside one episode can still leave a drop with
+ *   no window: a window opens at t1, a recovery at r < t1 is ignored, the next drop at t2 <= t1 is
+ *   ignored because the t1 window is still live, and the room refuses the t1 window's expiry as a
+ *   stale episode, so no other member is told the seat is gone. Closing that needs an episode
+ *   identity from the room, not an instant.
  * @param scope Coroutine scope that owns per-peer timer jobs. Must outlive this
  *   controller; typically the Room's scope.
  */
