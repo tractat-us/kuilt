@@ -2393,9 +2393,9 @@ prototype below must show the gain first.
 - The wake clamp freezes a lease's reservation error into a permanent offset when
   its group wakes mid-lease: idle credit when over-reserved, a penalty when
   under-reserved. Both exist under slot length. Whether to close it, and how, is
-  being investigated separately (#3200).
+  being investigated separately (#3238).
 - If C is ever reopened, should lengths reorder interior levels (I2) or only
-  siblings (I1)? The prototype's I1 and I2 arms decide (#3200).
+  siblings (I1)? The prototype's I1 and I2 arms, recorded on #3200, decide.
 
 ## 8. Partitions, crashes, and the fairness-error bound
 
@@ -2877,10 +2877,9 @@ scratch engine.
   the winner's head is larger, `extend` the lease by `head − reservation`. Then it
   pops the head.
 - `extend` makes no pick, so the order is the slot-length order, the contract
-  ruled in #3200 (plan Amendment 9), and this ships without settling the rest of
-  #3200. The head sets only what the lease holds, `max(reservation, head)`. A
-  head below the reservation would need the lease to shrink, which is #3200's
-  question.
+  ruled in #3200 (plan Amendment 9). The head sets only what the lease holds,
+  `max(reservation, head)`. A head below the reservation would need the lease to
+  shrink, which is #3648's question.
 - The list stops at the first refusal, including the position-ceiling refusal
   the overflow fix adds (#3313). When the `acquire` lands and its `extend` is
   refused, that pick is left out and the list ends there, even when the root
@@ -2936,7 +2935,7 @@ position-ceiling refusal, landed in #3352.
 #### Open
 
 - A head below the lease's reservation, which would need the lease to shrink.
-  Tracked by #3200.
+  Tracked by #3648.
 
 ---
 
