@@ -11,12 +11,16 @@ and `:kuilt-crdt` (value types); `:kuilt-crdt` itself has no transport dependenc
   for eviction, anti-entropy, and retry tuning.
 
 - **`QuiltMessage<S>`** — sealed wire message hierarchy: `Delta`, `Ack`, `FullState`,
-  `Resend`, `Delivered`, `RootDigest`, `FullStateRequest`. Serialised with CBOR by
-  default. The last two are the anti-entropy tick: it ships a `RootDigest` — a 64-bit
-  hash of the state plus the sender's own-delta high-water — and the peer answers with a
-  `FullStateRequest` only when its own root differs, so a converged round costs one small
-  frame instead of the whole CRDT (#1955). `FullState` is untouched and remains the
-  always-correct fallback that every convergence guarantee traces to.
+  `StateReply`, `Resend`, `Delivered`, `RootDigest`, `VectorDigest`, `FullStateRequest`.
+  Serialised with CBOR by default. `RootDigest`, `VectorDigest` and `FullStateRequest` are
+  the anti-entropy tick: it ships a `RootDigest` — a 64-bit hash of the state plus the
+  sender's own-delta high-water — and the peer answers with a `FullStateRequest` only when
+  its own root differs, so a converged round costs one small frame instead of the whole
+  CRDT (#1955). A peer that reads it gets a `VectorDigest`, which adds what the sender has
+  seen of every replica's deltas (#3622). `FullState` is untouched and remains the
+  always-correct fallback that every convergence guarantee traces to. `StateReply` is the
+  same whole state, pushed back when a peer's `FullState` lands behind; one that lands
+  behind in turn draws digests rather than another whole state (#3629).
 
 - **`RgaGcCoordinator`** — causal-stability GC coordinator for `Rga`. Consumes
   `Quilter.cutFrontier` + `deliveredLocal` and emits `Compact` patches that evict

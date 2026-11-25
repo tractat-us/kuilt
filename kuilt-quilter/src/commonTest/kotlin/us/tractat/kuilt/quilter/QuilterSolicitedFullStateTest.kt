@@ -341,6 +341,44 @@ class QuilterSolicitedFullStateTest {
     }
 
     /**
+     * The same churn with no settle, so the pair's first contacts land in it (#3629). Both replicas
+     * write from t = 0, so each first-contact [QuiltMessage.FullState] lands behind the other's
+     * first write, and none of them was asked for: before [QuiltMessage.StateReply], each drew a
+     * whole state back, which landed behind the next write in turn, and the pair bounced whole
+     * states for the whole two minutes (224 on this rig, against 20 requests).
+     *
+     * Now a push-back to a peer proven current is a [QuiltMessage.StateReply], and a behind one draws
+     * digests, so a chain ends by its third whole state. What may start one unasked is bounded by
+     * the lag: each side's first contact, and its unproven-peer fallback on the ticks before the
+     * other's announcement lands, at t = 1 s and t = 2 s. That is three per side. (No frame is
+     * lost, so no [QuiltMessage.Resend] falls back to a whole state, and every first-contact retry
+     * is cancelled by the first frame to arrive.) A first contact
+     * lands before the receiver has latched [QuiltMessage.VectorDigest] for its sender, so it can draw
+     * a plain push-back and then a [QuiltMessage.StateReply]: three whole states. A fallback lands
+     * after the latch and draws at most a [QuiltMessage.StateReply]: two. So
+     * [UNASKED_CHAIN_BOUND] = 2 × (3 + 2 + 2) = 14 whole states answer no request, and every other
+     * whole state answers one.
+     */
+    @Test
+    fun churnFromFirstContactBouncesABoundedNumberOfWholeStates() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = laggedPair(this, writers = 2, settle = Duration.ZERO)
+
+            assertAll(
+                { assertTrue(rig.stateReplies > 0, "rig: a push-back must have gone as a state reply (${rig.counts})") },
+                { assertTrue(rig.churnWholeStates > rig.churnRequests, "rig: some whole states must answer no request (${rig.counts})") },
+                {
+                    assertTrue(
+                        rig.churnWholeStates <= rig.churnRequests + UNASKED_CHAIN_BOUND,
+                        "whole states past the requests are bounded by the unasked chains (${rig.counts})",
+                    )
+                },
+                { assertEquals(rig.a.state.value, rig.b.state.value, "converged within lag + a tick (${rig.counts})") },
+                { assertEquals(rig.a.stateRootForTest(), rig.b.stateRootForTest(), "with equal roots") },
+            )
+        }
+
+    /**
      * The backstop under churn: one replica writes every 3 s on the same lagged link, so the
      * other's state is always one the writer held a little earlier, and its dominated digests carry
      * the writer's past roots. With a 10 s backstop over two minutes of churn, the writer never
@@ -365,25 +403,27 @@ class QuilterSolicitedFullStateTest {
         val b: Quilter<GSet<String>>,
         val churnWholeStates: Int,
         val churnRequests: Int,
+        val stateReplies: Int,
         val ringHits: Long,
     ) {
-        val counts get() = "churnWholeStates=$churnWholeStates churnRequests=$churnRequests ringHits=$ringHits"
+        val counts get() =
+            "churnWholeStates=$churnWholeStates churnRequests=$churnRequests stateReplies=$stateReplies ringHits=$ringHits"
     }
 
     /**
-     * Two replicas over [LagSeam]s. After [SETTLE], A writes every 3 s for two minutes, and so
+     * Two replicas over [LagSeam]s. After [settle], A writes every 3 s for two minutes, and so
      * does B, 1.5 s later each time, when [writers] is 2; then [LAG] plus a tick of quiet. Counts
-     * the whole states and requests both sent after [SETTLE], and the dominated digests either
-     * matched against a past root. The settle keeps out the whole states every join sends before
+     * the whole states and requests both sent after [settle], and the dominated digests either
+     * matched against a past root. A settle keeps out the whole states every join sends before
      * the first digest crosses the link (a first contact and the unproven-peer fallback of each
-     * tick).
+     * tick). With no settle the count starts before the first contacts, so it holds them all.
      *
      * The knobs the counts depend on are pinned, not defaulted: a 10 s backstop, so two minutes
      * hold twelve runs of it; a request timeout longer than the lag, so a request in flight is
      * never retried early; and no ack-age skip, so nothing but the vector and the ring decides
      * whether a dominated digest asks.
      */
-    private suspend fun laggedPair(scope: TestScope, writers: Int): LaggedPair = with(scope) {
+    private suspend fun laggedPair(scope: TestScope, writers: Int, settle: Duration = SETTLE): LaggedPair = with(scope) {
         val loom = InMemoryLoom()
         val now = { testScheduler.currentTime }
         val seamA = LagSeam(loom.host(Pattern("lag")), LAG, backgroundScope, now)
@@ -398,8 +438,8 @@ class QuilterSolicitedFullStateTest {
         val a = quilterOn(seamA, config, GSet.empty())
         val b = quilterOn(seamB, config, GSet.empty())
         testScheduler.runCurrent()
-        testScheduler.advanceTimeBy(SETTLE)
-        val settled = seamA.sent.size to seamB.sent.size
+        testScheduler.advanceTimeBy(settle)
+        val settled = if (settle == Duration.ZERO) 0 to 0 else seamA.sent.size to seamB.sent.size
 
         repeat(40) { i ->
             a.apply(Patch(GSet.of("a$i")))
@@ -413,8 +453,9 @@ class QuilterSolicitedFullStateTest {
         LaggedPair(
             a = a,
             b = b,
-            churnWholeStates = churn.count { it is QuiltMessage.FullState },
+            churnWholeStates = churn.count { it is QuiltMessage.FullState || it is QuiltMessage.StateReply },
             churnRequests = churn.count { it is QuiltMessage.FullStateRequest },
+            stateReplies = churn.count { it is QuiltMessage.StateReply },
             ringHits = a.recentRootHitsForTest + b.recentRootHitsForTest,
         )
     }
@@ -422,6 +463,9 @@ class QuilterSolicitedFullStateTest {
     private companion object {
         val LAG: Duration = 2.seconds
         val SETTLE: Duration = 10.seconds
+
+        /** Whole states that answer no request when the churn starts at first contact; see its test. */
+        const val UNASKED_CHAIN_BOUND: Int = 14
     }
 }
 
