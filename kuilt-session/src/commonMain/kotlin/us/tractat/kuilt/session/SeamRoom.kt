@@ -3333,29 +3333,32 @@ internal class SeamRoom(
      * a silent [PartitionEvent.Reason.Timeout] partition that may still recover) opens the
      * reconnect window via [markPartitioned].
      *
-     * The resume is claimed in the section that checks [detector] (#3609): checked in one section and
-     * claimed in another, a resume that ended in between, restarting the host detector, would leave
-     * this event from the one it replaced to start a second episode on the healed link.
+     * Each fork checks [detector] in the section that acts on it (#3609), and only there. The resume
+     * is claimed in the section that checks it: checked in one section and claimed in another, a
+     * resume that ended in between, restarting the host detector, would leave this event from the
+     * one it replaced to start a second episode on the healed link.
      * [JoinerResumeMachine.attemptReconnect] shares this room's reentrant [lock] and only launches,
-     * so nothing suspends under it. [markPartitioned] checks again in its own section.
+     * so nothing suspends under it. A partition is checked by [markPartitioned], in the section that
+     * writes the level; a check here as well would be the one that decides on one thread, leaving
+     * that one unpinned.
      */
     private suspend fun handleUnresponsive(event: PartitionEvent.PeerUnresponsive, detector: Job) {
         val (fork, isHost) = lock.withLock {
             val isHost = _role.value == SessionRole.Joiner && event.peerId == hostPeerId
             val fork = when {
+                !isHost || event.reason != PartitionEvent.Reason.TransportClosed -> UnresponsiveFork.Partition
                 !isCurrentDetector(event.peerId, detector) -> UnresponsiveFork.StaleDetector
-                isHost && event.reason == PartitionEvent.Reason.TransportClosed -> {
+                else -> {
                     resumeMachine?.attemptReconnect(event.at)
                     UnresponsiveFork.Resume
                 }
-                else -> UnresponsiveFork.Partition
             }
             fork to isHost
         }
         if (fork == UnresponsiveFork.StaleDetector) {
             logger.debug {
                 "membership.unresponsive.stale-detector peer=${event.peerId.value} reason=${event.reason}: " +
-                    "a detector no longer watching this peer reported it"
+                    "a replaced host detector reported it, so it starts no resume"
             }
             return
         }
