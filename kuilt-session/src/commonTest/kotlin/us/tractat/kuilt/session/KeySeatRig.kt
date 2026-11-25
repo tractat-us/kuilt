@@ -470,6 +470,7 @@ internal suspend fun TestScope.boardRoom(
     seam: Seam = board.plug(id),
     reweave: (suspend () -> Seam)? = null,
     name: String = id.value,
+    admission: HostAdmission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
 ): Room = SeamRoomFactory(
     loom = InMemoryLoom(),
     scope = scope,
@@ -480,7 +481,7 @@ internal suspend fun TestScope.boardRoom(
     reconnectControllerFactory = hold?.factory,
 ).adopt(
     seam,
-    role,
-    memberName = name) KEY_SEAT_ROOM else null,
+    if (role == SessionRole.Host) AdoptRole.Host(admission, roomId = KEY_SEAT_ROOM) else AdoptRole.Joiner,
+    memberName = name,
     reweave = reweave,
 )

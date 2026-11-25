@@ -48,7 +48,7 @@ class UnsignableEntryValueTest {
 
     @Test
     fun hostRefusesAnUnsignableRoomId() = runTest {
-        for (bad in UNSIGNABLE) refusal("roomId") { factory().host(Pattern("room"), roomId = RoomId(bad)) }
+        for (bad in UNSIGNABLE) refusal("roomId") { factory().host(Pattern("room"), roomId = RoomId(bad), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) }
     }
 
     @Test
@@ -91,7 +91,7 @@ class UnsignableEntryValueTest {
         )
         val elected = lobbies[0].host.first { lobbies[0].peers.value.size == 2 }
         val host = lobbies.single { it.selfId == elected }
-        for (bad in UNSIGNABLE) refusal("deviceId") { host.start(deviceId = bad) }
+        for (bad in UNSIGNABLE) refusal("deviceId") { host.start(deviceId = bad, admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) }
         lobbies.forEach { it.leave() }
     }
 

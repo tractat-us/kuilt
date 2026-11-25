@@ -81,7 +81,7 @@ class RealKeyAdmitTest {
         val hostId = PeerId("host")
         val seam = FakeSeam(selfId = hostId, initialPeers = setOf(hostId, bob))
         val room = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock = { Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = InMemoryDeviceKeyStore())
-            .adopt(seam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), roomId = RoomId("room-1"), memberName = "Host"))
+            .adopt(seam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), roomId = RoomId("room-1")), memberName = "Host")
         runCurrent()
         val hello = AdmitMessage.Hello(
             displayName = "Bob",

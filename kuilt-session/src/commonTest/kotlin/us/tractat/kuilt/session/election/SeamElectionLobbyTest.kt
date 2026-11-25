@@ -168,7 +168,7 @@ class SeamElectionLobbyTest {
             val electedHost = l1.host.first { l1.peers.value.size == 2 }
             l2.host.first { l2.peers.value.size == 2 }
             val nonHost = if (l1.selfId == electedHost) l2 else l1
-            assertFailsWith<NotElectedHostException> { nonHost.start() }
+            assertFailsWith<NotElectedHostException> { nonHost.start(admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) }
             l1.leave(); l2.leave()
         }
 
