@@ -266,9 +266,9 @@ class ReturningAdmissionTest {
 
     /**
      * The host's half of the same: a Proof crowded with passes from this host for other rooms, or run
-     * out, ahead of the good one. The host sets aside every pass whose issuer, subject, scope or end
-     * already rules it out, before checking any signature, so the good one is reached however many
-     * come first.
+     * out, or for another device, or from another host, ahead of the good one. The host sets aside
+     * every pass whose issuer, subject, scope or end already rules it out, before checking any
+     * signature, so the good one is reached however many come first.
      */
     @Test
     fun aGoodPassBehindManyThatCannotApplyIsStillFound() = runTest {
@@ -285,21 +285,25 @@ class ReturningAdmissionTest {
         }
         val runOut = Grant.issue(hostSigner, bobKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now - 2, notAfter = now - 1)
         val anotherDevices = Grant.issue(hostSigner, carolKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
-        val anotherHosts = Grant.issue(fakeDeviceKey(ANOTHER_HOST), bobKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
+        // As many as the cap, so the good pass is reached only if every one is set aside unchecked: a
+        // signature check on another host's pass stops at its issuer, so only the cap can see it counted.
+        val anotherHosts = (1..4).map {
+            Grant.issue(fakeDeviceKey(ANOTHER_HOST), bobKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
+        }
 
-        val anotherHostSigned = anotherHosts.isSignedByIssuer(hostStore.keyScheme)
+        val anotherHostSigned = anotherHosts.all { it.isSignedByIssuer(hostStore.keyScheme) }
         val checksBefore = hostStore.checks
         host.admit(bob, bobKey, nonce = 2, grants = otherRooms + runOut + anotherDevices + anotherHosts + good)
 
         assertAll(
-            { assertTrue(anotherHosts.issuer != host.hostKey && anotherHostSigned, "rig: a genuine pass, from another host") },
-            { assertEquals(1, counted.asked.size, "the good pass is found behind nine that cannot apply") },
+            { assertTrue(anotherHosts.none { it.issuer == host.hostKey } && anotherHostSigned, "rig: four genuine passes, from another host") },
+            { assertEquals(1, counted.asked.size, "the good pass is found behind twelve that cannot apply") },
             { assertEquals(ReturnKind.Returning, host.directWelcomesTo(bob).last().returnKind) },
             {
                 assertEquals(
                     1,
                     hostStore.checks - checksBefore,
-                    "the nine are set aside on their fields — room, end, subject and issuer: only the good pass's signature is checked",
+                    "the twelve are set aside on their fields — room, end, subject and issuer: only the good pass's signature is checked",
                 )
             },
         )
