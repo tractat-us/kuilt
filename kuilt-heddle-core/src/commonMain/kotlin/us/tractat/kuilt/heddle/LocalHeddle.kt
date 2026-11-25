@@ -1687,7 +1687,7 @@ public class LocalHeddle private constructor(
         } catch (broken: IllegalArgumentException) {
             // The check is decode's, and decode reports a broken bound as corrupt bytes. Here the
             // bytes are this engine's own, so a broken bound is its bug.
-            throw broken
+            throw IllegalStateException("the engine's own books do not persist: ${broken.message}", broken)
         }
 
     /**
