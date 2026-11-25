@@ -98,9 +98,10 @@ public data class Topology(public val root: String, public val children: List<No
      * @property children the children declared in the config, in the order written.
      * @property template set when the consumer attaches children to this group while running, and
      *   what each attached child gets; `null` when the group has only its declared [children]. A
-     *   group with a template may declare none. Each attached child is a leaf, one level below this
-     *   group: it carries no template of its own, so it never has children. Declared groups nest
-     *   to any depth; attached ones do not yet, and letting them is tracked by #3314.
+     *   group with a template may declare none. An attached child is a leaf unless the template
+     *   carries a [template][ChildTemplate.template] of its own: then it is a group, and the consumer
+     *   attaches children beneath it in turn ([GroupPath.Nested]). Everything below an attached
+     *   child is attached.
      * @property maxConcurrent the most leases open beneath this group at once, counted across all
      *   its children; `null` for no ceiling, `0` to pause it.
      */
@@ -133,11 +134,23 @@ public data class Topology(public val root: String, public val children: List<No
      * ([LocalHeddle.attach]). Every attached child gets [weight] and [maxConcurrent]. Its name is
      * an opaque string the consumer chooses: heddle attaches no meaning to it.
      *
+     * With a [template] of its own, each attached child is a group: the consumer attaches children
+     * beneath it, each getting what that template gives, and the attached child itself is never
+     * leased. Templates nest as deep as the consumer's tree does: `kind → repository → author` is a
+     * declared `kind` whose template's template is the authors'. Weights are per template, so every
+     * repository weighs the same beside its siblings, and every author beside the other authors of
+     * its repository.
+     *
      * @property weight each attached child's share relative to its siblings, declared or attached.
      * @property maxConcurrent the most leases open on **each** attached child at once, not on all
      *   of them together; `null` for no ceiling, `0` to pause every one. Never negative. The
-     *   group's own [Group.maxConcurrent] caps them all together.
+     *   group's own [Group.maxConcurrent] caps them all together. On a template with a [template],
+     *   it caps all the leases beneath each attached child together.
+     * @property template what each child attached beneath an attached child gets, or `null` when
+     *   every attached child is a leaf. A snapshot written before this field existed decodes as
+     *   `null`, and a `null` one is left out of the encoding, so those bytes do not change.
      * @sample us.tractat.kuilt.heddle.sampleTemplateCeiling
+     * @sample us.tractat.kuilt.heddle.sampleNestedAttach
      */
     @Serializable
     public data class ChildTemplate(
@@ -145,6 +158,7 @@ public data class Topology(public val root: String, public val children: List<No
         // snapshot goldens always carry it.
         @Serializable(with = TopologyWeightSerializer::class) public val weight: Weight,
         public val maxConcurrent: Long? = null,
+        @IntroducedAt("0.7.7") public val template: ChildTemplate? = null,
     )
 
     public companion object {
@@ -237,7 +251,8 @@ public data class TopologyProblem(
 
         /**
          * A `maxConcurrent` ceiling is negative. `0` is not a problem: it pauses the node. Reported
-         * at the node's own path, or at the group's path for the ceiling in its template.
+         * at the node's own path, or at the group's path for the ceiling in its template or in a
+         * template nested in it.
          */
         NEGATIVE_MAX_CONCURRENT,
 
@@ -305,11 +320,14 @@ private fun Topology.Node.written(): TopologyDocument.Node = when (this) {
         name,
         weight.text(),
         children.map { it.written() },
-        template?.let { TopologyDocument.ChildTemplate(it.weight.text(), it.maxConcurrent) },
+        template?.written(),
         maxConcurrent,
     )
     is Topology.Lane -> TopologyDocument.Lane(name, weight.text(), maxConcurrent)
 }
+
+private fun Topology.ChildTemplate.written(): TopologyDocument.ChildTemplate =
+    TopologyDocument.ChildTemplate(weight.text(), maxConcurrent, template?.written())
 
 /** Only called once [documentProblems] is empty, so every weight text parses. */
 private fun TopologyDocument.Node.checked(): Topology.Node = when (this) {
@@ -317,11 +335,14 @@ private fun TopologyDocument.Node.checked(): Topology.Node = when (this) {
         name,
         checkedWeight(weight),
         children.map { it.checked() },
-        template?.let { Topology.ChildTemplate(checkedWeight(it.weight), it.maxConcurrent) },
+        template?.checked(),
         maxConcurrent,
     )
     is TopologyDocument.Lane -> Topology.Lane(name, checkedWeight(weight), maxConcurrent)
 }
+
+private fun TopologyDocument.ChildTemplate.checked(): Topology.ChildTemplate =
+    Topology.ChildTemplate(checkedWeight(weight), maxConcurrent, template?.checked())
 
 private fun checkedWeight(text: String): Weight =
     checkNotNull(parseWeightText(text)) { "weight ${quoted(text)} passed the check but does not parse" }
@@ -347,12 +368,12 @@ private fun MutableList<TopologyProblem>.walkGroup(
     children: List<TopologyDocument.Node>,
     template: TopologyDocument.ChildTemplate?,
 ) {
-    if (template != null && parseWeightText(template.weight) == null) {
-        add(group.problem(TopologyProblem.Kind.INVALID_WEIGHT, "template weight ${quoted(template.weight)} $NOT_A_WEIGHT"))
-    }
-    val templateCeiling = template?.maxConcurrent
-    if (templateCeiling != null && templateCeiling < 0L) {
-        add(group.problem(TopologyProblem.Kind.NEGATIVE_MAX_CONCURRENT, "template maxConcurrent $templateCeiling $NEGATIVE_CEILING"))
+    var level = 1
+    var nested = template
+    while (nested != null) {
+        checkTemplate(group, nested, level)
+        nested = nested.template
+        level++
     }
     if (children.isEmpty() && template == null) {
         add(group.problem(TopologyProblem.Kind.EMPTY_GROUP, "the group has no children and no template to attach any by"))
@@ -379,6 +400,25 @@ private fun MutableList<TopologyProblem>.walkGroup(
         if (child is TopologyDocument.Group) {
             walkGroup(at, child.children, child.template)
         }
+    }
+}
+
+/**
+ * The problems in one [template] of [group]'s chain, [level] `1` being the group's own, each reported
+ * at the group's address: a nested template has no node of its own to point at.
+ */
+private fun MutableList<TopologyProblem>.checkTemplate(group: Address, template: TopologyDocument.ChildTemplate, level: Int) {
+    val label = when (level) {
+        1 -> "template"
+        2 -> "nested template"
+        else -> "nested template at level $level"
+    }
+    if (parseWeightText(template.weight) == null) {
+        add(group.problem(TopologyProblem.Kind.INVALID_WEIGHT, "$label weight ${quoted(template.weight)} $NOT_A_WEIGHT"))
+    }
+    val ceiling = template.maxConcurrent
+    if (ceiling != null && ceiling < 0L) {
+        add(group.problem(TopologyProblem.Kind.NEGATIVE_MAX_CONCURRENT, "$label maxConcurrent $ceiling $NEGATIVE_CEILING"))
     }
 }
 

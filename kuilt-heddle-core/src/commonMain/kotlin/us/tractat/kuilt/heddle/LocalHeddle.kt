@@ -317,10 +317,11 @@ public sealed interface LeaseOutcome {
  * ## What a lease ends at
  *
  * A lease ends only at a **leasable** group: a leaf (no ACTIVE child edge) that the topology
- * declares a lane, or an attached child of a group it gives a template. Being a leaf is not enough. A
- * group whose children are all inactive reads as a leaf in the ledger, and only the topology can
- * tell a lane from a group that has nothing attached right now, such as a group with a template
- * before its first child is attached. That group is never leased, and work named at it is never wanted.
+ * declares a lane, or an attached child whose template carries no template of its own. Being a leaf
+ * is not enough. A group whose children are all inactive reads as a leaf in the ledger, and only the
+ * topology can tell a lane from a group that has nothing attached right now, such as a group with a
+ * template before its first child is attached, or an attached repository before its first author is.
+ * That group is never leased, and work named at it is never wanted.
  * The pick's terminal, the lift of [acquire]'s two sets into demand, [admit], [explain] and
  * [entitlement] read this one predicate, so none of them can accept a group the others refuse.
  *
@@ -1288,27 +1289,61 @@ public class LocalHeddle private constructor(
     /**
      * Attach the child [name] to the group at [group], read from the root down, with the weight and
      * ceiling that group's template in the topology gives ([Topology.attach]). Applied as
-     * one unit, like [apply]. Attaching a child that is already attached does nothing; attaching one
-     * whose detach is still draining gives it a new edge and moves its draining leases onto it.
+     * one unit, like [apply]. Attaching a child that is already attached does nothing; attaching a
+     * leaf whose detach is still draining gives it a new edge and moves its draining leases onto it.
+     * A group waits instead, as [attach] of a path says. The same as [attach] of
+     * `GroupPath.Attached(group, name)`.
      *
      * @throws IllegalArgumentException if [group] does not name a group the topology gives a
      *   template, [name] is empty, or [generation] is negative.
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
-    public fun attach(group: List<String>, name: String, generation: Long): ApplyResult =
-        atomically { run(topology.attach(group, name, ledger, generation), Attribution.CHILD) }
+    public fun attach(group: List<String>, name: String, generation: Long): ApplyResult = attach(GroupPath.Attached(group, name), generation)
 
     /**
      * Detach the attached child [name] from the group at [group] ([Topology.detach]):
      * closed at once, and retired once its open leases complete, until when it is
-     * [StepRefusal.Draining].
+     * [StepRefusal.Draining]. The same as [detach] of `GroupPath.Attached(group, name)`, so a child
+     * whose template carries a template takes everything attached beneath it along.
      *
      * @throws IllegalArgumentException if [group] does not name a group the topology gives a
      *   template, or [name] is empty.
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
-    public fun detach(group: List<String>, name: String): ApplyResult =
-        atomically { run(topology.detach(group, name, ledger), Attribution.CHILD) }
+    public fun detach(group: List<String>, name: String): ApplyResult = detach(GroupPath.Attached(group, name))
+
+    /**
+     * Attach the child at [path], with the weight and ceiling the template it is attached under
+     * gives, and every attached group above it that is not attached yet, as one unit
+     * ([Topology.attach]). A [GroupPath.Nested] names a child beneath an attached one: an author
+     * beneath a repository, say, where the declared group's template carries the authors' template.
+     * The repository is a group and is never leased; work is charged to an author.
+     *
+     * Attaching what is already attached does nothing. Attaching a leaf whose detach is still
+     * draining gives it a new edge and moves its draining leases onto it. An attached group whose
+     * detach is still draining is different: the leases beneath it run on children the detach
+     * closed, so it is [StepRefusal.Draining] until they complete, and attaching it then brings none
+     * of those children back. What the detach closed beneath it retires in the same unit, so no
+     * child's edge outlives the group edge it hung from.
+     *
+     * @throws IllegalArgumentException if [path] is a [GroupPath.Declared], no template reaches it
+     *   ([Topology.findGroupId] is `null`), or [generation] is negative.
+     * @sample us.tractat.kuilt.heddle.sampleNestedAttach
+     */
+    public fun attach(path: GroupPath, generation: Long): ApplyResult =
+        atomically { run(topology.attach(path, ledger, generation), Attribution.CHILD) }
+
+    /**
+     * Detach the attached child at [path] and everything attached beneath it ([Topology.detach]):
+     * closed at once, top-down, so nothing new is leased beneath it, and retired bottom-up once the
+     * leases beneath each complete, until when each waiting group is [StepRefusal.Draining]. Detach
+     * again once they have drained.
+     *
+     * @throws IllegalArgumentException if [path] is a [GroupPath.Declared], or no template reaches it.
+     * @sample us.tractat.kuilt.heddle.sampleNestedAttach
+     */
+    public fun detach(path: GroupPath): ApplyResult =
+        atomically { run(topology.detach(path, ledger), Attribution.CHILD) }
 
     /**
      * Apply [steps] as one unit. Each [attempt] starts from the committed ledger. One that finds a
@@ -1390,8 +1425,10 @@ public class LocalHeddle private constructor(
      * children come and go stays the size of what it holds now rather than of everything it ever
      * held. Two kinds of edge go:
      * - every RETIRED edge [EntitlementLedger.forgetRefusal] passes: a leaf's, with its books
-     *   closed. Every one, not only the ones this swap retired, so a ledger restored from a
-     *   snapshot written before the engine forgot compacts in its first swap;
+     *   closed, or a dead group's, once every edge beneath it is gone and its books close as a
+     *   group, together with its other inbound edges. Every one, not only the ones this swap
+     *   retired, so a ledger restored from a snapshot written before the engine forgot compacts in
+     *   its first swap;
      * - every PREPARED edge the topology in force does not want ([Topology.unwantedPrepared]),
      *   which carries nothing, so only the generation floor moves.
      *
@@ -1401,20 +1438,28 @@ public class LocalHeddle private constructor(
      * edge a lease still charges ([ForgetRefusal.OUTSTANDING]). The allocator's memory of each
      * forgotten edge goes in the same swap, since its own pruning needs the edge's record.
      *
-     * Reads every edge's lifecycle once, and makes two passes for the replicas the counters name,
+     * It runs in rounds, until a round forgets nothing: a group's edges pass only once its
+     * children's are gone, so a detached subtree goes deepest first, one level a round, all in this
+     * swap. A swap takes one round more than the depth of the deepest subtree it retires. Each round
+     * reads every edge's lifecycle once, and makes two passes for the replicas the counters name,
      * one to choose the candidates ([EntitlementLedger.forgettable]) and one to forget them.
      * What forgetting changes and what it does not is on [EntitlementLedger.forget].
      */
     private fun forgetQuiesced() {
         if (!forgets) return
-        val quiesced = ledger.quiescedEdges()
-        if (quiesced.isEmpty()) return
-        val (prepared, retired) = quiesced.partition { ledger.lifecycle(it) == Lifecycle.PREPARED }
-        val unwanted = (leasable as? Leasable.ByTopology)?.topology?.unwantedPrepared(prepared, ledger).orEmpty()
-        val doomed = ledger.forgettable(retired + unwanted)
-        if (doomed.isEmpty()) return
-        ledger = checkNotNull(ledger.forget(doomed)) { "the ledger refused to forget ${doomed.map { it.value }}, each of which it passed" }
-        allocator.forget(doomed.toHashSet())
+        // Again until nothing more goes: a group's edges become forgettable only once its children's
+        // are gone (EntitlementLedger.forget), so a detached subtree goes level by level, deepest
+        // first, in this one swap. Each round forgets at least one edge, so this ends.
+        while (true) {
+            val quiesced = ledger.quiescedEdges()
+            if (quiesced.isEmpty()) return
+            val (prepared, retired) = quiesced.partition { ledger.lifecycle(it) == Lifecycle.PREPARED }
+            val unwanted = (leasable as? Leasable.ByTopology)?.topology?.unwantedPrepared(prepared, ledger).orEmpty()
+            val doomed = ledger.forgettable(retired + unwanted)
+            if (doomed.isEmpty()) return
+            ledger = checkNotNull(ledger.forget(doomed)) { "the ledger refused to forget ${doomed.map { it.value }}, each of which it passed" }
+            allocator.forget(doomed.toHashSet())
+        }
     }
 
     /**
@@ -1850,8 +1895,8 @@ public class LocalHeddle private constructor(
 
     /**
      * Whether a lease may end at [group]: the **one leasable predicate**. It is a leaf, it is not
-     * the root, and the topology declares it a lane or an attached child of a group with a template
-     * ([leasable]). The descent stops only here, and every name a pick or an admission accepts is
+     * the root, and the topology declares it a lane or an attached child whose template carries no
+     * template ([leasable]). The descent stops only here, and every name a pick or an admission accepts is
      * tested by it, through [reachable]. A [LocalHeddleView] reads the same top-level predicate.
      */
     private fun EntitlementLedger.isLeasable(group: GroupId): Boolean = isLeasable(group, root, leasable)

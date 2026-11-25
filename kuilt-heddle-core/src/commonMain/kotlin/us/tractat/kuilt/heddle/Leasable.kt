@@ -20,8 +20,9 @@ internal sealed interface Leasable {
 
     /**
      * The most leases that may be open beneath [group] at once, or `null` for no ceiling: its
-     * node's [Topology.Node.maxConcurrent], or for an attached child, its group's
-     * [Topology.ChildTemplate.maxConcurrent], which caps each child on its own.
+     * node's [Topology.Node.maxConcurrent], or for an attached child, the
+     * [Topology.ChildTemplate.maxConcurrent] of the template it is attached under, which caps each
+     * child on its own.
      */
     fun ceilingOf(group: GroupId): Long?
 
@@ -29,48 +30,56 @@ internal sealed interface Leasable {
     val hasCeilings: Boolean
 
     /**
-     * What [topology] declares: each of its lanes, and each attached child of a group it gives a
-     * template. A child under a template is declared by its name alone; whether it is attached is the ledger's
-     * to say, and a leaf with no ACTIVE lineage is never reached anyway.
+     * What [topology] declares: each of its lanes, and each attached child whose template carries no
+     * [template][Topology.ChildTemplate.template] of its own. A child under a template is declared by
+     * its path alone; whether it is attached is the ledger's to say, and a leaf with no ACTIVE lineage
+     * is never reached anyway. An attached child whose template carries a template is a group of
+     * attached children, never leasable, even while nothing is attached beneath it and the ledger
+     * reads it as a leaf.
      */
     class ByTopology(val topology: Topology) : Leasable {
         private val lanes = HashSet<GroupId>()
-        private val templated = HashSet<GroupId>()
+
+        /** The template of each declared group that has one, by its names below the root. */
+        private val templates = HashMap<List<String>, Topology.ChildTemplate>()
 
         /** The ceiling of each declared group and lane that has one. */
         private val ceilings = HashMap<GroupId, Long>()
 
-        /** The ceiling each attached child takes from its group's template, by that group, where the template sets one. */
-        private val templateCeilings = HashMap<GroupId, Long>()
+        /** Whether any template, nested ones included, sets a ceiling for each child attached under it. */
+        private val hasTemplateCeilings: Boolean
 
         init {
-            fun walk(parent: String, nodes: List<Topology.Node>) {
+            fun walk(parent: String, names: List<String>, nodes: List<Topology.Node>) {
                 for (node in nodes) {
                     val id = declaredChildId(parent, node.name)
                     node.maxConcurrent?.let { ceilings[GroupId(id)] = it }
                     when (node) {
                         is Topology.Lane -> lanes += GroupId(id)
                         is Topology.Group -> {
-                            node.template?.let { template ->
-                                templated += GroupId(id)
-                                template.maxConcurrent?.let { templateCeilings[GroupId(id)] = it }
-                            }
-                            walk(id, node.children)
+                            node.template?.let { templates[names + node.name] = it }
+                            walk(id, names + node.name, node.children)
                         }
                     }
                 }
             }
-            walk(escapeSegment(topology.root), topology.children)
+            walk(escapeSegment(topology.root), emptyList(), topology.children)
+            hasTemplateCeilings = templates.values.any { top -> generateSequence(top) { it.template }.any { it.maxConcurrent != null } }
+        }
+
+        /** The template the attached child [group] is attached under, or `null` for any other group. */
+        private fun ownTemplate(group: GroupId): Topology.ChildTemplate? {
+            val parsed = pathOf(group)?.takeIf { it.root == topology.root } ?: return null
+            return parsed.path.ownTemplate { templates[it] }
         }
 
         override fun declares(group: GroupId): Boolean =
-            group in lanes || (pathOf(group)?.path is GroupPath.Attached && GroupId(group.value.substringBeforeLast('/')) in templated)
+            group in lanes || ownTemplate(group)?.let { it.template == null } == true
 
         override fun ceilingOf(group: GroupId): Long? =
-            ceilings[group] ?: templateCeilings.takeIf { it.isNotEmpty() && pathOf(group)?.path is GroupPath.Attached }
-                ?.get(GroupId(group.value.substringBeforeLast('/')))
+            ceilings[group] ?: if (hasTemplateCeilings) ownTemplate(group)?.maxConcurrent else null
 
-        override val hasCeilings: Boolean get() = ceilings.isNotEmpty() || templateCeilings.isNotEmpty()
+        override val hasCeilings: Boolean get() = ceilings.isNotEmpty() || hasTemplateCeilings
     }
 
     /**

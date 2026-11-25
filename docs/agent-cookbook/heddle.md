@@ -884,9 +884,10 @@ engine, its `revision` and what it persists are unchanged.
 **Intent:** groups the program discovers as it runs — a tenant, a repository, a contributor's
 fork — each with its own fair share, without rewriting the config.
 **Primitive:** a group with a `template` in the `Topology`, then
-`LocalHeddle.attach(group, name, generation)` and `detach(group, name)`. The template gives each
-attached child its weight and its own `maxConcurrent`; the names are opaque to heddle, of any
-spelling, and never collide with a declared child.
+`LocalHeddle.attach(group, name, generation)` and `detach(group, name)`, or `attach(path,
+generation)` and `detach(path)` with a `GroupPath` for children attached beneath attached ones. The
+template gives each attached child its weight and its own `maxConcurrent`; the names are opaque to
+heddle, of any spelling, and never collide with a declared child.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleAttachedChildren -->
 ```kotlin
@@ -905,17 +906,34 @@ spelling, and never collide with a declared child.
 `Topology.attach` and `detach`, as in the sample, list the same steps without applying them; on
 an engine, `LocalHeddle.attach` and `detach` apply them as one unit, like `apply`. Attaching
 twice does nothing. A detach drains like a removal, and its own swap forgets the child's retired
-edge once its books close, so detach a child whenever it goes idle. Re-attaching a child whose
-detach is still draining moves its leases onto the new edge. A reload that keeps the template
+edge once its books close, so detach a child whenever it goes idle; detaching a group forgets
+the edges beneath it and then its own, in the same swap. Re-attaching a child whose
+detach is still draining moves its leases onto the new edge; a group whose detach is draining
+waits for the leases beneath it instead. A reload that keeps the template
 keeps every attached child and its history; one that drops the template closes them.
 `Topology.attachedChildId(group, name)` names the child's id.
 
-An attached child is always a leaf: it carries no template of its own, so a tree you discover
-while running is one level deep under its group. For two levels, such as a repository and then
-its authors, declare each repository as a group with a `template`, and `apply` a new topology as
-each repository appears; its authors are then attached children. Letting an attached child have
-attached children of its own is tracked by
-[#3314](https://github.com/tractat-us/kuilt/issues/3314).
+**A tree you discover two levels deep** — a repository, then its authors — needs no reload per
+repository. Give the template a `template` of its own: each attached repository is then a group,
+never leased itself, and each author is attached beneath it with a `GroupPath.Nested`.
+`attach(path, generation)` attaches the repository too if it is new, in the same unit; weights are
+per template, so every repository weighs the same, and every author beside its siblings. Do not
+re-`apply` the tree for each repository you find: that rewrites the admin's document, and an
+admin's open save then refuses as `TreeChanged`.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleNestedAttach -->
+```kotlin
+    // Attaching an author attaches its repository too, in the same unit.
+    val kuilt = GroupPath.Attached(listOf("repos"), "kuilt")
+    val alice = GroupPath.Nested(kuilt, "alice")
+    check(heddle.attach(alice, generation = 1L).refusals.isEmpty())
+    val aliceId = checkNotNull(ci.findGroupId(alice))
+    check(aliceId == GroupId("ci/repos/!kuilt/!alice") && ci.findPath(aliceId) == alice)
+```
+
+`detach(path)` on a repository closes every author beneath it at once and retires them bottom-up,
+each `Draining` while its leases run; attaching the repository again brings no author back. In a
+config file the same shape is `template: { weight: "2", template: { weight: "1" } }`.
 
 ## Capping and pausing a group
 

@@ -651,6 +651,42 @@ internal fun sampleTemplateCeiling() {
 }
 
 /**
+ * A CI queue that finds both its repositories and their authors while running: each repository
+ * gets the same share, and inside it each author does. A repository is a group, so work is
+ * charged to an author; detaching a repository closes every author beneath it.
+ */
+@Suppress("unused")
+internal fun sampleNestedAttach() {
+    val ci = draft("ci") {
+        // Each repository weighs 2 beside the nightly lane, and each author caps at one job.
+        group("repos") { template(Weight.of(2), template = Topology.ChildTemplate(Weight.ONE, maxConcurrent = 1L)) }
+        lane("nightly")
+    }
+    val (heddle, booted) = LocalHeddle.fromTopology(ci, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+    check(booted.refusals.isEmpty())
+    heddle.reconcileCapacity(totalSlots = 4L)
+
+    // Attaching an author attaches its repository too, in the same unit.
+    val kuilt = GroupPath.Attached(listOf("repos"), "kuilt")
+    val alice = GroupPath.Nested(kuilt, "alice")
+    check(heddle.attach(alice, generation = 1L).refusals.isEmpty())
+    val aliceId = checkNotNull(ci.findGroupId(alice))
+    check(aliceId == GroupId("ci/repos/!kuilt/!alice") && ci.findPath(aliceId) == alice)
+
+    // Work is charged to the author; the repository itself is never leased.
+    val kuiltId = checkNotNull(ci.findGroupId(kuilt))
+    check(heddle.admit(kuiltId, waiting = setOf(kuiltId), startedAt = 0L) == AcquireOutcome.NoLiveLineage(kuiltId))
+    val lease = (heddle.acquire(setOf(aliceId), setOf(aliceId), startedAt = 0L) as AcquireOutcome.Acquired).lease
+    check(lease.leaf == aliceId)
+
+    // Detaching the repository closes alice too, and waits for her running job.
+    val detached = heddle.detach(kuilt)
+    check(detached.refusals.isNotEmpty() && detached.refusals.all { it is StepRefusal.Draining })
+    check(heddle.complete(lease.id, actualCost = 1L, waiting = emptySet()) is LeaseOutcome.Done)
+    check(heddle.detach(kuilt).refusals.isEmpty())
+}
+
+/**
  * A status line for the person whose build is waiting: where their next builds sit in line, why
  * another team goes first, and what share they are owed. Every answer is a read, so asking moves
  * nothing, and a preview finishes no build, so a lane under a ceiling shows up no more often than
