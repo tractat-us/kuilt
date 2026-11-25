@@ -273,6 +273,7 @@ private fun requireBalanced(ledger: EntitlementLedger, open: List<PersistedLease
     }
     val reserved = LinkedHashMap<AttachmentId, Long>()
     for (persisted in open) {
+        require(persisted.lease.reserved <= LocalHeddle.MAX_RESERVATION) { "MUTATION: lease reserves ${persisted.lease.reserved}, past the cap" }
         for (edge in persisted.path) reserved[edge] = checkedAdd(reserved[edge] ?: 0L, persisted.lease.reserved)
     }
     for ((edge, sum) in reserved) {
