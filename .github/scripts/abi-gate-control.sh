@@ -30,6 +30,16 @@
 # The 2026-10-11 ruling named "removing a public member or changing its return type"; arm 3 does
 # both, plus the addition, in one run.
 #
+# Receipts, taken on macOS against KGP 2.4.21 by editing kuilt.kmp-library and running this script:
+#   - unmutated: OK, all three arms.
+#   - `abiValidation()` deleted: still OK, and correctly so. KGP also activates validation on any
+#     READ of `kotlin.abiValidation` ("call abiValidation(), abiValidation { ... } or read
+#     abiValidation property", its own deprecation text), and the off-macOS skip reads it. Deleting
+#     the call alone does not turn the gate off.
+#   - that call AND the skip's read removed: arm 1 red, `updateKotlinAbi` not found.
+#   - `checkKotlinAbi` skipped for every module (an over-matching skip): arm 2 red, SKIPPED.
+#   - `checkKotlinAbi`'s actions replaced by a no-op (a checker that compares nothing): arm 3 red.
+#
 # Everything is restored on exit, by copy from a backup rather than `git checkout`. The module's JVM
 # classes are left compiled from the fixture; the next build recompiles them.
 set -euo pipefail
@@ -47,8 +57,15 @@ tab=$'\t'
 fail() {
   echo "abi-gate-control: FAILED — $1" >&2
   if [ -n "${2:-}" ] && [ -f "$2" ]; then
-    echo "----- $2 (last 60 lines) -----" >&2
-    tail -60 "$2" >&2
+    echo "----- $2: task outcomes for ${module} -----" >&2
+    grep -E "^> Task :${module}:(compileKotlinJvm|internalDumpKotlinAbi|checkKotlinAbi|updateKotlinAbi)( |\$)" "$2" >&2 || true
+    if grep -q '^\* What went wrong:' "$2"; then
+      echo "----- $2: what went wrong -----" >&2
+      sed -n '/^\* What went wrong:/,/^\* Try:/p' "$2" >&2
+    else
+      echo "----- $2 (last 40 lines) -----" >&2
+      tail -40 "$2" >&2
+    fi
   fi
   exit 1
 }

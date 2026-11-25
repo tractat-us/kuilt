@@ -395,6 +395,19 @@ jobs:
           -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
+      - name: ABI gate positive control — checkKotlinAbi still reds on drift (#2684)
+        # The build above ran checkKotlinAbi green on every module. This proves that green is a
+        # verdict: it plants a JVM-only fixture in :kuilt-math, records it, then changes a return
+        # type, removes a function and adds one, and requires checkKotlinAbi to fail naming exactly
+        # those three. It recompiles :kuilt-math's JVM sources and nothing else. LAST, because it
+        # leaves :kuilt-math compiled from the fixture, which would read as a re-run in the stamp
+        # invariance pass. Same daemon arguments, so the warm daemon is reused. Receipts and
+        # rationale are in the script's header.
+        run: >-
+          .github/scripts/abi-gate-control.sh --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+
       - name: Kill jstack heartbeat
         # Stop the background watchdog. Runs if: always() so the orphaned loop is
         # cleaned up even when the build step fails.
