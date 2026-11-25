@@ -44,13 +44,19 @@ class AdmissionRequestsTest {
     }
 
     @Test
-    fun defaultsToNoNameAndNoDeviceId() = keysTest { a, _ ->
-        val request = admissionRequest(a)
+    fun defaultsToNoDeviceId() = keysTest { a, _ ->
+        val request = admissionRequest(a, displayName = "Ada")
         assertAll(
             { assertEquals(a, request.key) },
-            { assertEquals("", request.displayName) },
+            { assertEquals("Ada", request.displayName) },
             { assertEquals(null, request.deviceId) },
         )
+    }
+
+    /** The proof signs a missing device id as `""`, so the request cannot tell the two apart either. */
+    @Test
+    fun anEmptyDeviceIdIsNone() = keysTest { a, _ ->
+        assertEquals(null, admissionRequest(a, displayName = "Ada", deviceId = "").deviceId)
     }
 
     @Test
@@ -58,9 +64,9 @@ class AdmissionRequestsTest {
         val policy = AdmissionPolicy.open(readmitFor = 10.minutes)
         val expected = AdmissionDecision.Admit(GrantTerms(10.minutes))
         val forA = policy.decide(admissionRequest(a, "Ada", "phone-1"))
-        val forB = policy.decide(admissionRequest(b))
+        val forB = policy.decide(admissionRequest(b, "Bea"))
         // A freshly generated key, the way an app's own test would most often get one.
-        val forFresh = policy.decide(admissionRequest(DeviceKey.generate().id))
+        val forFresh = policy.decide(admissionRequest(DeviceKey.generate().id, "Cy"))
         assertAll(
             { assertEquals(expected, forA) },
             { assertEquals(expected, forB) },

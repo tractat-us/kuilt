@@ -54,6 +54,20 @@ class AdmissionPolicyTest {
         )
     }
 
+    /**
+     * The proof signs a missing device id as `""`, so a joiner sending `""` and one sending nothing
+     * cannot be told apart. The request settles it in its own constructor (#3220): `""` is none,
+     * whoever builds the request, so a policy branching on `deviceId == null` sees one value.
+     */
+    @Test
+    fun anEmptyDeviceIdIsNone() = keysTest { a, _ ->
+        assertAll(
+            { assertNull(AdmissionRequest(a, "Ada", deviceId = "").deviceId) },
+            { assertNull(AdmissionRequest(a, "Ada", deviceId = null).deviceId) },
+            { assertEquals("phone-1", AdmissionRequest(a, "Ada", deviceId = "phone-1").deviceId) },
+        )
+    }
+
     @Test
     fun openCarriesTheTermItWasGiven() = keysTest { a, _ ->
         assertEquals(
