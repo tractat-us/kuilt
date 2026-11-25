@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
@@ -362,6 +363,22 @@ class GrantIssueTest {
         renew(KEY_SEAT_HOST, later(hostDevice, subject = fakeDidKey(7)).wire) // another device
         renew(KEY_SEAT_HOST, byteArrayOf(1, 2, 3)) // not a grant
         renew(carol, later(hostDevice).wire) // a genuine pass, from someone who is not the host
+        // A co-joiner on a flat fabric whose stray challenge Bob answers, which proves Carol's own key
+        // to Bob, then hands him a pass under that key. Only the host's renewals count.
+        val bobsHello = board.sent(from = bob).filterIsInstance<AdmitMessage.Hello>().last()
+        val carolDevice = fakeDeviceKey(9)
+        val stray = Challenge.sign(
+            carolDevice,
+            KEY_SEAT_ROOM.value,
+            hostPeerId = carol.value,
+            joinerPeerId = bob.value,
+            joinerNonce = assertNotNull(bobsHello.joinerNonce),
+            hostNonce = ByteArray(Challenge.NONCE_SIZE) { 4 },
+        )
+        board.inject(from = carol, to = bob, message = AdmitMessage.Challenge(stray.wire))
+        testScheduler.runCurrent()
+        val bobAnsweredCarol = board.sent(from = bob, to = carol).any { it is AdmitMessage.Proof }
+        renew(carol, later(carolDevice).wire)
         val afterForgeries = bobStore.grants()
         val genuine = later(hostDevice)
         renew(KEY_SEAT_HOST, genuine.wire)
@@ -369,6 +386,7 @@ class GrantIssueTest {
 
         assertAll(
             { assertEquals(1, welcomed.size, "rig: Bob holds the pass his Welcome carried") },
+            { assertTrue(bobAnsweredCarol, "rig: Bob answered Carol's stray challenge, so he holds her key as proven") },
             { assertEquals(welcomed, afterForgeries, "none of them displaced it") },
             { assertEquals(listOf(genuine), afterGenuine, "control: a genuine renewal from the host is kept") },
         )
