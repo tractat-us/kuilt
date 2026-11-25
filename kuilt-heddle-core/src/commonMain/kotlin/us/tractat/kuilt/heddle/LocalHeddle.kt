@@ -1425,8 +1425,10 @@ public class LocalHeddle private constructor(
      * children come and go stays the size of what it holds now rather than of everything it ever
      * held. Two kinds of edge go:
      * - every RETIRED edge [EntitlementLedger.forgetRefusal] passes: a leaf's, with its books
-     *   closed. Every one, not only the ones this swap retired, so a ledger restored from a
-     *   snapshot written before the engine forgot compacts in its first swap;
+     *   closed, or a dead group's, once every edge beneath it is gone and its books close as a
+     *   group, together with its other inbound edges. Every one, not only the ones this swap
+     *   retired, so a ledger restored from a snapshot written before the engine forgot compacts in
+     *   its first swap;
      * - every PREPARED edge the topology in force does not want ([Topology.unwantedPrepared]),
      *   which carries nothing, so only the generation floor moves.
      *
@@ -1436,7 +1438,10 @@ public class LocalHeddle private constructor(
      * edge a lease still charges ([ForgetRefusal.OUTSTANDING]). The allocator's memory of each
      * forgotten edge goes in the same swap, since its own pruning needs the edge's record.
      *
-     * Reads every edge's lifecycle once, and makes two passes for the replicas the counters name,
+     * It runs in rounds, until a round forgets nothing: a group's edges pass only once its
+     * children's are gone, so a detached subtree goes deepest first, one level a round, all in this
+     * swap. A swap takes one round more than the depth of the deepest subtree it retires. Each round
+     * reads every edge's lifecycle once, and makes two passes for the replicas the counters name,
      * one to choose the candidates ([EntitlementLedger.forgettable]) and one to forget them.
      * What forgetting changes and what it does not is on [EntitlementLedger.forget].
      */

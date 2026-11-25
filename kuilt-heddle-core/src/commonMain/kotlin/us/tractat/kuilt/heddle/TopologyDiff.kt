@@ -266,17 +266,20 @@ public fun Topology.attach(path: GroupPath, ledger: EntitlementLedger, generatio
     val prepareGeneration by lazy { effectiveGeneration(generation, ledger) }
     val planned = ArrayList<Planned>()
     val chainIds = chain.mapTo(HashSet()) { it.id }
+    // The topmost group of the chain attached again, if any: its subtree holds every deeper one's.
+    var reattached: GroupId? = null
     for (attached in chain) {
         val want = WantedChild(attached.id, attached.parent, attached.template.weight, group = attached.template.template != null)
         val edges = ledger.ownedEdgesInto(attached.id, root)
         val adopted = edges.adoptable(want)
         planned.planWanted(want, edges, adopted, ledger) { prepareGeneration }
-        // A group attached again after a detach: what that detach closed beneath it is not
-        // brought back, so it retires in this list, as a diff would retire it.
-        if (attached.template.template != null && adopted?.lifecycle != Lifecycle.ACTIVE) {
-            planned.planLeftBeneath(attached.id, chainIds, ledger, root)
-        }
+        if (reattached == null && attached.template.template != null && adopted?.lifecycle != Lifecycle.ACTIVE) reattached = attached.id
     }
+    // What a detach closed beneath a group attached again is not brought back: it retires in this
+    // list, as a diff would retire it. One walk from the topmost such group judges every group
+    // beneath it once; a walk per group would plan each deeper one's retires again, and the ledger
+    // refuses a second retire of an edge.
+    reattached?.let { planned.planLeftBeneath(it, chainIds, ledger, root) }
     return planned.sortedWith(STEP_ORDER).map { it.step }
 }
 

@@ -113,6 +113,7 @@ class LocalHeddleNestedAttachPropertyTest {
      * not yet retired. After every call:
      *
      * - [EntitlementLedger.validate] reports nothing;
+     * - no step of the call was refused by the ledger itself ([checkNoLedgerRefusal]);
      * - no edge outlives the edge above it: every live edge into an attached child has a live edge
      *   into its parent numbered at or below it, the edge it was attached under or one older. A
      *   parent's edge made after the child's is a re-attach, and this tree has no reweight, the one
@@ -182,12 +183,12 @@ class LocalHeddleNestedAttachPropertyTest {
         assertAll(
             { assertEquals(emptyList(), failures.take(20), "${failures.size} failures") },
             // Floors below the counts measured on JVM, macosArm64 and wasmJs, identical on all three
-            // (273, 89, 79, 30, 120), so a generator that stopped reaching a drain reds.
+            // (273, 89, 79, 30, 120, and 17 attaches over two detached groups), so a generator that stopped reaching a drain reds.
             { assertTrue(tally.leases >= 200, "leases ${tally.leases}") },
             { assertTrue(tally.drainingDetaches >= 60, "detaches that waited on a lease ${tally.drainingDetaches}") },
             { assertTrue(tally.reattachesOverClosing >= 55, "attaches over a closing edge ${tally.reattachesOverClosing}") },
             { assertTrue(tally.reattachesLanded >= 20, "of which landed ${tally.reattachesLanded}") },
-            { assertTrue(tally.deepReattaches >= 999_999, "attaches over two detached groups of a chain ${tally.deepReattaches}") },
+            { assertTrue(tally.deepReattaches >= 12, "attaches over two detached groups of a chain ${tally.deepReattaches}") },
             { assertTrue(tally.compared >= 80, "shares compared ${tally.compared}") },
         )
     }

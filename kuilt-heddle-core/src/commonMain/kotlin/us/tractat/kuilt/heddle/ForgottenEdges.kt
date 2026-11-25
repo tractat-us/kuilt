@@ -84,9 +84,10 @@ internal enum class ForgetRefusal {
     LIVE,
 
     /**
-     * The edge's child has child edges, live, retired or forgotten: leaves go first. A child whose
-     * child edges are all forgotten is the exception once it is dead and its books close as a group,
-     * and then its inbound edges go together, with its row in [ForgottenEdges.outflow].
+     * The edge's child has a child edge the ledger still holds, live or retired: leaves go first. A
+     * child whose child edges are all forgotten is judged as a group instead, by [GROUP_LIVE] and
+     * [GROUP_STRANDED]; when neither applies, its inbound edges go together, with its row in
+     * [ForgottenEdges.outflow].
      */
     CHILD_HAS_CHILD_EDGES,
 

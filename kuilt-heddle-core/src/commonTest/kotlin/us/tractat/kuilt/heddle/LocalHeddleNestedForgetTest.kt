@@ -16,8 +16,9 @@ import kotlin.test.assertTrue
  * Each cycle attaches an author beneath a repository, leases and completes one unit there, and
  * detaches the repository, which lands whole. The ledger's edge count and the snapshot's size after
  * [CYCLES] cycles must be where they were after [WARM], whatever the repository is called: a new
- * name each cycle, or the same name attached again. The one-level case beside them is the baseline
- * the forgetting design measured.
+ * name each cycle, the same name attached again, or a new name with the lease held across the
+ * detach, which waits on it, and completed after, alternately over and under its reservation. The
+ * one-level case beside them is the baseline the forgetting design measured.
  */
 class LocalHeddleNestedForgetTest {
 
