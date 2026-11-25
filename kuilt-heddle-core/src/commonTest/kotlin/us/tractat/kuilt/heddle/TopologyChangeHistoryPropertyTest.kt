@@ -20,15 +20,15 @@ import kotlin.test.assertEquals
  * attaches children under groups with a template, reads each group's live inbound edges, applies
  * the tree after, and reads them again. Then, for every group that had an edge before:
  *
- * - its edges changed exactly when some change that says [TopologyChange.History.LOST] speaks for
+ * - its edges changed exactly when some change that says [TopologyChange.SaveEffect.LOST] speaks for
  *   it. One direction is that a lost change really costs its groups their edge; the other is that
- *   no change that says [TopologyChange.History.KEPT] costs anybody theirs, since a group whose edge
+ *   no change that says [TopologyChange.SaveEffect.KEPT] costs anybody theirs, since a group whose edge
  *   changed with no lost change behind it fails. A child can carry a lost change and a kept one at
  *   once, a new weight beside a new ceiling, and its edge changes for the first;
  * - and every group an [TopologyChange.Added] change speaks for had no edge before and has one
  *   after.
  *
- * A [TopologyChange.RootRenamed] says [TopologyChange.History.NEW_TREE], and for it apply must
+ * A [TopologyChange.RootRenamed] says [TopologyChange.SaveEffect.NEW_TREE], and for it apply must
  * throw [IllegalArgumentException] rather than land anything.
  *
  * Which groups a change speaks for is read off the change: a removed node and everything beneath
@@ -66,9 +66,13 @@ class TopologyChangeHistoryPropertyTest {
             val heddle = LocalHeddle.bootWhole(before, POLICY, epoch = 0L)
             val attached = attachSome(heddle, before, r)
 
-            if (changes.any { it.history == TopologyChange.History.NEW_TREE }) {
-                val threw = runCatching { heddle.apply(after, generation = 1L) }.exceptionOrNull()
-                if (threw is IllegalArgumentException) newTreesThrew++ else newTreesApplied++
+            if (changes.any { it.history == TopologyChange.SaveEffect.NEW_TREE }) {
+                try {
+                    heddle.apply(after, generation = 1L)
+                    newTreesApplied++
+                } catch (_: IllegalArgumentException) {
+                    newTreesThrew++
+                }
                 continue
             }
 
@@ -82,7 +86,7 @@ class TopologyChangeHistoryPropertyTest {
             applied++
             val edgesAfter = edgesOf(heddle, edgesBefore.keys)
 
-            val lost = changes.filter { it.history == TopologyChange.History.LOST }
+            val lost = changes.filter { it.history == TopologyChange.SaveEffect.LOST }
                 .flatMapTo(HashSet()) { speaksFor(it, before, after, attached) }
             for (group in existing) {
                 if (edgesBefore.getValue(group).isEmpty()) {
@@ -107,7 +111,7 @@ class TopologyChangeHistoryPropertyTest {
                 }
                 val withEdges = groups.filter { it in existing }
                 val decisive = when (change.history) {
-                    TopologyChange.History.LOST -> withEdges.isNotEmpty()
+                    TopologyChange.SaveEffect.LOST -> withEdges.isNotEmpty()
                     else -> withEdges.isNotEmpty() && withEdges.none { it in lost }
                 }
                 if (decisive) reached.count("${change::class.simpleName}:${change.history}")

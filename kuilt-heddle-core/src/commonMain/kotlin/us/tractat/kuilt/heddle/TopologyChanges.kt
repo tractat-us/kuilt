@@ -41,41 +41,38 @@ public sealed interface TopologyChange {
     public val names: List<String>
 
     /**
-     * What [LocalHeddle.apply] does to fairness history when it lands this change: [History.LOST]
+     * What [LocalHeddle.apply] does to fairness history when it lands this change: [SaveEffect.LOST]
      * for a change that costs a group its history, the one to warn about before saving;
-     * [History.KEPT] for one that costs nobody any; and [History.NEW_TREE] for the one `apply`
+     * [SaveEffect.KEPT] for one that costs nobody any; and [SaveEffect.NEW_TREE] for the one `apply`
      * throws on, which an editor refuses to save rather than warns about.
      *
      * Read from the two trees alone, so it answers for what *may* be lost. A [TemplateRemoved] is
-     * [History.LOST] whether or not the app has attached any children under that group yet, since
+     * [SaveEffect.LOST] whether or not the app has attached any children under that group yet, since
      * a tree cannot say.
      *
      * One change is one cause. A child whose weight and ceiling both changed is a [WeightChanged],
-     * [History.LOST], beside a [CeilingChanged], [History.KEPT]: the child loses its history to the
-     * first, and the second costs it nothing more.
+     * [SaveEffect.LOST], beside a [CeilingChanged], [SaveEffect.KEPT]: the child loses its history to
+     * the first, and the second costs it nothing more.
      *
      * @sample us.tractat.kuilt.heddle.sampleTopologyChangeHistory
      */
-    public val history: History
+    public val history: SaveEffect
         get() = when (this) {
-            is RootRenamed -> History.NEW_TREE
-            is Removed, is WeightChanged, is TemplateRemoved -> History.LOST
-            is TemplateChanged -> if (before.weight == after.weight) History.KEPT else History.LOST
-            is Added, is LaneBecameGroup, is GroupBecameLane, is CeilingChanged, is TemplateAdded -> History.KEPT
+            is RootRenamed -> SaveEffect.NEW_TREE
+            is Removed, is WeightChanged, is TemplateRemoved -> SaveEffect.LOST
+            is TemplateChanged -> if (before.weight == after.weight) SaveEffect.KEPT else SaveEffect.LOST
+            is Added, is LaneBecameGroup, is GroupBecameLane, is CeilingChanged, is TemplateAdded -> SaveEffect.KEPT
         }
 
     /**
      * What a [TopologyChange] costs in fairness history; see [TopologyChange.history]. Three
      * answers, because an editor does three things: saves, warns, or refuses.
      *
-     * Not [TopologyEdit.History], which says what one *edit* of a document does, in six ways. An
-     * edit's history is about the node it edits, while a template change here costs the children
-     * the app attached under the node and never the node itself; and the save warning comes from
-     * the changes, which an editor reads as these three answers.
+     * Its sibling for one edit of a document is [TopologyEdit.History], which has six answers.
      *
      * @sample us.tractat.kuilt.heddle.sampleTopologyChangeHistory
      */
-    public enum class History {
+    public enum class SaveEffect {
         /**
          * Nobody loses history: an [Added] child, which has none yet, a change of kind, a ceiling,
          * a new template, or a template whose weight is the same.

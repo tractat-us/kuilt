@@ -369,14 +369,14 @@ internal fun sampleTopologyChangeHistory() {
         group("tenants") { template(Weight.of(2), maxConcurrent = 4) }
     }
     val changes = running.changesTo(edited)
-    check(changes.none { it.history == TopologyChange.History.NEW_TREE })
+    check(changes.none { it.history == TopologyChange.SaveEffect.NEW_TREE })
     // Of four changes, only the removal of batch costs anyone their history.
-    val warnings = changes.filter { it.history == TopologyChange.History.LOST }
+    val warnings = changes.filter { it.history == TopologyChange.SaveEffect.LOST }
     check(changes.size == 4 && warnings.map { it.names } == listOf(listOf("pool", "acme", "batch")))
 
     // A renamed root is a new tree, which apply throws on, so the save is refused, not warned about.
     val renamed = draft("farm") { lane("batch") }
-    check(running.changesTo(renamed).first().history == TopologyChange.History.NEW_TREE)
+    check(running.changesTo(renamed).first().history == TopologyChange.SaveEffect.NEW_TREE)
 }
 
 /**
