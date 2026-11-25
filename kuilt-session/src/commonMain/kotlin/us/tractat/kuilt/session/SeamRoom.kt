@@ -1868,11 +1868,22 @@ internal class SeamRoom(
         }
     }
 
+    /**
+     * **Test-visibility.** Run in [seatProvenJoiner] once [settleSeat]'s critical section has decided
+     * a pass and before the exchange acts on it, given the outcome's class name. It is the gap a
+     * thread can stall in between a decision and the controller call that reports it (#3675), and a
+     * test suspends here to stand in for that stall. Null in production.
+     */
+    @Volatile
+    internal var seatSettledForTest: (suspend (outcome: String) -> Unit)? = null
+
     private suspend fun seatProvenJoiner(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long, exchange: SeatExchange) {
         var asked: AskedWindow? = null
         var released: PeerId? = null
         while (true) {
-            when (val seating = settleSeat(joinerPeerId, keyed, generation, asked, released, exchange)) {
+            val seating = settleSeat(joinerPeerId, keyed, generation, asked, released, exchange)
+            seatSettledForTest?.invoke(seating::class.simpleName.orEmpty())
+            when (seating) {
                 SeatOutcome.Stale -> return logStaleAdmission(joinerPeerId)
                 is SeatOutcome.AwaitWindow -> {
                     logger.debug { "room.admit.await-window peer=${joinerPeerId.value} seat=${seating.seat.value}" }
@@ -1903,7 +1914,9 @@ internal class SeamRoom(
                 is SeatOutcome.Released -> {
                     seating.detached.close()
                     // Its window is disarmed, since its expiry has nothing left to evict.
-                    reconnectController?.onPeerRecovered(seating.peerId, clock().toEpochMilliseconds())
+                    // At the instant the release was decided, not now (#3675): a thread stalled here
+                    // past this id's next drop would otherwise disarm that newer window.
+                    reconnectController?.onPeerRecovered(seating.peerId, seating.decidedAtMs)
                     released = seating.peerId
                     asked = null
                 }
@@ -1922,7 +1935,7 @@ internal class SeamRoom(
                         // The window this partition opened, or is about to open, is not needed any
                         // more. A window `Success` spent needs nothing.
                         if (!asked.spent(joinerPeerId)) {
-                            reconnectController?.onPeerRecovered(joinerPeerId, clock().toEpochMilliseconds())
+                            reconnectController?.onPeerRecovered(joinerPeerId, seating.decidedAtMs)
                         }
                     }
                     seating.burst?.let { sendAdmissionBurst(it, keyed.joinerNonce, ReturnKind.Restored) }
@@ -1937,7 +1950,7 @@ internal class SeamRoom(
                     // A window `Success` is spent; any other answer left it to open, or open already,
                     // over a seat that is gone, and its expiry would only re-announce the departure.
                     if (!asked.spent(seating.previous)) {
-                        reconnectController?.onPeerRecovered(seating.previous, clock().toEpochMilliseconds())
+                        reconnectController?.onPeerRecovered(seating.previous, seating.decidedAtMs)
                     }
                     sendAdmissionBurst(seating.burst, keyed.joinerNonce, ReturnKind.Restored)
                     // Decided 19: told directly, since the other members' fan-out excludes its subject.
@@ -2018,9 +2031,10 @@ internal class SeamRoom(
 
         /**
          * [peerId]'s held seat was released, and the other members' `Farewell` enqueued, in the deciding
-         * critical section: close its inbox, then decide again.
+         * critical section: close its inbox, then decide again. [decidedAtMs] is the instant that
+         * section decided, which the recovery the controller is told of names.
          */
-        class Released(val peerId: PeerId, val detached: DetachedMember) : SeatOutcome
+        class Released(val peerId: PeerId, val detached: DetachedMember, val decidedAtMs: Long) : SeatOutcome
 
         class Refused(val reject: AdmitMessage.Reject) : SeatOutcome
 
@@ -2030,8 +2044,9 @@ internal class SeamRoom(
         /**
          * The held seat came back. [endedPause]: the seat was partitioned until now. [burst] is null
          * when the challenge stopped being current, so a newer exchange owes the joiner its Welcomes.
+         * [decidedAtMs]: as for [Released].
          */
-        class Restored(val burst: AdmissionBurst?, val endedPause: Boolean) : SeatOutcome
+        class Restored(val burst: AdmissionBurst?, val endedPause: Boolean, val decidedAtMs: Long) : SeatOutcome
 
         /** A new member was added. */
         class Admitted(val burst: AdmissionBurst) : SeatOutcome
@@ -2040,8 +2055,9 @@ internal class SeamRoom(
          * [previous]'s partitioned seat was taken over by the joiner under its new id, in the deciding
          * critical section: [previous] left, its `Farewell` was enqueued to the other members, and the
          * joiner was added as [burst]'s member. Close [detached], send the burst, and tell [previous].
+         * [decidedAtMs]: as for [Released].
          */
-        class Superseded(val previous: PeerId, val detached: DetachedMember, val burst: AdmissionBurst) : SeatOutcome
+        class Superseded(val previous: PeerId, val detached: DetachedMember, val burst: AdmissionBurst, val decidedAtMs: Long) : SeatOutcome
 
         /**
          * Another exchange is asking the controller about [seat] ([windowClaims]): wait for [released],
@@ -2091,13 +2107,17 @@ internal class SeamRoom(
         released: PeerId?,
         exchange: SeatExchange,
     ): SeatOutcome = lock.withLock {
+        // Read in the section that decides, so a recovery the controller is told of after the lock
+        // names when the seat changed. Read at the call, it could name an instant after this id's
+        // next drop, and the controller would take it as the end of that newer window (#3675).
+        val decidedAtMs = clock().toEpochMilliseconds()
         val current = pendingChallenges.isCurrent(joinerPeerId, generation)
         // 2.6: host-side grant verification feeds this (plan amendment bf12e0ffc); revocation is checked from 2.4.
         val decision = decideSeat(joinerPeerId, keyed.key, heldSeats(), holdsValidGrant = false)
         val outcome = settleSpentWindow(joinerPeerId, current, decision, asked) ?: toldSuperseded(joinerPeerId, keyed, generation, asked) ?: when (decision) {
-            is SeatDecision.Restore -> settleRestore(joinerPeerId, generation, current, asked)
+            is SeatDecision.Restore -> settleRestore(joinerPeerId, generation, current, asked, decidedAtMs)
             is SeatDecision.ReleaseAndAdmit ->
-                if (current) SeatOutcome.Released(decision.released, releaseHeldSeat(decision.released)) else SeatOutcome.Stale
+                if (current) SeatOutcome.Released(decision.released, releaseHeldSeat(decision.released), decidedAtMs) else SeatOutcome.Stale
             SeatDecision.KeyConflict -> if (retire(joinerPeerId, generation)) {
                 SeatOutcome.Refused(
                     AdmitMessage.Reject("key-conflict: ${joinerPeerId.value} is held by another device", RejectCode.KeyConflict, keyed.joinerNonce),
@@ -2105,7 +2125,7 @@ internal class SeamRoom(
             } else {
                 SeatOutcome.Stale
             }
-            is SeatDecision.RestoreUnderNewId -> settleRestoreUnderNewId(joinerPeerId, generation, current, decision.previous, asked)
+            is SeatDecision.RestoreUnderNewId -> settleRestoreUnderNewId(joinerPeerId, generation, current, decision.previous, asked, decidedAtMs)
             SeatDecision.AdditionalSeat, SeatDecision.Returning, SeatDecision.Ordinary ->
                 if (retire(joinerPeerId, generation)) admitNewMember(joinerPeerId, keyed) else SeatOutcome.Stale
         }
@@ -2243,24 +2263,24 @@ internal class SeamRoom(
      *   controller opens a window on a launched coroutine after the partition, so a Proof can land in
      *   between. Read as "not open yet", it restores.
      */
-    private fun settleRestore(peerId: PeerId, generation: Long, current: Boolean, askedAny: AskedWindow?): SeatOutcome {
+    private fun settleRestore(peerId: PeerId, generation: Long, current: Boolean, askedAny: AskedWindow?, decidedAtMs: Long): SeatOutcome {
         val held = checkNotNull(admittedById[peerId]) { "a Restore names a held seat" }
         // An answer about another seat — one an earlier pass meant to take over under this id — says
         // nothing about this one.
         val asked = askedAny?.takeIf { it.peerId == peerId }
-        if (asked?.answer == WindowAnswer.Restored) return restoreSeat(held, owesBurst = retire(peerId, generation))
+        if (asked?.answer == WindowAnswer.Restored) return restoreSeat(held, owesBurst = retire(peerId, generation), decidedAtMs)
         if (!current) return SeatOutcome.Stale
-        if (held.liveness !is Liveness.Partitioned) return restoreSeat(held, owesBurst = retire(peerId, generation))
+        if (held.liveness !is Liveness.Partitioned) return restoreSeat(held, owesBurst = retire(peerId, generation), decidedAtMs)
         val episode = checkNotNull(episodeDetectedAtMs[peerId]) { "a host records the episode of every seat it partitions" }
         if (asked == null || asked.episode != episode) return SeatOutcome.AskWindow(peerId, episode)
         return when (asked.answer) {
             WindowAnswer.Refused -> if (windowOpenedEpisodeMs[peerId] == episode) {
-                SeatOutcome.Released(peerId, releaseHeldSeat(peerId))
+                SeatOutcome.Released(peerId, releaseHeldSeat(peerId), decidedAtMs)
             } else {
                 logger.debug { "room.restore.refusal-before-window peer=${peerId.value} episode=$episode: read as not open yet" }
-                restoreSeat(held, owesBurst = retire(peerId, generation))
+                restoreSeat(held, owesBurst = retire(peerId, generation), decidedAtMs)
             }
-            WindowAnswer.NotYetOpen -> restoreSeat(held, owesBurst = retire(peerId, generation))
+            WindowAnswer.NotYetOpen -> restoreSeat(held, owesBurst = retire(peerId, generation), decidedAtMs)
             // Handled before either can reach here: a Success above, a throw by [seatProvenJoiner].
             WindowAnswer.Restored, WindowAnswer.Failed -> error("window answer ${asked.answer} is settled before the seat is")
         }
@@ -2290,6 +2310,7 @@ internal class SeamRoom(
         current: Boolean,
         previous: PeerId,
         askedAny: AskedWindow?,
+        decidedAtMs: Long,
     ): SeatOutcome {
         if (!current) return SeatOutcome.Stale
         val held = checkNotNull(admittedById[previous]) { "a RestoreUnderNewId names a held seat" }
@@ -2297,12 +2318,12 @@ internal class SeamRoom(
         val episode = checkNotNull(episodeDetectedAtMs[previous]) { "a host records the episode of every seat it partitions" }
         val asked = askedAny?.takeIf { it.peerId == previous && it.episode == episode } ?: return SeatOutcome.AskWindow(previous, episode)
         return when (asked.answer) {
-            WindowAnswer.Restored, WindowAnswer.NotYetOpen -> supersedeSeat(joinerPeerId, generation, held)
+            WindowAnswer.Restored, WindowAnswer.NotYetOpen -> supersedeSeat(joinerPeerId, generation, held, decidedAtMs)
             WindowAnswer.Refused -> if (windowOpenedEpisodeMs[previous] == episode) {
-                SeatOutcome.Released(previous, releaseHeldSeat(previous))
+                SeatOutcome.Released(previous, releaseHeldSeat(previous), decidedAtMs)
             } else {
                 logger.debug { "room.supersede.refusal-before-window peer=${previous.value} episode=$episode: read as not open yet" }
-                supersedeSeat(joinerPeerId, generation, held)
+                supersedeSeat(joinerPeerId, generation, held, decidedAtMs)
             }
             // A throw is settled by [seatProvenJoiner] before the seat is.
             WindowAnswer.Failed -> error("window answer ${asked.answer} is settled before the seat is")
@@ -2323,7 +2344,7 @@ internal class SeamRoom(
      * link was down hears neither: its admission burst names `new`, which it hears as `Joined(new)`,
      * and its roster rebuild drops `old` later with [LeaveReason.Unobserved] (#3615).
      */
-    private fun supersedeSeat(joinerPeerId: PeerId, generation: Long, held: Member): SeatOutcome {
+    private fun supersedeSeat(joinerPeerId: PeerId, generation: Long, held: Member, decidedAtMs: Long): SeatOutcome {
         if (!retire(joinerPeerId, generation)) return SeatOutcome.Stale
         val previous = held.id
         val detached = checkNotNull(detachMember(previous, LeaveReason.Superseded(by = joinerPeerId))) {
@@ -2334,7 +2355,7 @@ internal class SeamRoom(
         supersededIds.record(previous, held.key, successor = joinerPeerId)
         logger.info { "room.seat.superseded peer=${previous.value} by=${joinerPeerId.value}" }
         val admitted = admitMember(joinerPeerId, held.identity, held.key)
-        return SeatOutcome.Superseded(previous, detached, admitted.burst)
+        return SeatOutcome.Superseded(previous, detached, admitted.burst, decidedAtMs)
     }
 
     /** [PendingChallenges.retire], read as "this exchange still owes its joiner an answer". */
@@ -2369,7 +2390,7 @@ internal class SeamRoom(
      * membership id too ([membershipIds]), which is how the joiner tells this from a fresh admission.
      * [owesBurst]: this exchange still owes the joiner its Welcome burst.
      */
-    private fun restoreSeat(held: Member, owesBurst: Boolean): SeatOutcome {
+    private fun restoreSeat(held: Member, owesBurst: Boolean, decidedAtMs: Long): SeatOutcome {
         val member = checkNotNull(updateMemberLiveness(held.id, Liveness.Connected)) { "the seat was read under this lock" }
         val endedPause = held.liveness is Liveness.Partitioned
         // Enqueued in the section that ended the pause, for [markPartitioned]'s reason (#3625): after
@@ -2385,7 +2406,7 @@ internal class SeamRoom(
         // detector — was never seen to go, so there is nothing to announce.
         if (endedPause) emitEvent(MembershipEvent.Resumed(held.id))
         val burst = if (owesBurst) AdmissionBurst(member, admittedById.values.filter { it.id != held.id }, membershipOf(held.id)) else null
-        return SeatOutcome.Restored(burst, endedPause = endedPause)
+        return SeatOutcome.Restored(burst, endedPause = endedPause, decidedAtMs = decidedAtMs)
     }
 
     /**
