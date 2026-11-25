@@ -61,6 +61,11 @@ The rest of the surface, by what you would ask it:
   what each group is owed. Nothing it came from changes. Its `basis` is the
   engine's `revision` at the time; pass the same `generation` to the apply. A
   page holding only a stored snapshot asks `LocalHeddleSnapshot.previewApply(policy, …)`.
+- **Two admins edit at once.** Pass the tree the edit was loaded from,
+  `apply(new, generation, startedFrom)`, and the save applies only while that
+  tree is still `topology`; otherwise it returns `ApplyOutcome.TreeChanged` and
+  changes nothing. `previewApply` takes the same `startedFrom`. Leases never
+  refuse a save: it compares trees, not revisions.
 - **Something crashed.** `reconcileLeases` compares the open leases with the work
   still running and reports a `LeaseReconciliation`.
 - **The program restarts.** `persist` returns a `LocalHeddleSnapshot` to encode as
