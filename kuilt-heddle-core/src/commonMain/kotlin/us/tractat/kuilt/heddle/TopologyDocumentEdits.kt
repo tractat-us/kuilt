@@ -218,8 +218,8 @@ public fun TopologyDocument.rename(path: List<Int>, name: String): TopologyEdit 
  * new one starts with no history (see [LocalHeddle.apply]). A move to the parent it already has
  * only reorders it, and is [TopologyEdit.History.KEPT].
  *
- * Refused, checked in this order, with [TopologyEdit.NoSuchNode] for [path],
- * [TopologyEdit.AtRoot] for `[]`, [TopologyEdit.NoSuchNode] for [parent],
+ * Refused, checked in this order, with [TopologyEdit.AtRoot] for a [path] of `[]`,
+ * [TopologyEdit.NoSuchNode] for [path], [TopologyEdit.NoSuchNode] for [parent],
  * [TopologyEdit.IntoItself] when [parent] is the child or lies beneath it,
  * [TopologyEdit.NotAGroup] when [parent] is a lane, or [TopologyEdit.DuplicateName] naming the
  * child of [parent] that already has the moved child's name.
