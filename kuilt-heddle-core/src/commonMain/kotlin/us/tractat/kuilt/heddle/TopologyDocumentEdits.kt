@@ -205,7 +205,7 @@ public fun TopologyDocument.rename(path: List<Int>, name: String): TopologyEdit 
     val siblings = resolvedChildrenOf(parent)
     siblingNamed(parent, siblings, name, except = path.last())?.let { return it }
     val history = if (name == node.name) TopologyEdit.History.KEPT else TopologyEdit.History.REPLACED
-    return TopologyEdit.Edited(replaced(path, node), path, history)
+    return TopologyEdit.Edited(replaced(path, node.with(name = name)), path, history)
 }
 
 /**
