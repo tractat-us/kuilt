@@ -48,6 +48,11 @@ import kotlin.time.Duration.Companion.minutes
  * been good but for the one thing the case changes.
  */
 class ReturningAdmissionTest {
+    private companion object {
+        /** A host key that is not this room's host's. */
+        const val ANOTHER_HOST = 7
+    }
+
     private val bob = PeerId("bob")
     private val bobAgain = PeerId("bob-again")
     private val carol = PeerId("carol")
@@ -280,14 +285,49 @@ class ReturningAdmissionTest {
         }
         val runOut = Grant.issue(hostSigner, bobKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now - 2, notAfter = now - 1)
         val anotherDevices = Grant.issue(hostSigner, carolKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
+        val anotherHosts = Grant.issue(fakeDeviceKey(ANOTHER_HOST), bobKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
 
+        val anotherHostSigned = anotherHosts.isSignedByIssuer(hostStore.keyScheme)
         val checksBefore = hostStore.checks
-        host.admit(bob, bobKey, nonce = 2, grants = otherRooms + runOut + anotherDevices + good)
+        host.admit(bob, bobKey, nonce = 2, grants = otherRooms + runOut + anotherDevices + anotherHosts + good)
 
         assertAll(
-            { assertEquals(1, counted.asked.size, "the good pass is found behind eight that cannot apply") },
+            { assertTrue(anotherHosts.issuer != host.hostKey && anotherHostSigned, "rig: a genuine pass, from another host") },
+            { assertEquals(1, counted.asked.size, "the good pass is found behind nine that cannot apply") },
             { assertEquals(ReturnKind.Returning, host.directWelcomesTo(bob).last().returnKind) },
-            { assertEquals(1, hostStore.checks - checksBefore, "the eight are set aside on their fields: only the good pass's signature is checked") },
+            {
+                assertEquals(
+                    1,
+                    hostStore.checks - checksBefore,
+                    "the nine are set aside on their fields — room, end, subject and issuer: only the good pass's signature is checked",
+                )
+            },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * [revokeALostDeviceSample], run: Bob's pass is void the moment his device is revoked, so his
+     * return on it is vetted as a newcomer's. The cutoff is one past the clock, so even a pass issued in
+     * that same millisecond is void.
+     */
+    @Test
+    fun revokeALostDeviceSampleVoidsThePassTheDeviceHolds() = runTest {
+        val counted = Counted()
+        val host = rawHost(joiners = setOf(bob), admission = counted.admission)
+        host.admit(bob, bobKey, nonce = 1)
+        val pass = host.passesTo(bob).single()
+        host.say(bob, AdmitMessage.Goodbye)
+        val clock = virtualClock()
+
+        revokeALostDeviceSample(counted.admission, bobKey.id, clock)
+        host.admit(bob, bobKey, nonce = 2, grants = listOf(pass))
+
+        assertAll(
+            { assertEquals(pass.issuedAt, clock().toEpochMilliseconds(), "rig: the pass was issued in the same millisecond as the revocation") },
+            { assertEquals(clock().toEpochMilliseconds() + 1, counted.revocations.notBefore(bobKey.id), "the cutoff is one past the clock") },
+            { assertEquals(listOf(bobKey.id, bobKey.id), counted.keys(), "Bob's return on the voided pass is vetted") },
+            { assertNull(host.directWelcomesTo(bob).last().returnKind, "an ordinary admission, not a return") },
         )
         host.room.leave()
     }
