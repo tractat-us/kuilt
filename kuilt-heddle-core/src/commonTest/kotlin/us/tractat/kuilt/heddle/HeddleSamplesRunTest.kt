@@ -134,4 +134,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun sharesOverACandidateHold() = sampleSharesOverACandidate()
+
+    @Test
+    fun minimalEditorHolds() = sampleMinimalEditor()
 }
