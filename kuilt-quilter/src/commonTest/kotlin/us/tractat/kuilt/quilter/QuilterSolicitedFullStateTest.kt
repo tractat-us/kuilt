@@ -173,6 +173,40 @@ class QuilterSolicitedFullStateTest {
     }
 
     /**
+     * The digest reflects the sender's state, cursor included. The peer's write reached us inside
+     * a third peer's whole state, which merges it but raises only that peer's cursor. The peer's
+     * own whole state, asked for and behind, says it has seen its own seq 1, and the digest we
+     * answer with must say so too. A digest still showing 0 there tells the peer it holds
+     * something we lack, so its vector dominates ours and it waits out the backstop instead of
+     * asking at once.
+     */
+    @Test
+    fun theDigestAnsweringABehindStateCarriesTheSendersOwnSeq() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val third = PeerId("peer-3")
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer, third))
+            val quilter = quilterOn(seam)
+            testScheduler.runCurrent()
+            askThePeer(seam, quilter, vectors = true)
+            seam.deliver(
+                third,
+                sEncode(QuiltMessage.FullState(sender = ReplicaId(third.value), state = GSet.of("x", "p"), upThrough = 0L)),
+            )
+            testScheduler.runCurrent()
+            val mark = seam.directed.size
+
+            seam.deliver(peer, sEncode(QuiltMessage.FullState(sender = peerReplica, state = GSet.of("x", "p"), upThrough = 1L)))
+            testScheduler.runCurrent()
+            val digest = seam.framesTo(peer, from = mark).filterIsInstance<QuiltMessage.VectorDigest<GSet<String>>>()
+
+            assertAll(
+                { assertEquals(setOf("x", "a", "p"), quilter.state.value.elements, "rig: the peer's state must be behind ours") },
+                { assertEquals(1, digest.size, "rig: the behind state must draw one digest") },
+                { assertEquals(1L, digest.single().seen[peerReplica], "the digest carries the peer's own seq") },
+            )
+        }
+
+    /**
      * The control: the same behind state, unasked for, as a joiner's first contact is (#828). It
      * still draws exactly one whole state, at once.
      */
