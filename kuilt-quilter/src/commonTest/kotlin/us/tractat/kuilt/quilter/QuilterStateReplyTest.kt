@@ -2,6 +2,8 @@
 
 package us.tractat.kuilt.quilter
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -217,6 +219,53 @@ class QuilterStateReplyTest {
     }
 
     /**
+     * A request is answered by a plain [QuiltMessage.FullState], even when the peer's send slot is
+     * busy with a [QuiltMessage.StateReply]: the one send that follows is plain, however many
+     * push-backs were asked for after the request. A [QuiltMessage.StateReply] in its place would
+     * leave the peer's request outstanding until it timed out.
+     */
+    @Test
+    fun aRequestOwedBesideAStateReplyIsAnsweredWithAPlainFullState() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val fake = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
+            val seam = WholeStateGateSeam(fake)
+            val quilter = quilterOn(seam)
+            testScheduler.runCurrent()
+            peerSendsAVectorDigest(fake, quilter)
+            write(quilter, "a")
+            val mark = fake.directed.size
+            seam.hold.value = true
+
+            fake.deliver(peer, behindFullState()) // our push-back parks in the slot
+            testScheduler.runCurrent()
+            fake.deliver(peer, behindStateReply()) // draws our digests, arming the grant
+            testScheduler.runCurrent()
+            fake.deliver(peer, rEncode(QuiltMessage.FullStateRequest(requester = peerReplica, sender = selfReplica)))
+            testScheduler.runCurrent()
+            write(quilter, "b")
+            fake.deliver(peer, behindFullState()) // another push-back, asked for after the request
+            testScheduler.runCurrent()
+            val parked = seam.wholeStatesParked
+            seam.hold.value = false
+            testScheduler.runCurrent()
+            val sent = fake.framesTo(peer, from = mark).filter { it is QuiltMessage.FullState || it is QuiltMessage.StateReply }
+
+            assertAll(
+                { assertEquals(1, parked, "rig: one whole state must be parked while the rest are asked for") },
+                { assertTrue(sent.firstOrNull() is QuiltMessage.StateReply, "rig: the parked send is the push-back") },
+                { assertEquals(2, sent.size, "the parked send, then exactly one more") },
+                { assertTrue(sent.lastOrNull() is QuiltMessage.FullState, "and that one is plain, answering the request") },
+                {
+                    assertEquals(
+                        setOf("x", "a", "b"),
+                        (sent.lastOrNull() as? QuiltMessage.FullState)?.state?.elements,
+                        "carrying the state as it is then",
+                    )
+                },
+            )
+        }
+
+    /**
      * #828's rejoin heal, with a peer proven current. It drops and comes back inside `evictionAfter`,
      * restarted and empty, so we still know it and send it no first contact; its own first contact
      * lands behind us, and our push-back, now a [QuiltMessage.StateReply], is what heals it. The
@@ -255,5 +304,21 @@ class QuilterStateReplyTest {
             { assertEquals(1, pushedBack.replies().size, "it is one state reply") },
             { assertEquals(setOf("x", "a", "b"), rejoined.state.value.elements, "and the rejoined peer heals to our state") },
         )
+    }
+}
+
+/** A [Seam] that parks every whole-state send to a peer while [hold] is set, counting the sends parked. */
+private class WholeStateGateSeam(private val delegate: FakeSeam) : Seam by delegate {
+    val hold = MutableStateFlow(false)
+    var wholeStatesParked = 0
+        private set
+
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        val msg = rDecode(payload)
+        if ((msg is QuiltMessage.FullState || msg is QuiltMessage.StateReply) && hold.value) {
+            wholeStatesParked++
+            hold.first { !it }
+        }
+        delegate.sendTo(peer, payload)
     }
 }
