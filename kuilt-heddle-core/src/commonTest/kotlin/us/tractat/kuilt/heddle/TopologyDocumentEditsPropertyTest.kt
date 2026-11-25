@@ -17,7 +17,10 @@ import kotlin.test.assertEquals
  * - the edit's result is exactly the model's: the same refusal naming the same path, or an
  *   [TopologyEdit.Edited] whose document, path and history are the model's;
  * - `Topology.from` of the edited document is [TopologyParse.Valid] with the topology built from
- *   the edited model whenever that topology is valid, and [TopologyParse.Invalid] otherwise.
+ *   the edited model whenever that topology is valid, and [TopologyParse.Invalid] otherwise;
+ * - when the trees before and after are both valid, the edit's [TopologyEdit.History] has the
+ *   shape [Topology.changesTo] gives between them, since the model copies the history rules and
+ *   so cannot catch one both copies got wrong.
  *
  * Some trees start with two siblings of one name, a document that is invalid while it is being
  * edited, so an edit addressed by index still has to land on the right one of the pair.
@@ -40,6 +43,7 @@ class TopologyDocumentEditsPropertyTest {
         val failures = ArrayList<String>()
         val outcomes = HashMap<String, Int>()
         val histories = HashMap<TopologyEdit.History, Int>()
+        val agreements = HashMap<TopologyEdit.History, Int>()
         var validTrees = 0
         var invalidTrees = 0
         var startedWithDuplicate = 0
@@ -64,6 +68,14 @@ class TopologyDocumentEditsPropertyTest {
                 validTrees++
                 val built = TopologyParse.Valid(Topology(model.name, direct))
                 if (read != built) failures += "seed $seed $label: read back $read, built $built"
+                val readBefore = Topology.from(before)
+                if (readBefore is TopologyParse.Valid && read is TopologyParse.Valid) {
+                    val changes = readBefore.topology.changesTo(read.topology)
+                    agreements[expected.history] = (agreements[expected.history] ?: 0) + 1
+                    if (!expected.history.agreesWith(changes)) {
+                        failures += "seed $seed $label: history ${expected.history}, but changesTo lists $changes"
+                    }
+                }
             } else {
                 invalidTrees++
                 if (read !is TopologyParse.Invalid) failures += "seed $seed $label: read back $read from a tree with problems"
@@ -74,6 +86,8 @@ class TopologyDocumentEditsPropertyTest {
         val tally = listOf("weight", "ceiling", "add", "remove", "rename", "move").map { "$it:edited" to (outcomes["$it:edited"] ?: 0) to 50 } +
             listOf("NoSuchNode", "NotAGroup", "DuplicateName", "AtRoot", "IntoItself").map { it to (outcomes[it] ?: 0) to 50 } +
             TopologyEdit.History.entries.map { it.name to (histories[it] ?: 0) to 30 } +
+            TopologyEdit.History.entries.map { "${it.name} against changesTo" to (agreements[it] ?: 0) to 30 } +
+            listOf("against changesTo" to agreements.values.sum() to 500) +
             listOf("valid trees" to validTrees to 500, "invalid trees" to invalidTrees to 80, "started with a duplicate" to startedWithDuplicate to 150)
         val short = tally.filter { (counted, floor) -> counted.second < floor }.map { (counted, floor) -> "${counted.first}: ${counted.second} < $floor" }
         assertAll(
@@ -132,6 +146,41 @@ class TopologyDocumentEditsPropertyTest {
             else -> if (anywhere.isEmpty()) listOf(model.children.size) else anywhere.dropLast(1) + (model.at(anywhere.dropLast(1))?.children?.size ?: 0)
         }
     }
+
+    // ── History against changesTo ───────────────────────────────────────────────────────────────
+
+    /**
+     * Whether [changes], what [Topology.changesTo] lists between the trees before and after one
+     * edit, has the shape this history names. The model above writes the history rules a second
+     * time, so a rule both copies got wrong agrees with itself; this is the one check of them
+     * against the code that reads what a save will cost. Sibling order is not a change, so a
+     * reorder lists nothing.
+     */
+    private fun TopologyEdit.History.agreesWith(changes: List<TopologyChange>): Boolean {
+        val kinds = changes.map { it.kind }
+        return when (this) {
+            TopologyEdit.History.KEPT -> kinds.isEmpty() || kinds == listOf("ceiling")
+            TopologyEdit.History.SHARE_RESTARTS -> kinds == listOf("weight")
+            TopologyEdit.History.STARTS_EMPTY -> kinds == listOf("added")
+            TopologyEdit.History.DRAINS -> kinds == listOf("removed")
+            TopologyEdit.History.REPLACED -> kinds.sorted() == listOf("added", "removed")
+            TopologyEdit.History.NEW_TREE -> kinds.firstOrNull() == "root" && kinds.drop(1).all { it == "added" || it == "removed" }
+        }
+    }
+
+    private val TopologyChange.kind: String
+        get() = when (this) {
+            is TopologyChange.RootRenamed -> "root"
+            is TopologyChange.Added -> "added"
+            is TopologyChange.Removed -> "removed"
+            is TopologyChange.WeightChanged -> "weight"
+            is TopologyChange.CeilingChanged -> "ceiling"
+            is TopologyChange.LaneBecameGroup -> "lane to group"
+            is TopologyChange.GroupBecameLane -> "group to lane"
+            is TopologyChange.TemplateAdded -> "template added"
+            is TopologyChange.TemplateRemoved -> "template removed"
+            is TopologyChange.TemplateChanged -> "template changed"
+        }
 
     // ── the model ───────────────────────────────────────────────────────────────────────────────
 
