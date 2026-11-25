@@ -97,6 +97,11 @@ abstract interface us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kui
         final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.Unknown.toString|toString(){}[0]
     }
 
+    final object AdmissionPolicyFailed : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.AdmissionPolicyFailed|null[0]
+        final val id // us.tractat.kuilt.session.admit/RejectCode.AdmissionPolicyFailed.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.AdmissionPolicyFailed.id.<get-id>|<get-id>(){}[0]
+    }
+
     final object BadProof : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.BadProof|null[0]
         final val id // us.tractat.kuilt.session.admit/RejectCode.BadProof.id|{}id[0]
             final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.BadProof.id.<get-id>|<get-id>(){}[0]
@@ -157,7 +162,7 @@ abstract interface us.tractat.kuilt.session.election/ElectionLobby { // us.tract
 
     abstract suspend fun awaitRoom(kotlin/String? = ..., kotlin/String? = ...): us.tractat.kuilt.session.election/ElectionOutcome // us.tractat.kuilt.session.election/ElectionLobby.awaitRoom|awaitRoom(kotlin.String?;kotlin.String?){}[0]
     abstract suspend fun leave() // us.tractat.kuilt.session.election/ElectionLobby.leave|leave(){}[0]
-    abstract suspend fun start(kotlin/String? = ..., kotlin/String? = ...): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.election/ElectionLobby.start|start(kotlin.String?;kotlin.String?){}[0]
+    abstract suspend fun start(kotlin/String? = ..., kotlin/String? = ..., us.tractat.kuilt.session.admit/HostAdmission): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.election/ElectionLobby.start|start(kotlin.String?;kotlin.String?;us.tractat.kuilt.session.admit.HostAdmission){}[0]
 }
 
 abstract interface us.tractat.kuilt.session.partition/JoinerReconnectController { // us.tractat.kuilt.session.partition/JoinerReconnectController|null[0]
@@ -199,7 +204,7 @@ abstract interface us.tractat.kuilt.session/Room { // us.tractat.kuilt.session/R
 }
 
 abstract interface us.tractat.kuilt.session/RoomFactory { // us.tractat.kuilt.session/RoomFactory|null[0]
-    abstract suspend fun host(us.tractat.kuilt.core/Pattern, kotlin/String? = ..., us.tractat.kuilt.session.partition/RoomId? = ...): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/RoomFactory.host|host(us.tractat.kuilt.core.Pattern;kotlin.String?;us.tractat.kuilt.session.partition.RoomId?){}[0]
+    abstract suspend fun host(us.tractat.kuilt.core/Pattern, kotlin/String? = ..., us.tractat.kuilt.session.partition/RoomId? = ..., us.tractat.kuilt.session.admit/HostAdmission): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/RoomFactory.host|host(us.tractat.kuilt.core.Pattern;kotlin.String?;us.tractat.kuilt.session.partition.RoomId?;us.tractat.kuilt.session.admit.HostAdmission){}[0]
     abstract suspend fun join(us.tractat.kuilt.core/Tag, kotlin/String? = ..., kotlin/String? = ...): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/RoomFactory.join|join(us.tractat.kuilt.core.Tag;kotlin.String?;kotlin.String?){}[0]
 }
 
@@ -800,6 +805,30 @@ sealed interface us.tractat.kuilt.session/AdmissionFailure { // us.tractat.kuilt
     }
 }
 
+sealed interface us.tractat.kuilt.session/AdoptRole { // us.tractat.kuilt.session/AdoptRole|null[0]
+    final class Host : us.tractat.kuilt.session/AdoptRole { // us.tractat.kuilt.session/AdoptRole.Host|null[0]
+        constructor <init>(us.tractat.kuilt.session.admit/HostAdmission, us.tractat.kuilt.session.partition/RoomId? = ...) // us.tractat.kuilt.session/AdoptRole.Host.<init>|<init>(us.tractat.kuilt.session.admit.HostAdmission;us.tractat.kuilt.session.partition.RoomId?){}[0]
+
+        final val admission // us.tractat.kuilt.session/AdoptRole.Host.admission|{}admission[0]
+            final fun <get-admission>(): us.tractat.kuilt.session.admit/HostAdmission // us.tractat.kuilt.session/AdoptRole.Host.admission.<get-admission>|<get-admission>(){}[0]
+        final val roomId // us.tractat.kuilt.session/AdoptRole.Host.roomId|{}roomId[0]
+            final fun <get-roomId>(): us.tractat.kuilt.session.partition/RoomId? // us.tractat.kuilt.session/AdoptRole.Host.roomId.<get-roomId>|<get-roomId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.session.admit/HostAdmission // us.tractat.kuilt.session/AdoptRole.Host.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.session.partition/RoomId? // us.tractat.kuilt.session/AdoptRole.Host.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.session.admit/HostAdmission = ..., us.tractat.kuilt.session.partition/RoomId? = ...): us.tractat.kuilt.session/AdoptRole.Host // us.tractat.kuilt.session/AdoptRole.Host.copy|copy(us.tractat.kuilt.session.admit.HostAdmission;us.tractat.kuilt.session.partition.RoomId?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/AdoptRole.Host.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/AdoptRole.Host.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/AdoptRole.Host.toString|toString(){}[0]
+    }
+
+    final object Joiner : us.tractat.kuilt.session/AdoptRole { // us.tractat.kuilt.session/AdoptRole.Joiner|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/AdoptRole.Joiner.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/AdoptRole.Joiner.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/AdoptRole.Joiner.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.session/FailureReason { // us.tractat.kuilt.session/FailureReason|null[0]
     final class Refused : us.tractat.kuilt.session/FailureReason { // us.tractat.kuilt.session/FailureReason.Refused|null[0]
         constructor <init>(kotlin/String, us.tractat.kuilt.session.admit/RejectCode = ...) // us.tractat.kuilt.session/FailureReason.Refused.<init>|<init>(kotlin.String;us.tractat.kuilt.session.admit.RejectCode){}[0]
@@ -1202,7 +1231,7 @@ final class us.tractat.kuilt.session/FramesLost : kotlin/RuntimeException { // u
 }
 
 final class us.tractat.kuilt.session/LoomRoomHost : us.tractat.kuilt.session/RoomHost { // us.tractat.kuilt.session/LoomRoomHost|null[0]
-    constructor <init>(us.tractat.kuilt.core/Loom, us.tractat.kuilt.core/Pattern, us.tractat.kuilt.identity/DeviceKeyStore, kotlin/Function0<kotlin.time/Instant> = ..., us.tractat.kuilt.liveness/HeartbeatConfig = ...) // us.tractat.kuilt.session/LoomRoomHost.<init>|<init>(us.tractat.kuilt.core.Loom;us.tractat.kuilt.core.Pattern;us.tractat.kuilt.identity.DeviceKeyStore;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.liveness.HeartbeatConfig){}[0]
+    constructor <init>(us.tractat.kuilt.core/Loom, us.tractat.kuilt.core/Pattern, us.tractat.kuilt.identity/DeviceKeyStore, us.tractat.kuilt.session.admit/HostAdmission, kotlin/Function0<kotlin.time/Instant> = ..., us.tractat.kuilt.liveness/HeartbeatConfig = ...) // us.tractat.kuilt.session/LoomRoomHost.<init>|<init>(us.tractat.kuilt.core.Loom;us.tractat.kuilt.core.Pattern;us.tractat.kuilt.identity.DeviceKeyStore;us.tractat.kuilt.session.admit.HostAdmission;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.liveness.HeartbeatConfig){}[0]
 
     final fun close() // us.tractat.kuilt.session/LoomRoomHost.close|close(){}[0]
     final suspend fun start(kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.session/Room, kotlin/Unit>) // us.tractat.kuilt.session/LoomRoomHost.start|start(kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.session.Room,kotlin.Unit>){}[0]
@@ -1293,9 +1322,9 @@ final class us.tractat.kuilt.session/RoomFrame { // us.tractat.kuilt.session/Roo
 final class us.tractat.kuilt.session/SeamRoomFactory : us.tractat.kuilt.session/RoomFactory { // us.tractat.kuilt.session/SeamRoomFactory|null[0]
     constructor <init>(us.tractat.kuilt.core/Loom, kotlinx.coroutines/CoroutineScope, kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.identity/DeviceKeyStore, us.tractat.kuilt.liveness/HeartbeatConfig = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Function3<us.tractat.kuilt.session.partition/RoomId, kotlinx.coroutines/CoroutineScope, kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.session.partition/JoinerReconnectController>? = ...) // us.tractat.kuilt.session/SeamRoomFactory.<init>|<init>(us.tractat.kuilt.core.Loom;kotlinx.coroutines.CoroutineScope;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.identity.DeviceKeyStore;us.tractat.kuilt.liveness.HeartbeatConfig;kotlin.time.Duration;kotlin.Int;kotlin.Function3<us.tractat.kuilt.session.partition.RoomId,kotlinx.coroutines.CoroutineScope,kotlin.Function0<kotlin.time.Instant>,us.tractat.kuilt.session.partition.JoinerReconnectController>?){}[0]
 
-    final suspend fun adopt(us.tractat.kuilt.core/Seam, us.tractat.kuilt.session/SessionRole, kotlin/String? = ..., kotlin/String? = ..., kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.core/Seam>? = ..., us.tractat.kuilt.session.partition/RoomId? = ..., kotlin/String? = ...): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/SeamRoomFactory.adopt|adopt(us.tractat.kuilt.core.Seam;us.tractat.kuilt.session.SessionRole;kotlin.String?;kotlin.String?;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.core.Seam>?;us.tractat.kuilt.session.partition.RoomId?;kotlin.String?){}[0]
+    final suspend fun adopt(us.tractat.kuilt.core/Seam, us.tractat.kuilt.session/AdoptRole, kotlin/String? = ..., kotlin/String? = ..., kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.core/Seam>? = ..., kotlin/String? = ...): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/SeamRoomFactory.adopt|adopt(us.tractat.kuilt.core.Seam;us.tractat.kuilt.session.AdoptRole;kotlin.String?;kotlin.String?;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.core.Seam>?;kotlin.String?){}[0]
     final suspend fun electLobby(us.tractat.kuilt.core/Pattern): us.tractat.kuilt.session.election/ElectionLobby // us.tractat.kuilt.session/SeamRoomFactory.electLobby|electLobby(us.tractat.kuilt.core.Pattern){}[0]
-    final suspend fun host(us.tractat.kuilt.core/Pattern, kotlin/String?, us.tractat.kuilt.session.partition/RoomId?): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/SeamRoomFactory.host|host(us.tractat.kuilt.core.Pattern;kotlin.String?;us.tractat.kuilt.session.partition.RoomId?){}[0]
+    final suspend fun host(us.tractat.kuilt.core/Pattern, kotlin/String?, us.tractat.kuilt.session.partition/RoomId?, us.tractat.kuilt.session.admit/HostAdmission): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/SeamRoomFactory.host|host(us.tractat.kuilt.core.Pattern;kotlin.String?;us.tractat.kuilt.session.partition.RoomId?;us.tractat.kuilt.session.admit.HostAdmission){}[0]
     final suspend fun join(us.tractat.kuilt.core/Tag, kotlin/String?, kotlin/String?): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/SeamRoomFactory.join|join(us.tractat.kuilt.core.Tag;kotlin.String?;kotlin.String?){}[0]
 
     final object Companion { // us.tractat.kuilt.session/SeamRoomFactory.Companion|null[0]

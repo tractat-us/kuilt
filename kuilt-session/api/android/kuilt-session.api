@@ -22,6 +22,30 @@ public final class us/tractat/kuilt/session/AdmissionFailure$TimedOut : us/tract
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract interface class us/tractat/kuilt/session/AdoptRole {
+}
+
+public final class us/tractat/kuilt/session/AdoptRole$Host : us/tractat/kuilt/session/AdoptRole {
+	public synthetic fun <init> (Lus/tractat/kuilt/session/admit/HostAdmission;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/session/admit/HostAdmission;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lus/tractat/kuilt/session/admit/HostAdmission;
+	public final fun component2-khmOKoI ()Ljava/lang/String;
+	public final fun copy-0YezCcE (Lus/tractat/kuilt/session/admit/HostAdmission;Ljava/lang/String;)Lus/tractat/kuilt/session/AdoptRole$Host;
+	public static synthetic fun copy-0YezCcE$default (Lus/tractat/kuilt/session/AdoptRole$Host;Lus/tractat/kuilt/session/admit/HostAdmission;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/AdoptRole$Host;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAdmission ()Lus/tractat/kuilt/session/admit/HostAdmission;
+	public final fun getRoomId-khmOKoI ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/AdoptRole$Joiner : us/tractat/kuilt/session/AdoptRole {
+	public static final field INSTANCE Lus/tractat/kuilt/session/AdoptRole$Joiner;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface class us/tractat/kuilt/session/FailureReason {
 }
 
@@ -130,8 +154,8 @@ public final class us/tractat/kuilt/session/Liveness$Partitioned : us/tractat/ku
 }
 
 public final class us/tractat/kuilt/session/LoomRoomHost : us/tractat/kuilt/session/RoomHost {
-	public fun <init> (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/identity/DeviceKeyStore;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;)V
-	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/identity/DeviceKeyStore;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/identity/DeviceKeyStore;Lus/tractat/kuilt/session/admit/HostAdmission;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/identity/DeviceKeyStore;Lus/tractat/kuilt/session/admit/HostAdmission;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun close ()V
 	public fun start (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
@@ -395,14 +419,14 @@ public final class us/tractat/kuilt/session/RoomChannel {
 }
 
 public abstract interface class us/tractat/kuilt/session/RoomFactory {
-	public abstract fun host-_oCq2W8 (Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun host-_oCq2W8$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun host-wILaFhk (Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/session/admit/HostAdmission;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun host-wILaFhk$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/session/admit/HostAdmission;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public abstract fun join (Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun join$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class us/tractat/kuilt/session/RoomFactory$DefaultImpls {
-	public static synthetic fun host-_oCq2W8$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun host-wILaFhk$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/session/admit/HostAdmission;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static synthetic fun join$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
@@ -446,10 +470,10 @@ public final class us/tractat/kuilt/session/SeamRoomFactory : us/tractat/kuilt/s
 	public static final field Companion Lus/tractat/kuilt/session/SeamRoomFactory$Companion;
 	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/identity/DeviceKeyStore;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/identity/DeviceKeyStore;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun adopt-V4P9x5Q (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/session/SessionRole;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun adopt-V4P9x5Q$default (Lus/tractat/kuilt/session/SeamRoomFactory;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/session/SessionRole;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun adopt (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/session/AdoptRole;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun adopt$default (Lus/tractat/kuilt/session/SeamRoomFactory;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/session/AdoptRole;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun electLobby (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun host-_oCq2W8 (Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun host-wILaFhk (Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/session/admit/HostAdmission;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun join (Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
@@ -836,6 +860,12 @@ public abstract interface class us/tractat/kuilt/session/admit/RejectCode {
 	public fun getRetryable ()Z
 }
 
+public final class us/tractat/kuilt/session/admit/RejectCode$AdmissionPolicyFailed : us/tractat/kuilt/session/admit/RejectCode {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$AdmissionPolicyFailed;
+	public fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
+}
+
 public final class us/tractat/kuilt/session/admit/RejectCode$BadProof : us/tractat/kuilt/session/admit/RejectCode {
 	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$BadProof;
 	public fun getId ()Ljava/lang/String;
@@ -914,13 +944,13 @@ public abstract interface class us/tractat/kuilt/session/election/ElectionLobby 
 	public abstract fun getSelfId-PaHlmAU ()Ljava/lang/String;
 	public abstract fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun leave (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun start (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun start$default (Lus/tractat/kuilt/session/election/ElectionLobby;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun start (Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/session/admit/HostAdmission;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun start$default (Lus/tractat/kuilt/session/election/ElectionLobby;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/session/admit/HostAdmission;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class us/tractat/kuilt/session/election/ElectionLobby$DefaultImpls {
 	public static synthetic fun awaitRoom$default (Lus/tractat/kuilt/session/election/ElectionLobby;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public static synthetic fun start$default (Lus/tractat/kuilt/session/election/ElectionLobby;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun start$default (Lus/tractat/kuilt/session/election/ElectionLobby;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/session/admit/HostAdmission;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class us/tractat/kuilt/session/election/ElectionLobbyKt {
