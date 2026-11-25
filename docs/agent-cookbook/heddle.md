@@ -460,6 +460,52 @@ prepared with, under ids that are the same on every target and never collide how
 are spelt: `root/acme/batch@1:1#0` is `batch` in `acme`, at weight 1, generation 0, and
 `groupId("acme", "batch")` names the group. `LocalHeddle.fromTopology` does this for you.
 
+## Editing the tree as a document
+
+**Intent:** an editor changes one weight three levels down, adds a lane, renames or moves a
+group, without copying every group on the way to it by hand.
+**Primitive:** the edits on `TopologyDocument` (`:kuilt-heddle-core`): `setWeight`,
+`setMaxConcurrent` (`null` clears it), `addChild`, `remove`, `rename` and `move`. Each takes a
+path and returns a `TopologyEdit`: `Edited` with the new document, or a refusal naming the path to
+blame. None throws, and the document it was asked of is unchanged.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyDocumentEdits -->
+```kotlin
+    var document = running.toDocument()
+
+    // A path is child indices, as on a TopologyProblem: [0, 1] is acme's batch lane.
+    val reweighted = document.setWeight(listOf(0, 1), "2")
+    check(reweighted is TopologyEdit.Edited && reweighted.history == TopologyEdit.History.SHARE_RESTARTS)
+    document = reweighted.document
+
+    // A rename is a delete plus an add, and the result says so before anything is saved.
+    val renamed = document.rename(listOf(1), "hobbyists")
+    check(renamed is TopologyEdit.Edited && renamed.history == TopologyEdit.History.REPLACED)
+    document = renamed.document
+
+    // An edit that would give two siblings one name is refused, naming the sibling that has it.
+    val refused = document.addChild(listOf(0), TopologyDocument.Lane("batch"))
+    check(refused == TopologyEdit.DuplicateName(listOf(0, 1), "batch"))
+
+    // The edited document is checked the usual way before it goes near an engine.
+    check(Topology.from(document) is TopologyParse.Valid)
+```
+
+- **A path is child indices, the address a `TopologyProblem` and a `TopologyChange` carry.** The
+  path a problem comes back with is the path to edit. Two siblings of one name, or a child with
+  none, still have an address each, so an editor can fix the duplicate it was just told about.
+- **An index is a place, not a node.** `remove` and `move` shift later siblings up one, and
+  `Edited.path` says where the edit landed in the new document. `addChild` and a move append, so
+  they never shift an existing sibling.
+- **`Edited.history` is the warning to show before saving.** `REPLACED` for a rename or a move to
+  another parent, which drain the old group and start a new one with no history; `DRAINS` for a
+  removal; `SHARE_RESTARTS` for a new weight; `NEW_TREE` for a renamed root, which
+  `LocalHeddle.apply` refuses. A ceiling, a reorder and an edit that changes nothing are `KEPT`.
+- **Edits check the shape, not the values.** A bad weight, an empty name, a negative ceiling or a
+  group left empty go in as a file would put them, and `Topology.from` reports them. The refusals
+  are `NoSuchNode`, `NotAGroup`, `DuplicateName`, `AtRoot` (the root has no weight, ceiling or
+  parent) and `IntoItself` (a move under its own subtree).
+
 ## Changing the tree while work runs
 
 **Intent:** reload the config while leases are open, without leasing against a half-applied
