@@ -202,7 +202,7 @@ public fun TopologyDocument.rename(path: List<Int>, name: String): TopologyEdit 
     }
     val node = nodeAt(path) ?: return TopologyEdit.NoSuchNode(path)
     val parent = path.dropLast(1)
-    val siblings = (childrenOf(parent) as Siblings.Found).children
+    val siblings = resolvedChildrenOf(parent)
     siblingNamed(parent, siblings, name, except = path.last())?.let { return it }
     val history = if (name == node.name) TopologyEdit.History.KEPT else TopologyEdit.History.REPLACED
     return TopologyEdit.Edited(replaced(path, node.with(name = name)), path, history)
@@ -243,7 +243,7 @@ public fun TopologyDocument.move(path: List<Int>, parent: List<Int>): TopologyEd
 
     val removed = without(path)
     val landed = parent.shiftedPast(path)
-    val index = (removed.childrenOf(landed) as Siblings.Found).children.size
+    val index = removed.resolvedChildrenOf(landed).size
     val history = if (sameParent) TopologyEdit.History.KEPT else TopologyEdit.History.REPLACED
     return TopologyEdit.Edited(removed.withChildren(landed) { it + node }, landed + index, history)
 }
@@ -283,6 +283,13 @@ private fun TopologyDocument.childrenOf(parent: List<Int>): Siblings {
         is Lane -> Siblings.Refused(TopologyEdit.NotAGroup(parent))
         is Group -> Siblings.Found(node.children)
     }
+}
+
+/** The children of the group or root at [parent], which the caller has already found to be one. */
+private fun TopologyDocument.resolvedChildrenOf(parent: List<Int>): List<Node> {
+    val found = childrenOf(parent)
+    check(found is Siblings.Found) { "the group at $parent was found before this edit, and now ${(found as Siblings.Refused).refusal}" }
+    return found.children
 }
 
 /** A refusal naming the first of [siblings], other than the one at [except], that is called [name]. */

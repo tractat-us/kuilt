@@ -506,6 +506,10 @@ blame. None throws, and the document it was asked of is unchanged.
   are `NoSuchNode`, `NotAGroup`, `DuplicateName`, `AtRoot` (the root has no weight, ceiling or
   parent) and `IntoItself` (a move under its own subtree).
 
+These edits are one step of an admin page's loop. Listing what the edit changes, previewing it and
+saving it only if nobody else saved first are in
+[Showing an admin what an edit changes](#showing-an-admin-what-an-edit-changes).
+
 ## Changing the tree while work runs
 
 **Intent:** reload the config while leases are open, without leasing against a half-applied
@@ -560,7 +564,8 @@ each change beside the line it is at.
 `TopologyChange`s, and the checked `LocalHeddle.apply(new, generation, startedFrom)` →
 `ApplyOutcome` (`:kuilt-heddle-core`). `heddle.topology` is the running tree, the same one
 `persist()` stores as `lastApplied`. `toDocument` writes it out as the `TopologyDocument` an editor
-starts from, and `Topology.from` reads the edited one back, an exact round trip:
+starts from and edits by path ([Editing the tree as a document](#editing-the-tree-as-a-document)),
+and `Topology.from` reads the edited one back, an exact round trip:
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyToDocument -->
 ```kotlin
