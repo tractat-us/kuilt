@@ -1192,6 +1192,12 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat() // us.tractat.kuilt.conformance/RoomConformanceSuite.aDifferentKeyOnAPartitionedIdReleasesTheSeat|aDifferentKeyOnAPartitionedIdReleasesTheSeat(){}[0]
 
     // Targets: [apple]
+    final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage() // us.tractat.kuilt.conformance/RoomConformanceSuite.aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage|aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(){}[0]
+
+    // Targets: [apple]
+    final fun aReturnAfterTheSeatWentIsReadmitted() // us.tractat.kuilt.conformance/RoomConformanceSuite.aReturnAfterTheSeatWentIsReadmitted|aReturnAfterTheSeatWentIsReadmitted(){}[0]
+
+    // Targets: [apple]
     final fun broadcastDeliversRoomFrameTaggedWithSender() // us.tractat.kuilt.conformance/RoomConformanceSuite.broadcastDeliversRoomFrameTaggedWithSender|broadcastDeliversRoomFrameTaggedWithSender(){}[0]
 
     // Targets: [apple]
@@ -1304,6 +1310,12 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
 
     // Targets: [wasmJs]
     final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aDifferentKeyOnAPartitionedIdReleasesTheSeat|aDifferentKeyOnAPartitionedIdReleasesTheSeat(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage|aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aReturnAfterTheSeatWentIsReadmitted(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aReturnAfterTheSeatWentIsReadmitted|aReturnAfterTheSeatWentIsReadmitted(){}[0]
 
     // Targets: [wasmJs]
     final fun broadcastDeliversRoomFrameTaggedWithSender(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.broadcastDeliversRoomFrameTaggedWithSender|broadcastDeliversRoomFrameTaggedWithSender(){}[0]

@@ -578,6 +578,8 @@ public final class us/tractat/kuilt/conformance/ReturnHarness {
 public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public fun <init> ()V
 	public final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat ()V
+	public final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage ()V
+	public final fun aReturnAfterTheSeatWentIsReadmitted ()V
 	public final fun broadcastDeliversRoomFrameTaggedWithSender ()V
 	public final fun channelStateTornAfterLeave ()V
 	public final fun differentKeyOnLiveIdIsRefused ()V
