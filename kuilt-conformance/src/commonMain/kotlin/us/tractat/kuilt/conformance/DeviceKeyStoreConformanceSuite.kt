@@ -12,6 +12,7 @@ import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.GrantScope
+import us.tractat.kuilt.identity.GrantTrust
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -290,6 +291,44 @@ public abstract class DeviceKeyStoreConformanceSuite {
                     assertEquals(expected.size, keptAcrossRestart.size, "each exactly once")
                 }
             },
+        )
+    }
+
+    /**
+     * A held grant dated more than [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS] after another grant from
+     * the same issuer and scope is replaced by it, although that grant is older (identity Task 2.5,
+     * Decided 24).
+     *
+     * A pass issued while the host's clock ran ahead is refused as `NotYetValid` once the clock is
+     * set back, and the device goes through ordinary admission, which hands it a fresh pass dated by
+     * the corrected clock. Under the newest-wins rule alone that fresh pass is older than the bad one
+     * and is dropped, so every return is vetted until the bad pass's date comes near. The fresh
+     * pass's date is the issuer's clock now, so a held pass dated beyond the allowance past it is
+     * exactly one its issuer refuses.
+     *
+     * Three stores, one per arm, so no arm reads another's grants. The boundary arm keeps a pass
+     * dated exactly the allowance ahead: the issuer still accepts that one, so it must not be given
+     * up. A store comparing with `>=` fails there and nowhere else.
+     */
+    @Test
+    public fun aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val host = DeviceKey.generate()
+        suspend fun keptAfter(heldIssuedAt: Long): Pair<Grant, List<Grant>> {
+            val store = newFixture().open { }
+            val me = store.deviceKey().id
+            store.keepGrant(grant(host, me, heldIssuedAt))
+            val fresh = grant(host, me, T)
+            store.keepGrant(fresh)
+            return fresh to store.grants()
+        }
+        val (freshAfterPostDated, afterPostDated) = keptAfter(T + GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS + 1)
+        val (_, afterBoundary) = keptAfter(T + GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS)
+        val (_, afterNewer) = keptAfter(T + 1)
+
+        assertAll(
+            { assertEquals(listOf(freshAfterPostDated), afterPostDated, "a pass dated beyond the allowance gives way to the fresh one") },
+            { assertEquals(listOf(T + GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS), afterBoundary.map { it.issuedAt }, "a pass dated exactly the allowance ahead is kept") },
+            { assertEquals(listOf(T + 1), afterNewer.map { it.issuedAt }, "positive control: a newer pass within the allowance is kept") },
         )
     }
 
