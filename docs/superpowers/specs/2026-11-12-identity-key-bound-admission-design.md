@@ -462,8 +462,9 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
   `AdmissionPolicyFailed` (retryable) a policy that throws.
   No "keyless Hello" code: the `ProtocolVersion` gate already refuses every older peer.
 - `join`/`adopt` gain a `deviceId` parameter; today nothing sends one.
-- The host forgets a departed member's key and previous peer id once its last grant expires (from
-  slice 2). In slice 1 a departed member is forgotten at once, except a superseded id, which
+- The host forgets a departed member's key and previous peer id once the last pass it *issued* that
+  membership expires (from slice 2), keeping at most 256 such records, oldest out first. A takeover
+  writes none (Amendment M). In slice 1 a departed member is forgotten at once, except a superseded id, which
   `SupersededIds` keeps with its key (at most 64) while its successor is seated.
 
 ### Configuration and call sites
