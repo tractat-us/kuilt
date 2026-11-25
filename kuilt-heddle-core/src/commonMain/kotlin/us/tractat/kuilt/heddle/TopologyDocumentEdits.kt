@@ -96,7 +96,8 @@ public sealed interface TopologyEdit {
     public enum class History {
         /**
          * Nothing loses history: a ceiling, an edit that changes nothing, a reorder among siblings,
-         * or a template added, or changed in a way that keeps every attached child's ([setTemplate]).
+         * or a template added, or changed in a way that keeps every attached child's history
+         * ([setTemplate]).
          */
         KEPT,
 
@@ -104,8 +105,9 @@ public sealed interface TopologyEdit {
          * The node keeps its name and its place, but its share restarts: a new weight is a new edge,
          * so the node rejoins its parent's front. What lies beneath it keeps its history.
          *
-         * From [setTemplate], the nodes are the children attached at the level whose template weight
-         * changed, each with a new edge at the new weight. The group keeps its own share.
+         * From [setTemplate], the nodes are the children attached at each level whose template
+         * weight changed, each with a new edge at its level's new weight. The group keeps its own
+         * share.
          */
         SHARE_RESTARTS,
 
