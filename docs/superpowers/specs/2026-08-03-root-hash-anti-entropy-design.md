@@ -194,6 +194,19 @@ arriving every 60 s. Each of these was traced and survives:
   And the receiver's vector can understate what it holds, when a replica's writes reached it inside
   a third peer's whole state. A behind state nobody asked for, such as a first contact, still draws
   the whole state at once (#828).
+
+  That whole state is a `StateReply` when the sender has sent the receiver a `VectorDigest`, and a
+  plain `FullState` otherwise, since an older build drops the unknown variant. It is the same
+  state, so #828's heal is unchanged. The difference is the hop after it: a `StateReply` that lands
+  behind *its* receiver draws that receiver's digests with the grant armed, never a whole state.
+  Without it, two lagged peers that both write bounced whole states from first contact for as long
+  as the writes outpaced the link, since no request starts that chain (224 whole states against
+  20 requests over two minutes on `QuilterSolicitedFullStateTest`'s rig, 30 after). A chain
+  between current peers now ends by its third whole state: an unasked `FullState`, a plain
+  push-back if it landed before the receiver had seen a `VectorDigest` from its sender, and a
+  `StateReply`. The request answer, the first contact, its retries and the unproven-peer fallback
+  all stay plain `FullState`; a peer's send slot sends a plain one whenever a request is owed, so a
+  `StateReply` never stands in for a request's answer.
 - **Sender-side GC.** The match branch's ack drives `onAck` → `ackedThrough` →
   `recomputeUniversalAck` → `gcPendingDeltas` identically. (That ack is also why a converged round
   is two frames rather than one — see the cost table's footnote.)

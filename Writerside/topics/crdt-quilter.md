@@ -72,6 +72,10 @@ It waits until every write has been handed to the connection, then closes. Keep 
 - `Delta(seq, patch)` — an incremental update.
 - `FullState(state)` — the complete current state, sent to new peers, as a retry on gap
   detection, and in reply to a `FullStateRequest`.
+- `StateReply(state)` — the complete state again, sent back when a peer's `FullState`
+  arrives older than ours. If it in turn arrives older than its receiver's state, the
+  receiver answers with a digest, not a third copy, so two busy peers on a slow link stop
+  trading whole states. Sent only to a peer that has shown it can read one.
 - `Ack(seq)` — acknowledgement, used to clear the pending-delta buffer. Also what a peer
   sends back when a `RootDigest` matches its own state.
 - `Resend(fromSeq)` — request to re-send deltas from `fromSeq` when a gap is detected.

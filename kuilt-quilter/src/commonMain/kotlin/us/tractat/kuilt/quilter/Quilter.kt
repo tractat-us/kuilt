@@ -210,6 +210,12 @@ private object SystemMonotonicMillis : MonotonicMillis {
  *   only when its own root differs; that request is answered with a [QuiltMessage.FullState].
  *   A peer that has never sent a digest of its own may be running a build that cannot read
  *   one, so it is sent the state alongside the digest until it proves otherwise (#2006).
+ * - A [QuiltMessage.FullState] nobody asked for that lands strictly behind this replica's state,
+ *   such as a rejoining peer's first contact, is answered with this replica's whole state at once
+ *   (#828): a [QuiltMessage.StateReply] to a peer that has sent a [QuiltMessage.VectorDigest], a
+ *   plain [QuiltMessage.FullState] to any other. A [QuiltMessage.StateReply], or a requested
+ *   [QuiltMessage.FullState], that lands behind draws digests instead, so two lagged peers that
+ *   both write do not bounce whole states (#3629).
  * - A [QuiltMessage.Delivered] gossips this replica's contiguous delivered version vector,
  *   the matrix-clock row that drives causal-stability GC for dot-carrying CRDTs.
  *
@@ -1017,16 +1023,29 @@ public class Quilter<S : Quilted<S>>(
      * does not hang. A send that hangs on a peer still in [Seam.peers] holds the slot for as long
      * as it hangs.
      */
-    private fun requestFullStateSend(peer: PeerId) {
+    private fun requestFullStateSend(peer: PeerId) = requestWholeStateSend(peer, plain = true)
+
+    /**
+     * Asks for [peer] to be sent this replica's whole state as a [QuiltMessage.StateReply], the
+     * push-back on a [QuiltMessage.FullState] of its that landed behind (#3629). Only for a peer in
+     * [everSentUsVector]. Shares the peer's send slot with [requestFullStateSend], and gives way to
+     * it: when both are owed, the one send that follows is a plain [QuiltMessage.FullState], since
+     * that also answers a request, which a [QuiltMessage.StateReply] does not. Under [lock].
+     */
+    private fun requestStateReplySend(peer: PeerId) = requestWholeStateSend(peer, plain = false)
+
+    private fun requestWholeStateSend(peer: PeerId, plain: Boolean) {
         val busy = fullStateSlots[peer]
         if (busy != null) {
             busy.dirty = true
+            busy.plainOwed = busy.plainOwed || plain
             return
         }
         // Lazy, so the slot is in the map before its coroutine can look itself up there: an
         // unconfined dispatcher would otherwise run the whole send inside `launch`.
         lateinit var slot: FullStateSlot
         slot = FullStateSlot(scope.launch(start = CoroutineStart.LAZY) { runFullStateSlot(peer, slot) })
+        slot.plainOwed = plain
         fullStateSlots[peer] = slot
         slot.job.start()
     }
@@ -1042,7 +1061,16 @@ public class Quilter<S : Quilted<S>>(
                 val bytes = lock.withLock {
                     if (fullStateSlots[peer] !== slot) return
                     slot.dirty = false
-                    encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
+                    val plain = slot.plainOwed
+                    slot.plainOwed = false
+                    val state = _state.value
+                    encode(
+                        if (plain) {
+                            QuiltMessage.FullState(sender = replica, state = state, upThrough = nextSeq)
+                        } else {
+                            QuiltMessage.StateReply(sender = replica, state = state, upThrough = nextSeq)
+                        },
+                    )
                 }
                 runCatchingCancellable { seam.sendTo(peer, bytes) }
                     .onFailure { logger.debug { "fullState to $peer failed: ${it.message}" } }
@@ -1265,6 +1293,17 @@ public class Quilter<S : Quilted<S>>(
         scheduleFullStateRetry(peer, config.fullStateRetryLimit)
     }
 
+    /**
+     * [sendFullStateTo] for a push-back to a peer in [everSentUsVector]: the same whole state as a
+     * [QuiltMessage.StateReply] (#3629), with the same retries, which stay plain. A retry fires
+     * only when [peer] has sent nothing for [QuilterConfig.fullStateRetryInterval], and a plain
+     * [QuiltMessage.FullState] then is never wrong. Under [lock].
+     */
+    private fun pushStateReplyTo(peer: PeerId) {
+        requestStateReplySend(peer)
+        scheduleFullStateRetry(peer, config.fullStateRetryLimit)
+    }
+
     private fun scheduleFullStateRetry(peer: PeerId, attemptsLeft: Int) {
         if (attemptsLeft <= 0) {
             pendingFullStateJobs.remove(peer)
@@ -1300,7 +1339,7 @@ public class Quilter<S : Quilted<S>>(
             is QuiltMessage.Delta -> onDelta(sender, msg)
             is QuiltMessage.Ack -> onAck(sender, msg)
             is QuiltMessage.FullState -> onFullState(sender, msg)
-            is QuiltMessage.StateReply -> onFullState(sender, QuiltMessage.FullState(msg.sender, msg.state, msg.upThrough))
+            is QuiltMessage.StateReply -> onStateReply(sender, msg)
             is QuiltMessage.Resend -> onResend(sender, msg)
             is QuiltMessage.Delivered -> onDelivered(sender, msg)
             is QuiltMessage.RootDigest -> onRootDigest(sender, msg)
@@ -1466,6 +1505,18 @@ public class Quilter<S : Quilted<S>>(
      *     `onPeersChanged → sendFullStateTo(hub)`) *after* its collector has subscribed, so that
      *     FullState is guaranteed to reach the hub; the hub sees an empty/lagging state and
      *     pushes its full history back in response. Prompt, not anti-entropy-cadence.
+     *
+     *     To a peer in [everSentUsVector] the push-back is a [QuiltMessage.StateReply] (#3629),
+     *     which carries the same whole state, so #828's heal is unchanged. What changes is the
+     *     next hop: a [QuiltMessage.StateReply] that lands behind *its* receiver draws digests
+     *     ([onStateReply]), never a whole state. Two lagged peers that both write would otherwise
+     *     bounce whole states for as long as the writes outpace the link, each push-back landing
+     *     behind the other's newest write, and no request starts that chain, so not answering
+     *     requested states with whole states does not end it. Any other peer may run a build
+     *     that drops the variant, and gets the plain [QuiltMessage.FullState] it always did. So a
+     *     chain between current peers is at most three whole states: an unasked one, a plain
+     *     push-back if it landed before the receiver had latched [everSentUsVector] for us, and
+     *     a [QuiltMessage.StateReply].
      *   - **Asked for** (our [outstandingRequest] names the sender): send the sender our digests
      *     with the grant armed, as the tick does, and not our whole state (#3629). On a lagged
      *     link under churn, a requested state usually lands behind only because our newest
@@ -1506,11 +1557,45 @@ public class Quilter<S : Quilted<S>>(
     private fun onFullState(sender: PeerId, msg: QuiltMessage.FullState<S>) {
         val solicited = outstandingRequest?.peer == sender
         if (solicited) clearOutstandingRequest()
-        replicaOf[sender] = msg.sender
+        if (!absorbWholeState(sender, msg.sender, msg.state, msg.upThrough)) return
+        // A state we asked for gets our digests, and the sender asks for our whole state only if
+        // they show it lacks something (#3629); one we did not ask for, such as a first contact,
+        // gets our whole state at once (#828), as a state reply where the sender can read one.
+        when {
+            solicited -> sendDigestsTo(sender)
+            sender in everSentUsVector -> pushStateReplyTo(sender)
+            else -> sendFullStateTo(sender)
+        }
+    }
+
+    /**
+     * An inbound [QuiltMessage.StateReply]: [sender]'s push-back on a [QuiltMessage.FullState] of
+     * ours that landed behind it (#3629). Absorbed as a [QuiltMessage.FullState] is, merge and
+     * cursor resync alike. When it lands strictly behind us in turn, as it does when we wrote while
+     * it crossed the link, it draws our digests with the grant armed, as a state we asked for does,
+     * and never our whole state: that is the hop that ends the chain. The sender then asks for our
+     * whole state only if the digests show it lacks something, and gets it as a plain
+     * [QuiltMessage.FullState] answering that request.
+     *
+     * It never clears [outstandingRequest]. A request to [sender] is answered by a
+     * [QuiltMessage.FullState]: [sender]'s send slot sends a plain one whenever a request is owed,
+     * even beside a [QuiltMessage.StateReply].
+     */
+    private fun onStateReply(sender: PeerId, msg: QuiltMessage.StateReply<S>) {
+        if (absorbWholeState(sender, msg.sender, msg.state, msg.upThrough)) sendDigestsTo(sender)
+    }
+
+    /**
+     * Merges a whole state from [sender], whose replica is [senderReplica], and resyncs the receive
+     * cursor to [upThrough]. Returns whether the state was strictly behind ours, for the caller to
+     * answer. Under [lock].
+     */
+    private fun absorbWholeState(sender: PeerId, senderReplica: ReplicaId, state: S, upThrough: Long): Boolean {
+        replicaOf[sender] = senderReplica
         val current = _state.value
-        val merged = current.piece(msg.state)
-        // When msg.state == current the sender is already up to date, and nothing goes back.
-        val senderBehind = merged == current && msg.state != current
+        val merged = current.piece(state)
+        // When state == current the sender is already up to date, and nothing goes back.
+        val senderBehind = merged == current && state != current
         if (merged != current) {
             _state.value = merged
             recomputeDeliveredLocal()
@@ -1518,13 +1603,8 @@ public class Quilter<S : Quilted<S>>(
         // Before answering, so the digest's vector carries the sender's own seq (#3629). A
         // digest that understates it reads to the sender as us lacking its writes, and the
         // sender then waits out the dominated-digest backstop instead of asking at once.
-        resyncReceiveCursor(sender, msg.sender, msg.upThrough)
-        if (senderBehind) {
-            // A state we asked for gets our digests, and the sender asks for our whole state only
-            // if they show it lacks something (#3629); one we did not ask for, such as a first
-            // contact, gets our whole state at once (#828).
-            if (solicited) sendDigestsTo(sender) else sendFullStateTo(sender)
-        }
+        resyncReceiveCursor(sender, senderReplica, upThrough)
+        return senderBehind
     }
 
     /**
@@ -1867,11 +1947,14 @@ internal fun contiguousFrontier(dots: Set<Dot>, floor: VersionVector): VersionVe
 
 /**
  * One peer's whole-state send slot in [Quilter]: present while its sender coroutine ([job]) is
- * shipping that peer a [QuiltMessage.FullState]. [dirty] records that another send was asked for
- * during this one. Mutated only under the owning [Quilter]'s lock.
+ * shipping that peer a whole state. [dirty] records that another send was asked for during this
+ * one. [plainOwed] says the next send is a [QuiltMessage.FullState]; it stays `false` only while
+ * every send asked for since the last was a [QuiltMessage.StateReply]. Mutated only under the owning
+ * [Quilter]'s lock.
  */
 private class FullStateSlot(val job: Job) {
     var dirty: Boolean = false
+    var plainOwed: Boolean = true
 }
 
 /**
