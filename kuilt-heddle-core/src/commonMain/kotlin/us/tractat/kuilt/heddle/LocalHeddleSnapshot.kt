@@ -22,10 +22,23 @@ import kotlinx.serialization.encoding.encodeCollection
  * and start an engine from it with [LocalHeddle.restore].
  *
  * A snapshot that exists is consistent. The engine is the only thing that builds one, and decoding
- * one runs the same check, so a snapshot whose leases name an edge the ledger lacks, a path that
- * does not lead from [root] to the lease's leaf, a path across a retired edge, or a lease from a
- * later epoch than [epoch] never decodes: [LocalHeddle.decode] reports it as
- * [RestoreResult.Corrupt].
+ * one runs the same check, so a snapshot that breaks any of these never decodes:
+ * [LocalHeddle.decode] reports it as [RestoreResult.Corrupt].
+ *
+ * - Each lease names only edges the ledger has, down a path that leads from [root] to the lease's
+ *   leaf across no retired edge, and none is from a later epoch than [epoch].
+ * - Each edge is charged, returned plus spent, no more than was issued across it, and its
+ *   effective spend is not below zero.
+ * - Each group holds, for each writer, no less than nothing.
+ * - What the leaves have spent, forgotten edges included, and what every group holds come to no
+ *   more than was ever minted.
+ * - The open leases across an edge reserve no more than is outstanding on it.
+ * - Each parent's active children's weights fit the weight budget [LocalHeddle.apply] keeps.
+ * - Every total the engine reads stays within `Long`.
+ *
+ * Each is a bound the engine keeps after every call, and none is a fixed cap: a lease that
+ * [LocalHeddle.extend] has grown past [LocalHeddle.MAX_RESERVATION] is one an engine writes, so it
+ * restores.
  *
  * ## What is kept, and why
  *
