@@ -379,7 +379,9 @@ joiner                                        host
   sender, dropped when the peer is lost or after `admitTimeout`. Keying by sender, never by a claimed
   peer id, is what stops a bystander overwriting a member's pending challenge to lock it out.
 - **The room id is now known to the joiner before the Proof**, because the Challenge carries it, so
-  the proof binds the room and the joiner picks grants by issuer.
+  the proof binds the room and the joiner presents the grants from the challenger's key whose scope is
+  this room or any room of the host — two at most (Amendment M). The host rejects on issuer, subject,
+  scope and expiry before checking any signature, and caps the signature checks.
 
 ### The key → seat table
 

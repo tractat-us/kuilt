@@ -378,7 +378,18 @@ Iain's rulings, recorded as Decided 32 in the design. These win where they diffe
 - **`Reject.init` does not police `retryable` against known codes.** A policy may return a kuilt id with any retryability: the wire carries the app's value, and `fromWire` prefers the known code. A check there would throw inside `settleSeat`'s lock after `retire()`, the hazard Amendment K closed for `superseded`.
 - **The renewal loop starts from the membership's terms, not from the first issued grant,** so a signing failure at seating skips one pass and does not cost the whole connection.
 - **Accepted additions to Task 2.5:** an overdue renewal goes out on the member's next contact while it is Connected, and the joiner also checks that the grant's subject is its own key. `ProtocolVersion` goes from 7 to 8 under the +1 rule, because v7 never shipped but snapshot consumers saw it.
-- **`GrantIssuer` is stateless.** Per-member terms live in `Membership`, and the schedule in the room's renewal jobs. 2.6's plan text assumes departed records in `GrantIssuer`, so 2.6 reads them from wherever the departed-member record is kept (spec *Membership and the wire*: forgotten once its last grant expires).
+- **`GrantIssuer` is stateless.** Per-member terms live in `Membership`, and the schedule in the room's renewal jobs. 2.6's plan text assumes departed records (in `DepartedMembers`, Amendment L/M), so 2.6 reads them from wherever the departed-member record is kept (spec *Membership and the wire*: forgotten once its last grant expires).
+
+## Amendment M — rulings of 2026-11-25 (during Task 2.6's review, PR #3705)
+
+- **The joiner presents only passes for this room or for any room of the host: two at most.** The store keeps one pass per issuer and scope and never prunes (Decided 21), and room ids are minted per process, so presenting by issuer alone sends every room's pass. A host cap then cut off honest returns. The host also rejects on cheap fields before verifying signatures, and caps only the signature checks.
+- **A pass check that throws answers `Reject(HostFailed)`,** as *Membership and the wire* already says for the host's checking failures. It does not vet: vetting would turn a free return into a policy prompt. An undecodable pass is ignored.
+- **Accepted judgement calls:**
+  - When several presented passes are valid, the most generous is carried forward: the longest lifetime, then the wider reach. It never mints a combination of terms the host didn't issue as one pass.
+  - The departed-record cap is 256, oldest out first. A takeover writes no record. The record holds the `notAfter` of the last pass *issued*. Losing a record costs only `ReturningMark.previousId`, which may already be null.
+  - Lobby re-election is modelled as two hosts with distinct keys, since Decided 11 rests on the issuer key alone.
+- **Pass revocation keys on `issuedAt`; seat revocation keys on `admittedAtMs`.** So a revoked held seat whose device also holds a pass issued at or after the cutoff is released and comes back `Returning`, unvetted (Decided 14, 23, 27). That is intended: the pass is post-revocation.
+- **2.7's tests are reshaped** (see Task 2.7): one store per device across launches, the relaunch row as the headline, the two expiry rows merged, and planted-pass hooks for the two cases a real joiner cannot reach.
 
 ## Global Constraints
 
@@ -1062,16 +1073,15 @@ public class HostAdmission(public val policy: AdmissionPolicy, public val revoca
 **Files:**
 - Modify: `RoomConformanceSuite.kt`, `InMemoryRoomConformanceTest.kt`, the cookbook (the section's grants and revocation half, from compiled samples), the skill row (final symbol list, ≤ 8,192 bytes), `module.md` for both modules, and `llms.txt`.
 
-**Tests.** Each case asserts its rig fired, and asserts the policy's call count.
-- `returnInsideGrantNoVetting`: 0 policy calls.
-- `grantExpiredRunsVetting`: 1 policy call.
+**Tests.** Each case asserts its rig fired, and asserts the policy's call count. *(Reshaped by Amendment M.)*
+- **The harness first:** each `ReturnDevice` keeps one store across all its launches (`launch` and `launchBeside`; `launchBeside`'s contract already says "the same key store"), so passes survive a relaunch.
+- `returnInsideGrantNoVetting` is the headline relaunch row: kill, wait past the host's hold, relaunch under a fresh id, then 0 policy calls and `ReturningMark`.
+- `expiredGrantIsVetted` (merged with `grantExpiredRunsVetting`): 1 policy call. This restores the TCK's own-key "seat gone, no valid grant, so vetted" row that 2.6 turned into a 0-call row.
 - `grantForAnotherRoomIsIgnored`
-- `grantForAnotherSubjectIsIgnored`
-- `untrustedIssuerIsIgnored`
 - `revokedSubjectIsVetted`
-- `expiredGrantIsVetted`
+- `grantForAnotherSubjectIsIgnored` and `untrustedIssuerIsIgnored` cannot be reached through a real joiner, which filters by issuer and keeps only its own subject. They need a hook that plants a pass or sends a raw Proof, plus a rig assertion that the pass was presented. Otherwise they pass vacuously.
 
-Each of the last five goes to ordinary admission with exactly one policy call.
+Each refusal case goes to ordinary admission with exactly one policy call.
 
 - [ ] **Step 1: Write the cases, and run the positive control** (`holdsValidGrant = true` hard-wired) to see the refusal cases red. Then revert.
 - [ ] **Step 2: Run them green, then the doc checks and the full build, then commit.** Commit: "conformance: grants, expiry and revocation on return (#3159)".
