@@ -20,6 +20,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.identity.AdmissionProof
 import us.tractat.kuilt.identity.DeviceKeyStore
@@ -268,6 +269,11 @@ internal class PassPlanting(private val passes: suspend (proof: AdmissionProof, 
 
     /** [loom] with every Proof its seams send rewritten, for a device whose key is in [store]. */
     fun over(loom: Loom, store: DeviceKeyStore): Loom = object : Loom by loom {
+        // Delegation forwards `host` and `join` to [loom]'s own, which would weave past this override.
+        override suspend fun host(pattern: Pattern): Seam = weave(Rendezvous.New(pattern))
+
+        override suspend fun join(tag: Tag): Seam = weave(Rendezvous.Existing(tag))
+
         override suspend fun weave(rendezvous: Rendezvous): Seam {
             val seam = loom.weave(rendezvous)
             return object : Seam by seam {
