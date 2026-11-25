@@ -1664,18 +1664,31 @@ public class LocalHeddle private constructor(
      * Everything a restart needs, as one value to encode and store: see [LocalHeddleSnapshot]. Like
      * [snapshot], it is taken under the caller's scheduling lock, since it reads the engine's own
      * maps; the value it returns is immutable, so encoding and writing it can happen off the lock.
-     * Costs a sort of the open leases and of the wake memory.
      *
+     * Costs a sort of the open leases and of the wake memory, and a walk of the whole ledger:
+     * O(edges + groups × writers + the edges of every open lease's path). The walk is the check
+     * [LocalHeddle.decode] runs, that the books balance (see [LocalHeddleSnapshot]), so what this returns
+     * always decodes.
+     *
+     * @throws IllegalStateException when this engine's own books break a bound the check holds them
+     *   to. Every call keeps them, so that is a bug in the engine, never in what the caller passed.
      * @sample us.tractat.kuilt.heddle.sampleLocalPersistence
      */
-    public fun persist(): LocalHeddleSnapshot = LocalHeddleSnapshot(
-        epoch = epoch,
-        ledger = ledger,
-        allocatorMemory = allocator.memory,
-        totalSlots = capacity.slots,
-        open = open.values.sortedBy { it.lease.id }.map { PersistedLease(it.lease, it.path) },
-        lastApplied = topology,
-    )
+    public fun persist(): LocalHeddleSnapshot =
+        try {
+            LocalHeddleSnapshot(
+                epoch = epoch,
+                ledger = ledger,
+                allocatorMemory = allocator.memory,
+                totalSlots = capacity.slots,
+                open = open.values.sortedBy { it.lease.id }.map { PersistedLease(it.lease, it.path) },
+                lastApplied = topology,
+            )
+        } catch (broken: IllegalArgumentException) {
+            // The check is decode's, and decode reports a broken bound as corrupt bytes. Here the
+            // bytes are this engine's own, so a broken bound is its bug.
+            throw IllegalStateException("the engine's own books do not persist: ${broken.message}", broken)
+        }
 
     /**
      * Replace the ledger with [transform] of it: the test seam for a topology change while leases
