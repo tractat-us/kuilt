@@ -1065,10 +1065,18 @@ public class WarpNode(
      * their new ring successor.
      */
     private fun rebuildRingAndClaim() {
-        val effectiveRoster = lock.withLock { rosterPeers - partitionedPeers }
-        val newRing = RosterSnapshot(effectiveRoster).toTaskRing()
+        // Read the effective roster and publish its ring in ONE critical section (#3680). The
+        // roster collector and every detector collector call this from their own coroutines, so on
+        // a multi-threaded dispatcher a rebuild split into a read section and a publish section can
+        // stall between them while a later rebuild runs to the end, and then publish the older ring
+        // last: a recovered peer left out of the ring while `partitionedPeers` has it back, with
+        // nothing to rebuild it. The build is pure and cheap (a few thousand vnode entries). No test drives that
+        // interleaving, so nothing reds if the section is split again; keep it whole.
+        //
+        // The claims below need no such care: they read [ring] under [lock] for every decision, so
+        // a claim pass always sees the newest ring published.
         lock.withLock {
-            ring = newRing
+            ring = RosterSnapshot(rosterPeers - partitionedPeers).toTaskRing()
             lastRingChangeAt = clock()
         }
         claimOwned(queueQuilter.state.value.keys, CoordinationKind.Free)
