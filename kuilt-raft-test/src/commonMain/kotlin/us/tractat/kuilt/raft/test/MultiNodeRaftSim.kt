@@ -118,8 +118,9 @@ import kotlin.time.Duration.Companion.seconds
  * @param nodeScope Scope for node coroutines — pass [TestScope.backgroundScope] so the infinite
  *   heartbeat/election loops are cancelled at test teardown without
  *   [kotlinx.coroutines.test.UncompletedCoroutinesError].
- * @param baseConfig Timing parameters for every node. [RaftConfig.random] is **overridden per node**
- *   (`Random(baseSeed + nodeIndex)`) to ensure distinct election timeouts and guarantee convergence.
+ * @param baseConfig Timing parameters for every node. [RaftConfig.random] is **overridden per node
+ *   and per start** (`Random(simNodeSeed(baseSeed, nodeIndex, start))`, see below) to ensure
+ *   distinct election timeouts and guarantee convergence.
  *   Must have [RaftConfig.expectVirtualTime] `= true` for tests running under a
  *   [kotlinx.coroutines.test.TestDispatcher]. Defaults to [MULTI_NODE_SIM_BASE_CONFIG].
  * @param baseSeed Seed from which per-node [Random]s are derived. Change to explore different
@@ -127,8 +128,24 @@ import kotlin.time.Duration.Companion.seconds
  * @param maxPayloadBytes Optional payload cap forwarded to [MultiNodeRaftNetwork] — forces
  *   InstallSnapshot chunking in tests that exercise the snapshot-transfer path.
  * @param nodeFactory Override to wire a custom [RaftNode] implementation. The default wires
- *   [CoroutineScope.raftNode] with a per-node seeded config. Parameters: `(id, transport,
- *   storage, childScope)`.
+ *   [CoroutineScope.raftNode] with a per-node, per-start seeded config. Parameters: `(id,
+ *   transport, storage, childScope)`. It is called once per start of a node — at construction and
+ *   again on every [restart] — and a custom factory that seeds [RaftConfig.random] must give each
+ *   start its own seed, for the reason below.
+ *
+ * ## A restart is a new process, so it gets a new seed
+ *
+ * The default factory seeds a node's first start with `baseSeed + nodeIndex`, and its `k`-th
+ * restart with a seed that differs from every earlier one (`simNodeSeed`). It never reuses one.
+ * A [us.tractat.kuilt.raft.ClientIdentity.Auto] node mints its client id from
+ * [RaftConfig.random], and the library promises that id changes on restart; in production it does,
+ * because the process draws from fresh entropy. Reseeding a restart with its first seed brings the
+ * old id back, and the restarted node's first forward reuses the old incarnation's
+ * `(clientId, requestId)` with different bytes, which the leader refuses with
+ * [us.tractat.kuilt.raft.RequestIdConflictException] (#3425).
+ *
+ * The seed stays a pure function of `baseSeed`, the node's index and its start count — no clock,
+ * no entropy — so one `baseSeed` replays the same run, restarts included, on every target.
  */
 public class MultiNodeRaftSim(
     public val nodeIds: List<NodeId>,
@@ -557,9 +574,9 @@ public const val MULTI_NODE_SIM_SEED: Long = 485L
  * Fast timing config for [MultiNodeRaftSim] tests — elections fire in single-digit virtual ms,
  * so a 3-node leader election completes in ≤ 20 ms of virtual time.
  *
- * [RaftConfig.random] is left as [Random.Default] here; [MultiNodeRaftSim] overrides it per-node
- * with `Random(baseSeed + nodeIndex)` so each node draws a distinct election timeout and
- * symmetry-breaking works correctly. The [RaftConfig.expectVirtualTime] flag suppresses the
+ * [RaftConfig.random] is left as [Random.Default] here; [MultiNodeRaftSim] overrides it per node
+ * and per start (`baseSeed + nodeIndex` on a first start, a fresh seed on each restart) so each node
+ * draws a distinct election timeout and symmetry-breaking works correctly. The [RaftConfig.expectVirtualTime] flag suppresses the
  * real-dispatcher guard for tests running under a [kotlinx.coroutines.test.TestDispatcher].
  *
  * **Never use this config in production** — fast timings are meaningless on real networks and
@@ -706,15 +723,38 @@ public fun raftSimTest(
 
 // ── Private factory ──────────────────────────────────────────────────────────
 
+/**
+ * The seed of node [nodeIndex]'s [start]-th start (`0` is the first) in a sim seeded with
+ * [baseSeed]: a pure function of the three, so a sim replays identically on every target.
+ *
+ * A first start keeps `baseSeed + nodeIndex`, the seed the sim has always given it, so no
+ * first-start trajectory moved. Each restart steps by [RESTART_SEED_STRIDE]: for every `start` up to
+ * a million, `start * RESTART_SEED_STRIDE` lies more than 10^12 from zero modulo 2^64, so a
+ * restart's seed lands on no earlier start's seed of the same node and on no other node's seed in
+ * any sim with fewer nodes than that. The multiply wraps on overflow; Kotlin's [Long] wraps the
+ * same way on every target, and only distinctness matters here.
+ */
+internal fun simNodeSeed(baseSeed: Long, nodeIndex: Int, start: Int): Long {
+    require(nodeIndex >= 0) { "nodeIndex must be non-negative, was $nodeIndex" }
+    require(start >= 0) { "start must be non-negative, was $start" }
+    return baseSeed + nodeIndex + start * RESTART_SEED_STRIDE
+}
+
+/** The 64-bit golden-ratio constant: odd, so multiplying by it is a bijection on [Long]. */
+private const val RESTART_SEED_STRIDE: Long = -0x61c8864680b583ebL
+
 private fun defaultNodeFactory(
     nodeIds: List<NodeId>,
     baseConfig: RaftConfig,
     baseSeed: Long,
 ): (NodeId, RaftTransport, RaftStorage, CoroutineScope) -> RaftNode {
     val clusterConfig = ClusterConfig(voters = nodeIds.toSet())
+    // One count per node, bumped on each call: the sim calls the factory once per start.
+    val starts = mutableMapOf<NodeId, Int>()
     return { id, transport, storage, childScope ->
-        val nodeIndex = nodeIds.indexOf(id).toLong()
-        val nodeConfig = baseConfig.copy(random = Random(baseSeed + nodeIndex))
-        childScope.raftNode(clusterConfig, transport, storage, nodeConfig)
+        val start = starts[id] ?: 0
+        starts[id] = start + 1
+        val seed = simNodeSeed(baseSeed, nodeIds.indexOf(id), start)
+        childScope.raftNode(clusterConfig, transport, storage, baseConfig.copy(random = Random(seed)))
     }
 }

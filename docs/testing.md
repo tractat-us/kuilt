@@ -100,7 +100,10 @@ rather than fails:
    `StandardTestDispatcher`, but the *duration* each node waits is still an RNG draw.
    `MultiNodeRaftSim` seeds `Random(baseSeed + nodeIndex)` per node so timeouts differ
    and a leader actually wins the race. Identical seeds ⇒ split-vote storm ⇒ no leader
-   ⇒ hang.
+   ⇒ hang. A restart gets a fresh seed, still derived from `baseSeed`, the node and its
+   start count, so a `ClientIdentity.Auto` node comes back under a new client id as a
+   real process would (#3425). A custom `nodeFactory` that restarts nodes has to do
+   the same.
 4. **Node coroutines on `backgroundScope`.** The infinite loops must be cancelled at
    teardown, or `runTest` reports `UncompletedCoroutinesError`.
 
