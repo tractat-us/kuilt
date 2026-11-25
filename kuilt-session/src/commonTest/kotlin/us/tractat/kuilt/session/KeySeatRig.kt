@@ -114,6 +114,9 @@ internal class ObservedHold(
     /** The detection instant of every partition the real controller has been told of, in order. */
     val opened = mutableListOf<Long>()
 
+    /** The instant of every recovery the real controller has been told of, in order. */
+    val recovered = mutableListOf<Long>()
+
     val factory: JoinerReconnectControllerFactory = { roomId, scope, clock ->
         val controller = DefaultJoinerReconnectController(
             roomId = roomId,
@@ -135,6 +138,11 @@ internal class ObservedHold(
                         controller.onPeerUnresponsive(peerId, at)
                     }
                 }
+            }
+
+            override fun onPeerRecovered(peerId: PeerId, at: Long) {
+                recovered += at
+                controller.onPeerRecovered(peerId, at)
             }
 
             override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict {

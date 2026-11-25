@@ -3241,6 +3241,24 @@ internal class SeamRoom(
     internal fun hasDetector(peerId: PeerId): Boolean = lock.withLock { detectors.containsKey(peerId) }
 
     /**
+     * **Test-visibility.** The job of the detector registered for [peerId], or null: the identity
+     * [handlePartitionEvent] is given for each event that detector reports (#3609). No production
+     * caller reads this.
+     */
+    internal fun detectorJobForTest(peerId: PeerId): Job? = lock.withLock { detectors[peerId]?.job }
+
+    /**
+     * **Test-visibility.** Handle [event] as the collector of the detector whose job is [detector]
+     * would. A test passes the job of a detector that has since been replaced to stand in for the one
+     * interleaving no single-threaded test can reach (#3609): a collector that took an event off its
+     * detector, then lost its thread before its first critical section while the detector was
+     * stopped and another started for the same peer. The collector runs nothing that suspends between
+     * the two, so a stalled thread is the only way there, and it hands over exactly this pair.
+     */
+    internal suspend fun handlePartitionEventForTest(event: PartitionEvent, detector: Job) =
+        handlePartitionEvent(event, detector)
+
+    /**
      * Test-visibility: is a reconnect attempt currently in flight (its reply slot installed)?
      *
      * Exposed for [us.tractat.kuilt.session] tests that interleave [sayHelloAgain] with the
