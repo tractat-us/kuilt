@@ -9,7 +9,7 @@ picking favourites — which device is in charge when a room full of devices fir
 ## Rejoin & reconnect
 
 **Intent:** a per-game / per-session id both peers agree on — to key a durable `(session, device) → seat` record, scope a log, or name a table.
-**Primitive:** `Room.roomId` (`us.tractat.kuilt.session`). Agreed in the admit handshake at zero extra traffic — don't mint your own and replicate it over a side channel, and don't use the host's peer id, which names the *device* and repeats across every room it hosts.
+**Primitive:** `Room.roomId` (`us.tractat.kuilt.session`). Agreed in the admit handshake at zero extra traffic — don't mint your own and replicate it over a side channel, and don't use the host's peer id, which names the *device* and repeats across every room it hosts. To name a *device* across rooms and launches, use `Member.key` ([below](#device-identity--return)).
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#perSessionIdSample -->
 ```kotlin
@@ -40,8 +40,38 @@ public suspend fun callerSuppliedRoomIdSample(
 }
 ```
 
-**Intent:** rejoin / reconnect after a dropped connection; "hold the slot open" for a grace window.
-**Primitive:** none to call — keep the `Room`. A joiner built by `SeamRoomFactory` says Hello again after a tear, and the device key its `Hello` proves restores the held seat. There is no token and no `resume` call. (`SeamRoom` is `internal`; `SeamRoomFactory` builds it.) Don't re-track the grace window yourself.
+**Intent:** rejoin / reconnect after a dropped connection; "hold the slot open" for a grace window; get a phone the system killed back into its seat when the user reopens the app.
+**Primitive:** none to call — keep the `Room`, and give the factory this device's `DeviceKeyStore`. A joiner built by `SeamRoomFactory` says Hello again after a tear, and the device key its `Hello` proves restores the held seat. There is no token and no `resume` call. (`SeamRoom` is `internal`; `SeamRoomFactory` builds it.) Don't re-track the grace window yourself, and don't keep a `(room, device) → seat` record: the host keeps it, keyed by the device key.
+
+| Away for… | What happens | What the host and the other members see |
+|---|---|---|
+| less than the host holds the seat (`HeartbeatConfig.reconnectWindow`, 60 s by default) | the same membership comes back, whether the link healed or the app was killed and reopened | `Resumed` under the same peer id; under a new one, `Left(old, LeaveReason.Superseded(by = new))` then `Joined(new)` |
+| longer | admitted afresh, and the room stays in session | `Left(old, PartitionExpired)` earlier, then `Joined` |
+
+The app makes no call between the drop and the return; the return rows of `RoomConformanceSuite`
+hold every room to that, counting the calls. After an app kill, the launch's ordinary `join` over
+the same store is the whole of it:
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#returnIsAutomaticSample -->
+```kotlin
+public suspend fun returnIsAutomaticSample(
+    loom: Loom,
+    scope: CoroutineScope,
+    clock: () -> Instant,
+    keyStore: DeviceKeyStore,
+    tag: Tag,
+): Room {
+    // One store per device, opened once at launch and shared by every room: it IS the device. In an
+    // app that is DeviceKeyStore.platform(…); a fresh InMemoryDeviceKeyStore() every launch makes a
+    // new device every launch, and nothing comes back.
+    val factory = SeamRoomFactory(loom = loom, scope = scope, clock = clock, deviceKeyStore = keyStore)
+    // The first join and the join after an app kill are the same call. A torn link needs none: keep
+    // the room, and on a loom that heals its seam in place it says Hello again by itself.
+    return factory.join(tag, memberName = "Ada")
+}
+```
+
+Remembering *which* room to rejoin after a kill is the app's: kuilt keeps the key, not the `Tag`.
 
 Keep the existing room. After a transport tear, a joiner built by `SeamRoomFactory` says Hello
 again automatically within the reconnect window. This requires a loom that heals the **same seam
@@ -79,6 +109,29 @@ public suspend fun watchTheReturnSample(room: Room) {
             // The window closed, or the host refused the Hello. WHY is in the reason's code.
             // See classifyRejectCodeSample.
             is MembershipEvent.HostLost -> Unit
+            else -> Unit
+        }
+    }
+}
+```
+
+On the host, and on every other member, the same return reads as one of two shapes. Tell a member
+who came back from a stranger by them, never by a display name:
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#whoCameBackSample -->
+```kotlin
+public suspend fun whoCameBackSample(room: Room) {
+    room.events.collect { event ->
+        when (event) {
+            // The same seat under the same peer id: nothing on anyone's screen needs to change.
+            is MembershipEvent.Resumed -> Unit
+            is MembershipEvent.Left -> when (event.reason) {
+                // The same device under a new peer id, which joins next. Move whatever you keyed on
+                // event.peerId over to the reason's `by`: that Joined is not a stranger. On this
+                // room's own id it means another process of this device took the seat: this room is over.
+                is LeaveReason.Superseded -> Unit // "Ada is back"
+                else -> Unit // gone
+            }
             else -> Unit
         }
     }
@@ -734,4 +787,4 @@ public suspend fun admissionPolicyTestSample(blocked: DidKey, stranger: DidKey):
 
 **The key on a roster:** `Member.key`. A room proves every key at the door: the host challenges each joiner and admits it only once it has signed a proof under the key its Hello named, and the host signs its own challenge too. So on the host every member's key is verified, and on a joiner the host's own entry is; every *other* entry on a joiner's roster is host-asserted, carried on the host's Welcome. Do not hand-roll a second handshake to "check" a key the room already proved. Two limits, both stated in `Member`'s KDoc. **The key binds the handshake, not later frames:** on a `Mesh`, a link that later takes a member's peer id (#2387) sends frames under that member's key, so a `HostedOverlay` deployment should use a binding `LinkAdmission` until #2387 lands. **A key is not unique:** two tabs of one browser share one key and hold two seats, so never look a member up by its key alone.
 
-So far this is the store (in memory, on the desktop JVM, on iOS, on macOS and on Android), the key, its name, the pass, its check, the revocations, the policy's types, and the room's proof of each key at admission. The other platforms' stores, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
+So far this is the store (in memory, on the desktop JVM, on iOS, on macOS and on Android), the key, its name, the pass, its check, the revocations, the policy's types, the room's proof of each key at admission, and the seat a host holds for that key, which a returning device gets back with no call from the app ([Rejoin & reconnect](#rejoin--reconnect)). The other platforms' stores, and the room's use of passes, are arriving in the pieces that follow.

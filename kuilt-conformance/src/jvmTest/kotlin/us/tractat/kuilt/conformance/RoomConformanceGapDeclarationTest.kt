@@ -5,12 +5,13 @@ import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.time.Instant
 
 /**
- * Runs [RoomConformanceSuite]'s five fault-injection-gated obligations against a harness that
+ * Runs [RoomConformanceSuite]'s five fault-injection-gated obligations, and its five return rows, against a harness that
  * declares [RoomConformanceSuite.FaultInjection.Unsupported] — **the first time in this suite's
  * life that its skip path has been executed at all** (#2306).
  *
@@ -26,7 +27,7 @@ import kotlin.time.Instant
  *  - a **blank** tracking URL fails every gated obligation — this is the one runtime hole the sealed
  *    fixture leaves, since `Unsupported("")` is the only way left to write a declaration that
  *    declares nothing;
- *  - a **real** tracking URL lets all five skip cleanly, which is the survivability check above.
+ *  - a **real** tracking URL lets all ten skip cleanly, which is the survivability check above.
  *
  * ## Why `jvmTest` and not `commonTest`
  *
@@ -114,14 +115,30 @@ class RoomConformanceGapDeclarationTest {
         assertFailsWith<AssertionError> { suite.leaveDoesNotMintACancellationWhenTeardownIsSlow() }
     }
 
+    /**
+     * The return rows (#3159, Task 1.9) are gated by their own fixture, [ReturnFixture], which this
+     * harness declares [ReturnFixture.Unsupported] with the same URL. A blank one fails every row.
+     */
+    @Test
+    fun blankTrackingUrlFailsEveryReturnRow() {
+        val suite = unsupported("")
+        assertAll(
+            { assertFailsWith<AssertionError> { suite.returnRestoresHeldSeatSameId() } },
+            { assertFailsWith<AssertionError> { suite.resumeWithinWindowFiresResumed() } },
+            { assertFailsWith<AssertionError> { suite.differentKeyOnLiveIdIsRefused() } },
+            { assertFailsWith<AssertionError> { suite.processRebuiltInsideWindowRestores() } },
+            { assertFailsWith<AssertionError> { suite.processRebuiltWithFreshIdRestores() } },
+        )
+    }
+
     // ── A declared gap skips cleanly — the survivability half ──
 
     /**
-     * All five gated obligations skip without throwing, without hanging and without leaking a
+     * All ten gated obligations skip without throwing, without hanging and without leaking a
      * coroutine, so a harness that genuinely cannot partition its links can still subclass this
-     * suite. Deliberately **one** test over all five rather than five: what is under assertion is
+     * suite. Deliberately **one** test over all ten rather than ten: what is under assertion is
      * that the declared-gap path is survivable as a whole, and a per-obligation split would report
-     * five identical greens for one property.
+     * ten identical greens for one property.
      *
      * Note what this cannot do: it cannot tell a harness that *truly* cannot fault-inject from one
      * that could and declared otherwise. Nothing at this layer can — the declaration is a claim
@@ -136,6 +153,11 @@ class RoomConformanceGapDeclarationTest {
         suite.theTeardownFaultReallyFires()
         suite.leaveIsIdempotentEvenWhenTeardownFails()
         suite.leaveDoesNotMintACancellationWhenTeardownIsSlow()
+        suite.returnRestoresHeldSeatSameId()
+        suite.resumeWithinWindowFiresResumed()
+        suite.differentKeyOnLiveIdIsRefused()
+        suite.processRebuiltInsideWindowRestores()
+        suite.processRebuiltWithFreshIdRestores()
     }
 
     // ── The ungated obligations are unaffected by the declaration ──
