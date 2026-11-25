@@ -358,6 +358,36 @@ class ShareLineLagTest {
         )
     }
 
+    /**
+     * A parent whose children's weights fail the weight budget, `{1/30,721, 1/30,722}` (a merged
+     * set no single apply admits), gives its children `null` and only them; their shares still read.
+     */
+    @Test
+    fun aParentOverTheWeightBudgetReadsNullForItsChildrenAlone() {
+        val root = GroupId("root")
+        val p = GroupId("p")
+        val x = GroupId("x")
+        val a = GroupId("a")
+        val b = GroupId("b")
+        val ledger = shapedLedger(
+            root,
+            listOf(
+                edgeOf(root, p), edgeOf(root, x),
+                AttachmentRecord(AttachmentId("p>a"), p, a, Weight.of(1L, 30_721L)),
+                AttachmentRecord(AttachmentId("p>b"), p, b, Weight.of(1L, 30_722L)),
+            ),
+        )
+        val line = engineOver(ledger, root, supply = 0).shareLine(setOf(a, b, x))
+        assertAll(
+            { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1L, 30_721L), Weight.of(1L, 30_722L))), "the rig: p's weights fail the budget") },
+            { assertNull(line.lag(a)) },
+            { assertNull(line.lag(b)) },
+            { assertEquals(Rational.ZERO, checkNotNull(line.lag(p)), "p and x, alone and unserved, stand at the front") },
+            { assertEquals(Rational.ZERO, checkNotNull(line.lag(x))) },
+            { assertEquals(Rational.of(30_722L, 2L * 61_443L), line.share(a)) },
+        )
+    }
+
     /** A lag that does not fit `Long` throws for its own row, and the rows beside the parent still read. */
     @Test
     fun aLagThatDoesNotFitThrowsForItsRowAlone() {
