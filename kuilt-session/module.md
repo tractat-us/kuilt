@@ -26,10 +26,13 @@ coming back is recognised by the key it proves, never by a name or a token it wa
 - **Back after the pass ran out, or after its host revoked it:** the policy decides it like any
   newcomer.
 
-A host revokes a lost device in the `RevocationList` its `HostAdmission` holds. That voids every pass
-the device holds and lets its held seat go when it next says hello. It removes nobody who is in the
-room now, and it is not a ban: a device the policy admits again gets a fresh pass that works. To
-keep a device out, the policy refuses it.
+A host revokes a lost device in the `RevocationList` its `HostAdmission` holds. Every pass issued to
+the device before that moment stops working, and when the device next says hello the policy decides
+it like a newcomer. A seat the room still holds for it is let go only if the policy lets it in; if
+the policy says no, the seat stays held until its hold runs out. A pass issued after the revocation,
+which a later admission gave the device, still works. Revoking removes nobody who is in the room
+now, though their pass stops being renewed, and it is not a ban: to keep a device out, the policy
+refuses it.
 
 `RoomConformanceSuite` in `:kuilt-conformance` checks each of these returns against a real room,
 counting the calls the app made and the times the policy was asked.

@@ -405,10 +405,11 @@ public suspend fun hostAdmissionSample(
 
 /**
  * Stop a lost or stolen device coming back on the pass a room you host gave it: revoke its key in the
- * revocations the room's [HostAdmission] holds, which are the ones it checks every returning pass
- * against. Every pass issued to that key before the cutoff is void from then on. When the device next
- * says Hello your admission policy decides it as a newcomer, and a seat the room still holds for it is
- * let go rather than handed back.
+ * revocations the room's [HostAdmission] holds, which are the ones it checks every returning device
+ * against. Every pass issued to that key before the cutoff is void from then on, and so is every seat
+ * admitted before it. When the device next says Hello your admission policy decides it as a newcomer,
+ * and a seat the room still holds for it is let go only if the policy admits it: a refusal leaves the
+ * seat held until its hold runs out. A pass issued at or after the cutoff still lets it back unvetted.
  *
  * It removes nobody. A device in the room now keeps its seat, but the host stops renewing its pass, so
  * the pass runs out. Nor is it a ban: if the policy admits the device again, the fresh pass it gets
