@@ -45,6 +45,7 @@ abstract interface us.tractat.kuilt.conformance/ReturnDevice { // us.tractat.kui
     abstract suspend fun impostor(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnDevice.impostor|impostor(){}[0]
     abstract suspend fun kill(kotlin/Boolean = ...) // us.tractat.kuilt.conformance/ReturnDevice.kill|kill(kotlin.Boolean){}[0]
     abstract suspend fun launch(kotlin/Boolean = ...): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnDevice.launch|launch(kotlin.Boolean){}[0]
+    abstract suspend fun launchBeside(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnDevice.launchBeside|launchBeside(){}[0]
     abstract suspend fun restore() // us.tractat.kuilt.conformance/ReturnDevice.restore|restore(){}[0]
 }
 
@@ -1192,10 +1193,19 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat() // us.tractat.kuilt.conformance/RoomConformanceSuite.aDifferentKeyOnAPartitionedIdReleasesTheSeat|aDifferentKeyOnAPartitionedIdReleasesTheSeat(){}[0]
 
     // Targets: [apple]
+    final fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat() // us.tractat.kuilt.conformance/RoomConformanceSuite.aJoinerPresentingTheHostsKeyGetsAJoinerSeat|aJoinerPresentingTheHostsKeyGetsAJoinerSeat(){}[0]
+
+    // Targets: [apple]
     final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage() // us.tractat.kuilt.conformance/RoomConformanceSuite.aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage|aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(){}[0]
 
     // Targets: [apple]
     final fun aReturnAfterTheSeatWentIsReadmitted() // us.tractat.kuilt.conformance/RoomConformanceSuite.aReturnAfterTheSeatWentIsReadmitted|aReturnAfterTheSeatWentIsReadmitted(){}[0]
+
+    // Targets: [apple]
+    final fun aSecondLiveProcessGetsAnAdditionalSeat() // us.tractat.kuilt.conformance/RoomConformanceSuite.aSecondLiveProcessGetsAnAdditionalSeat|aSecondLiveProcessGetsAnAdditionalSeat(){}[0]
+
+    // Targets: [apple]
+    final fun anAwayJoinerHearsASupersedeThroughItsRosterRebuild() // us.tractat.kuilt.conformance/RoomConformanceSuite.anAwayJoinerHearsASupersedeThroughItsRosterRebuild|anAwayJoinerHearsASupersedeThroughItsRosterRebuild(){}[0]
 
     // Targets: [apple]
     final fun broadcastDeliversRoomFrameTaggedWithSender() // us.tractat.kuilt.conformance/RoomConformanceSuite.broadcastDeliversRoomFrameTaggedWithSender|broadcastDeliversRoomFrameTaggedWithSender(){}[0]
@@ -1312,10 +1322,19 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aDifferentKeyOnAPartitionedIdReleasesTheSeat|aDifferentKeyOnAPartitionedIdReleasesTheSeat(){}[0]
 
     // Targets: [wasmJs]
+    final fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aJoinerPresentingTheHostsKeyGetsAJoinerSeat|aJoinerPresentingTheHostsKeyGetsAJoinerSeat(){}[0]
+
+    // Targets: [wasmJs]
     final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage|aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(){}[0]
 
     // Targets: [wasmJs]
     final fun aReturnAfterTheSeatWentIsReadmitted(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aReturnAfterTheSeatWentIsReadmitted|aReturnAfterTheSeatWentIsReadmitted(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aSecondLiveProcessGetsAnAdditionalSeat(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aSecondLiveProcessGetsAnAdditionalSeat|aSecondLiveProcessGetsAnAdditionalSeat(){}[0]
+
+    // Targets: [wasmJs]
+    final fun anAwayJoinerHearsASupersedeThroughItsRosterRebuild(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.anAwayJoinerHearsASupersedeThroughItsRosterRebuild|anAwayJoinerHearsASupersedeThroughItsRosterRebuild(){}[0]
 
     // Targets: [wasmJs]
     final fun broadcastDeliversRoomFrameTaggedWithSender(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.broadcastDeliversRoomFrameTaggedWithSender|broadcastDeliversRoomFrameTaggedWithSender(){}[0]
@@ -2058,7 +2077,7 @@ final class us.tractat.kuilt.conformance/MatrixEntry { // us.tractat.kuilt.confo
 }
 
 final class us.tractat.kuilt.conformance/ReturnHarness { // us.tractat.kuilt.conformance/ReturnHarness|null[0]
-    constructor <init>(us.tractat.kuilt.session/RoomFactory, us.tractat.kuilt.core/Pattern, us.tractat.kuilt.core/Tag, us.tractat.kuilt.liveness/HeartbeatConfig, us.tractat.kuilt.liveness/HeartbeatConfig, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/ReturnDevice>) // us.tractat.kuilt.conformance/ReturnHarness.<init>|<init>(us.tractat.kuilt.session.RoomFactory;us.tractat.kuilt.core.Pattern;us.tractat.kuilt.core.Tag;us.tractat.kuilt.liveness.HeartbeatConfig;us.tractat.kuilt.liveness.HeartbeatConfig;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.conformance.ReturnDevice>){}[0]
+    constructor <init>(us.tractat.kuilt.session/RoomFactory, us.tractat.kuilt.core/Pattern, us.tractat.kuilt.core/Tag, us.tractat.kuilt.liveness/HeartbeatConfig, us.tractat.kuilt.liveness/HeartbeatConfig, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/ReturnDevice>, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.session/RoomFactory>) // us.tractat.kuilt.conformance/ReturnHarness.<init>|<init>(us.tractat.kuilt.session.RoomFactory;us.tractat.kuilt.core.Pattern;us.tractat.kuilt.core.Tag;us.tractat.kuilt.liveness.HeartbeatConfig;us.tractat.kuilt.liveness.HeartbeatConfig;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.conformance.ReturnDevice>;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.session.RoomFactory>){}[0]
 
     final val hostFactory // us.tractat.kuilt.conformance/ReturnHarness.hostFactory|{}hostFactory[0]
         final fun <get-hostFactory>(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnHarness.hostFactory.<get-hostFactory>|<get-hostFactory>(){}[0]
@@ -2071,6 +2090,7 @@ final class us.tractat.kuilt.conformance/ReturnHarness { // us.tractat.kuilt.con
     final val joinerHeartbeat // us.tractat.kuilt.conformance/ReturnHarness.joinerHeartbeat|{}joinerHeartbeat[0]
         final fun <get-joinerHeartbeat>(): us.tractat.kuilt.liveness/HeartbeatConfig // us.tractat.kuilt.conformance/ReturnHarness.joinerHeartbeat.<get-joinerHeartbeat>|<get-joinerHeartbeat>(){}[0]
 
+    final suspend fun hostTab(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnHarness.hostTab|hostTab(){}[0]
     final suspend fun newDevice(): us.tractat.kuilt.conformance/ReturnDevice // us.tractat.kuilt.conformance/ReturnHarness.newDevice|newDevice(){}[0]
 }
 
