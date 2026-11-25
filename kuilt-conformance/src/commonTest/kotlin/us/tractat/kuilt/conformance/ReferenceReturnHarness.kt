@@ -6,8 +6,6 @@ import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.InMemoryTag
@@ -43,9 +41,11 @@ import kotlin.time.Instant
  * process's first, which only the room's re-weave makes.
  *
  * The server keys connections by peer id and lets a newer connection take an id over, which is how
- * [ReturnDevice.impostor] reaches the host under a live member's id. The victim is muted for the
- * impostor's stay: a frame it sent would re-register its own connection for the id and steal the
- * impostor's answer.
+ * [ReturnDevice.impostor] reaches the host under a member's id. It does not close the connection it
+ * displaced, so a live victim is muted for the impostor's stay — a frame it sent would re-register
+ * its own connection for the id and steal the impostor's answer — and [ReturnDevice.restore] then
+ * closes that displaced connection, as a server that deduplicates links would. The victim's room
+ * reads the tear and comes back through its own re-weave, which takes the id back from the impostor.
  *
  * The host runs a short hold ([REFERENCE_HOST_HEARTBEAT]) and a device a long reconnect window
  * ([REFERENCE_JOINER_HEARTBEAT]), so a joiner is still trying when the host lets its seat go.
@@ -73,6 +73,8 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
         val down = atomic(false)
         val muted = atomic(false)
         val weaves = atomic(0)
+        /** An impostor took this process's id while it was live; [ReturnDevice.restore] tears the link it displaced. */
+        val displaced = atomic(false)
         private val base = object : Loom {
             override suspend fun weave(rendezvous: Rendezvous): Seam {
                 check(!down.value) { "the reference return rig holds ${peerId.value}'s link down" }
@@ -107,12 +109,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
             scope.cancel()
             // The socket a killed app leaves behind is closed by the system, not by the app. Left open,
             // the server keeps the connection, so the host goes on seeing the seat connected.
-            if (!socketCloses) return
-            try {
-                mux.closeBase(CloseReason.Normal)
-            } catch (_: Throwable) {
-                currentCoroutineContext().ensureActive()
-            }
+            if (socketCloses) mux.closeBase(CloseReason.Normal)
         }
     }
 
@@ -147,17 +144,22 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
                 process.mux.closeBase()
             }
 
-            override fun restore() {
-                current.value?.let {
-                    it.down.value = false
-                    it.muted.value = false
-                }
+            override suspend fun restore() {
+                val process = checkNotNull(current.value) { "nothing launched to restore" }
+                process.down.value = false
+                process.muted.value = false
+                // The link an impostor displaced is still open on this side and routes nothing: close it,
+                // so the room tears and re-weaves, and the fresh connection takes the id back.
+                if (process.displaced.getAndSet(false)) process.mux.closeBase()
             }
 
             override suspend fun impostor(): RoomFactory {
                 val victim = checkNotNull(current.value) { "no process whose id an impostor could present" }
-                victim.muted.value = true
-                victim.down.value = true
+                if (victim.scope.coroutineContext[Job]?.isActive == true) {
+                    victim.muted.value = true
+                    victim.down.value = true
+                    victim.displaced.value = true
+                }
                 // A different device — a key of its own — under the victim's peer id.
                 return Process(victim.peerId, deviceIndex = IMPOSTOR_KEY_OFFSET + index).factory
             }

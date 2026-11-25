@@ -11,7 +11,7 @@ import kotlin.test.assertFailsWith
 import kotlin.time.Instant
 
 /**
- * Runs [RoomConformanceSuite]'s five fault-injection-gated obligations, and its five return rows, against a harness that
+ * Runs [RoomConformanceSuite]'s five fault-injection-gated obligations, and its six return rows, against a harness that
  * declares [RoomConformanceSuite.FaultInjection.Unsupported] — **the first time in this suite's
  * life that its skip path has been executed at all** (#2306).
  *
@@ -27,7 +27,7 @@ import kotlin.time.Instant
  *  - a **blank** tracking URL fails every gated obligation — this is the one runtime hole the sealed
  *    fixture leaves, since `Unsupported("")` is the only way left to write a declaration that
  *    declares nothing;
- *  - a **real** tracking URL lets all ten skip cleanly, which is the survivability check above.
+ *  - a **real** tracking URL lets all eleven skip cleanly, which is the survivability check above.
  *
  * ## Why `jvmTest` and not `commonTest`
  *
@@ -126,6 +126,7 @@ class RoomConformanceGapDeclarationTest {
             { assertFailsWith<AssertionError> { suite.returnRestoresHeldSeatSameId() } },
             { assertFailsWith<AssertionError> { suite.resumeWithinWindowFiresResumed() } },
             { assertFailsWith<AssertionError> { suite.differentKeyOnLiveIdIsRefused() } },
+            { assertFailsWith<AssertionError> { suite.aDifferentKeyOnAPartitionedIdReleasesTheSeat() } },
             { assertFailsWith<AssertionError> { suite.processRebuiltInsideWindowRestores() } },
             { assertFailsWith<AssertionError> { suite.processRebuiltWithFreshIdRestores() } },
         )
@@ -134,11 +135,11 @@ class RoomConformanceGapDeclarationTest {
     // ── A declared gap skips cleanly — the survivability half ──
 
     /**
-     * All ten gated obligations skip without throwing, without hanging and without leaking a
+     * All eleven gated obligations skip without throwing, without hanging and without leaking a
      * coroutine, so a harness that genuinely cannot partition its links can still subclass this
-     * suite. Deliberately **one** test over all ten rather than ten: what is under assertion is
+     * suite. Deliberately **one** test over all eleven rather than eleven: what is under assertion is
      * that the declared-gap path is survivable as a whole, and a per-obligation split would report
-     * ten identical greens for one property.
+     * eleven identical greens for one property.
      *
      * Note what this cannot do: it cannot tell a harness that *truly* cannot fault-inject from one
      * that could and declared otherwise. Nothing at this layer can — the declaration is a claim
@@ -156,6 +157,7 @@ class RoomConformanceGapDeclarationTest {
         suite.returnRestoresHeldSeatSameId()
         suite.resumeWithinWindowFiresResumed()
         suite.differentKeyOnLiveIdIsRefused()
+        suite.aDifferentKeyOnAPartitionedIdReleasesTheSeat()
         suite.processRebuiltInsideWindowRestores()
         suite.processRebuiltWithFreshIdRestores()
     }

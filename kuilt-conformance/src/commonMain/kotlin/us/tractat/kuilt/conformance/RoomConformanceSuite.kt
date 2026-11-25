@@ -580,6 +580,63 @@ public abstract class RoomConformanceSuite {
         }
 
     /**
+     * A device whose key store was cleared while its peer id persisted comes back under that id with a
+     * key it never held, while the host holds the old seat partitioned. The host lets that seat go and
+     * admits the newcomer as an ordinary new member under the new key (Decided 18, 23): the old
+     * membership leaves `PartitionExpired`, a new one joins, and the old key holds nothing. The only
+     * app call is the relaunch's `join`.
+     */
+    @Test
+    public fun aDifferentKeyOnAPartitionedIdReleasesTheSeat(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a different key on a partitioned member's id releases the seat")
+                ?: return@runTest
+            val host = h.hostFactory.host(h.hostPattern)
+            val device = h.newDevice()
+            val app = AppCalls()
+            val first = app.factory(device.launch()).join(h.joinTag)
+            var cleared: Room? = null
+            try {
+                val me = first.selfId
+                val admitted = host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == me } }
+                first.awaitRoster("the device sees the host") { it.isNotEmpty() }
+                val oldKey = admitted.single { it.id == me }.key
+                val hostTape = EventTape(host, backgroundScope)
+
+                device.kill()
+                val held = host.awaitRoster("the host holds the dead process's seat Partitioned") { roster ->
+                    roster.any { it.id == me && it.liveness is Liveness.Partitioned }
+                }
+                val callsAtKill = app.snapshot()
+                val second = app.factory(device.impostor()).join(h.joinTag).also { cleared = it }
+                val after = host.awaitRoster("the id is seated again, under a new key") { roster ->
+                    roster.any { it.id == me && it.key != oldKey && it.liveness == Liveness.Connected }
+                }
+                val seen = second.awaitRoster("the newcomer is admitted and sees the host") { it.isNotEmpty() }
+                runCurrent() // let the events that announce the admission reach the tapes
+                assertAll(
+                    { assertEquals(me, second.selfId, "rig: the newcomer presents the old id") },
+                    { assertTrue(held.single { it.id == me }.liveness is Liveness.Partitioned, "rig: the seat was partitioned when the newcomer arrived") },
+                    { assertEquals(callsAtKill + "join", app.snapshot(), "the relaunch's join is the app's only call") },
+                    {
+                        assertEquals(
+                            listOf("Left(${me.value}, ${LeaveReason.PartitionExpired})", "Joined(${me.value})"),
+                            hostTape.edges().map { it.edge() },
+                            "the old seat is let go, then the newcomer joins as a new member",
+                        )
+                    },
+                    { assertEquals(1, after.count { it.id == me }, "one seat under the id") },
+                    { assertTrue(after.none { it.key == oldKey }, "the old key holds no seat: ${after.map { it.id to it.key }}") },
+                    { assertTrue(hostTape.events().none { it is MembershipEvent.Resumed }, "a new key is never a restore") },
+                    { assertTrue(seen.isNotEmpty(), "the newcomer is admitted, not refused") },
+                )
+            } finally {
+                cleared?.leave()
+                host.leave()
+            }
+        }
+
+    /**
      * A process killed without a goodbye and started again on the same device, under the same peer
      * id, inside the host's hold, gets the held seat back. The only app call is the relaunch's `join`:
      * no token, no `resume`.
@@ -1950,24 +2007,10 @@ public abstract class RoomConformanceSuite {
     /**
      * The return rig for one row, or `null` when the harness declared it cannot build one — after
      * asserting the declaration names an issue, as [injectorOrDeclaredGap] does.
-     *
-     * A supported rig also has to make a readmission reachable, so its configs are checked here,
-     * where a row that needs them starts: a device whose reconnect window ends before the host has
-     * noticed it and let its seat go gives up first, and a readmission row would then be measuring a
-     * `HostLost` the fixture chose.
      */
     private fun TestScope.returnHarnessOrDeclaredGap(obligation: String): ReturnHarness? =
         when (val fixture = newReturnHarness(this)) {
-            is ReturnFixture.Supported -> fixture.harness.also { h ->
-                val hostGivesUp = h.hostHeartbeat.timeout + h.hostHeartbeat.reconnectWindow
-                assertTrue(
-                    h.joinerHeartbeat.reconnectWindow > hostGivesUp + h.joinerHeartbeat.interval,
-                    "RoomConformanceSuite: the return rig's joiner window (${h.joinerHeartbeat.reconnectWindow}) " +
-                        "must outlast the host's detection plus hold ($hostGivesUp) by more than one retry " +
-                        "interval (${h.joinerHeartbeat.interval}), or a device stops trying before the host " +
-                        "lets its seat go and no readmission is reachable.",
-                )
-            }
+            is ReturnFixture.Supported -> fixture.harness
             is ReturnFixture.Unsupported -> {
                 assertTrue(
                     fixture.trackingUrl.isNotBlank(),

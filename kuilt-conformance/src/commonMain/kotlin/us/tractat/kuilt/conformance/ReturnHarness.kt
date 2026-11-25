@@ -121,18 +121,27 @@ public interface ReturnDevice {
 
     /**
      * Let this device's link come back: the room's next re-weave heals the **same** seam, under the
-     * same peer id. Also ends an [impostor]'s hold on this device.
+     * same peer id.
+     *
+     * After an [impostor] took the id from a live process, this also ends the hold: the link the
+     * impostor displaced is torn, so the room reads a tear, re-weaves, says Hello, and takes the id
+     * back — the room's own reconnect, as after a [drop].
      */
-    public fun restore()
+    public suspend fun restore()
 
     /**
      * A factory for a **different** device — a key of its own — whose rooms present this device's
-     * current peer id, while this device's room is still a connected member.
+     * peer id.
      *
-     * For as long as the impostor holds the id, this device's room is cut off: it sends nothing, and
-     * it cannot re-weave, until [restore]. That is what makes the host meet the impostor's Hello with
-     * the member still connected: the refusal has to come from the key → seat table, not from a seat
-     * the host already let go.
+     * If this device's process is still running, its room is a connected member when the impostor
+     * arrives, and is cut off for as long as the impostor holds the id: it sends nothing and cannot
+     * re-weave until [restore]. That is what makes the host meet the impostor's Hello with the member
+     * still connected, so a refusal has to come from the key → seat table, not from a seat the host
+     * already let go.
+     *
+     * After a [kill], the impostor is this device's own id under a key it has never held: a device
+     * whose key store was cleared while its peer id persisted. The host then meets its Hello with the
+     * seat partitioned.
      */
     public suspend fun impostor(): RoomFactory
 
@@ -197,6 +206,10 @@ internal class AppCalls {
         }
     }
 
+    /**
+     * Counts the [Room] methods that act. Delegation forwards everything else uncounted, so a method
+     * that acts and is added to [Room] later must be overridden here too, or the counter misses it.
+     */
     private inner class CountedRoom(private val inner: Room) : Room by inner {
         override fun incomingFrom(member: PeerId): Flow<RoomFrame> {
             record("incomingFrom")
