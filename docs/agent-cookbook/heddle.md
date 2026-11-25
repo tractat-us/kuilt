@@ -598,7 +598,8 @@ blame. None throws, and the document it was asked of is unchanged.
   root, for which `LocalHeddle.apply` throws `IllegalArgumentException`. A ceiling, a reorder and
   an edit that changes nothing are `KEPT`. Edits cancel out: a rename and the rename back are
   `REPLACED` twice and change nothing. So the warning before saving is
-  `loaded.changesTo(candidate)`, the tree the editor started from against the edited one.
+  `loaded.changesTo(candidate)`, the tree the editor started from against the edited one, read
+  through each change's `history`.
 - **Edits check the shape, not the values.** A bad weight, an empty name, a negative ceiling or a
   group left empty go in as a file would put them, and `Topology.from` reports them. The refusals
   are `NoSuchNode`, `NotAGroup`, `DuplicateName`, `AtRoot` (the root has no weight, ceiling or
@@ -705,6 +706,40 @@ and `Topology.from` reads the edited one back, an exact round trip:
 - **Reordering siblings is not a change**: nothing in heddle reads the order.
 - **A `RootRenamed` replaces every child** and `Topology.diff` refuses it: it is a new tree, not an
   edit.
+
+**Warn from `history`, not from a list of arms.** Each `TopologyChange` says what landing it costs
+as `TopologyChange.History`: `LOST` when a group loses its history, the changes above that drain,
+restart a share or detach for good; `KEPT` when nobody loses any; and `NEW_TREE` for a renamed
+root, which `apply` throws on. So a page warns on every `LOST` and refuses the save on a
+`NEW_TREE`, without sorting the arms itself:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyChangeHistory -->
+```kotlin
+    val running = draft("pool") {
+        group("acme", Weight.of(3)) {
+            lane("interactive")
+            lane("batch")
+        }
+        group("tenants") { template(Weight.of(2)) }
+    }
+    val edited = draft("pool") {
+        group("acme", Weight.of(3)) {
+            lane("interactive", maxConcurrent = 2)
+            lane("nightly")
+        }
+        // A new template ceiling keeps the attached children's history; a new weight would not.
+        group("tenants") { template(Weight.of(2), maxConcurrent = 4) }
+    }
+    val changes = running.changesTo(edited)
+    check(changes.none { it.history == TopologyChange.History.NEW_TREE })
+    // Of four changes, only the removal of batch costs anyone their history.
+    val warnings = changes.filter { it.history == TopologyChange.History.LOST }
+    check(changes.size == 4 && warnings.map { it.names } == listOf(listOf("pool", "acme", "batch")))
+
+    // A renamed root is a new tree, which apply throws on, so the save is refused, not warned about.
+    val renamed = draft("farm") { lane("batch") }
+    check(running.changesTo(renamed).first().history == TopologyChange.History.NEW_TREE)
+```
 
 To compare two documents, check each with `Topology.from` first: a change is defined only
 between valid trees.
