@@ -341,6 +341,16 @@ Iain's ruling, plus corrections the 1.8 reviews showed the text above needs. Whe
   - "New id, same key, every seat connected → additional seat" (Decided 30) needs a hook for a second live process, which `ReturnDevice` lacks. It is #3656, outside slice 1, and stays pinned in `:kuilt-session` meanwhile.
 - **Amendment G's spike bullet, made executable:** the episode matcher ends on `Readmitted(self)`, and the readmission SKIP arm reads that event as well as `resume.ok … restored=false`.
 
+## Amendment I — the slice-1 gate (2026-11-25, on `main` @ `3fba7ec44`)
+
+The slice-1 spec-conformance review found the code meets the key → seat table and the v7 wire, with one exception that needs a ruling.
+
+- **#3662 (Iain to rule) blocks 2.4's dispatch.** A bystander can take a partitioned member's peer id under Decided 18, and the member's return then ends in `KeyConflict`. The design's protection claim says otherwise. Two of #3662's options change rule 3, which 2.4 builds on. The same issue carries gate finding I1: a new process reusing a superseded id times out instead of ending.
+- **Design text corrected** for tier 1, Decided 23, the takeover row's membership id, the host-key row, the four Welcome shapes, the burst's `answers`, `HostFailed`, slice-1 forgetting, and the replay refusal.
+- **A slice-1 cleanup PR** (`Part of #3159`) takes gate findings I2 (the producerless public `ResumeResult` joiner half), I3 (the unused `ReleaseAndAdmit.admission`), I4 (the cookbook's seat-record contradiction), I5 (stale "reconnect dedup" KDoc), I7 (the v7 wire's `Farewell` answer documented) and I6 (a test for the away joiner hearing a supersede through its rebuild).
+- **Side fixes sharpened.** #3630 is worse than filed: a `Goodbye` in the gap leaves a permanent ghost (S1). #3610 is more reachable since 1.7. #3628 is re-scoped to S2, an expired `Farewell` overtaking a clean leave's.
+- **For 2.4's brief:** rule whether a host-key joiner with no joiner seats is decided by rules 6–7 or as an additional seat. With grants, `Returning` skips vetting, while Amendment C vets an additional seat.
+
 ## Global Constraints
 
 - **Each task is one PR and one sub-issue of #3159.**

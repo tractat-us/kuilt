@@ -26,8 +26,11 @@ Iain's statements are marked **(Iain)**. *My call* items were proposed in the co
 accepted by him, or are review corrections he has not yet seen (marked *revised*).
 
 1. **Three tiers of return (Iain).**
-   - *The seat is still held* (today's 60 s resume window): the member is restored as the same
-     membership, whether the link healed or the process died and restarted. Nobody's screen changes.
+   - *The seat is still held* (the host's reconnect window, counted from when it noticed the drop):
+     under the same peer id the member is restored as the same membership, whether the link healed or
+     the process restarted, and nobody's screen changes. A restarted process under a new peer id takes
+     the seat over: members present see `Left(old, Superseded(by = new))` then `Joined(new)`, with
+     identity and key kept (the slice-1 gate).
    - *Away less than the re-admission period* (default **1 hour since last contact**, per room):
      re-admitted with no vetting, announced to everyone as the same device returning.
    - *Longer*: ordinary admission, as if new.
@@ -106,7 +109,9 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     #3252's review).** An unpaired surrogate is refused with `IllegalArgumentException` rather than
     replaced (`?` on the JVM, U+FFFD elsewhere), so a statement never signs a value other than the one
     it was given, and the signed bytes are the same on every target.
-23. **Where two rows meet, the claimed id decides, and a released seat is decided again (controller
+23. **Superseded in part by Decided 30:** a claimed id holding a **connected** seat under another key
+    is the terminal key conflict whatever the proven key holds; a **partitioned** one is released
+    (Decided 18) and the key decided again. **Where two rows meet, the claimed id decides, and a released seat is decided again (controller
     ruling, 2026-11-13, #3251's review; confirmed by Iain 2026-11-13).** When the claimed id holds a seat under
     a *different* key while the proven key holds *another* seat, the verdict is the terminal key
     conflict whatever either seat's liveness: releasing the id's seat would leave one key holding two
@@ -218,6 +223,10 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
 
 - **Protected:** a bystander in the room — who knows every peer id, the room id and every key —
   cannot resume as, return as, or lock out another member. A captured proof cannot be replayed.
+  **⚠ Under ruling (#3662):** the lock-out half is false on a fabric with self-chosen peer ids. A
+  bystander presenting a *partitioned* member's id under its own key releases that seat (Decided 18),
+  and the member's return then meets a connected seat under another key and is refused
+  `KeyConflict`. The slice-1 gate found this; the protected/not-protected wording is #3662's to settle.
 - **Not protected:** an active relay sitting on the victim's own link over an unauthenticated
   fabric. Peer ids are self-chosen on WebSocket and star fabrics, so such a relay can forward a
   challenge and its answer. Closing that needs channel binding (a TLS exporter from #3157, or
@@ -352,8 +361,8 @@ The host keeps, for each member, its key. On a verified Proof:
 | Peer id | Key | Seat | Outcome |
 |---|---|---|---|
 | same | same | held (partitioned or still connected) | **Restored**: the same membership (the `Welcome` carries its `membership` id). `MembershipEvent.Resumed` only if the seat was `Partitioned`; a still-connected seat's old link is superseded silently (plan Amendment E) |
-| new | same | held, **partitioned** | **Restored under the new id**: the old member leaves with a dedicated `LeaveReason` (superseded), the new one inherits the membership; one event pair, ordered through `fanOutToOtherMembers`, for every member present for it. A joiner that was away hears the successor in its admission burst, and its roster rebuild drops the old id later (Amendment G). With several partitioned seats, the most recently connected (Decided 30) |
-| new | same | held, all **connected** (or the host's own key) | **Additional seat**: admitted as a new member under the same key; no seat is superseded (Decided 30) |
+| new | same | held, **partitioned** | **Restored under the new id**: the old member leaves with a dedicated `LeaveReason` (superseded), the new one inherits the seat's identity and key under a fresh membership id (plan Amendment E); one event pair, ordered through `fanOutToOtherMembers`, for every member present for it. A joiner that was away hears the successor in its admission burst, and its roster rebuild drops the old id later (Amendment G). With several partitioned seats, the most recently connected (Decided 30) |
+| new | same | held, all **connected** | **Additional seat**: admitted as a new member under the same key; no seat is superseded (Decided 30). A joiner presenting the host's own key is decided against the joiner seats that key holds, never the host's: with none it falls to the rows below, and a later tab gets an additional seat. The TCK row is #3656 |
 | any | same | gone, grant `Valid` | **Returning**: admitted without calling vetting; the roster Welcome carries a `returning` mark |
 | same | **different** | connected | **Rejected**, terminal — a different device claiming a connected member's id (Decided 18) |
 | same | **different** | partitioned | old seat released; the key is decided again without it: **Returning** with a valid grant, else **ordinary admission** as a new member (Decided 18, 23) |
@@ -396,18 +405,24 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
 
 ### Membership and the wire
 
-- `Member.key: DidKey`, non-null. Carried on all three Welcome shapes (direct, bootstrap, host intro).
-- The direct `Welcome` and every `Reject` carry `answers`, the nonce of the Hello they answer; the
-  joiner acts on one only if it names its latest Hello (plan Amendments E and F, including the one
-  pre-admission `ProtocolMismatch` exception). The direct `Welcome` also carries the seat's opaque
-  `membership` id, minted at admission and kept through a restore: a matching id is a restore, any
-  other a fresh admission.
+- `Member.key: DidKey`, non-null. Carried on all four Welcome shapes (direct, its roster copy, bootstrap, host intro).
+- The direct `Welcome`, every `Reject`, and the rest of the admission burst (bootstrap Welcomes and
+  the host intro) carry `answers`, the nonce of the Hello they answer; a roster copy carries none. A
+  joiner acts on a direct Welcome or a Reject only if it names its latest Hello (plan Amendments E
+  and F, including the one pre-admission `ProtocolMismatch` exception), and drops a burst frame
+  naming an older one (Amendment G). The direct `Welcome` also carries the seat's opaque `membership`
+  id, minted at every admission and at a takeover under a new id, and kept through a same-id restore:
+  a matching id is a restore, any other a fresh admission. A superseded id's Hello is answered with
+  `Farewell(supersededBy)`, which names no Hello (#3662 weighs replacing it with a named `Reject`).
 - The returning mark rides the bystander Welcome through `fanOutToOtherMembers`, keeping #1781's
   ordering against `Farewell`.
 - New refusal codes (bad proof, key conflict) override `retryable = false` and get `fromId` branches.
+  `HostFailed` (retryable) covers the host's own signing or checking failure.
   No "keyless Hello" code: the `ProtocolVersion` gate already refuses every older peer.
 - `join`/`adopt` gain a `deviceId` parameter; today nothing sends one.
-- The host forgets a departed member's key and previous peer id once its last grant expires.
+- The host forgets a departed member's key and previous peer id once its last grant expires (from
+  slice 2). In slice 1 a departed member is forgotten at once, except a superseded id, which
+  `SupersededIds` keeps with its key (at most 64) while its successor is seated.
 
 ### Configuration and call sites
 
@@ -432,10 +447,12 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
   expired → vetting runs", with the room/factory call count asserted zero between drop and return,
   and the policy's call count asserted (zero for returns, one for the expired case). Include
   "process rebuilt inside the window" and "rebuilt with a fresh peer id".
-- **Refusals, each asserting its rig fired:** forged proof; proof replayed under another nonce; proof
+- **Refusals, each asserting its rig fired:** forged proof; proof
   for another host; Challenge from a co-joiner; grant for another room, another subject, an
   untrusted issuer; expired grant; revoked subject; a bystander's Hello claiming a live member's id;
-  a bystander's Hello flood overwriting nothing but its own pending challenge.
+  a bystander's Hello flood overwriting nothing but its own pending challenge. A proof replayed under
+  another nonce is **dropped silently, never refused** (plan Amendment A § 1.4). A relaunch's own
+  `join` is the one app call a return row allows (Amendment H).
 - Cross-target vectors and properties under `allTests`; virtual time; the grant clock is injected.
 
 ## Slices
