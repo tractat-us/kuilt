@@ -139,7 +139,7 @@ public interface RejectCode {
             knownOrNull(id) ?: Unknown(id.orEmpty(), retryable ?: true)
 
         /** The code [id] names when this build knows it, else null. */
-        internal fun knownOrNull(id: String?): RejectCode? = when (id) {
+        private fun knownOrNull(id: String?): RejectCode? = when (id) {
             RoomMismatch.id -> RoomMismatch
             ProtocolMismatch.id -> ProtocolMismatch
             BadProof.id -> BadProof

@@ -234,23 +234,21 @@ class AdmitMessageTest {
     }
 
     /**
-     * A stated retryability that contradicts a code this build knows is refused in the constructor,
-     * and so on decode. An unknown code takes either value.
+     * A stated retryability that contradicts a code this build knows is neither refused nor read:
+     * the frame is built and decodes, and its code is the one this build knows, with this build's
+     * retryability. An unknown code takes the stated value.
      */
     @Test
-    fun `a Reject never calls a known code the opposite of what it is`() {
+    fun `a known code keeps its own retryability whatever a Reject states`() {
         val nonce = nonce(5)
-        // A valid frame and its lookalike differ only in the stated flag (CBOR `false` 0xf4, `true` 0xf5).
-        val valid = AdmitMessage.encode(AdmitMessage.Reject("r", RejectCode.BadProof.id, nonce, retryable = false))
-        val flagAt = valid.lastIndexOf(0xf4.toByte())
-        val contradicted = valid.copyOf().also { it[flagAt] = 0xf5.toByte() }
+        val terminalCalledRetryable = AdmitMessage.Reject("r", RejectCode.BadProof.id, nonce, retryable = true)
+        val retryableCalledTerminal = AdmitMessage.Reject("r", RejectCode.HostFailed.id, nonce, retryable = false)
+        val decoded = AdmitMessage.decode(AdmitMessage.encode(terminalCalledRetryable)) as? AdmitMessage.Reject
         assertAll(
-            { assertNotNull(AdmitMessage.decode(valid), "rig: the valid frame decodes") },
-            { assertTrue(flagAt > 0, "rig: the flag is on the wire") },
-            { assertFailsWith<IllegalArgumentException>("terminal called retryable") { AdmitMessage.Reject("r", RejectCode.BadProof.id, nonce, retryable = true) } },
-            { assertFailsWith<IllegalArgumentException>("retryable called terminal") { AdmitMessage.Reject("r", RejectCode.HostFailed.id, nonce, retryable = false) } },
-            { assertFailsWith<IllegalArgumentException>("superseded called retryable") { AdmitMessage.Reject("r", RejectCode.Superseded.id, nonce, "bob-2", retryable = true) } },
-            { assertNull(AdmitMessage.decode(contradicted), "a contradicted known code is dropped on decode") },
+            { assertEquals(terminalCalledRetryable, decoded, "the frame decodes as it was built") },
+            { assertEquals<RejectCode?>(RejectCode.BadProof, decoded?.code) },
+            { assertFalse(terminalCalledRetryable.code.retryable, "a terminal code stays terminal") },
+            { assertTrue(retryableCalledTerminal.code.retryable, "a retryable code stays retryable") },
             { assertEquals<RejectCode>(RejectCode.Unknown("x", false), AdmitMessage.Reject("r", "x", nonce, retryable = false).code) },
         )
     }

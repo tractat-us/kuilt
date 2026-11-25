@@ -268,9 +268,9 @@ public sealed interface AdmitMessage {
      * A joiner reads it only for a code it does not know, which decodes as
      * `RejectCode.Unknown(id, retryable)`: an app's own terminal refusal then stays terminal, and a
      * joiner's reconnect stops saying Hello to a host that refused it for good. A code the joiner
-     * knows keeps the retryability this build gives it. `null` when the sender stated none, which
-     * leaves an unknown code retryable. The constructor refuses a value that contradicts a code this
-     * build knows, so no `Reject` calls a terminal code retryable or the reverse.
+     * knows keeps the retryability this build gives it, whatever this says: an app's policy may
+     * refuse with its own code under one of kuilt's ids, and the frame still goes and still decodes.
+     * `null` when the sender stated none, which leaves an unknown code retryable.
      *
      * Construct with the typed secondary constructor: `Reject(reason, RejectCode.RoomMismatch, nonce)`,
      * or [superseded] for a [RejectCode.Superseded] refusal.
@@ -292,9 +292,6 @@ public sealed interface AdmitMessage {
                 "a ${RejectCode.Superseded.id} Reject names its successor, and no other Reject names one: code $codeId, successor $supersededBy"
             }
             require(supersededBy == null || answers != null) { "a ${RejectCode.Superseded.id} Reject names the Hello it answers" }
-            require(retryable == null || (RejectCode.knownOrNull(codeId)?.retryable ?: retryable) == retryable) {
-                "a $codeId Reject is ${if (retryable == true) "not " else ""}retryable"
-            }
         }
 
         /** A refusal for [code] of the Hello whose nonce is [answers], stating whether [code] is retryable. */

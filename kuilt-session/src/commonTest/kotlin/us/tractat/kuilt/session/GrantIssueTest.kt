@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.DeviceKey
+import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.GrantScope
@@ -232,6 +233,51 @@ class GrantIssueTest {
             { assertEquals(listOf(admittedAt, admittedAt + 1_000, admittedAt + 2_000), passes.map { it.issuedAt }, "Welcome, then one renewal per half lifetime") },
             { assertTrue(passes.all { it.notAfter - it.issuedAt == 2_000L }, "each renewal on the same terms") },
             { assertEquals<GrantVerdict>(GrantVerdict.Valid, lastVerdict) },
+        )
+    }
+
+    /** A host store whose key refuses to sign the first pass it is asked to: a platform signer failing once. */
+    private class FailsFirstPass(private val inner: DeviceKeyStore) : DeviceKeyStore by inner {
+        var refused = 0
+
+        override suspend fun deviceKey(): DeviceKey {
+            val key = inner.deviceKey()
+            return object : DeviceKey {
+                override val id: DidKey = key.id
+
+                @us.tractat.kuilt.identity.IdentityInternalApi
+                override suspend fun sign(message: ByteArray): ByteArray {
+                    if (refused == 0 && "kuilt/grant" in message.decodeToString()) {
+                        refused++
+                        error("the platform signer failed")
+                    }
+                    return key.sign(message)
+                }
+            }
+        }
+    }
+
+    /**
+     * A pass the host fails to sign at seating leaves the Welcome without one, and renewals still
+     * start: the next pass arrives a period later. Renewals run on the membership's terms, not on a
+     * pass that happened to be signed.
+     */
+    @Test
+    fun aPassThatFailsToSignAtSeatingIsRenewedAPeriodLater() = runTest {
+        val store = FailsFirstPass(fakeKeyStore(HOST_DEVICE))
+        val host = rawHost(joiners = setOf(bob), store = store, admission = admitting(GrantTerms(2.seconds)))
+        host.admit(bob, bobKey, nonce = 1)
+        val direct = host.sentTo(bob).filterIsInstance<AdmitMessage.Welcome>().single { it.membership != null }
+
+        host.advanceKeeping(setOf(bob), 1.seconds)
+
+        val passes = host.passesTo(bob)
+        val verdict = passes.singleOrNull()?.let { trust().verify(it, bobKey.id, KEY_SEAT_ROOM.value, now()) }
+        assertAll(
+            { assertEquals(1, store.refused, "rig: the signer refused the Welcome's pass") },
+            { assertEquals(null, direct.grant, "rig: so the Welcome carries none") },
+            { assertEquals(1, host.renewalsTo(bob), "a renewal still arrives a period later") },
+            { assertEquals<GrantVerdict?>(GrantVerdict.Valid, verdict) },
         )
     }
 
