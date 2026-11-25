@@ -61,8 +61,23 @@ package us.tractat.kuilt.session.admit
  * Hello, and the direct Welcome carries the id of the membership it admits, so a returning joiner
  * can tell its own seat from a fresh admission. The rest of the admission burst, a Welcome per
  * existing member and the host's intro, carries the same nonce (#3615), so a joiner drops a late
- * frame of a burst answering an older Hello and rebuilds its roster only on the latest burst. A v6 joiner reads neither, so it would still take an
- * answer to an older Hello as the answer to its latest one; the gate refuses it.
+ * frame of a burst answering an older Hello and rebuilds its roster only on the latest burst. A v6
+ * joiner reads neither, so it would still take an answer to an older Hello as the answer to its
+ * latest one; the gate refuses it.
+ *
+ * The burst's nonce arrived after the rest of v7, under the same number: #3641 added
+ * [AdmitMessage.Welcome.answers] to the bootstrap Welcomes and the host intro without a bump. No
+ * release tag carries the earlier form (v0.7.6 speaks v2), so no peer in the field speaks it.
+ *
+ * **A Hello from a superseded id, under the key that was superseded, is answered with a
+ * `Farewell`, not a challenge.** While the id that took the seat over is seated, the host answers
+ * it with [AdmitMessage.Farewell] whose `supersededBy` names the successor. Under any other key the
+ * id is challenged and decided like any Hello. The host remembers at most 64 superseded ids, oldest
+ * forgotten first, and a forgotten id is challenged too. The Farewell names no Hello. A joiner
+ * honours it only from its identified host, so a room admitted before — a superseded process whose
+ * link has healed — ends with `Left(self, Superseded(by))`. A new process of the same device reusing
+ * the id has no host yet: it drops the Farewell, and its join times out. #3662 is weighing whether
+ * to answer that Hello with a `Reject` naming it instead.
  *
  * **One answer may name no Hello.** A host older than v7 cannot name one, and what it sends a v7
  * Hello is [RejectCode.ProtocolMismatch]. So before its first admission a joiner acts on a

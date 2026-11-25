@@ -32,6 +32,7 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.admit.ReturnKind
+import us.tractat.kuilt.session.partition.JoinerOutcome
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -618,7 +619,7 @@ class ResumeAckAfterHostLostTest {
     private suspend fun TestScope.expireWindow(
         room: SeamRoom,
         seam: ScriptedSeam,
-    ): ResumeResult.JoinerOutcome {
+    ): JoinerOutcome {
         seam.tear()
         runCurrent()
         challengeReHello(seam)
@@ -626,7 +627,7 @@ class ResumeAckAfterHostLostTest {
             { assertEquals(1, seam.hellosToHost, "precondition: the re-Hello went out") },
             { assertTrue(room.hasPendingResume(), "precondition: its verdict has not come back") },
         )
-        val joined: Deferred<ResumeResult.JoinerOutcome> = async { room.sayHelloAgain() }
+        val joined: Deferred<JoinerOutcome> = async { room.sayHelloAgain() }
         runCurrent()
 
         advanceTimeBy(config.reconnectWindow.inWholeMilliseconds + 1)

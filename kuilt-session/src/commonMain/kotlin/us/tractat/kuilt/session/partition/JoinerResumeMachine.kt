@@ -225,7 +225,7 @@ internal class JoinerResumeMachine(
      * [AdmitMessage.Reject]; the room's admit-frame handler resolves it via [takeFlightForWelcome] /
      * [rejectFlight]. The room's `leave()` takes whatever is left with [takePendingFlight].
      */
-    private var pendingResume: CompletableDeferred<ResumeResult.JoinerOutcome>? = null
+    private var pendingResume: CompletableDeferred<JoinerOutcome>? = null
 
     /**
      * Completes when the current flight's Hello has actually gone out (#3165). Installed with
@@ -234,7 +234,7 @@ internal class JoinerResumeMachine(
      * Since the Hello goes to the host alone, the flight's owner may wait up to
      * [HeartbeatConfig.resumeTimeout] for the host to be addressable *before* it sends. A joined
      * caller that started its reply deadline at the moment it joined could then settle the shared
-     * flight as [ResumeResult.TimedOut] after the host had already spent the window but before its
+     * flight as [JoinerOutcome.TimedOut] after the host had already spent the window but before its
      * ack arrived, leaving every later attempt refused. So a joined caller waits for this first, and
      * starts its reply deadline from the send, exactly as the owner does.
      */
@@ -329,7 +329,7 @@ internal class JoinerResumeMachine(
      * flight (#1280) hangs forever. The room's self-`Welcome` handler takes it through
      * [takeFlightForWelcome] instead.
      */
-    fun takePendingFlight(): CompletableDeferred<ResumeResult.JoinerOutcome>? = lock.withLock {
+    fun takePendingFlight(): CompletableDeferred<JoinerOutcome>? = lock.withLock {
         val d = pendingResume
         pendingResume = null
         d
@@ -364,7 +364,7 @@ internal class JoinerResumeMachine(
      * that decision finds the room terminal, settles the flight as [ResumeResult.WindowClosed], and
      * emits nothing.
      */
-    fun takeFlightForWelcome(): Pair<CompletableDeferred<ResumeResult.JoinerOutcome>?, Boolean>? = lock.withLock {
+    fun takeFlightForWelcome(): Pair<CompletableDeferred<JoinerOutcome>?, Boolean>? = lock.withLock {
         val d = pendingResume
         if (d == null && !reconnecting) return null
         pendingResume = null
@@ -374,7 +374,7 @@ internal class JoinerResumeMachine(
     }
 
     /**
-     * Resolves the pending flight as [ResumeResult.Refused], carrying the refuser's [message] and
+     * Resolves the pending flight as [JoinerOutcome.Refused], carrying the refuser's [message] and
      * [code] verbatim, and returns whether this machine took the `Reject` — `false` means it
      * arrived with no reconnect under way (the initial join), which the room fails loudly as an
      * admission rejection instead (#1178).
@@ -389,7 +389,7 @@ internal class JoinerResumeMachine(
      * [RejectCode.Unknown], which is retryable. The recorded [refusal] refines the terminal label to
      * [FailureReason.Refused] if the window ultimately expires.
      *
-     * **The value handed to the caller is [ResumeResult.Refused], not [ResumeResult.WindowClosed]
+     * **The value handed to the caller is [JoinerOutcome.Refused], not [ResumeResult.WindowClosed]
      * (#2364)**, so a terminal refusal and a transient one stay distinct at the public surface.
      */
     fun rejectFlight(message: String, code: RejectCode): Boolean = lock.withLock {
@@ -398,7 +398,7 @@ internal class JoinerResumeMachine(
         pendingResume = null
         // Count within the episode, so runReconnect can report each reject exactly once.
         refusal = Refusal(message, code, attempt = (refusal?.attempt ?: 0) + 1)
-        d.complete(ResumeResult.Refused(message, code))
+        d.complete(JoinerOutcome.Refused(message, code))
         true
     }
 
@@ -723,7 +723,7 @@ internal class JoinerResumeMachine(
      * [ResumeResult.Success] when it names the membership this room already held,
      * [ResumeResult.WindowClosed] when it names another, a fresh admission because the seat was gone,
      * which the room keeps ([takeFlightForWelcome]). A `Reject` naming that Hello settles it
-     * [ResumeResult.Refused] ([rejectFlight]).
+     * [JoinerOutcome.Refused] ([rejectFlight]).
      *
      * [runReconnect] is the only production caller since `Room.resume` was retired (#3215). Tests
      * reach it outside an episode through `SeamRoom.sayHelloAgain`.
@@ -740,7 +740,7 @@ internal class JoinerResumeMachine(
      * `leave()` resolves any still-pending attempt the same way (via [takePendingFlight]), so no
      * caller's `await` outlives the room.
      */
-    suspend fun resume(): ResumeResult.JoinerOutcome {
+    suspend fun resume(): JoinerOutcome {
         // Install (or join) the deferred under lock; check terminal flags first.
         val (deferred, sent, ownsFlight) = lock.withLock {
             if (host.isTerminal()) return ResumeResult.WindowClosed
@@ -757,7 +757,7 @@ internal class JoinerResumeMachine(
                 // forgot it, and a Welcome answering an earlier attempt of this episode closes the
                 // episode, as Amendment C says, even after this flight is installed.
                 if (!reconnecting) host.forgetLatestHello()
-                val reply = CompletableDeferred<ResumeResult.JoinerOutcome>().also { pendingResume = it }
+                val reply = CompletableDeferred<JoinerOutcome>().also { pendingResume = it }
                 val went = CompletableDeferred<Unit>().also { pendingSent = it }
                 Triple(reply, went, true)
             }
@@ -778,7 +778,7 @@ internal class JoinerResumeMachine(
         val failure = sendResult.exceptionOrNull()
         when {
             failure is PeerNotConnected || sendResult.getOrNull() == false ->
-                return settleOrAwait(deferred, ResumeResult.TimedOut)
+                return settleOrAwait(deferred, JoinerOutcome.TimedOut)
             // A reply may have raced the failure and resolved the flight first — honor it.
             failure != null -> abandonFlight(deferred)
         }
@@ -790,7 +790,7 @@ internal class JoinerResumeMachine(
      * [HeartbeatConfig.resumeTimeout]) for the host to be addressable on [seam]. Returns `false`
      * when there is no Hello to send — no host identified, it never appeared, the seam tore while
      * waiting, the flight was settled meanwhile, or the room may not say Hello again
-     * ([JoinerResumeHost.prepareReHello]) — so the flight settles as [ResumeResult.TimedOut], what a
+     * ([JoinerResumeHost.prepareReHello]) — so the flight settles as [JoinerOutcome.TimedOut], what a
      * frame nobody received becomes anyway.
      *
      * **Never a broadcast** (Amendment A § 1.7). On a flat loom a broadcast Hello is answered by
@@ -803,7 +803,7 @@ internal class JoinerResumeMachine(
      * it was superseded after that section and before the send still sends this one Hello; the
      * host answers it with the same `Farewell(supersededBy)`, which a room already ending ignores.
      */
-    private suspend fun sendToHost(flight: CompletableDeferred<ResumeResult.JoinerOutcome>): Boolean {
+    private suspend fun sendToHost(flight: CompletableDeferred<JoinerOutcome>): Boolean {
         val hostId = host.hostPeer() ?: return false
         // true: the host is addressable; false: the seam tore first; null: the bound elapsed.
         val addressable: Boolean? = withTimeoutOrNull(heartbeatConfig.resumeTimeout) {
@@ -829,23 +829,23 @@ internal class JoinerResumeMachine(
      * so its reply deadline starts from the send, as the owner's does (see [pendingSent]).
      */
     private suspend fun awaitJoinedFlight(
-        deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
+        deferred: CompletableDeferred<JoinerOutcome>,
         sent: CompletableDeferred<Unit>,
-    ): ResumeResult.JoinerOutcome {
+    ): JoinerOutcome {
         val reached = withTimeoutOrNull(heartbeatConfig.resumeTimeout) {
             select<Unit> {
                 sent.onAwait { }
                 deferred.onAwait { }
             }
         }
-        if (reached == null) return settleOrAwait(deferred, ResumeResult.TimedOut)
+        if (reached == null) return settleOrAwait(deferred, JoinerOutcome.TimedOut)
         return awaitFlightBounded(deferred)
     }
 
     /**
      * Await the shared flight [deferred] under the [HeartbeatConfig.resumeTimeout] deadline
      * (#1587). A host that never replies — gone, black-holed, or a lost reply — must not park
-     * the caller forever. On expiry, resolve the flight as [ResumeResult.TimedOut] *for every
+     * the caller forever. On expiry, resolve the flight as [JoinerOutcome.TimedOut] *for every
      * caller of it* ([completeFlight] clears the single-flight slot and completes the shared
      * deferred iff this flight still owns it) so the owner and every joined caller are released
      * together and a subsequent [resume] starts a fresh flight. A flight a reply took just before
@@ -865,28 +865,28 @@ internal class JoinerResumeMachine(
      * **A flight whose seam tears settles at once (#3151).** The reply to a Hello can only come
      * back over the generation it went out on, so once [seam] reads [SeamState.Torn] no verdict can
      * arrive and waiting out the deadline only spends the reconnect window. The flight then settles
-     * as [ResumeResult.TimedOut] for every caller, exactly as the deadline would have settled it.
+     * as [JoinerOutcome.TimedOut] for every caller, exactly as the deadline would have settled it.
      */
     private suspend fun awaitFlightBounded(
-        deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
-    ): ResumeResult.JoinerOutcome =
+        deferred: CompletableDeferred<JoinerOutcome>,
+    ): JoinerOutcome =
         withTimeoutOrNull(heartbeatConfig.resumeTimeout) { awaitVerdictOrTear(deferred) }
-            ?: settleOrAwait(deferred, ResumeResult.TimedOut)
+            ?: settleOrAwait(deferred, JoinerOutcome.TimedOut)
 
     /**
      * Settle [deferred] as [result] if it still holds the slot, then return whatever it finally
      * holds: [result], or the verdict of whoever took it first ([completeFlight]).
      */
     private suspend fun settleOrAwait(
-        deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
-        result: ResumeResult.JoinerOutcome,
-    ): ResumeResult.JoinerOutcome {
+        deferred: CompletableDeferred<JoinerOutcome>,
+        result: JoinerOutcome,
+    ): JoinerOutcome {
         completeFlight(deferred, result)
         return deferred.await()
     }
 
     /**
-     * The flight's verdict, or — if [seam] tears first — [ResumeResult.TimedOut] settled on the
+     * The flight's verdict, or — if [seam] tears first — [JoinerOutcome.TimedOut] settled on the
      * shared flight. Returns whatever the flight finally holds rather than `TimedOut` outright, so a
      * verdict that raced the tear is the one reported.
      *
@@ -894,17 +894,17 @@ internal class JoinerResumeMachine(
      * wins over a seam that is also already torn.
      */
     private suspend fun awaitVerdictOrTear(
-        deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
-    ): ResumeResult.JoinerOutcome = coroutineScope {
+        deferred: CompletableDeferred<JoinerOutcome>,
+    ): JoinerOutcome = coroutineScope {
         val tear = async { seam.state.first { it is SeamState.Torn } }
-        val verdict = select<ResumeResult.JoinerOutcome?> {
+        val verdict = select<JoinerOutcome?> {
             deferred.onAwait { it }
             tear.onAwait { null }
         }
         tear.cancel()
         verdict ?: run {
             logger.info { "resume.flight-torn self=${seam.selfId.value} → settling the flight as TimedOut" }
-            settleOrAwait(deferred, ResumeResult.TimedOut)
+            settleOrAwait(deferred, JoinerOutcome.TimedOut)
         }
     }
 
@@ -913,7 +913,7 @@ internal class JoinerResumeMachine(
      * broadcast-cancellation paths): see [completeFlight] for the slot-clear + completion
      * semantics.
      */
-    private fun abandonFlight(deferred: CompletableDeferred<ResumeResult.JoinerOutcome>) =
+    private fun abandonFlight(deferred: CompletableDeferred<JoinerOutcome>) =
         completeFlight(deferred, ResumeResult.WindowClosed)
 
     /**
@@ -932,8 +932,8 @@ internal class JoinerResumeMachine(
      * retried into a second `Resumed` or a contradictory `HostLost`.
      */
     private fun completeFlight(
-        deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
-        result: ResumeResult.JoinerOutcome,
+        deferred: CompletableDeferred<JoinerOutcome>,
+        result: JoinerOutcome,
     ) {
         val owned = lock.withLock {
             (pendingResume === deferred).also { if (it) pendingResume = null }

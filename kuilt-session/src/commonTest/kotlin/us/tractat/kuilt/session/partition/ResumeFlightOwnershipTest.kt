@@ -180,7 +180,7 @@ class ResumeFlightOwnershipTest {
          * Starts the reconnect, lets it send its `Resume`, and takes the pending flight as the room's
          * ack handler would — leaving the flight taken but not yet completed.
          */
-        fun ackTakesTheFlight(): CompletableDeferred<ResumeResult.JoinerOutcome> {
+        fun ackTakesTheFlight(): CompletableDeferred<JoinerOutcome> {
             machine.attemptReconnect(Instant.fromEpochMilliseconds(0))
             scope.runCurrent()
             assertAll(

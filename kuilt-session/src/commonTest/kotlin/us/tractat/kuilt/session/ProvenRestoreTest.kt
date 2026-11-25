@@ -480,6 +480,48 @@ class ProvenRestoreTest {
         host.room.leave()
     }
 
+    /**
+     * The re-decision after a release is a real one, not a new membership by default. Dave's key
+     * claims Bob's partitioned id while Dave's own seat is partitioned too: Bob's seat is released,
+     * and deciding Dave's key again without it finds Dave's held seat, so Bob's id takes that seat
+     * over. The two room tests above cannot tell this from "admit a new member", since an additional
+     * seat and an ordinary admission both admit one.
+     */
+    @Test
+    fun releasedSeatsClaimantTakesItsOwnPartitionedSeatOver() = runTest {
+        val host = rawHost(joiners = setOf(bob, carol, dave))
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.admit(dave, daveKey, nonce = 3)
+        host.partition(bob, alive = setOf(carol, dave))
+        host.partition(dave, alive = setOf(carol))
+        val bobStillHeld = host.member(bob)?.liveness
+
+        val mark = host.events.mark()
+        host.admit(bob, daveKey, nonce = 4)
+        val edges = host.events.edgesSince(mark)
+
+        assertAll(
+            { assertIs<Liveness.Partitioned>(bobStillHeld, "rig: Bob's seat was still held when Dave's key claimed it") },
+            { assertTrue(host.rejectsTo(bob).isEmpty(), "no terminal conflict: ${host.rejectsTo(bob).map { it.code }}") },
+            { assertEquals(listOf(dave), host.hold.calls.map { it.peerId }, "the re-decision asked about Dave's seat") },
+            {
+                assertEquals(
+                    listOf(
+                        "Left(bob, ${LeaveReason.PartitionExpired})",
+                        "Left(dave, ${LeaveReason.Superseded(by = bob)})",
+                        "Joined(bob)",
+                    ),
+                    edges.map { it.describe() },
+                    "Bob's seat is released, then Dave's is taken over under Bob's id",
+                )
+            },
+            { assertEquals(daveKey.id, host.member(bob)?.key) },
+            { assertEquals(null, host.member(dave), "Dave's old id holds no seat") },
+        )
+        host.room.leave()
+    }
+
     // ── The decision is made at Proof time ───────────────────────────────────
 
     /**

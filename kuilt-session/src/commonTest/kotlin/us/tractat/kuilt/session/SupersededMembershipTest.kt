@@ -13,6 +13,7 @@ import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ReturnKind
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.test.FlakyLifecycleSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -166,6 +167,91 @@ class SupersededMembershipTest {
             },
             { assertTrue(leftAt >= 0 && joinedAt > leftAt, "bystander: ${edges.render()}") },
             { assertEquals(setOf(KEY_SEAT_HOST, second), carolRoom.roster.value.map { it.id }.toSet()) },
+        )
+        rebuilt.leave()
+        carolRoom.leave()
+        host.leave()
+    }
+
+    /**
+     * `Superseded` is promised to the members present for it (Amendment G). Carol is away — her link
+     * to the host dead both ways — while Bob's process dies and comes back under a new id, so the
+     * host's `Farewell(bob-1, supersededBy = bob-2)` goes into her dead link. When she comes back the
+     * host restores her seat and re-sends the burst: she hears `Joined(bob-2)` from it, and her roster
+     * rebuild then drops `bob-1` as [LeaveReason.Unobserved]. She never says `Superseded`, which
+     * would claim a takeover she did not see, and keeps no ghost of `bob-1`.
+     */
+    @Test
+    fun anAwayMemberHearsTheSuccessorInItsBurstAndDropsTheOldIdAtTheRebuild() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val board = Switchboard(setOf(KEY_SEAT_HOST, first, second, carol))
+        val host = boardRoom(board, KEY_SEAT_HOST, fakeKeyStore(HOST_DEVICE), SessionRole.Host)
+        val bobStore = fakeKeyStore(1)
+        val firstProcess = processScope()
+        boardRoom(board, first, bobStore, SessionRole.Joiner, scope = firstProcess, name = "Bob")
+        val carolLink = FlakyLifecycleSeam(board.plug(carol), backgroundScope)
+        val carolRoom = boardRoom(board, carol, fakeKeyStore(2), SessionRole.Joiner, seam = carolLink, reweave = { carolLink })
+        val carolLog = EventLog(carolRoom, backgroundScope)
+        testScheduler.runCurrent()
+        val heldBob = carolRoom.roster.value.any { it.id == first }
+
+        // Carol goes away, dead both ways, and Bob's process dies.
+        val awayMark = carolLog.mark()
+        board.mute(from = carol, to = KEY_SEAT_HOST)
+        board.mute(from = KEY_SEAT_HOST, to = carol)
+        carolLink.enterWeaving()
+        firstProcess.cancel()
+        board.unplug(first)
+        testScheduler.advanceTimeBy(PARTITION_DETECTED)
+        testScheduler.runCurrent()
+        val bobHeld = host.roster.value.singleOrNull { it.id == first }?.liveness
+        val carolHeld = host.roster.value.singleOrNull { it.id == carol }?.liveness
+
+        // Bob comes back under a new id and takes his seat over, while Carol cannot hear it.
+        val toCarol = board.delivered(from = KEY_SEAT_HOST, to = carol).size
+        val rebuilt = boardRoom(board, second, bobStore, SessionRole.Joiner, name = "Bob")
+        testScheduler.runCurrent()
+        val farewellsSent = board.sent(from = KEY_SEAT_HOST, to = carol).count { it is AdmitMessage.Farewell && it.supersededBy == second.value }
+        val deliveredWhileAway = board.delivered(from = KEY_SEAT_HOST, to = carol).size - toCarol
+        val hostRosterAfterTakeover = host.roster.value.map { it.id }.toSet()
+
+        // Carol's link comes back. Her own window on bob-1 opened when her link tore and is still
+        // running, so a roster read now sees whether the rebuild, not that window, dropped bob-1.
+        board.unmute(from = carol, to = KEY_SEAT_HOST)
+        board.unmute(from = KEY_SEAT_HOST, to = carol)
+        carolLink.recover()
+        testScheduler.advanceTimeBy(KEY_SEAT_HEARTBEAT.interval * 3)
+        testScheduler.runCurrent()
+        val rosterAtReturn = carolRoom.roster.value.map { it.id }.toSet()
+        val returnedAt = testScheduler.currentTime
+        // Then past every window, so a later Left for bob-1 by some other route would show.
+        testScheduler.advanceTimeBy(KEY_SEAT_HEARTBEAT.reconnectWindow * 2)
+        testScheduler.runCurrent()
+
+        val since = carolLog.since(awayMark)
+        val aboutBob = since.filter {
+            (it is MembershipEvent.Left && it.peerId == first) || (it is MembershipEvent.Joined && it.member.id == second)
+        }
+        val burstWelcome = board.delivered(from = KEY_SEAT_HOST, to = carol).welcomesFor(second)
+        assertAll(
+            { assertTrue(heldBob, "rig: Carol held bob-1 before she went away") },
+            { assertIs<Liveness.Partitioned>(bobHeld, "rig: the host held bob-1's seat partitioned") },
+            { assertIs<Liveness.Partitioned>(carolHeld, "rig: the host held Carol's seat partitioned") },
+            { assertEquals(setOf(second, carol), hostRosterAfterTakeover, "rig: bob-2 took bob-1's seat over") },
+            { assertEquals(1, farewellsSent, "rig: the host told Carol of the takeover") },
+            { assertEquals(0, deliveredWhileAway, "rig: nothing reached Carol while she was away") },
+            { assertEquals(1, since.count { it is MembershipEvent.Resumed && it.peerId == carol }, "rig: Carol's seat came back: ${since.render()}") },
+            { assertTrue(burstWelcome.isNotEmpty() && burstWelcome.all { it.answers != null }, "Carol heard bob-2 in her admission burst: $burstWelcome") },
+            {
+                assertEquals(
+                    listOf("Joined(bob-2)", "Left(bob-1, ${LeaveReason.Unobserved})"),
+                    aboutBob.map { it.describe() },
+                    "Carol: ${since.render()}",
+                )
+            },
+            { assertTrue(since.none { it is MembershipEvent.Left && it.reason is LeaveReason.Superseded }, "Carol never says Superseded: ${since.render()}") },
+            { assertTrue(returnedAt < KEY_SEAT_HEARTBEAT.reconnectWindow.inWholeMilliseconds, "rig: Carol was back before her own window on bob-1 ran out") },
+            { assertEquals(setOf(KEY_SEAT_HOST, second), rosterAtReturn, "Carol keeps no ghost of bob-1 once she is back") },
+            { assertEquals(setOf(KEY_SEAT_HOST, second), carolRoom.roster.value.map { it.id }.toSet(), "nor later") },
         )
         rebuilt.leave()
         carolRoom.leave()

@@ -156,9 +156,9 @@ No arrow points back into `:kuilt-core`. `:kuilt-session` does NOT depend on
 On transport tear `ServerClusterReconnect` advances to the next endpoint from
 the `ClusterEndpoints` list and reconnects. Cross-server resume always degrades
 to fresh-join: each server's reconnect-window registry is in-memory and
-per-host-room, so server-B has no window state for a token issued by server-A.
-`ClusterClient` treats `ResumeResult.WindowClosed` as a fall-back-to-fresh-join
-signal — reconnect is correct, it costs a re-snapshot on the learner's log.
+per-host-room, so server-B holds no seat for a device server-A admitted.
+`ClusterClient` leaves a torn room and joins the next endpoint fresh rather than
+waiting on a return the next server cannot restore. Reconnect is correct; it costs a re-snapshot on the learner's log.
 
 ## Exactly-once proposals
 

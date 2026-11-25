@@ -44,7 +44,7 @@ import kotlin.test.assertTrue
  * - The player relay transport over the [ManagedSeam] wraps every send as a
  *   `RaftRelay(dest = leader)` addressed to the single relay peer.
  * - Endpoint rotation follows [ServerClusterReconnect]'s round-robin policy.
- * - A terminal [us.tractat.kuilt.session.partition.ResumeResult.Refused] is treated as a
+ * - A cross-server return, which the next server cannot restore, is treated as a
  *   fresh-join signal, not an error (proven by #532).
  * - Exactly-once `requestId` semantics survive a simulated failover.
  *

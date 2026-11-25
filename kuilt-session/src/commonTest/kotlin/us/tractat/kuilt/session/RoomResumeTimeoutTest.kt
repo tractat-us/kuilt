@@ -14,7 +14,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
-import us.tractat.kuilt.session.partition.ResumeResult
+import us.tractat.kuilt.session.partition.JoinerOutcome
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
@@ -31,7 +31,7 @@ import kotlin.time.Instant
 
 /**
  * Regression tests for #1587 — a direct [Room.resume] against a host that never replies must
- * not park the caller forever. It returns [ResumeResult.TimedOut] once
+ * not park the caller forever. It returns [JoinerOutcome.TimedOut] once
  * [HeartbeatConfig.resumeTimeout] virtual-elapses.
  *
  * Timing: `resumeTimeout` (200 ms) is deliberately far shorter than the heartbeat `timeout`
@@ -54,7 +54,7 @@ class RoomResumeTimeoutTest {
 
     /**
      * A single direct attempt (`sayHelloAgain`) against a black-holed link (host never sees the Hello,
-     * so never replies) returns [ResumeResult.TimedOut] after `resumeTimeout`, rather than
+     * so never replies) returns [JoinerOutcome.TimedOut] after `resumeTimeout`, rather than
      * hanging.
      */
     @Test
@@ -70,12 +70,12 @@ class RoomResumeTimeoutTest {
         runCurrent()
 
         assertTrue(direct.isCompleted, "resume() must complete on the resumeTimeout deadline, not hang")
-        assertIs<ResumeResult.TimedOut>(direct.await(), "a silent host must resolve as TimedOut")
+        assertIs<JoinerOutcome.TimedOut>(direct.await(), "a silent host must resolve as TimedOut")
     }
 
     /**
      * A joined concurrent caller (coalesced onto the same in-flight attempt, #1280) must also be
-     * released with [ResumeResult.TimedOut] — the timeout releases every caller of the flight,
+     * released with [JoinerOutcome.TimedOut] — the timeout releases every caller of the flight,
      * not just the owner.
      */
     @Test
@@ -98,8 +98,8 @@ class RoomResumeTimeoutTest {
         val ownerResult = owner.await()
         val joinedResult = joined.await()
         assertAll(
-            { assertIs<ResumeResult.TimedOut>(ownerResult) },
-            { assertIs<ResumeResult.TimedOut>(joinedResult) },
+            { assertIs<JoinerOutcome.TimedOut>(ownerResult) },
+            { assertIs<JoinerOutcome.TimedOut>(joinedResult) },
         )
     }
 
