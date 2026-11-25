@@ -109,7 +109,11 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     2026-11-13, #3253's review; confirmed by Iain, 2026-11-16).** One host key serves many rooms, so
     `Room(A)` and `Room(B)` from one issuer are both kept; keyed by issuer alone, B's refresh evicts
     A's and the device loses its pass back into A — Decided 1's middle tier. A tie on `issuedAt` keeps
-    the held grant, so a replayed or reordered copy cannot displace it.
+    the held grant, so a replayed or reordered copy cannot displace it. One exception (Iain,
+    2026-11-25, Amendment L): a grant delivered on the direct `Welcome` answering this device's
+    latest Hello, which C1 makes unreplayable, replaces a held grant dated beyond the clock-skew
+    allowance (Decided 24) relative to it. That is how a device holding a post-dated pass recovers.
+    A `GrantRenewal` carries no nonce, so it never takes the exception.
 22. **Statement text is strict UTF-8 on encode as well as decode (controller ruling, 2026-11-13,
     #3252's review).** An unpaired surrogate is refused with `IllegalArgumentException` rather than
     replaced (`?` on the JVM, U+FFFD elsewhere), so a statement never signs a value other than the one
@@ -297,7 +301,7 @@ The rest of this document is for the builder.
 public interface DeviceKeyStore {
     /** This device's key: created on first call, the same on every call after. */
     public suspend fun deviceKey(): DeviceKey
-    /** The grants this device holds, by issuer. Not secret — useless without the key. */
+    /** The grants this device holds, by issuer and scope. Not secret — useless without the key. */
     public suspend fun grants(): List<Grant>
     public suspend fun keepGrant(grant: Grant)
 }
