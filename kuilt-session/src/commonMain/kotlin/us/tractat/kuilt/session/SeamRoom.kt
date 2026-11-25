@@ -2219,8 +2219,7 @@ internal class SeamRoom(
         val decision = decideUnderRevocation(joinerPeerId, keyed.key)
         val outcome = settleSpentWindow(joinerPeerId, current, decision, asked) ?: toldSuperseded(joinerPeerId, keyed, generation, asked) ?: when (decision) {
             is SeatDecision.Restore -> settleRestore(joinerPeerId, generation, current, asked, decidedAtMs)
-            is SeatDecision.ReleaseAndAdmit ->
-                if (current) SeatOutcome.Released(decision.released, releaseHeldSeat(decision.released), decidedAtMs) else SeatOutcome.Stale
+            is SeatDecision.ReleaseAndAdmit -> settleRelease(joinerPeerId, keyed, generation, current, decision.released, vetted, decidedAtMs)
             SeatDecision.KeyConflict -> if (retire(joinerPeerId, generation)) {
                 SeatOutcome.Refused(
                     AdmitMessage.Reject("key-conflict: ${joinerPeerId.value} is held by another device", RejectCode.KeyConflict, keyed.joinerNonce),
@@ -2257,8 +2256,8 @@ internal class SeamRoom(
      *
      * 2.6: host-side grant verification feeds `holdsValidGrant` (plan amendment bf12e0ffc).
      */
-    private fun decideUnderRevocation(claimedId: PeerId, key: DidKey): SeatDecision {
-        val held = heldSeats()
+    private fun decideUnderRevocation(claimedId: PeerId, key: DidKey, without: PeerId? = null): SeatDecision {
+        val held = if (without == null) heldSeats() else heldSeats() - without
         val cutoff = checkNotNull(admission) { "only a host decides seats" }.revocations.notBefore(key)
             ?: return decideSeat(claimedId, key, held, holdsValidGrant = false)
         val revoked = held.filter { (id, seat) -> seat.key == key && membershipOf(id).admittedAtMs < cutoff }.keys
@@ -2267,6 +2266,39 @@ internal class SeamRoom(
             return SeatDecision.ReleaseAndAdmit(released = claimedId)
         }
         return decideSeat(claimedId, key, held - revoked, holdsValidGrant = false)
+    }
+
+    /**
+     * **Under [lock].** [SeatDecision.ReleaseAndAdmit]: the claimed id's seat [released] is to be given
+     * up — held partitioned under another key (Decided 18), or held under this key and revoked since
+     * its admission (Decided 14) — and the key decided again without it.
+     *
+     * **Vetted before released** (#3220, the coordinator's ruling on #3699's review). When the key
+     * decided without the seat is a [SeatDecision.Newcomer], the policy is asked first, with the seat
+     * still held, and the seat is released only in the pass that holds its `Admit`; the next pass then
+     * seats the newcomer. A refusal is sent with the seat untouched, and a policy that throws or runs
+     * out the challenge releases nothing, so a newcomer the policy does not admit cannot evict a
+     * partitioned member by knocking under its id. If the member heals meanwhile, the decision is no
+     * longer a release: a different key meets a connected seat, [SeatDecision.KeyConflict].
+     *
+     * When the key decided without the seat is not a newcomer — it holds a partitioned seat of its
+     * own, or (2.6) a valid grant — nothing is vetted, and the seat is released at once.
+     */
+    private fun settleRelease(
+        joinerPeerId: PeerId,
+        keyed: KeyedHello,
+        generation: Long,
+        current: Boolean,
+        released: PeerId,
+        vetted: AdmissionDecision?,
+        decidedAtMs: Long,
+    ): SeatOutcome {
+        if (!current) return SeatOutcome.Stale
+        val afterRelease = decideUnderRevocation(joinerPeerId, keyed.key, without = released)
+        if (afterRelease is SeatDecision.Newcomer && vetted !is AdmissionDecision.Admit) {
+            return settleNewcomer(joinerPeerId, keyed, generation, current, afterRelease, vetted, decidedAtMs)
+        }
+        return SeatOutcome.Released(released, releaseHeldSeat(released), decidedAtMs)
     }
 
     /**
