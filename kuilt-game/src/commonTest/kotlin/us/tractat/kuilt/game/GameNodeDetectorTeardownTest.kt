@@ -50,7 +50,7 @@ class GameNodeDetectorTeardownTest {
             val target = PeerId("voter-1")
             val rawLiveness = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)
             val heartbeatSeam = FakeHeartbeatSeam(self, target)
-            val evictions = Channel<NodeId>(Channel.UNLIMITED)
+            val evictions = Channel<EvictionRequest>(Channel.UNLIMITED)
 
             val job = backgroundScope.launchDetectorFor(
                 voterId = NodeId(target.value),
