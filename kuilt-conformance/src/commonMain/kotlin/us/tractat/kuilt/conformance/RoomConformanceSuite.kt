@@ -1258,6 +1258,207 @@ public abstract class RoomConformanceSuite {
             }
         }
 
+    // ── (0b) A pass back in: a device whose seat is gone (#3159, Task 2.7) ───
+    //
+    // The host lets a seat go once its hold runs out, and the device's pass decides what happens next:
+    // a good one lets it back without asking the admission policy, and marks it as the device
+    // returning; one that ran out, or that its host revoked since, sends it to the policy as a
+    // newcomer. Every row asserts the seat was gone when the device came back, since a held seat is
+    // restored without the policy too, and a row about passes would pass on a restore.
+    //
+    // A pass for another room, for another device, or from another host is not reachable from here:
+    // a real joiner presents only its host's passes for this room or for every room of that host's,
+    // and keeps only passes naming its own key. Those refusals run beside the reference rig, which
+    // can put a pass in a Proof that no joiner would send (`PlantedPassRefusalTest`).
+
+    /**
+     * The headline relaunch (#3222): an app killed without a goodbye, and gone past the host's hold,
+     * is opened again. The new process presents a fresh peer id over the device's one key store, and
+     * comes back on the pass the first one kept: the admission policy is not asked, and the host and a
+     * member who stayed both hear `Joined(new, ReturningMark(old))`, naming the id the seat had. The
+     * relaunch's `join` is the app's only call.
+     */
+    @Test
+    public fun returnInsideGrantNoVetting(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a relaunch inside its pass comes back unvetted") ?: return@runTest
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
+            val bystander = h.newDevice().launch().join(h.joinTag)
+            val device = h.newDevice()
+            val app = AppCalls()
+            val first = app.factory(device.launch()).join(h.joinTag)
+            var relaunched: Room? = null
+            try {
+                val old = first.selfId
+                val admitted = host.awaitRoster("both devices are admitted") { roster ->
+                    roster.any { it.id == old } && roster.any { it.id == bystander.selfId }
+                }
+                bystander.awaitRoster("the bystander lists the device") { roster -> roster.any { it.id == old } }
+                val key = admitted.single { it.id == old }.key
+                val hostTape = EventTape(host, backgroundScope)
+                val bystanderTape = EventTape(bystander, backgroundScope)
+                val vettedAtKill = vetting.keys()
+
+                device.kill()
+                host.awaitRoster("the host lets the dead process's seat go") { roster -> roster.none { it.id == old } }
+                val seatsAtRelaunch = host.roster.value.filter { it.key == key }
+                val callsAtRelaunch = app.snapshot()
+                val second = app.factory(device.launch()).join(h.joinTag).also { relaunched = it }
+                val fresh = second.selfId
+                val after = host.awaitRoster("the relaunched process holds a seat") { roster ->
+                    roster.any { it.id == fresh && it.liveness == Liveness.Connected }
+                }
+                bystander.awaitRoster("the bystander lists the relaunched process") { roster -> roster.any { it.id == fresh } }
+                runCurrent() // let the events that announce the return reach the tapes
+                val hostMarks = hostTape.events().filterIsInstance<MembershipEvent.Joined>().filter { it.member.id == fresh }.map { it.returning }
+                val bystanderMarks = bystanderTape.events().filterIsInstance<MembershipEvent.Joined>().filter { it.member.id == fresh }.map { it.returning }
+                assertAll(
+                    { assertTrue(fresh != old, "rig: the relaunched process presents a fresh id") },
+                    { assertEquals(emptyList(), seatsAtRelaunch, "rig: the key held no seat when the new process said Hello, so nothing was restored") },
+                    {
+                        assertEquals(
+                            listOf("Left(${old.value}, ${LeaveReason.PartitionExpired})", "Joined(${fresh.value})"),
+                            hostTape.edges().map { it.edge() },
+                            "rig: the old seat expired, then the new process joined as a new membership",
+                        )
+                    },
+                    { assertEquals(1, vettedAtKill.count { it == key }, "rig: the policy vetted the device once, when it first joined: $vettedAtKill") },
+                    { assertEquals(vettedAtKill, vetting.keys(), "a return on its pass never asks the admission policy") },
+                    { assertEquals(listOf(ReturningMark(previousId = old)), hostMarks, "the host marks it as the device returning, naming the id its seat had") },
+                    { assertEquals(hostMarks, bystanderMarks, "a member who stayed hears the same mark") },
+                    { assertEquals(key, after.single { it.id == fresh }.key, "under the device's key") },
+                    { assertEquals(callsAtRelaunch + "join", app.snapshot(), "the relaunch's join is the app's only call") },
+                )
+            } finally {
+                relaunched?.leave()
+                bystander.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * A pass runs out, and a device that comes back after it is decided as a newcomer: the admission
+     * policy is asked once, about the device's key, and the new membership is not marked (#3223; the
+     * design's *Testing*, "grant expired → vetting runs").
+     *
+     * The row returns once inside the pass's term first, unvetted, so it is the pass that lets the
+     * device in until then. The one call that follows is the pass running out, not a device that
+     * never held one.
+     */
+    @Test
+    public fun expiredGrantIsVetted(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a return after its pass ran out is vetted") ?: return@runTest
+            // Long enough for a return inside it after the host lets the seat go, short against a test.
+            val term = h.hostHeartbeat.timeout + h.hostHeartbeat.reconnectWindow + 4.seconds
+            val vetting = VettingCount(readmitFor = term)
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
+            val device = h.newDevice()
+            val app = AppCalls()
+            val first = app.factory(device.launch()).join(h.joinTag)
+            var live: Room = first
+            try {
+                val one = first.selfId
+                val key = host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == one } }.single { it.id == one }.key
+                val vettedAtFirst = vetting.keys()
+                val hostTape = EventTape(host, backgroundScope)
+
+                // Inside the term: back on the pass.
+                device.kill()
+                host.awaitRoster("the host lets the first process's seat go") { roster -> roster.none { it.id == one } }
+                val second = app.factory(device.launch()).join(h.joinTag).also { live = it }
+                val two = second.selfId
+                host.awaitRoster("the second process holds a seat") { roster -> roster.any { it.id == two && it.liveness == Liveness.Connected } }
+                val vettedInsideTerm = vetting.keys()
+
+                // Past the term: every pass the device holds was issued while a seat of its was
+                // connected, so at or before this kill, and none is good past the kill plus the term.
+                device.kill()
+                val killedAt = testScheduler.currentTime
+                host.awaitRoster("the host lets the second process's seat go") { roster -> roster.none { it.id == two } }
+                advanceTimeBy(term)
+                runCurrent()
+                val awayFor = (testScheduler.currentTime - killedAt).milliseconds
+                val seatsAtRelaunch = host.roster.value.filter { it.key == key }
+                val third = app.factory(device.launch()).join(h.joinTag).also { live = it }
+                val three = third.selfId
+                host.awaitRoster("the third process holds a seat") { roster -> roster.any { it.id == three && it.liveness == Liveness.Connected } }
+                runCurrent() // let the events that announce the admissions reach the tape
+                val marks = hostTape.events().filterIsInstance<MembershipEvent.Joined>().associate { it.member.id to it.returning }
+                assertAll(
+                    { assertEquals(listOf(key), vettedAtFirst, "rig: the policy vetted the device once, when it first joined") },
+                    { assertEquals(vettedAtFirst, vettedInsideTerm, "rig: inside the term the device came back on its pass, unvetted") },
+                    { assertEquals(ReturningMark(previousId = one), marks[two], "rig: and was marked returning") },
+                    { assertTrue(awayFor > term, "rig: the device was away $awayFor, past its pass's $term term") },
+                    { assertEquals(emptyList(), seatsAtRelaunch, "rig: the key held no seat when the third process said Hello") },
+                    { assertEquals(vettedInsideTerm + key, vetting.keys(), "past the term, the policy is asked once, about the device's key") },
+                    { assertTrue(three in marks && marks[three] == null, "an ordinary admission, not marked as a return: $marks") },
+                    { assertEquals(listOf("join", "join", "join"), app.snapshot(), "each launch's join is the app's only call") },
+                )
+            } finally {
+                live.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * A device revoked after its pass was issued is decided as a newcomer when it comes back: the pass
+     * is void, so the admission policy is asked once and the membership is not marked (Decided 14,
+     * 27). Revoking voids passes and is not a ban: the admission gives the device a fresh pass, dated
+     * after the cutoff, and on that one it comes back unvetted.
+     *
+     * That last arm is also the row's rig: the device holds and presents its passes here, so the one
+     * call before it is the revocation's.
+     */
+    @Test
+    public fun revokedSubjectIsVetted(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a revoked device's return is vetted") ?: return@runTest
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
+            val device = h.newDevice()
+            val app = AppCalls()
+            val first = app.factory(device.launch()).join(h.joinTag)
+            var live: Room = first
+            try {
+                val one = first.selfId
+                val key = host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == one } }.single { it.id == one }.key
+                val vettedAtFirst = vetting.keys()
+                val hostTape = EventTape(host, backgroundScope)
+
+                device.kill()
+                host.awaitRoster("the host lets the first process's seat go") { roster -> roster.none { it.id == one } }
+                // After the seat went, so after every pass the device was issued while it was connected.
+                val cutoff = testScheduler.currentTime
+                vetting.revocations.revoke(key, notBefore = cutoff)
+                val second = app.factory(device.launch()).join(h.joinTag).also { live = it }
+                val two = second.selfId
+                host.awaitRoster("the revoked device holds a seat again") { roster -> roster.any { it.id == two && it.liveness == Liveness.Connected } }
+                val vettedOnTheVoidPass = vetting.keys()
+
+                device.kill()
+                host.awaitRoster("the host lets the second process's seat go") { roster -> roster.none { it.id == two } }
+                val third = app.factory(device.launch()).join(h.joinTag).also { live = it }
+                val three = third.selfId
+                host.awaitRoster("the third process holds a seat") { roster -> roster.any { it.id == three && it.liveness == Liveness.Connected } }
+                runCurrent() // let the events that announce the admissions reach the tape
+                val marks = hostTape.events().filterIsInstance<MembershipEvent.Joined>().associate { it.member.id to it.returning }
+                assertAll(
+                    { assertEquals(listOf(key), vettedAtFirst, "rig: the policy vetted the device once, when it first joined") },
+                    { assertEquals(cutoff, vetting.revocations.notBefore(key), "rig: the device is revoked from after its seat went") },
+                    { assertEquals(vettedAtFirst + key, vettedOnTheVoidPass, "a pass issued before the revocation is void: the policy is asked once, about the device's key") },
+                    { assertTrue(two in marks && marks[two] == null, "an ordinary admission, not marked as a return: $marks") },
+                    { assertEquals(vettedOnTheVoidPass, vetting.keys(), "the pass that admission gave is dated after the cutoff: the next return is unvetted") },
+                    { assertEquals(ReturningMark(previousId = two), marks[three], "and marked returning") },
+                    { assertEquals(listOf("join", "join", "join"), app.snapshot(), "each launch's join is the app's only call") },
+                )
+            } finally {
+                live.leave()
+                host.leave()
+            }
+        }
+
     // ── (1) host → role = Host, selfId is non-blank ──────────────────────────
 
     @Test
