@@ -56,9 +56,10 @@ private val STALE_TEST_QUILTER_CONFIG = QuilterConfig(
  * event does. So a stale event that does nothing is the check refusing it, not a seam that reaches
  * nothing.
  *
- * Why not `MultiNodeWarpSim`: it lives in `:kuilt-warp-test`, which depends on this module, so it
- * can neither be used here nor reach the `internal` seam from there. The wiring below is the one
- * [WarpNodePartitionFailoverTest] uses.
+ * Why not `MultiNodeWarpSim`: it gives each node the roster of its own seam
+ * (`seam.rosterSnapshot()`), so it cannot drop B from A's roster and add it back while B's seam
+ * stays up, and that is the readmission these tests need. The wiring below is the one
+ * [WarpNodePartitionFailoverTest] uses, with a roster flow per node.
  */
 class WarpNodeStaleDetectorEventTest {
 
@@ -146,19 +147,14 @@ class WarpNodeStaleDetectorEventTest {
             mesh.close()
         }
 
-    private class Mesh(
+    private data class Mesh(
         val nodeA: WarpNode,
         val b: PeerId,
         val old: Job,
         val current: Job,
-        private val nodeB: WarpNode,
+        val nodeB: WarpNode,
         val ranOn: () -> Map<TaskId, List<PeerId>>,
     ) {
-        operator fun component1() = nodeA
-        operator fun component2() = b
-        operator fun component3() = old
-        operator fun component4() = current
-
         fun close() {
             nodeA.close()
             nodeB.close()

@@ -1005,8 +1005,11 @@ public class WarpNode(
         // of this coroutine so they are cancelled when this Job is cancelled.
         //
         // Started LAZY and registered BEFORE it runs (#3672): an event is acted on only from the
-        // detector registered for its peer, so on an unconfined dispatcher a collector that ran
-        // inline and reported before the registration would have its first event dropped as stale.
+        // detector registered for its peer. A detector can report at once, with no timeout: it
+        // emits `PeerUnresponsive(TransportClosed)` as soon as the peer leaves `link.peers`. So a
+        // collector that ran inline (unconfined dispatcher) or on another thread before the
+        // registration would have its first event dropped as stale. No test drives that
+        // interleaving, so nothing reds if this order is undone; keep it.
         val umbrellaJob = ownScope.launch(start = CoroutineStart.LAZY) {
             detector.start(this)
             val self = coroutineContext.job
