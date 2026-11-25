@@ -24,7 +24,7 @@ public suspend fun perSessionIdSample(room: Room) {
 ```
 
 **Intent:** the room's identity is decided *outside* kuilt — a lobby code, an invite link, a matchmaker-assigned game id — and every member must read back that exact value.
-**Primitive:** `RoomFactory.host(pattern, roomId = …)`. Note what this is **not**: supplying an id does not make a *host restart* resumable. A restarted host has no roster and no reconnect-window registry, so a device that comes back to it is admitted as a new member, and reusing an id does not change that.
+**Primitive:** `RoomFactory.host(pattern, roomId = …, admission = …)`. Note what this is **not**: supplying an id does not make a *host restart* resumable. A restarted host has no roster and no reconnect-window registry, so a device that comes back to it is admitted as a new member, and reusing an id does not change that.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#callerSuppliedRoomIdSample -->
 ```kotlin
@@ -32,8 +32,9 @@ public suspend fun callerSuppliedRoomIdSample(
     factory: RoomFactory,
     pattern: Pattern,
     lobbyCode: String,
+    admission: HostAdmission,
 ): RoomId {
-    val room = factory.host(pattern, roomId = RoomId(lobbyCode))
+    val room = factory.host(pattern, roomId = RoomId(lobbyCode), admission = admission)
     // Read back off the room, not off the variable you passed in: the room is the thing joiners
     // agree with, and on a joiner this same property is how you learn the value at all.
     return room.roomId.value ?: error("a host room knows its id at construction")
@@ -520,14 +521,14 @@ public suspend fun flushThenLeaveSample(
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#handleEveryElectionOutcomeSample -->
 ```kotlin
-public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room? =
+public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby, admission: HostAdmission): Room? =
     when (val outcome = lobby.awaitRoom(memberName = "Player 2")) {
         is ElectionOutcome.Adopted -> outcome.room
         // The hosting peer left and this peer is now the elected host, with the co-members still
         // parked in their own awaitRoom on the SAME seam — so they ack this freeze round at once.
         // Re-running electLobby(...) would start a SECOND lobby beside this one, which strands them on
         // most looms; calling leave() first would close the shared seam and collapse them.
-        ElectionOutcome.BecameHost -> lobby.start(memberName = "Player 2")
+        ElectionOutcome.BecameHost -> lobby.start(memberName = "Player 2", admission = admission)
         // A genuine mid-2PC collapse: the co-electors are gone. Retryable — leave this lobby, then
         // re-run electLobby(...). A lobby left open stays on the mesh and can hold a host's start().
         is ElectionOutcome.Torn -> {
@@ -742,7 +743,7 @@ internal suspend fun sampleDurableRevocations() {
 }
 ```
 
-**Who gets in, and for how long:** `AdmissionPolicy` (`us.tractat.kuilt.session.admit`). Do not hand-roll an "is this joiner allowed" callback, an allow-list check, or a per-member expiry map beside the room. A policy answers `AdmissionDecision.Admit(GrantTerms(readmitFor, reach))` — the pass the newcomer gets: back within `readmitFor` of last contact (`Duration.INFINITE` for never expiring), in `GrantReach.ThisRoom` or `AnyRoomOfIssuer` — or `AdmissionDecision.Reject(code)`. **The joiner sees only `code.id`:** your own `RejectCode` arrives as `RejectCode.Unknown(id)` and is treated as retryable, whatever its `retryable` says. It sees newcomers only: a device whose seat is held, or that returns inside its pass, gets back in without asking it. **Revoking is not banning:** it voids a key's passes, so the device knocks again as a newcomer and the policy decides it like any other. A revocation cannot be undone, so a policy that refuses every revoked key bans it for good. Refuse on the app's own blocked set instead, which it can undo, and keep that set across restarts as you keep the revocations: a forgotten block lets a revoked device back in as a newcomer. To keep a device out from its next return, block it *and* revoke it: blocking alone leaves a held seat or a pass it holds working, and revoking alone only sends it back to this policy. Neither removes a device that is in the room now. Decide on `request.key`, the key the joiner proved; `displayName` is unverified. `AdmissionPolicy.open(readmitFor = 1.hours)` admits everyone, and checks its term when built rather than on a joiner's admission. `HostAdmission(policy, revocations)` is what a host will hold; it takes no host key, since the room checks passes against its own. No room entry point takes one yet; that is tracked by #3220.
+**Who gets in, and for how long:** `AdmissionPolicy` (`us.tractat.kuilt.session.admit`). Do not hand-roll an "is this joiner allowed" callback, an allow-list check, or a per-member expiry map beside the room. A policy answers `AdmissionDecision.Admit(GrantTerms(readmitFor, reach))` — the pass the newcomer gets: back within `readmitFor` of last contact (`Duration.INFINITE` for never expiring), in `GrantReach.ThisRoom` or `AnyRoomOfIssuer` — or `AdmissionDecision.Reject(code)`. **The joiner sees only `code.id`:** your own `RejectCode` arrives as `RejectCode.Unknown(id)` and is treated as retryable, whatever its `retryable` says. It sees newcomers only: a device whose seat is held, or that returns inside its pass, gets back in without asking it. **Revoking is not banning:** it voids a key's passes, so the device knocks again as a newcomer and the policy decides it like any other. A revocation cannot be undone, so a policy that refuses every revoked key bans it for good. Refuse on the app's own blocked set instead, which it can undo, and keep that set across restarts as you keep the revocations: a forgotten block lets a revoked device back in as a newcomer. To keep a device out from its next return, block it *and* revoke it: blocking alone leaves a held seat or a pass it holds working, and revoking alone only sends it back to this policy. Neither removes a device that is in the room now. Decide on `request.key`, the key the joiner proved; `displayName` is unverified. `AdmissionPolicy.open(readmitFor = 1.hours)` admits everyone, and checks its term when built rather than on a joiner's admission. `HostAdmission(policy, revocations)` is what every host entry point takes — `RoomFactory.host(…, admission = …)`, `AdoptRole.Host(admission)`, `ElectionLobby.start(…, admission = …)` — and it takes no host key, since the room checks passes against its own. A second tab of a device already in the room is a newcomer too: it gets a membership of its own. A policy that throws refuses that joiner with the retryable `RejectCode.AdmissionPolicyFailed`; one still deciding when the joiner's challenge runs out is cancelled, and the joiner's own admit deadline ends the attempt.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#hostAdmissionSample -->
 ```kotlin

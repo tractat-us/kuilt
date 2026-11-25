@@ -10,8 +10,10 @@ pick — with `electLobby`:
 
 ```kotlin
 val lobby = roomFactory.electLobby(Pattern("table-7"))
+// Whoever ends up hosting decides who gets in. This lets everyone in.
+val admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())
 // lobby.host is a live value every phone agrees on.
-if (lobby.host.value == lobby.selfId) lobby.start() else lobby.awaitRoom()
+if (lobby.host.value == lobby.selfId) lobby.start(admission = admission) else lobby.awaitRoom()
 ```
 
 Every phone runs the same rule over the same set of *connected* peers, so they all

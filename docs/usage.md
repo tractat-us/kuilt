@@ -111,7 +111,11 @@ or mDNS fabrics in production:
 val factory: RoomFactory = SeamRoomFactory.systemClock(loom, scope, deviceKeyStore)
 
 // Host a room (this peer becomes the Host) or join one (becomes a Joiner).
-val room: Room = factory.host(Pattern(sessionName = "alice", maxPeers = 4))
+val room: Room = factory.host(
+    Pattern(sessionName = "alice", maxPeers = 4),
+    // Who gets in: this lets everyone in. Write your own AdmissionPolicy to decide.
+    admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
+)
 // val room = factory.join(someTag)   // on the joining peer
 
 // The roster holds admitted members only — never raw, unidentified peers.
@@ -530,6 +534,7 @@ val host = KtorRoomHost(
     serverPeerId = PeerId("server-1"),
     pattern = Pattern("cluster-room"),
     deviceKeyStore = serverKeyStore,          // this server's key; each server has its own
+    admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), // who each room lets in
 )
 
 val serverScope = CoroutineScope(coroutineContext + Job())
