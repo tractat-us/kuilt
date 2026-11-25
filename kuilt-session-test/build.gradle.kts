@@ -20,5 +20,14 @@ kotlin {
             implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
+        // SLF4J backend for kotlin-logging on the JVM + Android unit-test variants: a real room's
+        // file-level logger (RoomRequestParityTest builds one) otherwise throws
+        // NoClassDefFoundError: org/slf4j/LoggerFactory. Mirrors :kuilt-session.
+        jvmTest.dependencies {
+            runtimeOnly(libs.logback)
+        }
+        androidUnitTest.dependencies {
+            runtimeOnly(libs.logback)
+        }
     }
 }
