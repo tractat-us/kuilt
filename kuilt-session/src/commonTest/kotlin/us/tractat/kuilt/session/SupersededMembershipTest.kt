@@ -214,11 +214,16 @@ class SupersededMembershipTest {
         val deliveredWhileAway = board.delivered(from = KEY_SEAT_HOST, to = carol).size - toCarol
         val hostRosterAfterTakeover = host.roster.value.map { it.id }.toSet()
 
-        // Carol's link comes back. Run past both reconnect windows, so a ghost would have had time to
-        // leave some other way.
+        // Carol's link comes back. Her own window on bob-1 opened when her link tore and is still
+        // running, so a roster read now sees whether the rebuild, not that window, dropped bob-1.
         board.unmute(from = carol, to = KEY_SEAT_HOST)
         board.unmute(from = KEY_SEAT_HOST, to = carol)
         carolLink.recover()
+        testScheduler.advanceTimeBy(KEY_SEAT_HEARTBEAT.interval * 3)
+        testScheduler.runCurrent()
+        val rosterAtReturn = carolRoom.roster.value.map { it.id }.toSet()
+        val returnedAt = testScheduler.currentTime
+        // Then past every window, so a later Left for bob-1 by some other route would show.
         testScheduler.advanceTimeBy(KEY_SEAT_HEARTBEAT.reconnectWindow * 2)
         testScheduler.runCurrent()
 
@@ -244,7 +249,9 @@ class SupersededMembershipTest {
                 )
             },
             { assertTrue(since.none { it is MembershipEvent.Left && it.reason is LeaveReason.Superseded }, "Carol never says Superseded: ${since.render()}") },
-            { assertEquals(setOf(KEY_SEAT_HOST, second), carolRoom.roster.value.map { it.id }.toSet(), "Carol keeps no ghost of bob-1") },
+            { assertTrue(returnedAt < KEY_SEAT_HEARTBEAT.reconnectWindow.inWholeMilliseconds, "rig: Carol was back before her own window on bob-1 ran out") },
+            { assertEquals(setOf(KEY_SEAT_HOST, second), rosterAtReturn, "Carol keeps no ghost of bob-1 once she is back") },
+            { assertEquals(setOf(KEY_SEAT_HOST, second), carolRoom.roster.value.map { it.id }.toSet(), "nor later") },
         )
         rebuilt.leave()
         carolRoom.leave()
