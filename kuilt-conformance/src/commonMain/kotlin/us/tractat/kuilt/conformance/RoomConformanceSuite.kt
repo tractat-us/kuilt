@@ -427,9 +427,13 @@ public abstract class RoomConformanceSuite {
         }
 
     /**
-     * `Resumed` marks the end of a partition, once per partition: two drops, two `Resumed`s on the
-     * host, and the device's room says it was restored each time. A retry that reaches a seat already
-     * restored says nothing more (plan Amendment E).
+     * `Resumed` marks the end of a partition, once per partition (plan Amendment E): two drops, two
+     * `Resumed`s on the host, and the device's room says it was restored each time. Then a return the
+     * host never saw as a partition — a process killed and relaunched under the same id before the host
+     * noticed it go — gets its seat back with no `Resumed` at all, since nothing was partitioned.
+     *
+     * That third arm is what separates "once per partition" from "once per return": every drop in the
+     * first two is a partition the host sees, so a room announcing every restore would pass them.
      */
     @Test
     public fun resumeWithinWindowFiresResumed(): TestResult =
@@ -439,10 +443,12 @@ public abstract class RoomConformanceSuite {
             val device = h.newDevice()
             val app = AppCalls()
             val joiner = app.factory(device.launch()).join(h.joinTag)
+            var live: Room = joiner
             try {
                 val me = joiner.selfId
-                host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == me } }
+                val admitted = host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == me } }
                 joiner.awaitRoster("the device sees the host") { it.isNotEmpty() }
+                val key = admitted.single { it.id == me }.key
                 val hostTape = EventTape(host, backgroundScope)
                 val joinerTape = EventTape(joiner, backgroundScope)
                 val callsAtFirstDrop = app.snapshot()
@@ -473,8 +479,31 @@ public abstract class RoomConformanceSuite {
                         assertEquals(2, partitions, "rig: the host saw two partitions, not one long one")
                     },
                 )
+
+                // A return the host never saw as a partition: the process dies with its link still open,
+                // and the next one, under the same id, says Hello before the host's detector fires.
+                device.kill(socketCloses = false)
+                val fast = app.factory(device.launch(reusePeerId = true)).join(h.joinTag).also { live = it }
+                fast.awaitRoster("the relaunched room sees the host") { roster -> roster.any { it.liveness == Liveness.Connected } }
+                val back = host.awaitRoster("the seat is Connected under the same id") { roster ->
+                    roster.any { it.id == me && it.liveness == Liveness.Connected }
+                }
+                advanceTimeBy(h.joinerHeartbeat.reconnectWindow)
+                runCurrent()
+                assertAll(
+                    { assertEquals(me, fast.selfId, "rig: the relaunched process presents the same id") },
+                    {
+                        val partitions = hostTape.events().count { it is MembershipEvent.Partitioned && it.peerId == me }
+                        assertEquals(2, partitions, "rig: the host never saw the relaunch as a partition")
+                    },
+                    { assertEquals(2, hostTape.events().count { it == MembershipEvent.Resumed(me) }, "no partition, so no Resumed") },
+                    { assertEquals(listOf(me), back.map { it.id }, "one seat, the same one") },
+                    { assertEquals(key, back.single().key, "under the device's key") },
+                    { assertEquals(callsAtFirstDrop + "join", app.snapshot(), "the relaunch's join is the app's only call") },
+                    { assertTrue(hostTape.edges().none { it is MembershipEvent.Joined || it is MembershipEvent.Left }, "no departure and no new member: ${hostTape.edges()}") },
+                )
             } finally {
-                joiner.leave()
+                live.leave()
                 host.leave()
             }
         }

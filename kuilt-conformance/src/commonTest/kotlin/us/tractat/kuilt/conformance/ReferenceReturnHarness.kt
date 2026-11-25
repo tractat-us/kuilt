@@ -103,9 +103,11 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
         /** The base weaves after this process's first: each one is a heal its room asked for. */
         fun heals(): Int = (weaves.value - 1).coerceAtLeast(0)
 
-        suspend fun end() {
+        suspend fun end(socketCloses: Boolean) {
             scope.cancel()
-            // The socket a killed app leaves behind is closed by the system, not by the app.
+            // The socket a killed app leaves behind is closed by the system, not by the app. Left open,
+            // the server keeps the connection, so the host goes on seeing the seat connected.
+            if (!socketCloses) return
             try {
                 mux.closeBase(CloseReason.Normal)
             } catch (_: Throwable) {
@@ -135,8 +137,8 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
                 return Process(id, index).also { current.value = it }.factory
             }
 
-            override suspend fun kill() {
-                checkNotNull(current.value) { "nothing launched to kill" }.end()
+            override suspend fun kill(socketCloses: Boolean) {
+                checkNotNull(current.value) { "nothing launched to kill" }.end(socketCloses)
             }
 
             override suspend fun drop() {
