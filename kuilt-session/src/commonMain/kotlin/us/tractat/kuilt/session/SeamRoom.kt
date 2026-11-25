@@ -3070,14 +3070,12 @@ internal class SeamRoom(
      */
     private suspend fun runDetectorRouteWatcher() {
         var previous = emptySet<PeerId>()
-        seam.peers.collect { _ ->
-            // The emission only says the list changed. The challenges are marked first and the list
-            // read after, so every challenge at or below the mark was opened before this read (#3610).
-            // The emitted list was read before the mark and may already be stale: a sender that left
-            // and came back with a fresh Hello since would be "gone" in it, and its new challenge
-            // below the mark.
-            val mark = pendingChallenges.mark()
-            val reachable = seam.peers.value
+        seam.peers.collect { emitted ->
+            // The emitted list was read before anything here and may already be stale: a sender that
+            // left and came back with a fresh Hello since would be "gone" in it. So the list that
+            // decides is read again, after marking the challenges: every challenge at or below the
+            // mark was opened before that read (#3610).
+            val (mark, reachable) = pendingChallenges.markBefore { seam.peers.value }
             lock.withLock {
                 // A sender still waiting on its challenge is not a member, so no detector reports it
                 // lost. Its leaving the seam is the loss: forget its challenge (#3211). Only a sender
@@ -3086,7 +3084,12 @@ internal class SeamRoom(
                 // challenge opened before the list was read: the challenges are not under this lock,
                 // so a sender back with a fresh Hello while this waits for it opens a newer one, which
                 // belongs to its new link (#3610).
-                for (gone in previous - reachable) pendingChallenges.dropOpenedBy(gone, mark)
+                //
+                // "Was reachable" counts the emitted list as well as the last read. `collect` decides
+                // what to emit next against what it emitted, not against what was read here, so a
+                // sender listed in [emitted] and gone by the read would otherwise never be seen leaving
+                // (review of #3664).
+                for (gone in (previous + emitted) - reachable) pendingChallenges.dropOpenedBy(gone, mark)
                 previous = reachable
                 if (closed) return@withLock
                 for (member in admittedById.values.toList()) {

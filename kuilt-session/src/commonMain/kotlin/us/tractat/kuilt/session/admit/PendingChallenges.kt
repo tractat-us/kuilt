@@ -137,6 +137,17 @@ internal class PendingChallenges(private val clock: () -> Instant) {
     fun mark(): Long = lock.withLock { nextGeneration }
 
     /**
+     * [mark], then [read], in that order: every entry at or below the returned mark was opened before
+     * [read] ran. The order is the point — marked after the read, an entry opened in between would
+     * fall below the mark and be dropped as if the read had seen it. [read] runs outside the table's
+     * lock, so it may block or take another lock.
+     */
+    inline fun <T> markBefore(read: () -> T): Pair<Long, T> {
+        val mark = mark()
+        return mark to read()
+    }
+
+    /**
      * Removes [sender]'s entry only if it was opened at or before [mark] (see [mark]); a newer entry is
      * kept.
      *

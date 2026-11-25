@@ -276,6 +276,20 @@ class PendingChallengesTest {
         )
     }
 
+    /** The route watcher's order (#3610): an entry opened while the read runs is above the mark. */
+    @Test
+    fun markBeforeMarksAheadOfTheRead() {
+        val before = table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds)
+        val (mark, during) = table.markBefore { table.open(alice, hello("alice"), byteArrayOf(2), now + 30.seconds) }
+
+        table.dropOpenedBy(alice, mark)
+
+        assertAll(
+            { assertEquals(before, mark, "the mark was taken before the read opened anything") },
+            { assertTrue(table.isCurrent(alice, during), "the entry opened during the read survives a drop at the mark") },
+        )
+    }
+
     @Test
     fun dropOpenedByRemovesAnEntryOpenedAtTheMark() {
         val generation = table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds)

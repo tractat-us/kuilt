@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.PeerId
@@ -22,7 +24,6 @@ import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.assertAll
-import us.tractat.kuilt.test.runConcurrencyStress
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -42,16 +43,22 @@ import kotlin.time.Duration.Companion.seconds
  * room's other thread, and only once his challenge has gone out is the watcher let go. His proof must
  * still find the challenge.
  *
- * A real-threaded probe, so `*ConcurrencyTest`: it runs under `-Pconcurrency.stress.tests=true`. The
- * interleaving is forced by latches, not sampled, so one round reproduces it, and the rig asserts the
- * watcher was blocked on the list it read when the challenge went out.
+ * Real threads, but not a stress probe, so not a `*ConcurrencyTest`: the interleaving is forced by
+ * latches, not sampled, so one round reproduces it in well under a second, and the rig asserts the
+ * watcher was blocked on the list it read when the challenge went out. It runs in the ordinary
+ * `jvmTest`, so `ci-required` pins the mark and its order (review of #3664). Every latch wait is
+ * bounded, so a broken rig fails rather than hangs.
  */
-class RouteWatcherMarkConcurrencyTest {
+class RouteWatcherMarkOrderTest {
     private val hostId = PeerId("host")
     private val bob = PeerId("bob")
 
     @Test
-    fun aChallengeOpenedWhileTheWatcherHoldsItsReadSurvivesTheDrop() = runConcurrencyStress(cap = 60.seconds) { stage ->
+    fun aChallengeOpenedWhileTheWatcherHoldsItsReadSurvivesTheDrop() = runBlocking {
+        withTimeout(60.seconds) { probe() }
+    }
+
+    private suspend fun probe() {
         Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
             val scope = CoroutineScope(dispatcher + SupervisorJob())
             val fake = FakeSeam(selfId = hostId, initialPeers = setOf(hostId, bob))
@@ -61,17 +68,14 @@ class RouteWatcherMarkConcurrencyTest {
                     .adopt(seam, SessionRole.Host, memberName = "Host", roomId = KEY_SEAT_ROOM)
 
                 // Its first read, of a list with bob, so that his leaving is a departure to it.
-                stage.at("awaiting the watcher's first read")
                 val started = seam.started.await(STEP, TimeUnit.SECONDS)
                 seam.arm()
                 fake.removePeer(bob)
-                stage.at("awaiting the watcher's read without bob")
                 val held = seam.held.await(STEP, TimeUnit.SECONDS)
 
                 fake.addPeer(bob)
                 val hello = currentHello("Bob", sessionId = bob.value)
                 fake.deliver(bob, AdmitMessage.encode(hello))
-                stage.at("awaiting bob's challenge")
                 val challenge = withTimeoutOrNull(STEP.seconds) {
                     seam.sent.receiveAsFlow().first { (to, msg) -> to == bob && msg is AdmitMessage.Challenge }.second
                 } as? AdmitMessage.Challenge
@@ -79,11 +83,9 @@ class RouteWatcherMarkConcurrencyTest {
 
                 seam.release.countDown()
                 // The watcher's next read is of bob's return, so by then it has acted on the read it held.
-                stage.at("awaiting the watcher's next read")
                 val actedBeforeProof = seam.readAgain.await(STEP, TimeUnit.SECONDS)
                 assertNotNull(challenge, "rig: the host challenged bob while the watcher was held")
                 fake.deliver(bob, AdmitMessage.encode(handProof(challenge, hostId, TEST_DEVICE_A)))
-                stage.at("awaiting bob's admission")
                 val admitted = withTimeoutOrNull(STEP.seconds) { room.roster.first { roster -> roster.any { it.id == bob } } } != null
 
                 assertAll(
