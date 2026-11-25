@@ -70,6 +70,18 @@ public interface RejectCode {
     }
 
     /**
+     * The joiner said Hello under a peer id whose seat another id of the same device took over, and
+     * under the key that was superseded (Decided 32, #3695). The `Reject` names the successor
+     * ([AdmitMessage.Reject.supersededBy]), and the joiner ends
+     * `Left(self, LeaveReason.Superseded(by))` rather than an admission failure. Terminal: another
+     * process of this device holds the membership, and a Hello from this one would take it back.
+     */
+    public object Superseded : RejectCode {
+        override val id: String = "superseded"
+        override val retryable: Boolean = false
+    }
+
+    /**
      * The host could not do its own half of the key-proving exchange (#3211): signing its challenge,
      * or checking the joiner's proof, failed on the host's platform. Retryable: the fault is the
      * host's, and nothing about the joiner's credentials was judged.
@@ -106,6 +118,7 @@ public interface RejectCode {
             ProtocolMismatch.id -> ProtocolMismatch
             BadProof.id -> BadProof
             KeyConflict.id -> KeyConflict
+            Superseded.id -> Superseded
             HostFailed.id -> HostFailed
             else -> Unknown(id)
         }

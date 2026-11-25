@@ -247,7 +247,16 @@ public sealed interface AdmitMessage {
      * predates v3, refused by the version gate. Width [Hello.JOINER_NONCE_SIZE], checked in the
      * constructor.
      *
-     * Construct with the typed secondary constructor: `Reject(reason, RejectCode.RoomMismatch, nonce)`.
+     * [supersededBy] — the [us.tractat.kuilt.core.PeerId] value of the member that took the joiner's
+     * seat over, on a [RejectCode.Superseded] refusal and on no other (v7, Decided 32, #3695). The
+     * host refuses that way a Hello under a superseded id and the key that was superseded, while the
+     * successor holds the seat. A new process of the device reusing the old id has no host to take a
+     * [Farewell] from, so the refusal names its Hello instead, and the joiner ends
+     * `Left(self, LeaveReason.Superseded(by))`. Both halves are checked in the constructor, and a
+     * superseded refusal always names the Hello it answers.
+     *
+     * Construct with the typed secondary constructor: `Reject(reason, RejectCode.RoomMismatch, nonce)`,
+     * or [superseded] for a [RejectCode.Superseded] refusal.
      */
     @Serializable
     @SerialName("reject")
@@ -255,11 +264,16 @@ public sealed interface AdmitMessage {
         val reason: String,
         @SerialName("code") val codeId: String? = null,
         val answers: ByteArray? = null,
+        val supersededBy: String? = null,
     ) : AdmitMessage {
         init {
             require(answers == null || answers.size == Hello.JOINER_NONCE_SIZE) {
                 "a Reject answers a ${Hello.JOINER_NONCE_SIZE}-byte joiner nonce, not ${answers?.size} bytes"
             }
+            require((codeId == RejectCode.Superseded.id) == (supersededBy != null)) {
+                "a ${RejectCode.Superseded.id} Reject names its successor, and no other Reject names one: code $codeId, successor $supersededBy"
+            }
+            require(supersededBy == null || answers != null) { "a ${RejectCode.Superseded.id} Reject names the Hello it answers" }
         }
 
         /** A refusal for [code] of the Hello whose nonce is [answers]. */
@@ -270,13 +284,28 @@ public sealed interface AdmitMessage {
 
         /** Compares [answers] by content: a decoded Reject equals the one that was encoded. */
         override fun equals(other: Any?): Boolean =
-            other is Reject && reason == other.reason && codeId == other.codeId && answers.contentEquals(other.answers)
+            other is Reject &&
+                reason == other.reason &&
+                codeId == other.codeId &&
+                answers.contentEquals(other.answers) &&
+                supersededBy == other.supersededBy
 
         override fun hashCode(): Int {
             var result = reason.hashCode()
             result = 31 * result + (codeId?.hashCode() ?: 0)
             result = 31 * result + answers.contentHashCode()
+            result = 31 * result + (supersededBy?.hashCode() ?: 0)
             return result
+        }
+
+        public companion object {
+            /**
+             * The [RejectCode.Superseded] refusal of the Hello whose nonce is [answers]: that Hello's
+             * id lost its seat to [successor], the [us.tractat.kuilt.core.PeerId] value of the same
+             * device's newer process, which holds it now.
+             */
+            public fun superseded(successor: String, answers: ByteArray): Reject =
+                Reject("superseded: the seat is held by $successor", RejectCode.Superseded.id, answers, successor)
         }
     }
 
@@ -325,15 +354,10 @@ public sealed interface AdmitMessage {
      * Farewell **directly** to the superseded member, which then ends its room and never says Hello
      * again. `null` on every other Farewell.
      *
-     * **It is also the host's answer to a Hello from a superseded id under the key that was
-     * superseded** (v7), while the successor is seated: a superseded process whose link was dead when
-     * the direct Farewell went says Hello again, and hears this Farewell instead of a challenge. The
-     * same id under another key is challenged as any Hello is, and so is one the host has forgotten:
-     * it remembers at most 64 superseded ids, oldest first out. The Farewell names no Hello, unlike a
-     * [Reject]. A joiner honours it only from its identified host, as every Farewell, so a room that
-     * was admitted ends; a new process of the same device reusing that id has no host yet, drops it,
-     * and its join times out. #3662 is weighing whether to answer that Hello with a `Reject` naming it
-     * instead.
+     * A Hello from a superseded id under the key that was superseded is **not** answered with this
+     * Farewell but with a [Reject] naming that Hello, under [RejectCode.Superseded] (v7, Decided 32):
+     * a joiner honours a Farewell only from its identified host, and a new process of the device
+     * reusing the old id has none yet.
      *
      * Wire-compatible: an older build that doesn't know this message drops it as
      * malformed and degrades to its own heartbeat-window eviction (the prior behavior).

@@ -152,7 +152,7 @@ the same peer id restores it. Under a new peer id it takes over a held seat of i
 key whose member is partitioned, and the old member leaves with
 `LeaveReason.Superseded`; beside a connected seat it gets a seat of its own. Peer ids
 are per-process: while the successor holds the seat, a Hello under the superseded id,
-from whichever process, is told `Farewell(supersededBy)`, so never reuse one. See the
+from whichever process, ends `Left(self, Superseded(by))`, so never reuse one. See the
 [resume recipe](agent-cookbook/session.md#rejoin--reconnect).
 
 `SeamRoomFactory` takes an injectable `clock: () -> Instant` and a

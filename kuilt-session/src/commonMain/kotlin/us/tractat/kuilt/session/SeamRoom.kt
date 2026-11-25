@@ -882,7 +882,8 @@ internal class SeamRoom(
 
     /**
      * **Host only.** The ids whose seat a new id of the same key took over, so their Hello is answered
-     * with `Farewell(supersededBy)` rather than a challenge (#3159, Task 1.7): see [SupersededIds].
+     * with a [RejectCode.Superseded] `Reject` rather than a challenge (#3159, Task 1.7; Decided 32): see
+     * [SupersededIds].
      * Guarded by [lock]; written by [supersedeSeat] and [admitMember], read by the Hello gate.
      */
     private val supersededIds = SupersededIds()
@@ -1560,13 +1561,15 @@ internal class SeamRoom(
      * **Joiner only.** Terminally fail the admit handshake: emit [MembershipEvent.AdmissionFailed]
      * (once) and tear the room down via [leave]. No-op if the room already went terminal or the
      * joiner was admitted after all (a late [admitted] completion or a stray post-admission `Reject`).
+     * A room ending superseded ([claimSuperseded]) is terminal from the moment it is claimed, so an
+     * admit deadline expiring before its `Left` is emitted adds nothing.
      *
      * Always invoked on a detached [scope] coroutine (see [watchAdmitDeadline] and the `Reject`
      * handler), so [leave] cancelling [admitDeadlineJob] never cancels this call.
      */
     private suspend fun failAdmission(reason: AdmissionFailure, at: Instant) {
         lock.withLock {
-            if (closed || hostLost || admissionFailed || admitted.isCompleted) return
+            if (closed || hostLost || admissionFailed || admitted.isCompleted || supersededBy != null) return
             admissionFailed = true
         }
         emitEvent(MembershipEvent.AdmissionFailed(reason, at))
@@ -1721,12 +1724,14 @@ internal class SeamRoom(
                         if (successor != null) {
                             // A superseded process saying Hello again, usually its reconnect after a
                             // link that was dead when Decided 19's direct Farewell went (#3159, Task
-                            // 1.7). Tell it again rather than challenge it: admitted, it would take an
-                            // additional seat of its key and the superseded membership would be back.
+                            // 1.7), or a new process of the device reusing the old id. Tell it rather
+                            // than challenge it: admitted, it would take an additional seat of its key
+                            // and the superseded membership would be back. A Reject naming its Hello,
+                            // not a Farewell, so a process that has no host yet hears it too (Decided 32).
                             logger.info { "room.hello.superseded peer=${sender.value} by=${successor.value}" }
                             scope.launch {
-                                val farewell = AdmitMessage.Farewell(sender.value, supersededBy = successor.value)
-                                runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(farewell)) }
+                                val reject = AdmitMessage.Reject.superseded(successor.value, keyed.joinerNonce)
+                                runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
                             }
                         } else {
                             challengeJoiner(sender, keyed)
@@ -1932,11 +1937,6 @@ internal class SeamRoom(
                     runCatchingCancellable { seam.sendTo(joinerPeerId, AdmitMessage.encode(seating.reject)) }
                     return
                 }
-                is SeatOutcome.ToldSuperseded -> {
-                    val farewell = AdmitMessage.Farewell(joinerPeerId.value, supersededBy = seating.successor.value)
-                    runCatchingCancellable { seam.sendTo(joinerPeerId, AdmitMessage.encode(farewell)) }
-                    return
-                }
                 is SeatOutcome.Restored -> {
                     // Its `Unpaused` was enqueued in the section that restored the seat ([restoreSeat]).
                     if (seating.endedPause) {
@@ -2044,10 +2044,11 @@ internal class SeamRoom(
          */
         class Released(val peerId: PeerId, val detached: DetachedMember, val decidedAtMs: Long) : SeatOutcome
 
+        /**
+         * Refuse the joiner with [reject] and seat nobody: a key conflict, or an id superseded under
+         * the key it proved ([toldSuperseded]).
+         */
         class Refused(val reject: AdmitMessage.Reject) : SeatOutcome
-
-        /** The joiner's id was superseded by [successor] under the key it proved: tell it, seat nobody. */
-        class ToldSuperseded(val successor: PeerId) : SeatOutcome
 
         /**
          * The held seat came back. [endedPause]: the seat was partitioned until now. [burst] is null
@@ -2155,8 +2156,9 @@ internal class SeamRoom(
 
     /**
      * **Under [lock].** A superseded process whose Hello was challenged before its seat was taken over
-     * (#3159, Task 1.7): the Hello gate answers every later Hello from that id with the `Farewell`,
-     * and this is the same answer for the one that slipped in first. Read under the lock that recorded
+     * (#3159, Task 1.7): the Hello gate answers every later Hello from that id with a
+     * [RejectCode.Superseded] `Reject` naming it (Decided 32), and this is the same answer for the one
+     * that slipped in first. Read under the lock that recorded
      * the supersession ([supersedeSeat]), so whichever comes first, the old process is not seated.
      *
      * Null when [asked] holds a spent window `Success`: that answer must be acted on, and an exchange
@@ -2166,7 +2168,11 @@ internal class SeamRoom(
     private fun toldSuperseded(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long, asked: AskedWindow?): SeatOutcome? {
         if (asked?.answer == WindowAnswer.Restored) return null
         val successor = seatedSuccessorFor(joinerPeerId, keyed.key) ?: return null
-        return if (retire(joinerPeerId, generation)) SeatOutcome.ToldSuperseded(successor) else SeatOutcome.Stale
+        return if (retire(joinerPeerId, generation)) {
+            SeatOutcome.Refused(AdmitMessage.Reject.superseded(successor.value, keyed.joinerNonce))
+        } else {
+            SeatOutcome.Stale
+        }
     }
 
     /**
@@ -2720,6 +2726,13 @@ internal class SeamRoom(
      * - the first admission → the host refused it; fail loudly (#1178) instead of leaving `join()`'s
      *   consumer hanging.
      *
+     * A [RejectCode.Superseded] refusal that names it means neither: another process of this device
+     * holds the membership under [AdmitMessage.Reject.supersededBy], and the room ends
+     * `Left(self, Superseded(by))` ([claimSuperseded]), on a reconnect and before a first admission
+     * alike (Decided 32). It is the one answer a process with no host yet can take as Decided 19's
+     * `Farewell`, which only an identified host's is honoured. The ending is claimed in the critical
+     * section that read the Hello, so no further Hello goes out after it.
+     *
      * One exception, before the first admission only: a [RejectCode.ProtocolMismatch] that names no
      * Hello. A host older than v7 cannot name one, and this is what it says to a v7 Hello; ignoring
      * it would turn its answer into an admit deadline.
@@ -2728,21 +2741,38 @@ internal class SeamRoom(
      * in one critical section, so a new Hello cannot be minted between the two.
      */
     private fun handleReject(sender: PeerId, reject: AdmitMessage.Reject) {
-        val failsAdmission = lock.withLock {
+        val successor = reject.supersededBy?.let(::PeerId)
+        val verdict = lock.withLock {
             val answersLatest = answersLatestHello(reject.answers)
             rejectCheckedForTest?.invoke(answersLatest)
             when {
-                answersLatest -> resumeMachine?.rejectFlight(reject.reason, reject.code) != true
-                reject.answers == null && reject.code == RejectCode.ProtocolMismatch && !admitted.isCompleted -> true
+                answersLatest && successor != null -> if (claimSuperseded(successor)) RejectVerdict.Superseded(successor) else RejectVerdict.Ignored
+                answersLatest -> if (resumeMachine?.rejectFlight(reject.reason, reject.code) != true) RejectVerdict.FailsAdmission else RejectVerdict.Ignored
+                reject.answers == null && reject.code == RejectCode.ProtocolMismatch && !admitted.isCompleted -> RejectVerdict.FailsAdmission
                 else -> {
                     logger.info { "room.reject.ignored from=${sender.value} code=${reject.code.id}: it answers no Hello this joiner is waiting on" }
-                    false
+                    RejectVerdict.Ignored
                 }
             }
         }
-        if (failsAdmission) {
-            scope.launch { failAdmission(AdmissionFailure.Rejected(reject.reason, reject.code), clock()) }
+        // Detached, as [failAdmission] is: [leave] cancels the inbound collector this runs on.
+        when (verdict) {
+            RejectVerdict.FailsAdmission -> scope.launch { failAdmission(AdmissionFailure.Rejected(reject.reason, reject.code), clock()) }
+            is RejectVerdict.Superseded -> scope.launch { announceSuperseded(verdict.by) }
+            RejectVerdict.Ignored -> Unit
         }
+    }
+
+    /** What [handleReject] does with a `Reject`, decided under [lock]. */
+    private sealed interface RejectVerdict {
+        /** Nothing: it answers no Hello this joiner is waiting on, a reconnect took it, or the room is ending already. */
+        data object Ignored : RejectVerdict
+
+        /** The admission fails ([failAdmission]). */
+        data object FailsAdmission : RejectVerdict
+
+        /** The room's ending as superseded by [by] was claimed; announce it ([announceSuperseded]). */
+        class Superseded(val by: PeerId) : RejectVerdict
     }
 
     /**
@@ -3083,10 +3113,26 @@ internal class SeamRoom(
      * on #3614).
      */
     private suspend fun endSuperseded(by: PeerId) {
-        lock.withLock {
-            if (closed || hostLost || supersededBy != null) return
-            supersededBy = by
-        }
+        if (lock.withLock { claimSuperseded(by) }) announceSuperseded(by)
+    }
+
+    /**
+     * **Joiner only; under [lock].** Claim this room's ending as superseded by [by]: false when it is
+     * ending already. Once claimed the room is terminal ([JoinerResumeMachine] sends no Hello, the
+     * admit deadline fails nothing), and the caller owes [announceSuperseded].
+     *
+     * A failed admission is an ending too: [failAdmission] claims it in one critical section and
+     * closes the room in [leave], and a superseded `Reject` checked between the two must not end the
+     * room a second time (review of #3697).
+     */
+    private fun claimSuperseded(by: PeerId): Boolean {
+        if (closed || hostLost || admissionFailed || supersededBy != null) return false
+        supersededBy = by
+        return true
+    }
+
+    /** The second half of [endSuperseded], for a caller whose [claimSuperseded] returned `true`. */
+    private suspend fun announceSuperseded(by: PeerId) {
         logger.info { "room.superseded self=${selfId.value} by=${by.value}" }
         emitEvent(MembershipEvent.Left(selfId, LeaveReason.Superseded(by)))
         leave(LeaveReason.Superseded(by))

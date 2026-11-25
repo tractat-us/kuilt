@@ -139,6 +139,49 @@ class AdmitMessageTest {
         )
     }
 
+    /**
+     * Decided 32 (#3695): a superseded refusal crosses the wire as itself, terminal, with the Hello it
+     * answers and the successor it names. The successor is part of its identity.
+     */
+    @Test
+    fun `a superseded Reject round-trips its successor and is terminal`() {
+        val nonce = ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE) { 7 }
+        val reject = AdmitMessage.Reject.superseded("bob-2", nonce)
+        val decoded = AdmitMessage.decode(AdmitMessage.encode(reject)) as AdmitMessage.Reject
+        assertAll(
+            { assertEquals(reject, decoded) },
+            { assertEquals("bob-2", decoded.supersededBy) },
+            { assertTrue(decoded.answers.contentEquals(nonce)) },
+            { assertEquals(RejectCode.Superseded, decoded.code) },
+            { assertEquals("superseded", RejectCode.Superseded.id, "the wire id is fixed once shipped") },
+            { assertEquals(RejectCode.Superseded, RejectCode.fromId("superseded")) },
+            { assertFalse(decoded.code.retryable) },
+            { assertNotEquals(reject, reject.copy(supersededBy = "bob-3")) },
+        )
+    }
+
+    /**
+     * A successor and the superseded code go together, and a superseded refusal names its Hello: each
+     * half refused in the constructor, and so on decode, where a frame breaking one is dropped.
+     */
+    @Test
+    fun `a Reject's successor and its superseded code go together`() {
+        val nonce = ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE) { 7 }
+        // The same frame as a valid one but for one code byte, so the decode arm differs only in that.
+        val lookalike = AdmitMessage.encode(AdmitMessage.Reject("r", "xuperseded", nonce))
+        val needle = "xuperseded".encodeToByteArray()
+        val codeAt = (0..lookalike.size - needle.size).firstOrNull { at -> needle.indices.all { lookalike[at + it] == needle[it] } } ?: -1
+        val codeOnly = lookalike.copyOf().also { it[codeAt] = 's'.code.toByte() }
+        assertAll(
+            { assertTrue(codeAt > 0, "rig: the code is on the wire") },
+            { assertNotNull(AdmitMessage.decode(lookalike), "rig: the lookalike decodes") },
+            { assertFailsWith<IllegalArgumentException>("no successor") { AdmitMessage.Reject("r", RejectCode.Superseded, nonce) } },
+            { assertFailsWith<IllegalArgumentException>("another code") { AdmitMessage.Reject("r", RejectCode.KeyConflict.id, nonce, supersededBy = "bob-2") } },
+            { assertFailsWith<IllegalArgumentException>("no Hello") { AdmitMessage.Reject("r", RejectCode.Superseded.id, answers = null, supersededBy = "bob-2") } },
+            { assertNull(AdmitMessage.decode(codeOnly), "a superseded code with no successor is dropped on decode") },
+        )
+    }
+
     /** An answer is a joiner nonce, so a wrong width is refused in the constructor, on every path. */
     @Test
     fun `a wrong-width answer is refused`() = runTest {
