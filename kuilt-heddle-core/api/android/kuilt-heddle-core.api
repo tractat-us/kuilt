@@ -500,6 +500,20 @@ public final class us/tractat/kuilt/heddle/GroupPath$Declared : us/tractat/kuilt
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/heddle/GroupPath$Nested : us/tractat/kuilt/heddle/GroupPath {
+	public fun <init> (Lus/tractat/kuilt/heddle/GroupPath;Ljava/lang/String;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/GroupPath;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Lus/tractat/kuilt/heddle/GroupPath;Ljava/lang/String;)Lus/tractat/kuilt/heddle/GroupPath$Nested;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/GroupPath$Nested;Lus/tractat/kuilt/heddle/GroupPath;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/GroupPath$Nested;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getName ()Ljava/lang/String;
+	public fun getNames ()Ljava/util/List;
+	public final fun getParent ()Lus/tractat/kuilt/heddle/GroupPath;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface annotation class us/tractat/kuilt/heddle/HeddleInternalApi : java/lang/annotation/Annotation {
 }
 
@@ -835,9 +849,11 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public final fun apply (Lus/tractat/kuilt/heddle/Topology;J)Lus/tractat/kuilt/heddle/ApplyResult;
 	public final fun apply (Lus/tractat/kuilt/heddle/Topology;JLus/tractat/kuilt/heddle/Topology;)Lus/tractat/kuilt/heddle/ApplyOutcome;
 	public final fun attach (Ljava/util/List;Ljava/lang/String;J)Lus/tractat/kuilt/heddle/ApplyResult;
+	public final fun attach (Lus/tractat/kuilt/heddle/GroupPath;J)Lus/tractat/kuilt/heddle/ApplyResult;
 	public final fun cancel (Lus/tractat/kuilt/heddle/LeaseId;)Lus/tractat/kuilt/heddle/LeaseOutcome;
 	public final fun complete (Lus/tractat/kuilt/heddle/LeaseId;JLjava/util/Set;)Lus/tractat/kuilt/heddle/LeaseOutcome;
 	public final fun detach (Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/ApplyResult;
+	public final fun detach (Lus/tractat/kuilt/heddle/GroupPath;)Lus/tractat/kuilt/heddle/ApplyResult;
 	public final fun entitlement-lUmtw0Q (Ljava/lang/String;Ljava/util/Set;J)Lus/tractat/kuilt/heddle/Rational;
 	public final fun explain-mLLTQY0 (Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;J)Lus/tractat/kuilt/heddle/WaitExplanation;
 	public static synthetic fun explain-mLLTQY0$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/WaitExplanation;
@@ -1363,12 +1379,18 @@ public final class us/tractat/kuilt/heddle/Topology$ChildTemplate {
 	public static final field Companion Lus/tractat/kuilt/heddle/Topology$ChildTemplate$Companion;
 	public fun <init> (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;)V
 	public synthetic fun <init> (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lus/tractat/kuilt/heddle/Weight;
 	public final fun component2 ()Ljava/lang/Long;
+	public final fun component3 ()Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
 	public final fun copy (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;)Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
+	public final fun copy (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;)Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Topology$ChildTemplate;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Topology$ChildTemplate;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getMaxConcurrent ()Ljava/lang/Long;
+	public final fun getTemplate ()Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
 	public final fun getWeight ()Lus/tractat/kuilt/heddle/Weight;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -1665,7 +1687,9 @@ public final class us/tractat/kuilt/heddle/TopologyChangesKt {
 
 public final class us/tractat/kuilt/heddle/TopologyDiffKt {
 	public static final fun attach (Lus/tractat/kuilt/heddle/Topology;Ljava/util/List;Ljava/lang/String;Lus/tractat/kuilt/heddle/EntitlementLedger;J)Ljava/util/List;
+	public static final fun attach (Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/GroupPath;Lus/tractat/kuilt/heddle/EntitlementLedger;J)Ljava/util/List;
 	public static final fun detach (Lus/tractat/kuilt/heddle/Topology;Ljava/util/List;Ljava/lang/String;Lus/tractat/kuilt/heddle/EntitlementLedger;)Ljava/util/List;
+	public static final fun detach (Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/GroupPath;Lus/tractat/kuilt/heddle/EntitlementLedger;)Ljava/util/List;
 	public static final fun diff (Lus/tractat/kuilt/heddle/Topology$Companion;Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/EntitlementLedger;J)Ljava/util/List;
 }
 
@@ -1699,12 +1723,18 @@ public final class us/tractat/kuilt/heddle/TopologyDocument$ChildTemplate {
 	public fun <init> ()V
 	public fun <init> (Ljava/lang/String;Ljava/lang/Long;)V
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/Long;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Long;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/Long;
+	public final fun component3 ()Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;
 	public final fun copy (Ljava/lang/String;Ljava/lang/Long;)Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;
+	public final fun copy (Ljava/lang/String;Ljava/lang/Long;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;)Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;Ljava/lang/String;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;Ljava/lang/String;Ljava/lang/Long;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getMaxConcurrent ()Ljava/lang/Long;
+	public final fun getTemplate ()Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;
 	public final fun getWeight ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -1834,7 +1864,9 @@ public abstract class us/tractat/kuilt/heddle/TopologyDraft {
 
 public final class us/tractat/kuilt/heddle/TopologyDraft$Group : us/tractat/kuilt/heddle/TopologyDraft {
 	public final fun template (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;)V
+	public final fun template (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;)V
 	public static synthetic fun template$default (Lus/tractat/kuilt/heddle/TopologyDraft$Group;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;ILjava/lang/Object;)V
+	public static synthetic fun template$default (Lus/tractat/kuilt/heddle/TopologyDraft$Group;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;ILjava/lang/Object;)V
 }
 
 public abstract interface annotation class us/tractat/kuilt/heddle/TopologyDraftDsl : java/lang/annotation/Annotation {
