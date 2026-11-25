@@ -90,6 +90,19 @@ internal enum class ForgetRefusal {
      */
     CHILD_HAS_CHILD_EDGES,
 
+    /**
+     * Every child edge the edge's child had is forgotten, but an inbound edge of that child is
+     * still live: a group that lives keeps its row in [ForgottenEdges.outflow], and its edges.
+     */
+    GROUP_LIVE,
+
+    /**
+     * Every child edge the edge's child had is forgotten and none of its inbound edges is live, but
+     * its books do not close as a group: what its inbound edges still account for at it is not what
+     * its row says it handed down. Those units stay for a re-attach's reconcile to recover.
+     */
+    GROUP_STRANDED,
+
     /** A transfer row, base or relocation, sits at the edge's path, and would lose its key. */
     TRANSFER_ROWS,
 

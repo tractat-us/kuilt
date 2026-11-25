@@ -140,16 +140,24 @@ class LocalHeddleNestedAttachPropertyTest {
                 val at = "seed $seed call $call"
                 when (r.nextInt(10)) {
                     in 0..3 -> {
-                        val draining = names.indices.any { depth -> h.snapshot().ledger.let { l -> l.inboundEdges(idOf(names.subList(0, depth + 1))).any { l.lifecycle(it) == Lifecycle.CLOSING } } }
+                        val before = h.snapshot().ledger
+                        fun closingOnly(depth: Int) = before.inboundEdges(idOf(names.subList(0, depth + 1))).let { edges ->
+                            edges.any { before.lifecycle(it) == Lifecycle.CLOSING } && edges.none { before.lifecycle(it) == Lifecycle.ACTIVE }
+                        }
+                        val draining = names.indices.any { depth -> before.inboundEdges(idOf(names.subList(0, depth + 1))).any { before.lifecycle(it) == Lifecycle.CLOSING } }
+                        // Two groups of the chain to attach again, both detached: the shape whose walks overlap.
+                        if (names.size == 3 && closingOnly(0) && closingOnly(1)) tally.deepReattaches++
                         model += names.indices.map { names.subList(0, it + 1) }
                         val result = h.attach(pathOf(names), generation = 1_000L + call)
                         if (draining) tally.reattachesOverClosing++
                         if (draining && result.refusals.isEmpty()) tally.reattachesLanded++
+                        checkNoLedgerRefusal(result, "$at (attach $names)", failures)
                     }
                     in 4..5 -> {
                         model.removeAll { it.size >= names.size && it.subList(0, names.size) == names }
                         val result = h.detach(pathOf(names))
                         if (result.refusals.any { it is StepRefusal.Draining }) tally.drainingDetaches++
+                        checkNoLedgerRefusal(result, "$at (detach $names)", failures)
                     }
                     in 6..8 -> {
                         val leaf = idOf(leaves[r.nextInt(leaves.size)])
@@ -179,8 +187,19 @@ class LocalHeddleNestedAttachPropertyTest {
             { assertTrue(tally.drainingDetaches >= 60, "detaches that waited on a lease ${tally.drainingDetaches}") },
             { assertTrue(tally.reattachesOverClosing >= 55, "attaches over a closing edge ${tally.reattachesOverClosing}") },
             { assertTrue(tally.reattachesLanded >= 20, "of which landed ${tally.reattachesLanded}") },
+            { assertTrue(tally.deepReattaches >= 999_999, "attaches over two detached groups of a chain ${tally.deepReattaches}") },
             { assertTrue(tally.compared >= 80, "shares compared ${tally.compared}") },
         )
+    }
+
+    /**
+     * A step the ledger itself refused. An honest plan never contains one: a step that cannot land
+     * yet is refused as [StepRefusal.Draining], or for a reason the engine names, never by the ledger
+     * turning down the step it was handed.
+     */
+    private fun checkNoLedgerRefusal(result: ApplyResult, at: String, failures: MutableList<String>) {
+        val refused = result.refusals.filterIsInstance<StepRefusal.Refused>().filter { it.reason == "the ledger refused it" }
+        if (refused.isNotEmpty()) failures += "$at: the ledger refused ${refused.map { it.step }}"
     }
 
     /** See [nestedAttachAndDetachUnderOpenLeasesSettleToTheModel]: validate, and no live edge beneath a retired one. */
@@ -270,6 +289,7 @@ class LocalHeddleNestedAttachPropertyTest {
         var drainingDetaches = 0
         var reattachesOverClosing = 0
         var reattachesLanded = 0
+        var deepReattaches = 0
     }
 
     private companion object {

@@ -130,6 +130,38 @@ class LocalHeddleNestedAttachTest {
         )
     }
 
+    /**
+     * Three attached levels, `a → b → x`, the whole chain detached while x's lease ran and then
+     * drained. Attaching `a/b/y` re-attaches both `a` and `b`, and x, which the detach closed, must
+     * retire exactly once in that list: a second retire of the same edge is refused by the ledger,
+     * and the refusal takes the whole attach with it.
+     */
+    @Test
+    fun reattachingADrainedChainRetiresWhatWasClosedOnce() {
+        val deep = Topology("root", listOf(Group("ci", Weight.ONE, listOf(Lane("manual")), template = ChildTemplate(Weight.of(2), template = ChildTemplate(Weight.ONE, template = ChildTemplate(Weight.ONE))))))
+        val a = GroupPath.Attached(listOf("ci"), "a")
+        val b = GroupPath.Nested(a, "b")
+        val x = GroupPath.Nested(b, "x")
+        val y = GroupPath.Nested(b, "y")
+        val h = LocalHeddle.bootWhole(deep, policy, epoch = 0L).also { it.reconcileCapacity(4L) }
+        check(h.attach(x, generation = 1L).refusals.isEmpty())
+        val xId = checkNotNull(deep.findGroupId(x))
+        val lease = assertIs<AcquireOutcome.Acquired>(h.acquire(setOf(xId), setOf(xId), startedAt = 0L)).lease
+        val draining = h.detach(a)
+        check(h.complete(lease.id, actualCost = 1L, waiting = emptySet()) is LeaseOutcome.Done)
+        val steps = deep.attach(y, h.snapshot().ledger, generation = 5L)
+        val result = h.attach(y, generation = 5L)
+        val ledger = h.snapshot().ledger
+        assertAll(
+            { assertTrue(draining.refusals.isNotEmpty() && draining.refusals.all { it is StepRefusal.Draining }, "the rig: the detach waited on x") },
+            { assertEquals(1, steps.count { it is TopologyStep.Retire && it.child == xId }, "x retires once: $steps") },
+            { assertEquals(emptyList(), result.refusals) },
+            { assertTrue(listOf(a, b, y).all { h.live(checkNotNull(deep.findGroupId(it))) }, "the chain and y are attached") },
+            { assertTrue(!h.live(xId) && ledger.liveInboundEdges(xId).isEmpty(), "x is not back, nor left closing") },
+            { assertEquals(emptyList(), ledger.validate()) },
+        )
+    }
+
     @Test
     fun aNestedTopologyPersistsAndRestores() {
         val h = engine().attached(alice)

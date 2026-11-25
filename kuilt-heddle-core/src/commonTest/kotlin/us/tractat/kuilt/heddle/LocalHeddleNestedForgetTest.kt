@@ -27,7 +27,7 @@ class LocalHeddleNestedForgetTest {
 
     private class Run(val edgesAtWarm: Int, val bytesAtWarm: Int, val edgesAtEnd: Int, val bytesAtEnd: Int, val leases: Int, val detaches: Int, val retired: Int)
 
-    private fun run(t: Topology, depth: Int, sameName: Boolean): Run {
+    private fun run(t: Topology, depth: Int, sameName: Boolean, holdAcross: Boolean = false): Run {
         val h = LocalHeddle.bootWhole(t, policy, epoch = 0L).also { it.reconcileCapacity(4L) }
         fun bytes() = Json.encodeToString(LocalHeddleSnapshot.serializer(), h.persist()).length
         var leases = 0
@@ -40,7 +40,19 @@ class LocalHeddleNestedForgetTest {
             check(h.attach(leaf, generation = i + 1L).refusals.isEmpty()) { "the rig: cycle $i attaches" }
             val id = checkNotNull(t.findGroupId(leaf))
             val acquired = h.acquire(setOf(id), setOf(id), startedAt = i.toLong())
-            if (acquired is AcquireOutcome.Acquired && h.complete(acquired.lease.id, actualCost = 1L, waiting = emptySet()) is LeaseOutcome.Done) leases++
+            if (holdAcross) {
+                // The detach waits on the lease, which then completes over or under its reservation.
+                val waited = h.detach(top)
+                retired += waited.applied.count { it is TopologyStep.Retire }
+                val cost = if (i % 2 == 0) 3L else 0L
+                if (waited.refusals.isNotEmpty() && waited.refusals.all { it is StepRefusal.Draining } &&
+                    acquired is AcquireOutcome.Acquired && h.complete(acquired.lease.id, actualCost = cost, waiting = emptySet()) is LeaseOutcome.Done
+                ) {
+                    leases++
+                }
+            } else if (acquired is AcquireOutcome.Acquired && h.complete(acquired.lease.id, actualCost = 1L, waiting = emptySet()) is LeaseOutcome.Done) {
+                leases++
+            }
             val detach = h.detach(top)
             if (detach.refusals.isEmpty()) detaches++
             retired += detach.applied.count { it is TopologyStep.Retire }
@@ -55,6 +67,7 @@ class LocalHeddleNestedForgetTest {
             "one level" to run(flat, depth = 1, sameName = false),
             "nested, a new repository each cycle" to run(nested, depth = 2, sameName = false),
             "nested, the same repository again" to run(nested, depth = 2, sameName = true),
+            "nested, the lease held across the detach" to run(nested, depth = 2, sameName = false, holdAcross = true),
         )
         assertAll(
             *runs.flatMap { (name, r) ->
