@@ -223,6 +223,8 @@ class AdmitMessageTest {
             // Positive control for the absence below: the key IS visible when written.
             { assertTrue("previousPeerId" in AdmitMessage.encode(returning).decodeToString()) },
             { assertFalse("previousPeerId" in AdmitMessage.encode(plain).decodeToString(), "an unmarked Welcome wrote a previous id") },
+            { assertFailsWith<IllegalArgumentException>("unmarked") { plain.copy(previousPeerId = "peer-1") } },
+            { assertFailsWith<IllegalArgumentException>("restored") { returning.copy(returnKind = ReturnKind.Restored) } },
         )
     }
 
