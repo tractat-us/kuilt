@@ -162,10 +162,13 @@ public sealed interface AdmitMessage {
      *   admission. It describes the host's decision; a joiner reads a restore from [membership]
      *   instead, since only that names *which* membership came back.
      * [answers] — the [Hello.joinerNonce] of the Hello this Welcome answers (v7, #3215), on the direct
-     *   Welcome only. A joiner takes a direct Welcome as the answer to its Hello only when this equals
-     *   the nonce of the latest Hello it sent, so a Welcome that answers an older Hello — the one
-     *   before a reconnect, say — never closes the reconnect that followed it. Width
-     *   [Hello.JOINER_NONCE_SIZE], checked in the constructor.
+     *   Welcome and the host intro. A joiner takes a direct Welcome as the answer to its Hello only
+     *   when this equals the nonce of the latest Hello it sent, so a Welcome that answers an older
+     *   Hello — the one before a reconnect, say — never closes the reconnect that followed it. On the
+     *   intro it says only which admission burst the intro closes (#3615): a joiner rebuilds its
+     *   roster on the intro of the burst answering its latest Hello, and never on a late one from an
+     *   earlier burst. The intro names the host, not the joiner, so it is never taken as the answer.
+     *   Width [Hello.JOINER_NONCE_SIZE], checked in the constructor.
      * [membership] — an opaque id the host minted when it admitted this membership (v7, #3215), on
      *   the direct Welcome only. A restored seat keeps the id it had, and every new admission gets a
      *   new one. So a joiner that compares the id on the Welcome answering its reconnect with the one

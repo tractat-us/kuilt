@@ -1173,14 +1173,16 @@ internal class SeamRoom(
      * reconnect's admission burst names every member the host holds, and a member admitted after the
      * host built the burst is named by its own roster `Welcome`, which can reach this room on its
      * fan-out lane before the burst does. Counting from the Hello rather than from the answer keeps
-     * that member. Guarded by [lock].
+     * that member. A member leaves the count when it leaves the roster ([detachMember]), so the count
+     * never holds more than the roster does between Hellos. Guarded by [lock].
      */
     private val namedSinceHello = mutableSetOf<PeerId>()
 
     /**
      * **Joiner only.** A reconnect closed and its admission burst is still arriving (#3615). The
-     * host's own `Welcome` comes last in the burst; when it arrives, [rebuildRoster] drops every member
-     * the host has not named since the Hello. Cleared by that, or by the next Hello. Guarded by [lock].
+     * host's own `Welcome` comes last in the burst; when the one naming the latest Hello arrives,
+     * [rebuildRoster] drops every member the host has not named since that Hello. Cleared by that, or
+     * by the next Hello. Guarded by [lock].
      */
     private var rosterRebuildPending = false
 
@@ -2444,9 +2446,13 @@ internal class SeamRoom(
     /**
      * Send a seated joiner what it needs, outside [lock]: its direct Welcome (marked [returnKind],
      * naming the Hello it [answers] and the membership), then, when [announce], the roster copy to
-     * every other member, then a Welcome for each member it did not know, then the host's own intro.
+     * every other member, then a Welcome for each member it did not know, then the host's own intro,
+     * which names the same Hello.
      *
-     * The direct Welcome is the ONE frame that names the joiner's Hello and its membership (#3215).
+     * The direct Welcome is the ONE frame that names the joiner's membership, and the one that
+     * answers its Hello (#3215). The intro names the Hello too, but only to say which burst it closes
+     * (#3615): a joiner takes it as the end of the burst answering its latest Hello, never as the
+     * answer.
      * It and the two joiner-directed loops stay INLINE: they address the joiner, not the bystanders, so they share no
      * recipient with any queued fan-out and have no order to keep against one.
      *
@@ -2489,12 +2495,17 @@ internal class SeamRoom(
             runCatchingCancellable { seam.sendTo(member.id, existingWelcome) }
         }
 
+        // The intro closes this burst, and names the Hello the burst answers, so a joiner can tell it
+        // from a late intro of an earlier burst to the same joiner: bursts run outside the lock, so
+        // two of them can interleave on its link (#3615). It carries no membership, so it is never
+        // the answer to that Hello: only the direct Welcome, which names the joiner, is.
         val hostIntro = AdmitMessage.encode(
             AdmitMessage.Welcome(
                 assignedPeerId = selfId.value,
                 displayName = resolvedMemberName,
                 sessionId = selfId.value,
                 key = device.key.id,
+                answers = answers,
             ),
         )
         runCatchingCancellable { seam.sendTo(member.id, hostIntro) }
@@ -2742,9 +2753,10 @@ internal class SeamRoom(
      * on (#3215).
      *
      * Every other `Welcome` it accepts names a member the host vouches for, counted in
-     * [namedSinceHello]. The host's own, which closes an admission burst, rebuilds the roster when a
-     * reconnect closed on that burst ([rebuildRoster], #3615); a member it drops goes into [dropped],
-     * whose inboxes the caller closes once it has released [lock].
+     * [namedSinceHello]. The host's own, which closes an admission burst and names the Hello that
+     * burst answers, rebuilds the roster when a reconnect closed on the burst answering the latest
+     * Hello ([rebuildRoster], #3615); a member it drops goes into [dropped], whose inboxes the caller
+     * closes once it has released [lock].
      */
     private fun acceptWelcome(sender: PeerId, welcome: AdmitMessage.Welcome, dropped: MutableList<DetachedMember>): Boolean? {
         run {
@@ -2817,8 +2829,12 @@ internal class SeamRoom(
             }
 
             namedSinceHello += assignedId
-            // The host's own Welcome is the last of its admission burst (sendAdmissionBurst).
-            if (assignedId == sender && rosterRebuildPending) dropped += rebuildRoster()
+            // The host's own Welcome is the last of its admission burst (sendAdmissionBurst), and it
+            // names the Hello that burst answers. Only the one closing the burst that answered the
+            // latest Hello rebuilds: two bursts to this joiner can interleave on the host, and an
+            // earlier one's intro landing after the new answer would rebuild on a count that has not
+            // yet heard the new burst's members (#3615).
+            if (assignedId == sender && rosterRebuildPending && answersLatestHello(welcome.answers)) dropped += rebuildRoster()
 
             if (admittedById.containsKey(assignedId)) return null // already known
             val identity = MemberIdentity(
@@ -2840,16 +2856,17 @@ internal class SeamRoom(
      * went down the link that was down. Without this it stays a ghost until something else notices,
      * and on a star nothing does: this room has no heartbeat edge to it.
      *
-     * A dropped member leaves with [LeaveReason.Normal]: this room did not see it go and cannot say
-     * why, and `Normal` claims less than [LeaveReason.PartitionExpired], which asserts the member's
-     * link died. Decided and removed in one section, so no `Welcome` naming it lands in between. The
-     * host is never dropped: its own `Welcome`, which calls this, has just been counted as named.
+     * A dropped member leaves with [LeaveReason.Unobserved]: this room did not see it go and cannot
+     * say why. [LeaveReason.Normal] would claim the member chose to leave, and
+     * [LeaveReason.PartitionExpired] that its link died. Decided and removed in one section, so no
+     * `Welcome` naming it lands in between. The host is never dropped: its own `Welcome`, which calls
+     * this, has just been counted as named.
      */
     private fun rebuildRoster(): List<DetachedMember> {
         rosterRebuildPending = false
         val gone = admittedById.keys.filter { it !in namedSinceHello }
         if (gone.isNotEmpty()) logger.info { "room.roster.rebuilt self=${selfId.value} dropped=${gone.map { it.value }}" }
-        return gone.mapNotNull { detachMember(it, LeaveReason.Normal) }
+        return gone.mapNotNull { detachMember(it, LeaveReason.Unobserved) }
     }
 
     /**
@@ -2883,8 +2900,9 @@ internal class SeamRoom(
      * the same ([JoinerResumeMachine.takeFlightForWelcome]).
      *
      * Either way it arms the roster rebuild ([rosterRebuildPending]): the rest of the burst this
-     * Welcome heads names every member the host holds, and the host's own Welcome, last in it,
-     * drops the members this room holds and the host did not name ([rebuildRoster]).
+     * Welcome heads names every member the host holds, and the host's own Welcome, last in it and
+     * naming the same Hello, drops the members this room holds and the host did not name
+     * ([rebuildRoster]).
      *
      * **A terminal room closes nothing (#3094).** A reconnect window that expires leaves its flight
      * installed until [leave] takes it. The `Welcome` and the window's verdict are ordered by [lock],
@@ -4783,6 +4801,10 @@ internal class SeamRoom(
         windowOpenedEpisodeMs.remove(peerId)
         // Pruned with the member, keeping `membershipIds.keys == admittedById.keys` (#3215).
         membershipIds.remove(peerId)
+        // A joiner's count of who the host named is cleared only by a new Hello, and a room that never
+        // reconnects never says one, so it is pruned here too (#3615). It changes no rebuild: on a
+        // joiner only a Welcome adds a member, and that Welcome names it again.
+        namedSinceHello.remove(peerId)
         // A later admission gets a fresh inbox; close this admission's inbox outside the lock.
         val inbox = memberInboxes.remove(peerId)
         // Keep removal in the same critical section as admission and liveness updates. Otherwise
