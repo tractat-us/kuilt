@@ -1261,7 +1261,9 @@ public class LocalHeddle private constructor(
      * moves on every [acquire], refused ones included, so on a busy engine it will have moved by the
      * time a person confirms; preview again then rather than refuse the apply. [apply] takes its diff
      * on the ledger it applies to, so applying after the engine moved on is still correct, just not
-     * necessarily what was previewed.
+     * necessarily what was previewed. Whether someone else applied a tree since the edit started is
+     * a different question, which [revision] cannot answer: pass `startedFrom` to the checked
+     * [previewApply] and [apply] for that.
      *
      * Shares over a candidate tree with no engine behind it need no preview: boot one with
      * [fromTopology] and ask it [entitlement].
