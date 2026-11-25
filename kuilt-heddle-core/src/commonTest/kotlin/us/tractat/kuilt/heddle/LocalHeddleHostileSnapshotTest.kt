@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -178,6 +179,54 @@ class LocalHeddleHostileSnapshotTest {
             restoresAndRuns(reserving(2L), "a lease reserving 2 of 2 outstanding"),
             corruptFor(reserving(3L), "reserve 3, more than the 2 outstanding"),
             corruptFor(edited(GOLDEN_FORMAT_1, leaseA, "\"seq\":50,\"reserved\":${Long.MAX_VALUE},"), "more than the 1 outstanding"),
+        )
+    }
+
+    /**
+     * Why decode caps no lease at [LocalHeddle.MAX_RESERVATION]: the cap bounds one reservation or
+     * one extension, and [LocalHeddle.extend] adds to the lease. A real engine leases `a` at the cap,
+     * extends it by the cap again, and persists, and what it wrote decodes, restores and runs. A
+     * check refusing a lease past the cap would make this snapshot corrupt, so this is the arm that
+     * reds when one is added (#3261).
+     */
+    @Test
+    fun aLeaseAnEngineExtendedPastTheReservationCapRestores() {
+        val topology = draft("root") { lane("a", Weight.ONE) }
+        val a = topology.groupId("a")
+        val engine = LocalHeddle.bootWhole(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
+        val opened = engine.admit(a, waiting = setOf(a), startedAt = 0L, reservation = LocalHeddle.MAX_RESERVATION)
+        val lease = assertIs<AcquireOutcome.Acquired>(opened, "the rig: the admit leased").lease
+        val extended = engine.extend(lease.id, LocalHeddle.MAX_RESERVATION, waiting = emptySet())
+        val reserved = engine.snapshot().leases.single().reserved
+        val text = Json.encodeToString(LocalHeddleSnapshot.serializer(), engine.persist())
+        assertAll(
+            { assertEquals(LeaseOutcome.Done(0L, 0L, 0L), extended, "the rig: the extension landed") },
+            { assertEquals(2 * LocalHeddle.MAX_RESERVATION, reserved, "the rig: the lease reserves twice the cap") },
+            { assertTrue(reserved > LocalHeddle.MAX_RESERVATION, "the rig: the lease reserves $reserved, past the cap") },
+            restoresAndRuns(text, "a lease extended to $reserved, past the cap"),
+        )
+    }
+
+    /**
+     * [LocalHeddle.persist] runs decode's check on the engine's own books, so a bound broken there is
+     * the engine's bug, and it throws [IllegalStateException] rather than the
+     * [IllegalArgumentException] decode reports as corrupt bytes. The books of an engine with a lease
+     * open on `a` are swapped for those of one that issued `a` nothing, so the lease reserves more
+     * than its edge holds.
+     */
+    @Test
+    fun anEngineWhoseOwnBooksBreakABoundThrowsIllegalStateFromPersist() {
+        val topology = draft("root") { lane("a", Weight.ONE) }
+        val a = topology.groupId("a")
+        fun engine() = LocalHeddle.bootWhole(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
+        val leased = engine()
+        assertIs<AcquireOutcome.Acquired>(leased.admit(a, waiting = setOf(a), startedAt = 0L, reservation = 5L), "the rig: the admit leased")
+        val idle = engine().persist().ledger
+        leased.reshapeForTest { idle }
+        val thrown = assertFailsWith<IllegalStateException> { leased.persist() }
+        assertAll(
+            { assertIs<IllegalArgumentException>(thrown.cause, "the bound decode checks is what broke") },
+            { assertTrue("reserve 5, more than" in thrown.message.orEmpty(), "it names the bound: ${thrown.message}") },
         )
     }
 
