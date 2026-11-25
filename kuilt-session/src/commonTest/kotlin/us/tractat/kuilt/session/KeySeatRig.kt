@@ -336,12 +336,13 @@ internal class RawHost(
     }
 }
 
-/** A [RawHost] for [joiners], on device [HOST_DEVICE], with an observed controller. */
+/** A [RawHost] for [joiners], on device [HOST_DEVICE], with an observed controller, deciding newcomers with [admission]. */
 internal suspend fun TestScope.rawHost(
     joiners: Set<PeerId>,
     hold: ObservedHold = ObservedHold(),
     store: DeviceKeyStore = fakeKeyStore(HOST_DEVICE),
     clock: () -> Instant = virtualClock(),
+    admission: HostAdmission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
 ): RawHost {
     val seam = FakeSeam(selfId = KEY_SEAT_HOST, initialPeers = setOf(KEY_SEAT_HOST) + joiners)
     val room = SeamRoomFactory(
@@ -352,7 +353,7 @@ internal suspend fun TestScope.rawHost(
         heartbeatConfig = KEY_SEAT_HEARTBEAT,
         admitTimeout = KEY_SEAT_ADMIT_TIMEOUT,
         reconnectControllerFactory = hold.factory,
-    ).adopt(seam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), roomId = KEY_SEAT_ROOM), memberName = "Host")
+    ).adopt(seam, AdoptRole.Host(admission, roomId = KEY_SEAT_ROOM), memberName = "Host")
     val events = EventLog(room, backgroundScope)
     testScheduler.runCurrent()
     return RawHost(this, seam, room, hold, events, fakeDidKey(HOST_DEVICE))
