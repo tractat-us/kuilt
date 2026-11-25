@@ -1768,12 +1768,20 @@ internal class SeamRoom(
                 if (_role.value == SessionRole.Host) {
                     // Under the room lock, so it orders against [settleSeat]'s retire-and-admit: a
                     // Goodbye between a Challenge and its Proof leaves nothing to admit (#3211).
+                    //
+                    // The Farewell is enqueued in the section that removes the member (#3628), as
+                    // every `Paused`/`Unpaused` and the roster `Welcome` are (#3625, #3630). Enqueued
+                    // after it, an exchange that spent this member's window could decide in the gap,
+                    // find the seat gone and enqueue its expired Farewell first ([settleSpentWindow]),
+                    // and every bystander would read this clean leave as `PartitionExpired`. It goes
+                    // before the removal so the `Left` the removal emits, and any consumer code that
+                    // runs inline on it, comes after it too. The fan-out leaves out the sender either way.
                     lock.withLock {
                         pendingChallenges.drop(sender)
                         stopDetector(sender)
-                    }
-                    removeFromRoster(sender, LeaveReason.Normal)
-                    propagateFarewell(sender)
+                        propagateFarewell(sender)
+                        detachMember(sender, LeaveReason.Normal)
+                    }?.close()
                 }
             }
             is AdmitMessage.Farewell -> {
@@ -3536,9 +3544,9 @@ internal class SeamRoom(
         // concern). With the enqueue there, whatever a LATER section decides about this member is
         // enqueued after this `Paused` on every lane, wherever that section enqueues. An EARLIER
         // section's frame precedes it only if that section also enqueued under its own lock:
-        // every `Paused`/`Unpaused` sender now does, and so does an admission's roster `Welcome`
-        // ([admitMember], #3630), but the `Goodbye` handler's `Farewell` (#3628) is still enqueued
-        // after its deciding section. `PausedFanOutOrderConcurrencyTest` parks this thread on the gap.
+        // every `Paused`/`Unpaused` sender now does, and so do an admission's roster `Welcome`
+        // ([admitMember], #3630) and the `Goodbye` handler's `Farewell` (#3628).
+        // `PausedFanOutOrderConcurrencyTest` parks this thread on the gap.
         // `fanOutToOtherMembers` re-enters the reentrant lock, and its `trySend` into an
         // UNLIMITED lane cannot suspend, so nothing suspend-capable runs under the lock.
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
@@ -4410,9 +4418,10 @@ internal class SeamRoom(
      *
      * The roster snapshot and the lane resolution are taken under [lock] and the enqueues happen
      * after this function's own acquisition is released. A caller already holding [lock] keeps them
-     * inside its section — [handleWindowExpired] and [releaseHeldSeat] do, so their `Farewell` is
-     * ordered against every later section's enqueues, and [markPartitioned], [refineWindow],
-     * [markRecovered] and [restoreSeat] do for their `Paused`/`Unpaused`
+     * inside its section — [handleWindowExpired], [releaseHeldSeat], [supersedeSeat] and the
+     * `Goodbye` handler (#3628) do, so their `Farewell` is ordered against every later section's
+     * enqueues, [admitMember] does for its roster `Welcome` (#3630), and [markPartitioned],
+     * [refineWindow], [markRecovered] and [restoreSeat] do for their `Paused`/`Unpaused`
      * (#3625). The
      * lock is reentrant, and a [Channel.trySend] into an unbounded channel cannot suspend, so
      * nothing suspend-capable sits inside a critical section either way.
