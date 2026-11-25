@@ -13,6 +13,7 @@ import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.RoomFrame
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.RoomId
 
 /**
@@ -25,7 +26,7 @@ import us.tractat.kuilt.session.partition.RoomId
  *
  * ```kotlin
  * val factory = FakeRoomFactory()
- * val room = factory.host(Pattern("alice"))
+ * val room = factory.host(Pattern("alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
  * // room.selfId == PeerId("alice"), room.role.value == SessionRole.Host
  * ```
  */
@@ -33,9 +34,10 @@ public class FakeRoomFactory : RoomFactory {
     /**
      * [roomId] is honoured verbatim when supplied; otherwise a fresh one is minted per call, so two
      * rooms hosted under the same session name never share an identity — the same contract the real
-     * factory keeps (#1594).
+     * factory keeps (#1594). A fake room admits nobody by itself, so [admission] is never asked:
+     * drive membership with [FakeRoom]'s own hooks.
      */
-    override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
+    override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?, admission: HostAdmission): Room =
         FakeRoom(
             selfId = PeerId(pattern.sessionName),
             initialRole = SessionRole.Host,

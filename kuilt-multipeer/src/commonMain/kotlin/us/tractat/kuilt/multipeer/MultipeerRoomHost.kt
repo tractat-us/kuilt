@@ -6,6 +6,7 @@ import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.session.LoomRoomHost
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomHost
+import us.tractat.kuilt.session.admit.HostAdmission
 
 /**
  * Multipeer-Connectivity room host. Wraps a [Loom] and a [Pattern], opens a
@@ -23,10 +24,11 @@ import us.tractat.kuilt.session.RoomHost
  * It has no native-code path. The [MultipeerPeerLinkFactory] dylib basenames and
  * JNA constants are unchanged and outside the scope of this class.
  *
- * [deviceKeyStore] holds this device's key; see [LoomRoomHost].
+ * [deviceKeyStore] holds this device's key, and [admission] decides who the room lets in; see [LoomRoomHost].
  */
 public class MultipeerRoomHost(
     loom: Loom,
     sessionConfig: Pattern,
     deviceKeyStore: DeviceKeyStore,
-) : RoomHost by LoomRoomHost(loom, sessionConfig, deviceKeyStore)
+    admission: HostAdmission,
+) : RoomHost by LoomRoomHost(loom, sessionConfig, deviceKeyStore, admission)

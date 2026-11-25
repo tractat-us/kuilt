@@ -16,6 +16,7 @@ import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
@@ -82,8 +83,8 @@ class RoomChannelStateAfterLeaveControlTest {
 
     /** The reference's rooms, with every channel view's state replaced by one that stays `Woven`. */
     private class StuckOpenRoomFactory(private val delegate: RoomFactory) : RoomFactory {
-        override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
-            StuckOpenRoom(delegate.host(pattern, memberName, roomId))
+        override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?, admission: HostAdmission): Room =
+            StuckOpenRoom(delegate.host(pattern, memberName, roomId, admission))
 
         override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room =
             StuckOpenRoom(delegate.join(tag, memberName, deviceId))

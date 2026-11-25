@@ -19,6 +19,7 @@ import us.tractat.kuilt.session.Principal
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomHost
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.admit.HostAdmission
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.websocket.KtorRoomHost")
 
@@ -40,12 +41,16 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.websocket.KtorRoomHost"
  * **One device key for every room.** Every room this host accepts is hosted by the same server, so
  * they all share the one [DeviceKeyStore] it is given. A process that runs several servers — a
  * cluster test, say — gives each its own store, because each server is its own device.
+ *
+ * **One admission for every room, too.** Every accepted connection is a room this server hosts, so
+ * each asks the same [HostAdmission] about its newcomer: see [us.tractat.kuilt.session.RoomFactory.host].
  */
 public class KtorRoomHost internal constructor(
     private val path: String,
     private val pattern: Pattern,
     private val loom: Loom,
     private val deviceKeyStore: DeviceKeyStore,
+    private val admission: HostAdmission,
 ) : RoomHost {
     /**
      * Production constructor. Pre-constructs a [KtorServerLoom] synchronously
@@ -54,7 +59,8 @@ public class KtorRoomHost internal constructor(
      * race-condition route registration against early connecting clients.
      *
      * [deviceKeyStore] holds this server's key. It is required: see
-     * [us.tractat.kuilt.session.SeamRoomFactory] for why, and what to pass.
+     * [us.tractat.kuilt.session.SeamRoomFactory] for why, and what to pass. [admission] decides who
+     * each accepted room lets in.
      */
     public constructor(
         application: Application,
@@ -62,12 +68,14 @@ public class KtorRoomHost internal constructor(
         serverPeerId: PeerId,
         pattern: Pattern,
         deviceKeyStore: DeviceKeyStore,
+        admission: HostAdmission,
         principalExtractor: (ApplicationCall) -> Principal? = { null },
     ) : this(
         path = path,
         pattern = pattern,
         loom = KtorServerLoom(application, path, serverPeerId, principalExtractor = principalExtractor),
         deviceKeyStore = deviceKeyStore,
+        admission = admission,
     )
 
     private val startMutex = Mutex()
@@ -102,7 +110,7 @@ public class KtorRoomHost internal constructor(
             while (true) {
                 val room: Room =
                     try {
-                        factory.host(pattern)
+                        factory.host(pattern, admission = admission)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {
