@@ -7,7 +7,7 @@ package us.tractat.kuilt.identity
  * treated as a newcomer, and which one tells the host why.
  */
 public sealed interface GrantVerdict {
-    /** Issued by this host, signed by it, to this device, for this room, not revoked, not expired. */
+    /** Issued by this host, signed by it, to this device, for this room, not revoked, not dated ahead, not expired. */
     public data object Valid : GrantVerdict
 
     /**
@@ -28,6 +28,13 @@ public sealed interface GrantVerdict {
     /** Issued before the host revoked this device: see [RevocationList]. */
     public data object Revoked : GrantVerdict
 
+    /**
+     * Dated in the future: its [Grant.issuedAt] is more than [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS]
+     * past the time it was checked at. The host's clock ran ahead when it issued the pass and has
+     * since been set back. The pass is refused rather than trusted, and the device is admitted afresh.
+     */
+    public data object NotYetValid : GrantVerdict
+
     /** Past its [Grant.notAfter]. */
     public data object Expired : GrantVerdict
 }
@@ -37,8 +44,8 @@ public sealed interface GrantVerdict {
  *
  * A device that comes back shows the pass the host gave it. Before letting it skip vetting, the host
  * checks that the pass is its own ([hostKey] issued and signed it), that it names the device that is
- * presenting it, that it is for this room, that the device was not revoked since ([revocations]), and
- * that it has not run out. [verify] answers with the first check that fails, in that order, or
+ * presenting it, that it is for this room, that the device was not revoked since ([revocations]), that
+ * it is not dated in the future, and that it has not run out. [verify] answers with the first check that fails, in that order, or
  * [GrantVerdict.Valid]:
  *
  * 1. [GrantVerdict.UntrustedIssuer] — [Grant.issuer] is not [hostKey].
@@ -47,8 +54,21 @@ public sealed interface GrantVerdict {
  * 4. [GrantVerdict.WrongScope] — a [GrantScope.Room] for another room id.
  *    [GrantScope.AnyRoomOfIssuer] is good in every room [hostKey] hosts.
  * 5. [GrantVerdict.Revoked] — [Grant.issuedAt] is before the subject's [RevocationList.notBefore].
- * 6. [GrantVerdict.Expired] — `now` is at or past [Grant.notAfter]. A grant with
+ * 6. [GrantVerdict.NotYetValid] — [Grant.issuedAt] is more than [CLOCK_SKEW_ALLOWANCE_MILLIS] past
+ *    `now`. A grant dated up to the allowance ahead is accepted, so a clock nudged back a little
+ *    between issuing and checking does not turn a good pass away.
+ * 7. [GrantVerdict.Expired] — `now` is at or past [Grant.notAfter]. A grant with
  *    [Grant.NO_EXPIRY] never expires, not even at `now = Long.MAX_VALUE`.
+ *
+ * The last two are the two ends of the span a grant is good for, and no grant meets both: its
+ * [Grant.notAfter] is always after its [Grant.issuedAt], so a grant dated after `now` has not run out.
+ *
+ * A future-dated grant is refused because of what it does to a revocation. A pass issued while the
+ * host's clock ran a year ahead carries an [Grant.issuedAt] a year out. Once the clock is corrected,
+ * `revoke(subject, now + 1)` sets a cutoff before that date and does not void the pass. Refusing it
+ * as [GrantVerdict.NotYetValid] stops the device returning on it until the clock nears its date.
+ * From then on it is good again, so a host that must void such a pass for good still picks a cutoff
+ * past the latest [Grant.issuedAt] it gave the device.
  *
  * The only trusted issuer is the host's own key. So losing that key is the safe direction: every
  * grant the host ever issued becomes [GrantVerdict.UntrustedIssuer], and those devices are vetted
@@ -103,5 +123,27 @@ public class GrantTrust @IdentityInternalApi constructor(
         return issuedAt < cutoff
     }
 
+    /** Whether this grant is dated more than the allowance past [now]. Saturates rather than wraps. */
+    private fun Grant.isPostDatedAt(now: Long): Boolean {
+        val latestAccepted =
+            if (now > Long.MAX_VALUE - CLOCK_SKEW_ALLOWANCE_MILLIS) Long.MAX_VALUE else now + CLOCK_SKEW_ALLOWANCE_MILLIS
+        return issuedAt > latestAccepted
+    }
+
     private fun Grant.isExpiredAt(now: Long): Boolean = notAfter != Grant.NO_EXPIRY && now >= notAfter
+
+    public companion object {
+        /**
+         * How far past `now`, in milliseconds, a grant's [Grant.issuedAt] may lie and still be
+         * accepted: five minutes. One millisecond further and [verify] answers
+         * [GrantVerdict.NotYetValid].
+         *
+         * A host checks only grants it issued itself, so the one clock in play is its own, read
+         * twice: when it issued the pass and when the pass comes back. Between the two a time sync
+         * can set that clock back, usually by well under a second, and on a device left unsynced for
+         * weeks by a minute or two. Five minutes covers that. A pass dated further ahead was issued
+         * while the clock was badly wrong, and is refused until its date comes near.
+         */
+        public const val CLOCK_SKEW_ALLOWANCE_MILLIS: Long = 5 * 60 * 1000L
+    }
 }
