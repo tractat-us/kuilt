@@ -47,7 +47,7 @@ The spec leaves these to the builder. Each one is fixed by a golden vector or a 
 - **Every PR that changes `AdmitMessage`, or what a peer must send to be admitted, bumps the protocol.** `ProtocolVersion.CURRENT`, `MIN_SUPPORTED` and `MAX_SUPPORTED` all move up by one (3, 4, …). Snapshot consumers iterate on `-dev` builds, and Decided 10 rules out mixed versions.
 - **A returning member's re-issued grant keeps the terms it presented:** the same scope, and the same lifetime (`notAfter − issuedAt`, or no expiry). The spec forces this. The policy sees only ordinary admissions, and Decided 2 gives a friend no expiry, which the room default would wipe out.
 - **`revoke` is monotone.** A later call keeps `max(old, new)` as the cutoff, so a clock that moves backwards cannot un-revoke anyone.
-- **`GrantTrust.verify` checks in a fixed order:** `UntrustedIssuer` → `BadSignature` → `WrongSubject` → `WrongScope` → `Revoked` (`issuedAt < notBefore`) → `Expired` (`now >= notAfter`) → `Valid`.
+- **`GrantTrust.verify` checks in a fixed order:** `UntrustedIssuer` → `BadSignature` → `WrongSubject` → `WrongScope` → `Revoked` (`issuedAt < notBefore`) → `NotYetValid` (`issuedAt > now + CLOCK_SKEW_ALLOWANCE_MILLIS`, five minutes, fixed; Decided 24, #3300) → `Expired` (`now >= notAfter`) → `Valid`. `NotYetValid` and `Expired` cannot both hold, because `notAfter > issuedAt`.
 - **Names.**
   - Frames: `AdmitMessage.Challenge`, `AdmitMessage.Proof`, `AdmitMessage.GrantRenewal`.
   - Welcome marks: `ReturnKind { Restored, Returning }` on the Welcome. `Farewell.supersededBy`.
@@ -325,6 +325,7 @@ Iain's ruling, plus corrections the 1.8 reviews showed the text above needs. Whe
 - **The conformance rows move to 1.9.** `RoomHarness` can only drop frames. A readmission needs the joiner's own seam torn and healed in place, which is the harness Amendment F gives 1.9. #3615 closes when its signal and rebuild merge, and its conformance done-when is carried by 1.9. Task 1.9 adds two rows on the tear-and-heal harness:
   - `aReturnAfterTheSeatWentIsReadmitted`: `Readmitted(self)`, never `Recovered(host)`, and zero app calls.
   - `aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage`. Its reference must be able to reach the ghost, or the row is vacuous. It also keeps a live bystander: one member who stays connected throughout is still listed after `Readmitted`.
+- **Task 2.5 owns a post-dated pass's recovery (#3300's review).** `DeviceKeyStore.keeping` replaces a held grant only with a strictly later `issuedAt` (Decided 21). So a device holding a `NotYetValid` pass drops the fresh pass that ordinary admission gives it, and every return is ordinary admission until the bad pass's date. 2.5 decides the remedy: either `keeping` treats a held grant dated beyond the allowance as replaceable, or the room tells the joiner to drop a grant it refused as `NotYetValid`. The recommendation is the first, since it needs no new frame.
 - **The spike #1637 probe's rewrite (Amendment F) counts `Readmitted` as a return ending**, along with `Recovered(host)`, `Resumed` and `HostLost`.
 
 ## Global Constraints
