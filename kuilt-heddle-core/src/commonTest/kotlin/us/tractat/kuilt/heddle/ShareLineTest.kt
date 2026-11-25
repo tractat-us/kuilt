@@ -4,6 +4,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -192,6 +193,34 @@ class ShareLineTest {
         assertAll(
             { assertEquals(listOf(1_200L, 800L, 400L, 0L).map(Rational::of), listOf(root, p, q, r).map { line.share(it) * Rational.of(RUN) }) },
             *checks.toTypedArray(),
+        )
+    }
+
+    /**
+     * A chain `g1 → … → g5`, each `gᵢ` of weight 1 beside a leaf `hᵢ` of weight `1/pᵢ` for a prime
+     * `pᵢ` near 30,000, so `share(gᵢ) = Π pⱼ / (pⱼ + 1)` and nothing cancels. Four levels fit a
+     * `Long` denominator; five do not. The row that does not fit throws, and every other row of the
+     * same line still reads.
+     */
+    @Test
+    fun aShareThatDoesNotFitThrowsForItsRowAlone() {
+        val primes = listOf(29_917L, 29_921L, 29_927L, 29_947L, 29_959L)
+        val g = List(primes.size + 1) { if (it == 0) root else GroupId("g$it") }
+        val h = List(primes.size) { GroupId("h${it + 1}") }
+        val edges = primes.indices.flatMap { i ->
+            listOf(
+                edgeOf(g[i], g[i + 1]),
+                AttachmentRecord(AttachmentId("${g[i].value}>${h[i].value}"), g[i], h[i], Weight.of(1L, primes[i])),
+            )
+        }
+        val line = engineOver(shapedLedger(root, edges), root, supply = 0).shareLine(h.toSet() + g.last())
+        val fourLevels = primes.take(4).fold(Rational.ONE) { share, p -> share * Rational.of(p, p + 1) }
+        assertAll(
+            { assertEquals(fourLevels, line.share(g[4]), "four levels fit") },
+            { assertEquals(Rational.of(1L, primes[0] + 1), line.share(h[0])) },
+            { assertFailsWith<ArithmeticException> { line.share(g[5]) } },
+            { assertFailsWith<ArithmeticException> { line.share(h[4]) } },
+            { assertEquals(Rational.ONE, line.share(root), "and the root still reads after them") },
         )
     }
 
