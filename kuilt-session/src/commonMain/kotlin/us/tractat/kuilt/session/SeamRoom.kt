@@ -1868,11 +1868,22 @@ internal class SeamRoom(
         }
     }
 
+    /**
+     * **Test-visibility.** Run in [seatProvenJoiner] once [settleSeat]'s critical section has decided
+     * a pass and before the exchange acts on it, given the outcome's class name. It is the gap a
+     * thread can stall in between a decision and the controller call that reports it (#3675), and a
+     * test suspends here to stand in for that stall. Null in production.
+     */
+    @Volatile
+    internal var seatSettledForTest: (suspend (outcome: String) -> Unit)? = null
+
     private suspend fun seatProvenJoiner(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long, exchange: SeatExchange) {
         var asked: AskedWindow? = null
         var released: PeerId? = null
         while (true) {
-            when (val seating = settleSeat(joinerPeerId, keyed, generation, asked, released, exchange)) {
+            val seating = settleSeat(joinerPeerId, keyed, generation, asked, released, exchange)
+            seatSettledForTest?.invoke(seating::class.simpleName.orEmpty())
+            when (seating) {
                 SeatOutcome.Stale -> return logStaleAdmission(joinerPeerId)
                 is SeatOutcome.AwaitWindow -> {
                     logger.debug { "room.admit.await-window peer=${joinerPeerId.value} seat=${seating.seat.value}" }
