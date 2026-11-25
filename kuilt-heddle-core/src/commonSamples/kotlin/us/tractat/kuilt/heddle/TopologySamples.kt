@@ -348,6 +348,38 @@ internal fun sampleTopologyChanges() {
 }
 
 /**
+ * Before saving, an editor warns about the changes that cost a group its history, and refuses a
+ * renamed root, from [TopologyChange.history] rather than from its own list of which changes lose it.
+ */
+@Suppress("unused")
+internal fun sampleTopologyChangeHistory() {
+    val running = draft("pool") {
+        group("acme", Weight.of(3)) {
+            lane("interactive")
+            lane("batch")
+        }
+        group("tenants") { template(Weight.of(2)) }
+    }
+    val edited = draft("pool") {
+        group("acme", Weight.of(3)) {
+            lane("interactive", maxConcurrent = 2)
+            lane("nightly")
+        }
+        // A new template ceiling keeps the attached children's history; a new weight would not.
+        group("tenants") { template(Weight.of(2), maxConcurrent = 4) }
+    }
+    val changes = running.changesTo(edited)
+    check(changes.none { it.history == TopologyChange.History.NEW_TREE })
+    // Of four changes, only the removal of batch costs anyone their history.
+    val warnings = changes.filter { it.history == TopologyChange.History.LOST }
+    check(changes.size == 4 && warnings.map { it.names } == listOf(listOf("pool", "acme", "batch")))
+
+    // A renamed root is a new tree, which apply throws on, so the save is refused, not warned about.
+    val renamed = draft("farm") { lane("batch") }
+    check(running.changesTo(renamed).first().history == TopologyChange.History.NEW_TREE)
+}
+
+/**
  * An admin page edits the running tree as a document, one path-addressed edit at a time, and
  * before saving warns with what the edited tree changes against the one it loaded.
  */
