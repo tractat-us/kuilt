@@ -338,12 +338,13 @@ internal suspend fun TestScope.rawHost(
     joiners: Set<PeerId>,
     hold: ObservedHold = ObservedHold(),
     store: DeviceKeyStore = fakeKeyStore(HOST_DEVICE),
+    clock: () -> Instant = virtualClock(),
 ): RawHost {
     val seam = FakeSeam(selfId = KEY_SEAT_HOST, initialPeers = setOf(KEY_SEAT_HOST) + joiners)
     val room = SeamRoomFactory(
         loom = InMemoryLoom(),
         scope = backgroundScope,
-        clock = virtualClock(),
+        clock = clock,
         deviceKeyStore = store,
         heartbeatConfig = KEY_SEAT_HEARTBEAT,
         admitTimeout = KEY_SEAT_ADMIT_TIMEOUT,

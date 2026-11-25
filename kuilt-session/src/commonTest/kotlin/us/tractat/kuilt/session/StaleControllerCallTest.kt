@@ -17,6 +17,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 
 /**
  * A reconnect-controller call meant for a membership that has ended leaves the newer membership's
@@ -90,6 +91,53 @@ class StaleControllerCallTest {
     fun aStaleRecoveryLeavesTheNewWindowsFarewell() = runTest {
         val rig = staleCallAfterReadmission(Stalled.RECOVERED)
         assertFarewellAtTheNewWindowsEnd(rig)
+    }
+
+    /**
+     * The room's default clock is the wall clock, which can step backwards. Bob's first window opened
+     * at t1 and was disarmed when he recovered. The clock then steps back, and his next drop is
+     * detected at t2 < t1. That drop is not stale: the t1 window has finished, so nothing newer is
+     * held, and refused it would leave bob's seat with no window. Nothing would then expire it, and
+     * the bystander would never be told he is gone.
+     */
+    @Test
+    fun aClockStepBackStillOpensTheNextWindow() = runTest {
+        var offsetMs = 60_000L
+        val host = rawHost(
+            joiners = setOf(bob, carol),
+            clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime + offsetMs) },
+        )
+        host.admit(carol, carolKey, nonce = 1)
+        host.admit(bob, bobKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+        val t1 = assertIs<Liveness.Partitioned>(host.member(bob)?.liveness).since.toEpochMilliseconds()
+        host.advanceKeeping(setOf(bob, carol), KEY_SEAT_HEARTBEAT.interval * 2)
+        val recoveredFirst = host.member(bob)?.liveness
+        val recoveries = host.hold.recovered.toList()
+
+        offsetMs = 0L
+        host.advanceKeeping(setOf(bob, carol), KEY_SEAT_HEARTBEAT.interval * 3)
+        val toCarol = host.sentTo(carol).size
+        host.partition(bob, alive = setOf(carol))
+        val t2 = assertIs<Liveness.Partitioned>(host.member(bob)?.liveness).since.toEpochMilliseconds()
+        val clockNow = { testScheduler.currentTime + offsetMs }
+
+        host.advanceKeeping(setOf(carol), (t2 + window - 100 - clockNow()).milliseconds)
+        val beforeEnd = host.sentTo(carol).drop(toCarol).farewellsFor(bob)
+        host.advanceKeeping(setOf(carol), 300.milliseconds)
+        val afterEnd = host.sentTo(carol).drop(toCarol).farewellsFor(bob)
+
+        assertAll(
+            { assertEquals(Liveness.Connected, recoveredFirst, "rig: bob recovered from his first drop") },
+            { assertEquals(1, recoveries.size, "rig: and the controller was told, disarming the t1 window: $recoveries") },
+            { assertTrue(recoveries.single() > t1, "rig: by a recovery after it opened") },
+            { assertTrue(t2 < t1, "rig: the clock stepped back past t1 = $t1, to t2 = $t2") },
+            { assertEquals(listOf(t1, t2), host.hold.opened, "rig: the controller was told of both drops") },
+            { assertEquals(emptyList(), beforeEnd, "no farewell before the new window ends") },
+            { assertEquals(listOf(AdmitMessage.Farewell(bob.value, expired = true)), afterEnd, "the bystander is told when it ends") },
+            { assertTrue(bob !in host.rosterHeardBy(carol), "no ghost on the bystander: ${host.rosterHeardBy(carol)}") },
+        )
+        host.room.leave()
     }
 
     private suspend fun TestScope.assertFarewellAtTheNewWindowsEnd(rig: Rig) {
