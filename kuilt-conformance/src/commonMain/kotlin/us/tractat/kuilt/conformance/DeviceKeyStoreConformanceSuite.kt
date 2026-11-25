@@ -246,7 +246,8 @@ public abstract class DeviceKeyStoreConformanceSuite {
 
     /**
      * The one rule every store applies: the newest grant per issuer **and** scope, where a tie keeps
-     * the held one.
+     * the held one. The one exception, a pass on a room's `Welcome` kept with
+     * [DeviceKeyStore.keepFreshGrant], is [aFreshPassReplacesOneDatedBeyondTheAllowance]'s.
      *
      * The tie is its own knob: two grants issued at the same instant are the one case where "newer"
      * and "not older" disagree, so a store comparing with `>=` passes every other line here and fails
@@ -321,40 +322,62 @@ public abstract class DeviceKeyStoreConformanceSuite {
     }
 
     /**
-     * A held grant dated more than [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS] after another grant from
-     * the same issuer and scope is replaced by it, although that grant is older (identity Task 2.5,
-     * Decided 24).
+     * [DeviceKeyStore.keepFreshGrant] gives up a held grant dated more than
+     * [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS] after the one it keeps, although that one is older;
+     * [DeviceKeyStore.keepGrant] never does (identity Task 2.5, Decided 21 and 24).
      *
      * A pass issued while the host's clock ran ahead is refused as `NotYetValid` once the clock is
-     * set back, and the device goes through ordinary admission, which hands it a fresh pass dated by
-     * the corrected clock. Under the newest-wins rule alone that fresh pass is older than the bad one
-     * and is dropped, so every return is vetted until the bad pass's date comes near. The fresh
-     * pass's date is the issuer's clock now, so a held pass dated beyond the allowance past it is
-     * exactly one its issuer refuses.
+     * set back, and the device goes through ordinary admission, whose `Welcome` hands it a fresh pass
+     * dated by the corrected clock. That `Welcome` answers the device's own latest Hello, so the pass
+     * on it is no replay, and the room keeps it with `keepFreshGrant`. A renewal names no Hello, so the
+     * same older grant through `keepGrant` leaves the held one in place.
      *
-     * Three stores, one per arm, so no arm reads another's grants. The boundary arm keeps a pass
-     * dated exactly the allowance ahead: the issuer still accepts that one, so it must not be given
-     * up. A store comparing with `>=` fails there and nowhere else.
+     * One store per arm, so no arm reads another's grants, each read again after a restart on the
+     * durable arm. The two paths, in both arrival orders:
+     * - the fresh pass after a post-dated one: replaces it through `keepFreshGrant`, and not through
+     *   `keepGrant`;
+     * - the post-dated pass after the fresh one: newer, so it replaces the fresh one either way, as
+     *   any newer grant does;
+     * - the boundary: a held pass dated exactly the allowance ahead is one its issuer still accepts,
+     *   so it is kept. A store comparing with `>=` fails there and nowhere else;
+     * - the control: a newer held pass within the allowance is kept.
      */
     @Test
-    public fun aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+    public fun aFreshPassReplacesOneDatedBeyondTheAllowance(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val host = DeviceKey.generate()
-        suspend fun keptAfter(heldIssuedAt: Long): Pair<Grant, List<Grant>> {
-            val store = newFixture().open { }
-            val me = store.deviceKey().id
-            store.keepGrant(grant(host, me, heldIssuedAt))
-            val fresh = grant(host, me, T)
-            store.keepGrant(fresh)
-            return fresh to store.grants()
-        }
-        val (freshAfterPostDated, afterPostDated) = keptAfter(T + GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS + 1)
-        val (_, afterBoundary) = keptAfter(T + GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS)
-        val (_, afterNewer) = keptAfter(T + 1)
+        val postDatedAt = T + GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS + 1
 
+        /** The issue dates kept after [firstAt] then [secondAt], each kept freshly or not, and after a restart. */
+        suspend fun kept(firstAt: Long, firstFresh: Boolean, secondAt: Long, secondFresh: Boolean): Pair<List<Long>, List<Long>?> {
+            val fixture = newFixture()
+            val store = fixture.open { }
+            val me = store.deviceKey().id
+            for ((at, fresh) in listOf(firstAt to firstFresh, secondAt to secondFresh)) {
+                val grant = grant(host, me, at)
+                if (fresh) store.keepFreshGrant(grant) else store.keepGrant(grant)
+            }
+            val restarted = (fixture as? DeviceKeyStoreFixture.Durable)?.open { }?.grants()
+            return store.grants().map { it.issuedAt } to restarted?.map { it.issuedAt }
+        }
+
+        val freshAfterPostDated = kept(postDatedAt, false, T, secondFresh = true)
+        val renewalAfterPostDated = kept(postDatedAt, false, T, secondFresh = false)
+        val postDatedAfterFresh = kept(T, true, postDatedAt, secondFresh = false)
+        val postDatedFreshAfterFresh = kept(T, true, postDatedAt, secondFresh = true)
+        val boundary = kept(T + GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS, false, T, secondFresh = true)
+        val newerWithin = kept(T + 1, false, T, secondFresh = true)
+
+        fun Pair<List<Long>, List<Long>?>.assertKept(expected: Long, message: String) {
+            assertEquals(listOf(expected), first, message)
+            if (second != null) assertEquals(listOf(expected), second, "$message, after a restart")
+        }
         assertAll(
-            { assertEquals(listOf(freshAfterPostDated), afterPostDated, "a pass dated beyond the allowance gives way to the fresh one") },
-            { assertEquals(listOf(T + GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS), afterBoundary.map { it.issuedAt }, "a pass dated exactly the allowance ahead is kept") },
-            { assertEquals(listOf(T + 1), afterNewer.map { it.issuedAt }, "positive control: a newer pass within the allowance is kept") },
+            { freshAfterPostDated.assertKept(T, "a fresh pass replaces one dated beyond the allowance") },
+            { renewalAfterPostDated.assertKept(postDatedAt, "the same pass kept as a renewal does not") },
+            { postDatedAfterFresh.assertKept(postDatedAt, "a newer pass replaces the held one, kept as a renewal") },
+            { postDatedFreshAfterFresh.assertKept(postDatedAt, "and kept freshly") },
+            { boundary.assertKept(T + GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS, "a pass dated exactly the allowance ahead is kept") },
+            { newerWithin.assertKept(T + 1, "control: a newer pass within the allowance is kept") },
         )
     }
 

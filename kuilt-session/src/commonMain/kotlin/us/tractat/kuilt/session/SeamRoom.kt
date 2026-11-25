@@ -3109,8 +3109,9 @@ internal class SeamRoom(
         val closed = lock.withLock {
             acceptWelcome(sender, welcome, dropped)?.let { restored ->
                 // The Welcome answering the latest Hello carries this member's pass (#3221), issued
-                // by the sender whose challenge this joiner verified: acceptWelcome checked both.
-                pass = welcome.grant?.let { wire -> verifiedHostKeys[sender]?.let { IssuedPass(sender, wire, it) } }
+                // by the sender whose challenge this joiner verified: acceptWelcome checked both. It
+                // names that Hello, so the pass on it is fresh, never a replay.
+                pass = welcome.grant?.let { wire -> verifiedHostKeys[sender]?.let { IssuedPass(sender, wire, it, fresh = true) } }
                 closeReconnect(sender, restored)
             }
         }
@@ -3121,8 +3122,12 @@ internal class SeamRoom(
         flight?.complete(verdict)
     }
 
-    /** A pass a host sent this joiner: [wire] from [sender], whose proven key is [hostKey]. */
-    private class IssuedPass(val sender: PeerId, val wire: ByteArray, val hostKey: DidKey)
+    /**
+     * A pass a host sent this joiner: [wire] from [sender], whose proven key is [hostKey]. [fresh]: it
+     * came on the `Welcome` answering this joiner's latest Hello, so it cannot be a replay
+     * ([DeviceKeyStore.keepFreshGrant]); a renewal names no Hello and is not.
+     */
+    private class IssuedPass(val sender: PeerId, val wire: ByteArray, val hostKey: DidKey, val fresh: Boolean)
 
     /**
      * **Joiner only.** A pass renewed by the host while this member is connected (#3221). Taken only
@@ -3135,14 +3140,16 @@ internal class SeamRoom(
             logger.info { "room.grant.dropped from=${sender.value}: not this room's host" }
             return
         }
-        scope.launch { keepPass(IssuedPass(sender, renewal.grant, hostKey)) }
+        scope.launch { keepPass(IssuedPass(sender, renewal.grant, hostKey, fresh = false)) }
     }
 
     /**
      * **Joiner only.** Keep [pass] in this device's store if it is one: it decodes, names the host that
      * sent it as issuer and this device as subject, and carries the issuer's signature, checked in
      * this room's scheme. Anything else is dropped and logged (#3221). The store keeps the newest per
-     * issuer and scope ([DeviceKeyStore.keepGrant]), so an older or replayed pass changes nothing.
+     * issuer and scope ([DeviceKeyStore.keepGrant]), so an older or replayed renewal changes nothing.
+     * The pass on the `Welcome` is kept freshly ([DeviceKeyStore.keepFreshGrant]): it also replaces a
+     * held pass its host would refuse as dated in the future (Decided 24, Amendment G).
      *
      * A throw from the check or the store is logged here: on Kotlin/Native an escape from this
      * launched coroutine aborts the process.
@@ -3164,7 +3171,7 @@ internal class SeamRoom(
                 logger.info { "room.grant.dropped from=${pass.sender.value}: its issuer did not sign it" }
                 return
             }
-            device.store.keepGrant(grant)
+            if (pass.fresh) device.store.keepFreshGrant(grant) else device.store.keepGrant(grant)
         } catch (failure: Throwable) {
             currentCoroutineContext().ensureActive()
             logger.warn(failure) { "room.grant.keep-failed from=${pass.sender.value}" }

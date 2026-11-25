@@ -545,7 +545,7 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby, admiss
 ## Device identity & return
 
 **Intent:** recognise a device when it comes back — a phone that dropped off the Wi-Fi, an app that was closed and reopened — and you are reaching for a device id the device tells you, a token you mint and hand out, or a hand-rolled public-key fingerprint.
-**Primitive:** `DeviceKeyStore` (`us.tractat.kuilt.identity`, `:kuilt-identity`). A device is recognised only if it comes back with the same key, so the key has to outlive the app; this is where it lives. `deviceKey()` makes the key on the first call and returns the same one on every call after, concurrent first calls included. `keepGrant` keeps the newest grant per host and scope — an older one from the same host for the same scope is ignored, while a pass into another room from the same host, or one from another host, sits beside it — and `grants()` reads them back. A grant issued at the same instant as the held one is ignored too, so a replayed or reordered copy cannot displace it — unless it is more than `GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS` older. A held grant dated that far after the new one gives way to it, since its issuer, whose clock dated the new one, would refuse the held one as `NotYetValid`. A room calls `keepGrant` itself, with the pass its host issues on the Welcome and renews while the device stays connected; an app calls it only outside a room. Do not hand-roll a key file or a "remember this device" token beside it. Take the store as a parameter: `InMemoryDeviceKeyStore()` keeps everything in memory and forgets it with the process, which is right for tests and for an app that has chosen not to be recognised; a platform store keeps the key across launches (below).
+**Primitive:** `DeviceKeyStore` (`us.tractat.kuilt.identity`, `:kuilt-identity`). A device is recognised only if it comes back with the same key, so the key has to outlive the app; this is where it lives. `deviceKey()` makes the key on the first call and returns the same one on every call after, concurrent first calls included. `keepGrant` keeps the newest grant per host and scope — an older one from the same host for the same scope is ignored, while a pass into another room from the same host, or one from another host, sits beside it — and `grants()` reads them back. A grant issued at the same instant as the held one is ignored too, so a replayed or reordered copy cannot displace it. A room keeps passes itself: the renewals its host sends while the device stays connected through `keepGrant`, and the pass on the `Welcome` answering the device's own latest Hello through `keepFreshGrant` (`@IdentityInternalApi`), which also gives up a held pass dated more than `GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS` after it — one the host would refuse as `NotYetValid`. An app calls `keepGrant` only outside a room. Do not hand-roll a key file or a "remember this device" token beside it. Take the store as a parameter: `InMemoryDeviceKeyStore()` keeps everything in memory and forgets it with the process, which is right for tests and for an app that has chosen not to be recognised; a platform store keeps the key across launches (below).
 
 <!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleDeviceKeyStore -->
 ```kotlin
@@ -562,9 +562,8 @@ internal suspend fun sampleDeviceKeyStore() {
     val now = 1_700_000_000_000L
     val first = Grant.issue(host, me.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 3_600_000)
     val renewed = Grant.issue(host, me.id, GrantScope.AnyRoomOfIssuer, issuedAt = now + 1_800_000, notAfter = now + 5_400_000)
-    store.keepGrant(first)
-    store.keepGrant(renewed) // newer than the one held from this host: replaces it
-    store.keepGrant(renewed) // issued at the same instant as the one held: ignored
+    store.keepGrant(renewed)
+    store.keepGrant(first) // older than the one held from this host: ignored
     check(store.grants() == listOf(renewed))
 }
 ```

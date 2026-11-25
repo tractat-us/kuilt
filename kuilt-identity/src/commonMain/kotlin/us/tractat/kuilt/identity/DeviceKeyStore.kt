@@ -31,20 +31,35 @@ public interface DeviceKeyStore {
      * when [grant] is newer by [Grant.issuedAt]. One host key can host many rooms, so a pass into
      * `Room("A")` and one into `Room("B")` from the same issuer are both kept, and so is a grant from
      * another issuer. A grant that is not newer — older, or issued at the same instant — is ignored,
-     * so a replayed or reordered copy cannot displace the grant already held.
+     * so a replayed or reordered copy can never displace the grant already held (Decided 21).
      *
-     * One exception: a held grant dated more than [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS] after
-     * [grant] gives way to it. Its issuer issued [grant] by its own clock, so it would refuse the held
-     * one as [GrantVerdict.NotYetValid]: a pass issued while that clock ran ahead. Kept, it would
-     * shut out every fresh pass until its date came near, and the device would be vetted on every
-     * return meanwhile. The cost is the converse case, which the store cannot tell from this one
-     * without a clock: a copy more than the allowance older than the held grant, replayed or
-     * delivered late, displaces it too.
+     * A room keeps the pass its host's `Welcome` carries with [keepFreshGrant] instead, which may give
+     * up a held pass dated in the future.
      *
      * The store does not check the grant: whether it is signed, names this device or is still good
      * is the room's question when the grant is presented.
      */
     public suspend fun keepGrant(grant: Grant)
+
+    /**
+     * Keeps [grant] as [keepGrant] does, with one exception: a held grant from the same issuer for the
+     * same scope dated more than [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS] after [grant] gives way to it,
+     * although [grant] is older (identity Task 2.5, #3221).
+     *
+     * Only for a grant its issuer has just handed this device in answer to the device's own latest
+     * Hello: the pass on a room's direct `Welcome`, which names that Hello, so it cannot be a replay.
+     * [grant]'s date is then the issuer's clock now, and the issuer would refuse the held grant as
+     * [GrantVerdict.NotYetValid]: a pass issued while that clock ran ahead. Kept, it would shut out
+     * every fresh pass until its date came near, and the device would be vetted on every return
+     * meanwhile. Through [keepGrant] a grant names no Hello, so nothing tells it from a replayed or
+     * late copy, and the held grant stays.
+     *
+     * The default keeps through [keepGrant], so a store that does not override this keeps the newest
+     * grant only, the safe direction: its device is vetted until the bad pass's date comes near. Every
+     * store kuilt ships overrides it.
+     */
+    @IdentityInternalApi
+    public suspend fun keepFreshGrant(grant: Grant): Unit = keepGrant(grant)
 
     /**
      * The scheme a room built on this store signs and checks every signature with: [KeyScheme.P256],
@@ -69,16 +84,16 @@ public interface DeviceKeyStore {
 
 /**
  * These grants with [grant] kept: it replaces the grant from the same issuer for the same scope when
- * strictly newer by [Grant.issuedAt], or when that held grant is dated beyond the clock-skew
- * allowance past it ([isPostDatedPast]); it is ignored otherwise, and added when none for its issuer
- * and scope is held. Scopes compare by value. The one rule every [DeviceKeyStore] applies, so stores
- * cannot disagree about which grant survives.
+ * strictly newer by [Grant.issuedAt], or, when [fresh] ([DeviceKeyStore.keepFreshGrant]), when that
+ * held grant is dated beyond the clock-skew allowance past it ([isPostDatedPast]); it is ignored
+ * otherwise, and added when none for its issuer and scope is held. Scopes compare by value. The one
+ * rule every [DeviceKeyStore] applies, so stores cannot disagree about which grant survives.
  */
-internal fun List<Grant>.keeping(grant: Grant): List<Grant> {
+internal fun List<Grant>.keeping(grant: Grant, fresh: Boolean = false): List<Grant> {
     val held = firstOrNull { it.issuer == grant.issuer && it.scope == grant.scope }
     return when {
         held == null -> this + grant
-        grant.issuedAt > held.issuedAt || held.isPostDatedPast(grant) -> map { if (it === held) grant else it }
+        grant.issuedAt > held.issuedAt || (fresh && held.isPostDatedPast(grant)) -> map { if (it === held) grant else it }
         else -> this
     }
 }

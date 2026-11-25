@@ -39,8 +39,8 @@ public sealed interface GrantVerdict {
      * ordinary admission, which the host's policy may refuse.
      *
      * The fresh pass ordinary admission hands the device replaces the bad one, although it is older:
-     * a [DeviceKeyStore] gives up a held grant dated beyond this allowance past a newly kept one from
-     * the same issuer and scope ([DeviceKeyStore.keepGrant], #3221).
+     * a room keeps the pass on its `Welcome` with [DeviceKeyStore.keepFreshGrant], which gives up a
+     * held grant dated beyond this allowance past it (#3221).
      */
     public data object NotYetValid : GrantVerdict
 
