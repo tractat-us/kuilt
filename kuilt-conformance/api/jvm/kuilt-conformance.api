@@ -108,6 +108,7 @@ public abstract class us/tractat/kuilt/conformance/DeviceKeyStoreConformanceSuit
 	public final fun aCorruptKeyIsReplacedNotFatal ()V
 	public final fun aKeyIsMadeOnceAndSignsUnderItsOwnName ()V
 	public final fun aKeyThatFailsItsSelfTestIsReplaced ()V
+	public final fun aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne ()V
 	public final fun aRestartKeepsTheKeyOrForgetsIt ()V
 	public final fun anInterruptedKeyWriteLeavesTheStoreReadable ()V
 	public final fun anUnreadableKeyIsRefusedNotReplaced ()V

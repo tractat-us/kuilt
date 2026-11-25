@@ -132,8 +132,8 @@ class HostAdmissionPolicyTest {
     }
 
     /**
-     * An admission records nothing the joiner can see yet (2.5 issues the pass), so what is pinned
-     * here is that `Admit` seats the newcomer: one `Joined`, one direct `Welcome`.
+     * `Admit` seats the newcomer: one `Joined`, one direct `Welcome`. The pass its terms buy is
+     * `GrantIssueTest`'s.
      */
     @Test
     fun policyAdmitSeatsTheNewcomer() = runTest {

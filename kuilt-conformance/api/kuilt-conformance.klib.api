@@ -526,6 +526,9 @@ abstract class us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite { // 
     final fun aKeyThatFailsItsSelfTestIsReplaced() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aKeyThatFailsItsSelfTestIsReplaced|aKeyThatFailsItsSelfTestIsReplaced(){}[0]
 
     // Targets: [apple]
+    final fun aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne|aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne(){}[0]
+
+    // Targets: [apple]
     final fun aRestartKeepsTheKeyOrForgetsIt() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aRestartKeepsTheKeyOrForgetsIt|aRestartKeepsTheKeyOrForgetsIt(){}[0]
 
     // Targets: [apple]
@@ -566,6 +569,9 @@ abstract class us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite { // 
 
     // Targets: [wasmJs]
     final fun aKeyThatFailsItsSelfTestIsReplaced(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aKeyThatFailsItsSelfTestIsReplaced|aKeyThatFailsItsSelfTestIsReplaced(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne|aPassDatedBeyondTheAllowanceIsReplacedByAFreshOne(){}[0]
 
     // Targets: [wasmJs]
     final fun aRestartKeepsTheKeyOrForgetsIt(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aRestartKeepsTheKeyOrForgetsIt|aRestartKeepsTheKeyOrForgetsIt(){}[0]

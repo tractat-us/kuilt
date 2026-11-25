@@ -380,10 +380,11 @@ public suspend fun hostAdmissionSample(
     blocked: StateFlow<Set<DidKey>>,
     store: DurableStore,
 ): HostAdmission {
-    // RejectCode is open, but the joiner sees only the id: this arrives as RejectCode.Unknown("not-welcome"),
-    // which is treated as retryable.
+    // RejectCode is open. The joiner does not know this code, so it arrives as
+    // RejectCode.Unknown("not-welcome", retryable = false), and a reconnecting device stops knocking.
     val notWelcome = object : RejectCode {
         override val id: String = "not-welcome"
+        override val retryable: Boolean = false
     }
     // The room checks returning passes against this list. Kept in the store, since a friend's pass
     // never expires: an in-memory list forgets on restart, and the voided passes work again.

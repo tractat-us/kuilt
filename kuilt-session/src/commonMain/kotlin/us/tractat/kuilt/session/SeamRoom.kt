@@ -621,12 +621,12 @@ private class DetachedMember(private val inbox: MemberInbox?) {
  * - [id] is opaque, sent on the member's direct `Welcome`; a restore keeps it and every other seating
  *   mints a new one.
  * - [admittedAtMs] is when the host admitted it, in epoch milliseconds: what a revocation's cutoff is
- *   compared with, so a device revoked after this instant gets no held-seat restore (Decided 14). A
- *   takeover under a new id inherits it, as it inherits the seat, so a takeover cannot launder a
+ *   compared with, so a device revoked after this instant gets no held-seat restore and no further
+ *   pass (Decided 14). A takeover under a new id inherits it, as it inherits the seat, so a takeover cannot launder a
  *   revocation.
- * - [terms] are the ones the host's policy admitted it on, kept for the pass 2.5 issues it. Null when
- *   no policy was asked: a device let back in on its grant (2.6), whose presented terms are carried
- *   forward instead.
+ * - [terms] are the ones the host's policy admitted it on, and every pass it is issued carries them
+ *   (#3221). Null when no policy was asked: a device let back in on its grant (2.6), whose presented
+ *   terms are carried forward instead.
  */
 private class Membership(val id: String, val admittedAtMs: Long, val terms: GrantTerms?)
 
@@ -2654,7 +2654,7 @@ internal class SeamRoom(
      * **Under [lock].** Add a new member for [joinerPeerId], from [keyed]: the Hello its joiner sent,
      * and the key it proved, which becomes [Member.key] and rides every Welcome that names the joiner.
      * [terms] are what the policy gave it, recorded with its membership for the pass it is to be
-     * issued (2.5); null for a membership no policy was asked about. It is admitted at [admittedAtMs].
+     * issued (#3221); null for a membership no policy was asked about. It is admitted at [admittedAtMs].
      */
     private fun admitNewMember(joinerPeerId: PeerId, keyed: KeyedHello, terms: GrantTerms?, admittedAtMs: Long): SeatOutcome.Admitted {
         val hello = keyed.hello
