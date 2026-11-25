@@ -3,6 +3,7 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -29,6 +30,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
@@ -42,6 +44,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -456,6 +459,90 @@ class JoinerReconnectTest {
             assertFalse(hostLost.isCompleted, "a silenced+restarted detector must not fire HostLost")
             hostLost.cancel()
         }
+
+    /**
+     * A loss the silenced host detector reported, handed over only after the resume restarted
+     * another (#3609). Silencing it is meant to leave host-liveness to the reconnect; a collector that
+     * lost its thread between taking the `PeerLost` and the room's lock defeats that unless the loss
+     * is checked against the detector now registered. Acted on, it ends a healed room as host-lost
+     * and stops the detector that is watching it. `StaleDetectorEventTest` says why the event is
+     * handed over by [SeamRoom.handlePartitionEventForTest]; the control is the same loss from the
+     * restarted detector.
+     */
+    @Test
+    fun `a loss from the host detector a resume replaced does not end the room`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val (h, old, current) = resumedOnce()
+            val hostId = h.hostRoom.selfId
+            val hostLost = async { h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
+            runCurrent()
+
+            h.joinerRoom.handlePartitionEventForTest(PartitionEvent.PeerLost(hostId, Instant.fromEpochMilliseconds(0L)), old)
+            runCurrent()
+            val staleHostLost = hostLost.isCompleted
+            val staleWatched = h.joinerRoom.detectorJobForTest(hostId) === current
+
+            h.joinerRoom.handlePartitionEventForTest(PartitionEvent.PeerLost(hostId, Instant.fromEpochMilliseconds(0L)), current)
+            runCurrent()
+
+            assertAll(
+                { assertFalse(staleHostLost, "a stale loss does not end the room") },
+                { assertTrue(staleWatched, "and leaves the restarted detector watching the host") },
+                { assertTrue(hostLost.isCompleted, "control: the same loss from the restarted detector ends it") },
+            )
+            hostLost.cancel()
+        }
+
+    /**
+     * The host-resume fork of the same gap: a transport close the silenced detector reported, handed
+     * over after the resume. Acted on, it starts a second reconnect episode on the healed link.
+     */
+    @Test
+    fun `a transport close from the host detector a resume replaced starts no reconnect`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val (h, old, current) = resumedOnce()
+            val hostId = h.hostRoom.selfId
+            val closed = PartitionEvent.PeerUnresponsive(
+                hostId,
+                Instant.fromEpochMilliseconds(0L),
+                PartitionEvent.Reason.TransportClosed,
+            )
+            val reweavesBefore = h.reweaveCount()
+
+            h.joinerRoom.handlePartitionEventForTest(closed, old)
+            val staleInFlight = h.joinerRoom.hasReconnectInFlight()
+            runCurrent()
+            val staleReweaves = h.reweaveCount()
+
+            h.joinerRoom.handlePartitionEventForTest(closed, current)
+            val controlInFlight = h.joinerRoom.hasReconnectInFlight()
+
+            assertAll(
+                { assertFalse(staleInFlight, "a stale transport close claims no reconnect") },
+                { assertEquals(reweavesBefore, staleReweaves, "and re-weaves nothing") },
+                { assertTrue(controlInFlight, "control: the same close from the restarted detector claims one") },
+            )
+        }
+
+    private data class Resumed(val harness: ReconnectHarness, val old: Job, val current: Job)
+
+    /** A joiner admitted, torn and resumed once: its host detector was silenced, and another restarted. */
+    private suspend fun TestScope.resumedOnce(): Resumed {
+        val h = reconnectHarness({ Instant.fromEpochMilliseconds(0L) })
+        val hostId = h.hostRoom.selfId
+        h.hostRoom.roster.first { it.size == 1 }
+        h.joinerRoom.roster.first { it.isNotEmpty() }
+        val old = assertNotNull(h.joinerRoom.detectorJobForTest(hostId), "rig: the host is watched while connected")
+        val resumed = async { h.joinerRoom.events.filterIsInstance<MembershipEvent.Resumed>().first() }
+        h.muxClient.closeBase()
+        repeat(4) { advanceTimeBy(100L) }
+        assertIs<MembershipEvent.Resumed>(resumed.await(), "rig: the joiner resumed")
+        val current = assertNotNull(h.joinerRoom.detectorJobForTest(hostId), "rig: the resume restarted a host detector")
+        assertNotSame(old, current, "rig: a new one")
+        assertTrue(old.isCancelled, "rig: the old one was silenced")
+        assertFalse(h.joinerRoom.hasReconnectInFlight(), "rig: the episode is over")
+        return Resumed(h, old, current)
+    }
 
     @Test
     fun `leave during an active reconnect stops the loop`() =
