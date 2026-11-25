@@ -31,6 +31,7 @@ import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -56,10 +57,12 @@ class ReturningAdmissionTest {
     private val bob = PeerId("bob")
     private val bobAgain = PeerId("bob-again")
     private val carol = PeerId("carol")
+    private val eve = PeerId("eve")
     private val hostTab = PeerId("host-tab")
 
     private val bobKey: DeviceKey = fakeDeviceKey(1)
     private val carolKey: DeviceKey = fakeDeviceKey(2)
+    private val eveKey: DeviceKey = fakeDeviceKey(3)
 
     /** A policy that counts the requests it is asked about and admits each on [terms]. */
     private class Counted(private val terms: (AdmissionRequest) -> GrantTerms = { GrantTerms(1.hours) }) {
@@ -533,6 +536,91 @@ class ReturningAdmissionTest {
             { assertEquals(0, anyMinted, "an any-room pass, minted id: unvetted") },
             { assertEquals(ReturningMark(previousId = null), anyMintedJoin?.returning) },
         )
+    }
+
+    // ── A seat released for a device that holds a good pass (rules 6–7) ──────
+
+    /**
+     * Eve's device claims Bob's id while Bob's seat is held partitioned, and Eve holds a good pass of
+     * her own from an earlier visit. Bob's seat is released for her (Decided 18), and the key decided
+     * again without it holds a good pass, so she comes back on it: the policy is not asked, and she is
+     * marked as her own device returning (Decided 23, the design's row 6, its Returning arm).
+     */
+    @Test
+    fun aDifferentDeviceOnAPartitionedIdReturnsOnItsOwnPass() = runTest {
+        val counted = Counted()
+        val host = rawHost(joiners = setOf(bob, carol, eve), admission = counted.admission)
+        host.admit(eve, eveKey, nonce = 1)
+        val evesPass = host.passesTo(eve).single()
+        host.say(eve, AdmitMessage.Goodbye)
+        host.admit(bob, bobKey, nonce = 2)
+        host.admit(carol, carolKey, nonce = 3)
+        host.partition(bob, alive = setOf(carol))
+        val vettedBefore = counted.keys()
+
+        val mark = host.events.mark()
+        host.admit(bob, eveKey, nonce = 4, grants = listOf(evesPass))
+
+        assertAll(
+            { assertEquals(listOf(eveKey.id, bobKey.id, carolKey.id), vettedBefore, "rig: each device was vetted once") },
+            { assertTrue(host.member(eve) == null, "rig: Eve's own seat was gone") },
+            { assertEquals(vettedBefore, counted.keys(), "Eve comes back on her pass: the policy is not asked") },
+            {
+                assertEquals(
+                    listOf("Left(bob, ${LeaveReason.PartitionExpired})", "Joined(bob)"),
+                    host.events.edgesSince(mark).map { it.describe() },
+                    "Bob's seat is released, and Eve joins under the id",
+                )
+            },
+            { assertEquals(listOf(ReturningMark(previousId = eve)), host.events.since(mark).joins().map { it.returning }, "marked as Eve's device returning") },
+            { assertEquals(ReturnKind.Returning, host.directWelcomesTo(bob).last().returnKind) },
+            { assertEquals(eveKey.id, host.member(bob)?.key, "the id is Eve's now") },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * A revoked device's held seat is released at its own Hello, and the device is decided again
+     * without it (Decided 14). When it holds a pass issued at or after the cutoff — here the one its
+     * second process was given on an ordinary admission after the revocation — it comes back on that
+     * pass, unvetted (Amendment M): pass revocation reads the pass's `issuedAt`, seat revocation the
+     * seat's admission.
+     */
+    @Test
+    fun aRevokedSeatIsReleasedForAPassIssuedAfterTheCutoff() = runTest {
+        val counted = Counted()
+        val host = rawHost(joiners = setOf(bob, bobAgain, carol), admission = counted.admission)
+        val admittedAt = testScheduler.currentTime
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+        val cutoff = testScheduler.currentTime
+        counted.revocations.revoke(bobKey.id, notBefore = cutoff)
+        host.admit(bobAgain, bobKey, nonce = 3)
+        val laterPass = host.passesTo(bobAgain).single()
+        host.say(bobAgain, AdmitMessage.Goodbye)
+        val heldWhenBobReturns = host.member(bob)?.liveness
+        val vettedBefore = counted.keys()
+
+        val mark = host.events.mark()
+        host.admit(bob, bobKey, nonce = 4, grants = listOf(laterPass))
+
+        assertAll(
+            { assertTrue(admittedAt < cutoff, "rig: Bob's seat was admitted before the cutoff") },
+            { assertTrue(laterPass.issuedAt >= cutoff, "rig: the pass Bob presents was issued at or after it") },
+            { assertIs<Liveness.Partitioned>(heldWhenBobReturns, "rig: Bob's revoked seat was still held") },
+            { assertEquals(listOf(bobKey.id, carolKey.id, bobKey.id), vettedBefore, "rig: the second process was vetted, after the revocation") },
+            { assertEquals(vettedBefore, counted.keys(), "on the later pass Bob comes back unvetted") },
+            {
+                assertEquals(
+                    listOf("Left(bob, ${LeaveReason.PartitionExpired})", "Joined(bob)"),
+                    host.events.edgesSince(mark).map { it.describe() },
+                    "the revoked seat is released, and Bob joins as a new membership",
+                )
+            },
+            { assertEquals(ReturnKind.Returning, host.directWelcomesTo(bob).last().returnKind, "marked as a return") },
+        )
+        host.room.leave()
     }
 
     // ── A pass is good only with the host that issued it (Decided 11) ────────
