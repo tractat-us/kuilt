@@ -8,8 +8,8 @@ picking favourites — which device is in charge when a room full of devices fir
 
 ## Rejoin & reconnect
 
-**Intent:** a per-game / per-session id both peers agree on — to key a durable `(session, device) → seat` record, scope a log, or name a table.
-**Primitive:** `Room.roomId` (`us.tractat.kuilt.session`). Agreed in the admit handshake at zero extra traffic — don't mint your own and replicate it over a side channel, and don't use the host's peer id, which names the *device* and repeats across every room it hosts. To name a *device* across rooms and launches, use `Member.key` ([below](#device-identity--return)).
+**Intent:** a per-game / per-session id both peers agree on — to scope a log or name a table.
+**Primitive:** `Room.roomId` (`us.tractat.kuilt.session`). Agreed in the admit handshake at zero extra traffic — don't mint your own and replicate it over a side channel, and don't use the host's peer id, which repeats across every room that host runs. It names the session, not a device: to name a *device* across rooms and launches, use `Member.key` ([below](#device-identity--return)), never `selfId`, which can change on every relaunch. And keep no `(session, device) → seat` record of your own: the seat is the host's, keyed by the device key, as the rejoin entry below says.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#perSessionIdSample -->
 ```kotlin
@@ -17,9 +17,9 @@ public suspend fun perSessionIdSample(room: Room) {
     // Null means "this joiner is not admitted yet", not "this room has no id" — so wait for the
     // value rather than sampling it. A host is non-null immediately and this returns at once.
     val id: RoomId = room.roomId.filterNotNull().first()
-    // Safe as a durable key — a fresh room means a fresh id, including two games in a row from one
-    // device and the games either side of an app kill.
-    println("seat record key: ${id.value}/${room.selfId.value}")
+    // Both peers read the same value, and a fresh room means a fresh id, so it scopes this game's
+    // log or names its table. Pair it with no peer id: selfId names this process, not the device.
+    println("log scope: ${id.value}")
 }
 ```
 

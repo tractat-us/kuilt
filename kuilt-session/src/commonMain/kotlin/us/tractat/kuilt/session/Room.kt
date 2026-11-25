@@ -297,8 +297,10 @@ public interface Room {
      *
      * One value per *room instance*, not per device: two rooms the same peer hosts in a row have
      * two different ids, and so do the rooms either side of an app restart. That is what makes it
-     * usable as a per-session key — a durable `(roomId, deviceId) → seat` record, a per-game log
-     * scope, a lobby identifier — rather than merely as a label for the host.
+     * usable as a per-session key — a per-game log scope, a table name, a lobby identifier — rather
+     * than merely as a label for the host. It is not half of a `(room, device) → seat` record: the
+     * seat is the host's, keyed by the member's [Member.key], which is also what names a device
+     * across launches.
      *
      * Both roles read the same value, but they learn it at different moments:
      * - **Host** — non-null from construction. [RoomFactory.host] mints it (or uses the one the

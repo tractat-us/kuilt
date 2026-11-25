@@ -88,16 +88,21 @@ private const val DEFAULT_CHUNK_BYTES: Int = 16 * 1024
  * Read the per-session id both peers already agreed on, instead of minting one and replicating it.
  *
  * [Room.roomId] is settled in the admit handshake at zero extra traffic. Don't agree your own over
- * a side channel — and don't reach for the host's peer id either, which names the *device* and so
- * repeats across every room that device hosts.
+ * a side channel — and don't reach for the host's peer id either, which repeats across every room
+ * that host runs.
+ *
+ * It names the **session**, so it scopes a log or names a table. It is not half of a
+ * `(session, device) → seat` key: a device across launches is named by [Member.key], since a
+ * process's [Room.selfId] can change on every relaunch, and the seat itself is the host's to keep,
+ * keyed by that key.
  */
 public suspend fun perSessionIdSample(room: Room) {
     // Null means "this joiner is not admitted yet", not "this room has no id" — so wait for the
     // value rather than sampling it. A host is non-null immediately and this returns at once.
     val id: RoomId = room.roomId.filterNotNull().first()
-    // Safe as a durable key — a fresh room means a fresh id, including two games in a row from one
-    // device and the games either side of an app kill.
-    println("seat record key: ${id.value}/${room.selfId.value}")
+    // Both peers read the same value, and a fresh room means a fresh id, so it scopes this game's
+    // log or names its table. Pair it with no peer id: selfId names this process, not the device.
+    println("log scope: ${id.value}")
 }
 
 /**
