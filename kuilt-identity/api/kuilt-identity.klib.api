@@ -77,6 +77,12 @@ sealed interface us.tractat.kuilt.identity/GrantVerdict { // us.tractat.kuilt.id
         final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantVerdict.Expired.toString|toString(){}[0]
     }
 
+    final object NotYetValid : us.tractat.kuilt.identity/GrantVerdict { // us.tractat.kuilt.identity/GrantVerdict.NotYetValid|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/GrantVerdict.NotYetValid.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/GrantVerdict.NotYetValid.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantVerdict.NotYetValid.toString|toString(){}[0]
+    }
+
     final object Revoked : us.tractat.kuilt.identity/GrantVerdict { // us.tractat.kuilt.identity/GrantVerdict.Revoked|null[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/GrantVerdict.Revoked.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/GrantVerdict.Revoked.hashCode|hashCode(){}[0]
@@ -211,6 +217,11 @@ final class us.tractat.kuilt.identity/GrantTrust { // us.tractat.kuilt.identity/
 
     final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantTrust.toString|toString(){}[0]
     final suspend fun verify(us.tractat.kuilt.identity/Grant, us.tractat.kuilt.identity/DidKey, kotlin/String, kotlin/Long): us.tractat.kuilt.identity/GrantVerdict // us.tractat.kuilt.identity/GrantTrust.verify|verify(us.tractat.kuilt.identity.Grant;us.tractat.kuilt.identity.DidKey;kotlin.String;kotlin.Long){}[0]
+
+    final object Companion { // us.tractat.kuilt.identity/GrantTrust.Companion|null[0]
+        final const val CLOCK_SKEW_ALLOWANCE_MILLIS // us.tractat.kuilt.identity/GrantTrust.Companion.CLOCK_SKEW_ALLOWANCE_MILLIS|{}CLOCK_SKEW_ALLOWANCE_MILLIS[0]
+            final fun <get-CLOCK_SKEW_ALLOWANCE_MILLIS>(): kotlin/Long // us.tractat.kuilt.identity/GrantTrust.Companion.CLOCK_SKEW_ALLOWANCE_MILLIS.<get-CLOCK_SKEW_ALLOWANCE_MILLIS>|<get-CLOCK_SKEW_ALLOWANCE_MILLIS>(){}[0]
+    }
 }
 
 final class us.tractat.kuilt.identity/InMemoryDeviceKeyStore : us.tractat.kuilt.identity/DeviceKeyStore { // us.tractat.kuilt.identity/InMemoryDeviceKeyStore|null[0]

@@ -60,6 +60,48 @@ class GrantTrustTest {
     }
 
     @Test
+    fun futureDatedGrantIsNotYetValid() = runTest {
+        val f = fixture()
+        val postDated = f.grant(issuedAt = ISSUED_AT + SKEW + 1)
+        assertEquals(GrantVerdict.NotYetValid, f.verify(postDated, now = ISSUED_AT))
+    }
+
+    @Test
+    fun skewAllowanceEndsExactlyAtTheAllowance() = runTest {
+        // Checked at one fixed instant, so only the grant's date moves: dated exactly the allowance
+        // ahead is the last one accepted, and one millisecond more is the first refused.
+        val f = fixture()
+        val now = ISSUED_AT
+        val atTheAllowance = f.verify(f.grant(issuedAt = now + SKEW), now = now)
+        val oneMsPast = f.verify(f.grant(issuedAt = now + SKEW + 1), now = now)
+        assertAll(
+            { assertEquals(5 * 60 * 1000L, SKEW, "the allowance is five minutes") },
+            { assertEquals(GrantVerdict.Valid, atTheAllowance, "dated exactly the allowance ahead") },
+            { assertEquals(GrantVerdict.NotYetValid, oneMsPast, "one millisecond past it") },
+        )
+    }
+
+    @Test
+    fun aPassFromAClockThatRanAheadIsRefusedUntilItsDate() = runTest {
+        // The case the check exists for. The host's clock ran a year ahead when it issued the pass,
+        // and has since been corrected. Revoking at the clock now sets a cutoff before the pass's
+        // date, so the revocation alone does not touch it.
+        val f = fixture()
+        val now = ISSUED_AT
+        val aYearOut = now + 365L * 24 * 3_600_000
+        val pass = f.grant(issuedAt = aYearOut, notAfter = Grant.NO_EXPIRY)
+        f.revocations.revoke(f.phone.id, notBefore = now + 1)
+        val afterRevoking = f.verify(pass, now = now)
+        // From the allowance before its date on, the pass is good again: this check does not void
+        // it, and a host that must picks a cutoff past its date.
+        val nearItsDate = f.verify(pass, now = aYearOut - SKEW)
+        assertAll(
+            { assertEquals(GrantVerdict.NotYetValid, afterRevoking, "refused, so the device goes through ordinary admission") },
+            { assertEquals(GrantVerdict.Valid, nearItsDate, "the check bounds the skew; the cutoff still decides") },
+        )
+    }
+
+    @Test
     fun expiredGrantIsExpired() = runTest {
         val f = fixture()
         assertEquals(GrantVerdict.Expired, f.verify(f.grant(), now = NOT_AFTER))
@@ -169,6 +211,47 @@ class GrantTrustTest {
         )
     }
 
+    @Test
+    fun aFutureDateIsReportedAfterEveryDefectBeforeIt() = runTest {
+        // The same walk as above for NotYetValid, which sits between Revoked and Expired. It cannot
+        // share that walk: a grant dated after `now` has not expired, so the two never meet, and
+        // NotYetValid's only neighbour that can be pinned is the check before it. The revocation is
+        // toggled by which list the trust reads, so one grant date can carry both defects at once.
+        val f = fixture()
+        val stranger = DeviceKey.generate().id
+        val otherHost = DeviceKey.generate()
+        val now = ISSUED_AT
+        val revoked = RevocationList.inMemory()
+        revoked.revoke(f.phone.id, notBefore = now + SKEW + 2)
+        revoked.revoke(stranger, notBefore = now + SKEW + 2)
+
+        suspend fun withDefects(vararg present: GrantVerdict): GrantVerdict {
+            val issuer = if (GrantVerdict.UntrustedIssuer in present) otherHost else f.host
+            val scope = if (GrantVerdict.WrongScope in present) GrantScope.Room("table-8") else GrantScope.Room(ROOM)
+            val issuedAt = if (GrantVerdict.NotYetValid in present) now + SKEW + 1 else now
+            var grant = f.grant(issuer = issuer, scope = scope, issuedAt = issuedAt)
+            if (GrantVerdict.BadSignature in present) grant = grant.withDamagedSignature()
+            val subject = if (GrantVerdict.WrongSubject in present) stranger else f.phone.id
+            val revocations = if (GrantVerdict.Revoked in present) revoked else RevocationList.inMemory()
+            return GrantTrust(f.host.id, revocations).verify(grant, subject, ROOM, now)
+        }
+
+        val order = listOf(
+            GrantVerdict.UntrustedIssuer,
+            GrantVerdict.BadSignature,
+            GrantVerdict.WrongSubject,
+            GrantVerdict.WrongScope,
+            GrantVerdict.Revoked,
+            GrantVerdict.NotYetValid,
+        )
+        val observed = order.indices.map { withDefects(*order.drop(it).toTypedArray()) }
+        val noneLeft = withDefects()
+        assertAll(
+            { assertEquals(order, observed, "each step reports the first defect left") },
+            { assertEquals(GrantVerdict.Valid, noneLeft, "and with none left, the grant is good") },
+        )
+    }
+
     /** One host, one device and the host's revocation list; every grant defaults to the good one. */
     private class Fixture(val host: DeviceKey, val phone: DeviceKey) {
         val revocations = RevocationList.inMemory()
@@ -191,6 +274,7 @@ class GrantTrustTest {
         const val ROOM = "table-7"
         const val ISSUED_AT = 1_700_000_000_000L
         const val NOT_AFTER = ISSUED_AT + 3_600_000L
+        const val SKEW = GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS
     }
 }
 
