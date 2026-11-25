@@ -219,6 +219,7 @@ class FastReconnectRaceTest {
                 { assertTrue(h.hostRoom.roster.value.any { it.id == carol.selfId }, "rig: the host still holds Carol") },
                 { assertEquals(listOf<MembershipEvent>(MembershipEvent.Readmitted(client)), joinerEvents.filterIsInstance<MembershipEvent.Readmitted>(), rendered) },
                 { assertTrue(joinerEvents.none { it is MembershipEvent.Recovered || it is MembershipEvent.HostLost }, rendered) },
+                { assertTrue(joinerEvents.none { it is MembershipEvent.Left && it.peerId == carol.selfId }, "Carol never left, not even for a moment: $rendered") },
                 { assertEquals(listOf<MembershipEvent>(MembershipEvent.Left(eve.selfId, LeaveReason.Unobserved)), joinerEvents.filterIsInstance<MembershipEvent.Left>(), "only Eve left, unobserved: $rendered") },
                 { assertEquals(setOf(hostId, carol.selfId), rosterAtReadmission, "no ghost and no lost member once readmitted: $rendered") },
                 { assertEquals(setOf(hostId, carol.selfId), h.joinerRoom.roster.value.map { it.id }.toSet(), "and none later: $rendered") },
