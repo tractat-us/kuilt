@@ -184,6 +184,12 @@ public sealed interface AdmitMessage {
      *   new one. So a joiner that compares the id on the Welcome answering its reconnect with the one
      *   it already holds knows whether it came back to its own seat (the same id) or was admitted
      *   afresh because the seat was gone (any other id).
+     * [grant] — the wire form of a signed [us.tractat.kuilt.identity.Grant] the host issued the
+     *   member this Welcome admits (v8, #3221), on the direct Welcome only: its pass back in, which the
+     *   joiner keeps in its [us.tractat.kuilt.identity.DeviceKeyStore]. The host renews it while the
+     *   member stays connected ([GrantRenewal]). `null` when the host issued none: its policy gave the
+     *   membership no terms, or it could not sign. Opaque here, like [Challenge.statement]: a grant is
+     *   checked over exactly the bytes its issuer signed. Compared by content.
      */
     @Serializable
     @SerialName("welcome")
@@ -197,6 +203,7 @@ public sealed interface AdmitMessage {
         val returnKind: ReturnKind? = null,
         val answers: ByteArray? = null,
         val membership: String? = null,
+        val grant: ByteArray? = null,
     ) : AdmitMessage {
         init {
             require(answers == null || answers.size == Hello.JOINER_NONCE_SIZE) {
@@ -204,7 +211,7 @@ public sealed interface AdmitMessage {
             }
         }
 
-        /** Compares [answers] by content: a decoded Welcome equals the one that was encoded. */
+        /** Compares [answers] and [grant] by content: a decoded Welcome equals the one that was encoded. */
         override fun equals(other: Any?): Boolean =
             other is Welcome &&
                 assignedPeerId == other.assignedPeerId &&
@@ -215,7 +222,8 @@ public sealed interface AdmitMessage {
                 roomId == other.roomId &&
                 returnKind == other.returnKind &&
                 answers.contentEquals(other.answers) &&
-                membership == other.membership
+                membership == other.membership &&
+                grant.contentEquals(other.grant)
 
         override fun hashCode(): Int {
             var result = assignedPeerId.hashCode()
@@ -227,6 +235,7 @@ public sealed interface AdmitMessage {
             result = 31 * result + (returnKind?.hashCode() ?: 0)
             result = 31 * result + answers.contentHashCode()
             result = 31 * result + (membership?.hashCode() ?: 0)
+            result = 31 * result + grant.contentHashCode()
             return result
         }
     }
@@ -255,6 +264,14 @@ public sealed interface AdmitMessage {
      * `Left(self, LeaveReason.Superseded(by))`. Both halves are checked in the constructor, and a
      * superseded refusal always names the Hello it answers.
      *
+     * [retryable] — whether the sender's [code] said retrying could succeed (v8, Decided 25, #3276).
+     * A joiner reads it only for a code it does not know, which decodes as
+     * `RejectCode.Unknown(id, retryable)`: an app's own terminal refusal then stays terminal, and a
+     * joiner's reconnect stops saying Hello to a host that refused it for good. A code the joiner
+     * knows keeps the retryability this build gives it. `null` when the sender stated none, which
+     * leaves an unknown code retryable. The constructor refuses a value that contradicts a code this
+     * build knows, so no `Reject` calls a terminal code retryable or the reverse.
+     *
      * Construct with the typed secondary constructor: `Reject(reason, RejectCode.RoomMismatch, nonce)`,
      * or [superseded] for a [RejectCode.Superseded] refusal.
      */
@@ -265,6 +282,7 @@ public sealed interface AdmitMessage {
         @SerialName("code") val codeId: String? = null,
         val answers: ByteArray? = null,
         val supersededBy: String? = null,
+        val retryable: Boolean? = null,
     ) : AdmitMessage {
         init {
             require(answers == null || answers.size == Hello.JOINER_NONCE_SIZE) {
@@ -274,13 +292,20 @@ public sealed interface AdmitMessage {
                 "a ${RejectCode.Superseded.id} Reject names its successor, and no other Reject names one: code $codeId, successor $supersededBy"
             }
             require(supersededBy == null || answers != null) { "a ${RejectCode.Superseded.id} Reject names the Hello it answers" }
+            require(retryable == null || (RejectCode.knownOrNull(codeId)?.retryable ?: retryable) == retryable) {
+                "a $codeId Reject is ${if (retryable == true) "not " else ""}retryable"
+            }
         }
 
-        /** A refusal for [code] of the Hello whose nonce is [answers]. */
-        public constructor(reason: String, code: RejectCode, answers: ByteArray?) : this(reason, code.id, answers)
+        /** A refusal for [code] of the Hello whose nonce is [answers], stating whether [code] is retryable. */
+        public constructor(reason: String, code: RejectCode, answers: ByteArray?) :
+            this(reason, code.id, answers, retryable = code.retryable)
 
-        /** The structured cause, or [RejectCode.Unknown] when the sender named one this build does not know. */
-        public val code: RejectCode get() = RejectCode.fromId(codeId)
+        /**
+         * The structured cause: a code this build knows, or [RejectCode.Unknown] with the sender's
+         * [retryable] when the sender named one it does not.
+         */
+        public val code: RejectCode get() = RejectCode.fromWire(codeId, retryable)
 
         /** Compares [answers] by content: a decoded Reject equals the one that was encoded. */
         override fun equals(other: Any?): Boolean =
@@ -288,13 +313,15 @@ public sealed interface AdmitMessage {
                 reason == other.reason &&
                 codeId == other.codeId &&
                 answers.contentEquals(other.answers) &&
-                supersededBy == other.supersededBy
+                supersededBy == other.supersededBy &&
+                retryable == other.retryable
 
         override fun hashCode(): Int {
             var result = reason.hashCode()
             result = 31 * result + (codeId?.hashCode() ?: 0)
             result = 31 * result + answers.contentHashCode()
             result = 31 * result + (supersededBy?.hashCode() ?: 0)
+            result = 31 * result + (retryable?.hashCode() ?: 0)
             return result
         }
 
@@ -305,7 +332,7 @@ public sealed interface AdmitMessage {
              * device's newer process, which holds it now.
              */
             public fun superseded(successor: String, answers: ByteArray): Reject =
-                Reject("superseded: the seat is held by $successor", RejectCode.Superseded.id, answers, successor)
+                Reject("superseded: the seat is held by $successor", RejectCode.Superseded.id, answers, successor, RejectCode.Superseded.retryable)
         }
     }
 
@@ -453,6 +480,31 @@ public sealed interface AdmitMessage {
         override fun hashCode(): Int = grants.fold(statement.contentHashCode()) { hash, grant -> 31 * hash + grant.contentHashCode() }
 
         override fun toString(): String = "Proof(statement=${statement.size} bytes, grants=${grants.size})"
+    }
+
+    /**
+     * Sent by the host to a connected member: a fresh pass back in, renewing the one its direct
+     * [Welcome] carried (v8, #3221).
+     *
+     * A pass is good for a fixed time after it was issued, and the host issues a new one every half of
+     * that time while the member stays connected, so the time counts from the member's last contact
+     * rather than from when it joined. A member the host holds as partitioned is sent nothing, and a
+     * pass that never expires is never renewed. Nor is the pass of a member whose device the host
+     * revoked after admitting it (Decided 14).
+     *
+     * [grant] is the wire form of a signed [us.tractat.kuilt.identity.Grant], opaque as on the
+     * [Welcome]. A joiner keeps it only from its identified host, and only when it decodes, names that
+     * host's proven key as issuer and this device's as subject, and carries the issuer's signature.
+     * Compared by content.
+     */
+    @Serializable
+    @SerialName("grant-renewal")
+    public class GrantRenewal(public val grant: ByteArray) : AdmitMessage {
+        override fun equals(other: Any?): Boolean = other is GrantRenewal && grant.contentEquals(other.grant)
+
+        override fun hashCode(): Int = grant.contentHashCode()
+
+        override fun toString(): String = "GrantRenewal(grant=${grant.size} bytes)"
     }
 
     public companion object {

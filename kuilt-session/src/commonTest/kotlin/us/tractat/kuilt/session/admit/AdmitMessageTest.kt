@@ -182,6 +182,79 @@ class AdmitMessageTest {
         )
     }
 
+    /**
+     * v8 (#3221): the direct Welcome carries the member's pass, by content, and a roster copy writes
+     * none. A [AdmitMessage.GrantRenewal] round-trips and compares by content too.
+     */
+    @Test
+    fun `Welcome and GrantRenewal round-trip a pass by content`() = runTest {
+        val pass = byteArrayOf(9, 8, 7, 6)
+        val welcome = AdmitMessage.Welcome("peer-1", "Bob", "s-1", DidKey.parse(KEY_A), membership = "membership-1", grant = pass)
+        val renewal = AdmitMessage.GrantRenewal(pass)
+        val rosterCopy = AdmitMessage.encode(welcome.copy(membership = null, grant = null)).decodeToString()
+        assertAll(
+            { assertEquals(welcome, AdmitMessage.decode(AdmitMessage.encode(welcome))) },
+            { assertEquals(welcome, welcome.copy(grant = pass.copyOf())) },
+            { assertEquals(welcome.hashCode(), welcome.copy(grant = pass.copyOf()).hashCode()) },
+            { assertNotEquals(welcome, welcome.copy(grant = byteArrayOf(9, 8, 7, 5))) },
+            { assertNotEquals(welcome, welcome.copy(grant = null)) },
+            // Positive control for the absence below: the key IS visible when written.
+            { assertTrue("grant" in AdmitMessage.encode(welcome).decodeToString()) },
+            { assertFalse("grant" in rosterCopy, "the roster copy wrote a pass") },
+            { assertTrue(AdmitMessage.encode(welcome).contains(byteArrayOf(0x44) + pass), "the pass is a CBOR byte string") },
+            { assertEquals<AdmitMessage?>(renewal, AdmitMessage.decode(AdmitMessage.encode(renewal))) },
+            { assertEquals(renewal.hashCode(), AdmitMessage.GrantRenewal(pass.copyOf()).hashCode()) },
+            { assertNotEquals(renewal, AdmitMessage.GrantRenewal(byteArrayOf(1))) },
+        )
+    }
+
+    /**
+     * v8 (Decided 25, #3276): a Reject states whether its code is retryable, so an app's own code,
+     * which the joiner does not know, keeps its meaning. A code the joiner knows keeps its own.
+     */
+    @Test
+    fun `a Reject carries its code's retryability to a joiner that does not know the code`() {
+        val nonce = nonce(5)
+        val never = object : RejectCode {
+            override val id = "banned"
+            override val retryable = false
+        }
+        val decoded = AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Reject("banned", never, nonce))) as AdmitMessage.Reject
+        val unstated = AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Reject("r", "quota", nonce))) as AdmitMessage.Reject
+        val known = AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Reject("r", RejectCode.KeyConflict, nonce))) as AdmitMessage.Reject
+        assertAll(
+            { assertEquals(false, decoded.retryable, "the wire says the code is terminal") },
+            { assertEquals<RejectCode>(RejectCode.Unknown("banned", retryable = false), decoded.code) },
+            { assertFalse(decoded.code.retryable, "an app's terminal code stays terminal") },
+            { assertEquals<RejectCode>(RejectCode.Unknown("quota"), unstated.code, "a Reject that states nothing leaves its code retryable") },
+            { assertTrue(unstated.code.retryable) },
+            { assertEquals<RejectCode>(RejectCode.KeyConflict, known.code, "a known code decodes as itself") },
+            { assertEquals(false, known.retryable, "and states its own retryability") },
+        )
+    }
+
+    /**
+     * A stated retryability that contradicts a code this build knows is refused in the constructor,
+     * and so on decode. An unknown code takes either value.
+     */
+    @Test
+    fun `a Reject never calls a known code the opposite of what it is`() {
+        val nonce = nonce(5)
+        // A valid frame and its lookalike differ only in the stated flag (CBOR `false` 0xf4, `true` 0xf5).
+        val valid = AdmitMessage.encode(AdmitMessage.Reject("r", RejectCode.BadProof.id, nonce, retryable = false))
+        val flagAt = valid.lastIndexOf(0xf4.toByte())
+        val contradicted = valid.copyOf().also { it[flagAt] = 0xf5.toByte() }
+        assertAll(
+            { assertNotNull(AdmitMessage.decode(valid), "rig: the valid frame decodes") },
+            { assertTrue(flagAt > 0, "rig: the flag is on the wire") },
+            { assertFailsWith<IllegalArgumentException>("terminal called retryable") { AdmitMessage.Reject("r", RejectCode.BadProof.id, nonce, retryable = true) } },
+            { assertFailsWith<IllegalArgumentException>("retryable called terminal") { AdmitMessage.Reject("r", RejectCode.HostFailed.id, nonce, retryable = false) } },
+            { assertFailsWith<IllegalArgumentException>("superseded called retryable") { AdmitMessage.Reject("r", RejectCode.Superseded.id, nonce, "bob-2", retryable = true) } },
+            { assertNull(AdmitMessage.decode(contradicted), "a contradicted known code is dropped on decode") },
+            { assertEquals<RejectCode>(RejectCode.Unknown("x", false), AdmitMessage.Reject("r", "x", nonce, retryable = false).code) },
+        )
+    }
+
     /** An answer is a joiner nonce, so a wrong width is refused in the constructor, on every path. */
     @Test
     fun `a wrong-width answer is refused`() = runTest {

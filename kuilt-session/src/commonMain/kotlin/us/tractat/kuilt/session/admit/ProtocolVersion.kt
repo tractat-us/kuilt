@@ -85,7 +85,17 @@ package us.tractat.kuilt.session.admit
  * host's answer into an admit timeout. Every other code, and the same code once the joiner has been
  * admitted (a reconnect included), counts only when it names the latest Hello.
  *
- * Every later change to what a joiner must send to be admitted bumps this line again.
+ * ## Version 8 — a pass back in, and a refusal's retryability (#3221)
+ *
+ * Version 8 has the host issue every member it admits a pass back in: a signed grant on the direct
+ * Welcome ([AdmitMessage.Welcome.grant]), renewed while the member stays connected
+ * ([AdmitMessage.GrantRenewal]). Every Reject also says whether its code is retryable
+ * ([AdmitMessage.Reject.retryable]), so an app's own terminal refusal stays terminal at a joiner that
+ * does not know the code (Decided 25). A v7 joiner keeps no pass, and retries a refusal its host
+ * meant as final until its deadline, so the gate refuses it.
+ *
+ * Every later change to what a joiner must send to be admitted, or must read to be admitted on the
+ * terms its host meant, bumps this line again.
  *
  * ## The limit of this gate, stated plainly
  *
@@ -95,13 +105,13 @@ package us.tractat.kuilt.session.admit
  */
 public object ProtocolVersion {
     /** The protocol version this build stamps into every [AdmitMessage.Hello] it sends. */
-    public const val CURRENT: Int = 7
+    public const val CURRENT: Int = 8
 
     /** Oldest declared version this build will admit. */
-    public const val MIN_SUPPORTED: Int = 7
+    public const val MIN_SUPPORTED: Int = 8
 
     /** Newest declared version this build will admit. */
-    public const val MAX_SUPPORTED: Int = 7
+    public const val MAX_SUPPORTED: Int = 8
 
     /**
      * Whether a joiner's declared [version] is one this host can admit.

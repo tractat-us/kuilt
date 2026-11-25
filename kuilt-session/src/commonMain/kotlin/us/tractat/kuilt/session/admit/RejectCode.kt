@@ -105,9 +105,15 @@ public interface RejectCode {
 
     /**
      * A code this build does not know: a peer that predates typed codes (empty [id]), a newer
-     * build's addition, or another module's own code. Retryable — see the type KDoc.
+     * build's addition, or another module's own code, such as one an app's [AdmissionPolicy] refused
+     * with.
+     *
+     * [retryable] is what the sender's code said, carried on the wire beside its id
+     * ([AdmitMessage.Reject.retryable], v8, Decided 25), so an app's own terminal refusal stays
+     * terminal at the joiner and its reconnect stops saying Hello. `true` when the sender said
+     * nothing, as a code-less `Reject` does — see the type KDoc.
      */
-    public data class Unknown(override val id: String) : RejectCode
+    public data class Unknown(override val id: String, override val retryable: Boolean = true) : RejectCode
 
     public companion object {
         /** The code of a [AdmitMessage.Reject] that carries none — an [Unknown] with an empty id. */
@@ -122,8 +128,18 @@ public interface RejectCode {
          * `listOf(RoomMismatch, …)` is initialised *before* those nested objects are, so it holds
          * nulls at first use.
          */
-        public fun fromId(id: String?): RejectCode = when (id) {
-            null -> Unspecified
+        public fun fromId(id: String?): RejectCode = knownOrNull(id) ?: Unknown(id.orEmpty())
+
+        /**
+         * Resolve a wire [id] and the [retryable] the sender stated beside it (Decided 25). A code
+         * this build knows is itself, whose retryability is fixed here and never read off the wire. Any
+         * other is [Unknown] with the stated [retryable], or retryable when none was stated.
+         */
+        public fun fromWire(id: String?, retryable: Boolean?): RejectCode =
+            knownOrNull(id) ?: Unknown(id.orEmpty(), retryable ?: true)
+
+        /** The code [id] names when this build knows it, else null. */
+        internal fun knownOrNull(id: String?): RejectCode? = when (id) {
             RoomMismatch.id -> RoomMismatch
             ProtocolMismatch.id -> ProtocolMismatch
             BadProof.id -> BadProof
@@ -131,7 +147,7 @@ public interface RejectCode {
             Superseded.id -> Superseded
             HostFailed.id -> HostFailed
             AdmissionPolicyFailed.id -> AdmissionPolicyFailed
-            else -> Unknown(id)
+            else -> null
         }
     }
 }
