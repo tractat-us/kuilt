@@ -150,22 +150,8 @@ class RoomIdentityTest {
             )
         }
 
-    @Test
-    fun `adopt rejects a room id supplied for a joiner`() =
-        runTest {
-            val f = factory(FakeLoom(), backgroundScope)
-
-            val failure = assertFailsWith<IllegalArgumentException> {
-                f.adopt(FakeSeam(selfId = PeerId(DEVICE)), SessionRole.Joiner, roomId = RoomId("table-7"))
-            }
-
-            // Silently ignoring it is the worse failure: a caller supplying an id would get a
-            // DIFFERENT identity than it asked for and fork its durable records with no signal.
-            assertTrue(
-                failure.message.orEmpty().contains("roomId applies to a host adopt"),
-                "expected the host-only contract in the message, got: ${failure.message}",
-            )
-        }
+    // A joiner adopt cannot carry a room id at all: `AdoptRole.Joiner` has no field for one, so the
+    // `require` this file used to pin is a type now (#3220).
 
     // ── The mint's own parts ──────────────────────────────────────────────────
 

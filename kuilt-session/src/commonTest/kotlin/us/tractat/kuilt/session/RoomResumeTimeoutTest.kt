@@ -13,7 +13,10 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.JoinerOutcome
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.Direction
@@ -129,6 +132,7 @@ class RoomResumeTimeoutTest {
         SeamRoom(
             seam = seam,
             role = role,
+            admission = if (role == SessionRole.Host) HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()) else null,
             memberName = displayName,
             scope = backgroundScope,
             clock = clock,

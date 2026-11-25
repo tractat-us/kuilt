@@ -251,6 +251,7 @@ class ConcurrentResumeHangTest {
         SeamRoom(
             seam = seam,
             role = role,
+            admission = if (role == SessionRole.Host) HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()) else null,
             memberName = displayName,
             scope = backgroundScope,
             clock = clock,

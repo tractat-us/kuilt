@@ -575,7 +575,7 @@ class LocalFabricTest {
             clock = { AT },
             device = RoomDevice.of(fakeKeyStore(2)),
             heartbeatConfig = HeartbeatConfig(),
-            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
+            admission = if (role == SessionRole.Host) HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()) else null,
         ).also { it.start() }
 }
 
