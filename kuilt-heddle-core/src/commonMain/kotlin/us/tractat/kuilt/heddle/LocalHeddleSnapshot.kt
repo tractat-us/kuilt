@@ -273,6 +273,7 @@ private fun requireBalanced(ledger: EntitlementLedger, open: List<PersistedLease
     }
     val reserved = LinkedHashMap<AttachmentId, Long>()
     for (persisted in open) {
+        require(persisted.lease.reserved <= LocalHeddle.MAX_RESERVATION) { "MUTATION: lease reserves ${persisted.lease.reserved}, past the cap" }
         for (edge in persisted.path) reserved[edge] = checkedAdd(reserved[edge] ?: 0L, persisted.lease.reserved)
     }
     for ((edge, sum) in reserved) {
@@ -400,7 +401,6 @@ private class LeaseFormat1(
     fun toPersisted(ledger: EntitlementLedger): PersistedLease {
         val last = requireNotNull(path.lastOrNull()) { "lease ${LeaseId(epoch, seq)} has an empty path" }
         val leaf = requireNotNull(ledger.record(last)) { "lease ${LeaseId(epoch, seq)} ends on ${last.value}, which the ledger does not hold" }.child
-        require(reserved <= LocalHeddle.MAX_RESERVATION) { "MUTATION: lease reserves $reserved, past the cap" }
         return PersistedLease(Lease(LeaseId(epoch, seq), leaf, reserved, startedAt), path)
     }
 
