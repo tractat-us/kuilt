@@ -38,3 +38,40 @@ internal fun sampleShareLine() {
     // With nothing queued anywhere, nothing competes, and even the pool is owed nothing.
     check(heddle.shareLine(emptySet()).share(pool) == Rational.ZERO)
 }
+
+/**
+ * Show how far each lane stands from its share: a lane just served reads below zero, the lane it
+ * went ahead of reads what it is owed, and a lane back from idle starts level with the rest.
+ */
+@Suppress("unused")
+internal fun sampleShareLineLag() {
+    val tree = draft("pool") {
+        lane("web")
+        lane("mobile")
+        lane("docs")
+    }
+    val pool = tree.groupId()
+    val web = tree.groupId("web")
+    val mobile = tree.groupId("mobile")
+    val docs = tree.groupId("docs")
+    val (heddle, booted) = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+    check(booted.refusals.isEmpty())
+    heddle.reconcileCapacity(totalSlots = 2L)
+    val both = setOf(web, mobile)
+
+    // Both wait, but this slot can run only web: web takes one unit, half a unit past its share.
+    check(heddle.acquire(both, eligible = setOf(web), startedAt = 0L) is AcquireOutcome.Acquired)
+    val line = heddle.shareLine(both)
+    check(line.lag(web) == Rational.of(-1L, 2L))
+    check(line.lag(mobile) == Rational.of(1L, 2L))
+    // Docs has nothing queued and the pool has no siblings: neither stands anywhere.
+    check(line.lag(docs) == null && line.lag(pool) == null)
+
+    // explain reads the same distance: web's side stands half a unit past the front.
+    val why = heddle.explain(web, waiting = both, eligible = both)
+    check(why is WaitExplanation.BehindAtLevel && why.nextChild == mobile)
+    check(checkNotNull(why.frontWide).toDouble() - checkNotNull(why.leafSideVirtualServiceWide).toDouble() == -0.5)
+
+    // Docs was idle all along. Queued now, it joins at the front: owed nothing, owing nothing.
+    check(heddle.shareLine(setOf(web, mobile, docs)).lag(docs) == Rational.ZERO)
+}

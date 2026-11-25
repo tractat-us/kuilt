@@ -223,7 +223,9 @@ class ShareLineTest {
             { assertEquals(Lifecycle.CLOSING, h.snapshot().ledger.lifecycle(draining.edge), "the rig: x1's edge is draining") },
             *listOf(x, x1, y).map { g -> { assertEquals(h.entitlement(g, waiting, totalSlots = 1L), line.share(g), g.value) } }.toTypedArray(),
             { assertEquals(Rational.ZERO, line.share(x1)) },
-            { assertTrue(line.share(x) > Rational.ZERO, "x competes as a lane") },
+            // x's new weight of 3 waits, as a Draining step, until x1's lease closes, so x still
+            // competes on its old edge at weight 1: an even split with y, not 3/4.
+            { assertEquals(Rational.of(1L, 2L), line.share(x), "x competes as a lane, at its old weight") },
             { assertEquals(Rational.ONE, line.share(x) + line.share(y)) },
             { assertEquals(Rational.ONE, line.share(before.groupId())) },
         )
@@ -294,25 +296,36 @@ class ShareLineTest {
         )
     }
 
-    /** A line is a value: neither emptying the set it was read from nor reweighting the tree moves it. */
+    /**
+     * A line is a value: neither emptying the set it was read from, nor a lease that moves the
+     * engine's books and wake memory, nor reweighting the tree moves it.
+     */
     @Test
     fun aLineKeepsWhatItRead() {
         val tree = draft("root") {
             lane("a")
             lane("b", Weight.of(3))
         }
-        val h = LocalHeddle.bootWhole(tree, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+        val h = LocalHeddle.bootWhole(tree, LocalPolicy(defaultReservation = 1L), epoch = 0L).also { it.mintSupply(10L) }
         val a = tree.groupId("a")
-        val both = hashSetOf(a, tree.groupId("b"))
+        val b = tree.groupId("b")
+        val both = hashSetOf(a, b)
+        check(h.acquire(both, eligible = setOf(a), startedAt = 0L) is AcquireOutcome.Acquired)
         val line = h.shareLine(both)
+        val before = h.allocator.memory
         both.clear()
+        h.lease(setOf(a, b))
+        val moved = h.allocator.memory
         h.apply(draft("root") {
             lane("a", Weight.of(5))
             lane("b", Weight.of(3))
         }, generation = 1L)
         assertAll(
             { assertEquals(Rational.of(1L, 4L), line.share(a)) },
-            { assertEquals(Rational.of(5L, 8L), h.shareLine(setOf(a, tree.groupId("b"))).share(a), "the rig: the reweight took") },
+            { assertEquals(Rational.of(-3L, 4L), line.lag(a), "a had one unit, a quarter of it its share") },
+            { assertEquals(Rational.of(3L, 4L), line.lag(b)) },
+            { assertTrue(moved != before, "the rig: the lease moved the engine's wake memory") },
+            { assertEquals(Rational.of(5L, 8L), h.shareLine(setOf(a, b)).share(a), "the rig: the reweight took") },
         )
     }
 
@@ -334,9 +347,9 @@ class ShareLineTest {
             root,
             parentOf = mapOf(x to root, y to root, z to x, zz to y),
             families = mapOf(
-                root to ShareLine.Family(mapOf(x to Weight.ONE, y to Weight.ONE), ShareLine.WeightSum.Fits(lcm = 1L, total = 4L)),
-                x to ShareLine.Family(mapOf(z to Weight.ONE), ShareLine.WeightSum.Fits(lcm = 1L, total = 1L)),
-                y to ShareLine.Family(mapOf(zz to Weight.ONE), ShareLine.WeightSum.Overflows),
+                root to ShareLine.Family(mapOf(x to Weight.ONE, y to Weight.ONE), ShareLine.WeightSum.Fits(lcm = 1L, total = 4L), ShareLine.Front.Overflows),
+                x to ShareLine.Family(mapOf(z to Weight.ONE), ShareLine.WeightSum.Fits(lcm = 1L, total = 1L), ShareLine.Front.Overflows),
+                y to ShareLine.Family(mapOf(zz to Weight.ONE), ShareLine.WeightSum.Overflows, ShareLine.Front.Overflows),
             ),
         )
         assertAll(

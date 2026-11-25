@@ -74,8 +74,8 @@ internal object ViewHistories {
 
     /**
      * Every answer the read-only calls give to [q], in order: both previews, then for each name its
-     * explanation and its entitlement, then what one share line says of each of [shareNames]. Each
-     * arm is one call on whichever surface is asked.
+     * explanation and its entitlement, then what one share line says of each of [shareNames], its
+     * share and then its lag. Each arm is one call on whichever surface is asked.
      */
     private fun answers(
         q: Question,
@@ -84,7 +84,7 @@ internal object ViewHistories {
         explain: (GroupId, Set<GroupId>, Set<GroupId>, Long) -> WaitExplanation,
         entitlement: (GroupId, Set<GroupId>, Long) -> Rational,
         shareLine: (Set<GroupId>) -> ShareLine,
-    ): List<Any> = buildList {
+    ): List<Any?> = buildList {
         add(byCount(q.counts, q.eligible, q.reservations))
         add(byQueue(q.queues, q.eligible, q.reservation))
         for (name in q.names) {
@@ -93,9 +93,10 @@ internal object ViewHistories {
         }
         val line = shareLine(q.waiting)
         for (name in shareNames) add(line.share(name))
+        for (name in shareNames) add(line.lag(name))
     }
 
-    fun LocalHeddle.answers(q: Question): List<Any> = answers(
+    fun LocalHeddle.answers(q: Question): List<Any?> = answers(
         q,
         { w, e, r -> previewPicks(w, e, r) },
         { w, e, r -> previewPicks(w, e, r) },
@@ -104,7 +105,7 @@ internal object ViewHistories {
         { w -> shareLine(w) },
     )
 
-    fun LocalHeddleView.answers(q: Question): List<Any> = answers(
+    fun LocalHeddleView.answers(q: Question): List<Any?> = answers(
         q,
         { w, e, r -> previewPicks(w, e, r) },
         { w, e, r -> previewPicks(w, e, r) },

@@ -16,9 +16,9 @@ import us.tractat.kuilt.heddle.LocalHeddle.Companion.MAX_RESERVATION
  * A view is a value. It reads the snapshot's books, wake memory, capacity and last applied topology,
  * with a count of the leases open beneath each node that has a ceiling
  * ([Topology.Node.maxConcurrent]). Each question that picks plays its picks forward on a throwaway
- * engine built from them, so asking twice gives the same answer twice; the share questions read
- * the books and pick nothing. It needs the policy too, which a snapshot does not keep: pass the one
- * the engine ran with.
+ * engine built from them, so asking twice gives the same answer twice; the share questions
+ * pick nothing, and a share line takes the wake step on a copy of the wake memory. It needs the
+ * policy too, which a snapshot does not keep: pass the one the engine ran with.
  *
  * A view from a snapshot shares nothing with any engine, and each question only reads it, so any
  * number of threads may ask one view at once. The engine's own calls go through a view that reads
@@ -32,8 +32,8 @@ public class LocalHeddleView internal constructor(
     private val epoch: Long,
     private val ledger: EntitlementLedger,
     /**
-     * The wake memory each throwaway engine starts from. It is only ever forked, never moved, so a
-     * view the engine builds over its own allocator leaves that allocator as it found it.
+     * The wake memory each throwaway engine starts from. It is only ever forked or copied from, never
+     * moved, so a view the engine builds over its own allocator leaves that allocator as it found it.
      */
     private val allocator: FairShareAllocator,
     private val capacity: Capacity,
@@ -273,10 +273,17 @@ public class LocalHeddleView internal constructor(
      * weight share, even when that share is more slots than the leases it has room for, so a
      * share is not a capped GPS rate.
      *
+     * The line also says how far each competing group stands from its share, [ShareLine.lag]: read at
+     * its parent as a pick arriving there now would read it, with the seat and wake step that pick
+     * takes first. That step runs on a copy of the wake memory, so asking moves nothing.
+     *
      * @sample us.tractat.kuilt.heddle.sampleShareLine
      */
-    public fun shareLine(waiting: Set<GroupId>): ShareLine =
-        ShareLine.over(ledger, root, ledger.reachable(ledger.belowCeilings(waiting, openBeneath, root, leasable), root, leasable))
+    public fun shareLine(waiting: Set<GroupId>): ShareLine {
+        val competing = ledger.reachable(ledger.belowCeilings(waiting, openBeneath, root, leasable), root, leasable)
+        // Placing copies what each parent's step reads of the wake memory, so the engine's own is never moved.
+        return ShareLine.over(ledger, root, competing, allocator, LocalHeddle.waitingOver(ledger, competing))
+    }
 }
 
 /** [slots] as last reconciled, and the root holdings it sizes: the [low] watermark and the [target] a top-up leaves. */
