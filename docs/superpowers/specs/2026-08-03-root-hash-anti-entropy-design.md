@@ -183,8 +183,12 @@ arriving every 60 s. Each of these was traced and survives:
 - **`cancelFullStateRetry(sender)`** fires on every inbound frame in `dispatch`, digests included.
 - **The push-back heal** (`onFullState`) is *preserved through the chain*, and is worth
   naming because a future refactor could break it invisibly: on a mismatch the receiver requests, the
-  sender ships, and the receiver then sees `merged == current && msg.state != current` and pushes its
-  own state back. Both heal directions still work.
+  sender ships, and the receiver then sees `merged == current && msg.state != current` and answers.
+  Both heal directions still work. Since #3629 that answer is the receiver's digests with the grant
+  armed, not its whole state, because the receiver asked for the state that landed behind: on a
+  lagged link under churn the whole state landed behind in turn and the pair bounced whole states.
+  The heal now takes one more hop, the sender's request for what the digest shows it lacks. A behind
+  state nobody asked for, such as a first contact, still draws the whole state at once (#828).
 - **Sender-side GC.** The match branch's ack drives `onAck` → `ackedThrough` →
   `recomputeUniversalAck` → `gcPendingDeltas` identically. (That ack is also why a converged round
   is two frames rather than one — see the cost table's footnote.)
