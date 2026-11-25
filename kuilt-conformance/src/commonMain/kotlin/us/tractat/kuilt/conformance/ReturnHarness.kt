@@ -123,9 +123,10 @@ public interface ReturnDevice {
      * seat of that key still connected (Decided 30).
      *
      * The process [launch] started is untouched, and stays the one every other hook acts on: [kill],
-     * [drop], [restore], [impostor] and [heals] never reach a process launched beside it, which runs
-     * until its room leaves. So a row can end the first process's link and watch the second hold its
-     * seat. The hook cannot show that the two share a key *store* rather than two stores holding one
+     * [drop], [restore], [impostor] and [heals] never reach a process launched beside it. Nothing here
+     * ends it: its room leaves when the row calls `leave`, and the harness keeps its process and link
+     * up until the test ends (the reference's live in the test's background scope). So a row can end
+     * the first process's link and watch the second hold its seat. The hook cannot show that the two share a key *store* rather than two stores holding one
      * key; a row reads the key off the host's roster, which is all the host decides on.
      */
     public suspend fun launchBeside(): RoomFactory

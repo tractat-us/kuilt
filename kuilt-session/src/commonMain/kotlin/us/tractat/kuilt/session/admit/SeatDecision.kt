@@ -85,9 +85,13 @@ internal sealed interface SeatDecision {
  *
  * [held] holds **joiner seats only, never the host's own.** A joiner presenting the host's key is
  * decided against the joiner seats that key holds like any other key, so the host's second tab gets
- * a seat of its own, and gets that seat back on a later Hello (Decided 30). Put the host's seat in
- * [held] and a joiner presenting the host's key under a fresh id would be told to take over the
- * host's membership.
+ * a seat of its own, and gets that seat back on a later Hello (Decided 30). Where leaving the host's
+ * seat out matters today is rule 1: with it in [held], a joiner claiming the host's own **peer id**
+ * under the host's key would be told [SeatDecision.Restore] of the host's membership. A joiner on
+ * the host's key under a fresh id would not notice: the host's seat is never partitioned, so it would
+ * get [SeatDecision.AdditionalSeat] where it now gets [SeatDecision.Ordinary], and the two seat a
+ * joiner identically in slice 1. That difference may become observable in 2.4, once an additional
+ * seat is vetted (plan Amendment C).
  *
  * The precedence, first match wins:
  * 1. the claimed id holds a seat under the proven key → [SeatDecision.Restore];
