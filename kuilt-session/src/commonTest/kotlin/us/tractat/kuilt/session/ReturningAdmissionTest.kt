@@ -428,13 +428,15 @@ class ReturningAdmissionTest {
         val hostDevice = fakeDeviceKey(HOST_DEVICE)
         val host = rawHost(joiners = setOf(hostTab), admission = counted.admission)
         host.admit(hostTab, hostDevice, nonce = 1)
+        val vettedAtFirst = counted.keys()
         val pass = host.passesTo(hostTab).single()
         host.say(hostTab, AdmitMessage.Goodbye)
 
         host.admit(hostTab, hostDevice, nonce = 2, grants = listOf(pass))
 
         assertAll(
-            { assertEquals(listOf(host.hostKey), counted.keys(), "rig: the first tab, on the host's key, was vetted once") },
+            { assertEquals(listOf(host.hostKey), vettedAtFirst, "rig: the first tab, on the host's key, was vetted as an ordinary admission") },
+            { assertEquals(vettedAtFirst, counted.keys(), "its return on the pass is not vetted") },
             { assertEquals(ReturnKind.Returning, host.directWelcomesTo(hostTab).last().returnKind, "its return on the pass is marked") },
             { assertTrue(host.member(hostTab) != null, "and seated") },
         )
