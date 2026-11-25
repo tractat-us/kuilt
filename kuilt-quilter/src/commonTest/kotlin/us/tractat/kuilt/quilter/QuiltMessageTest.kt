@@ -47,6 +47,16 @@ class QuiltMessageTest {
     }
 
     @Test
+    fun stateReplyRoundTripsThroughCbor() {
+        val msg = QuiltMessage.StateReply(sender = a, state = GCounter.of(a to 5L), upThrough = 7L)
+        val bytes = Cbor.encodeToByteArray(msgSerializer, msg)
+        val decoded = Cbor.decodeFromByteArray(msgSerializer, bytes)
+        assertEquals(msg.sender, (decoded as QuiltMessage.StateReply).sender)
+        assertEquals(msg.state, decoded.state)
+        assertEquals(msg.upThrough, decoded.upThrough)
+    }
+
+    @Test
     fun resendRoundTripsThroughCbor() {
         val b = ReplicaId("B")
         val msg = QuiltMessage.Resend<GCounter>(

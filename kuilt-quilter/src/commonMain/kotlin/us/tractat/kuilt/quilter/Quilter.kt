@@ -534,11 +534,11 @@ public class Quilter<S : Quilted<S>>(
 
     /**
      * Per-peer whole-state send slots (#3617). A peer with no entry is idle. An entry means one
-     * sender coroutine is shipping that peer a [QuiltMessage.FullState], and
-     * [FullStateSlot.dirty] means another was asked for meanwhile, so exactly one more send follows
-     * with the state as it is *then*. Every whole-state send goes through [requestFullStateSend],
-     * so a peer has at most one whole state in flight from this replica and one owed, however many
-     * times it was asked. Under [lock].
+     * sender coroutine is shipping that peer a whole state ([QuiltMessage.FullState] or
+     * [QuiltMessage.StateReply]), and [FullStateSlot.dirty] means another was asked for meanwhile,
+     * so exactly one more send follows with the state as it is *then*. Every whole-state send goes
+     * through [requestWholeStateSend], so a peer has at most one whole state in flight from this
+     * replica and one owed, however many times it was asked. Under [lock].
      */
     private val fullStateSlots: MutableMap<PeerId, FullStateSlot> = mutableMapOf()
 
@@ -1008,8 +1008,27 @@ public class Quilter<S : Quilted<S>>(
     private fun sendUnprovenPeerFullState(peer: PeerId) = requestFullStateSend(peer)
 
     /**
-     * Asks for [peer] to be sent this replica's whole state, through its send slot (#3617). Every
-     * whole-state send in this class comes here. Under [lock].
+     * Asks for [peer] to be sent this replica's whole state as a plain [QuiltMessage.FullState],
+     * through [requestWholeStateSend]. Under [lock].
+     */
+    private fun requestFullStateSend(peer: PeerId) = requestWholeStateSend(peer, plain = true)
+
+    /**
+     * Asks for [peer] to be sent this replica's whole state as a [QuiltMessage.StateReply], the
+     * push-back on a [QuiltMessage.FullState] of its that landed behind (#3629). Only for a peer in
+     * [everSentUsVector]. Under [lock].
+     */
+    private fun requestStateReplySend(peer: PeerId) = requestWholeStateSend(peer, plain = false)
+
+    /**
+     * Asks for [peer] to be sent this replica's whole state ([QuiltMessage.FullState] if [plain],
+     * [QuiltMessage.StateReply] otherwise), through its send slot (#3617). Every whole-state send
+     * in this class comes here, through [requestFullStateSend] or [requestStateReplySend]. Under
+     * [lock].
+     *
+     * The two kinds share the slot, and plain wins: when both are owed, the one send that follows
+     * is a [QuiltMessage.FullState], since that also answers a request, which a
+     * [QuiltMessage.StateReply] does not.
      *
      * An idle peer gets a sender coroutine. A peer already being sent one is marked dirty instead,
      * and gets exactly one more send once the current one finishes, encoded from the state as it is
@@ -1023,17 +1042,6 @@ public class Quilter<S : Quilted<S>>(
      * does not hang. A send that hangs on a peer still in [Seam.peers] holds the slot for as long
      * as it hangs.
      */
-    private fun requestFullStateSend(peer: PeerId) = requestWholeStateSend(peer, plain = true)
-
-    /**
-     * Asks for [peer] to be sent this replica's whole state as a [QuiltMessage.StateReply], the
-     * push-back on a [QuiltMessage.FullState] of its that landed behind (#3629). Only for a peer in
-     * [everSentUsVector]. Shares the peer's send slot with [requestFullStateSend], and gives way to
-     * it: when both are owed, the one send that follows is a plain [QuiltMessage.FullState], since
-     * that also answers a request, which a [QuiltMessage.StateReply] does not. Under [lock].
-     */
-    private fun requestStateReplySend(peer: PeerId) = requestWholeStateSend(peer, plain = false)
-
     private fun requestWholeStateSend(peer: PeerId, plain: Boolean) {
         val busy = fullStateSlots[peer]
         if (busy != null) {
@@ -1044,8 +1052,7 @@ public class Quilter<S : Quilted<S>>(
         // Lazy, so the slot is in the map before its coroutine can look itself up there: an
         // unconfined dispatcher would otherwise run the whole send inside `launch`.
         lateinit var slot: FullStateSlot
-        slot = FullStateSlot(scope.launch(start = CoroutineStart.LAZY) { runFullStateSlot(peer, slot) })
-        slot.plainOwed = plain
+        slot = FullStateSlot(scope.launch(start = CoroutineStart.LAZY) { runFullStateSlot(peer, slot) }, plainOwed = plain)
         fullStateSlots[peer] = slot
         slot.job.start()
     }
@@ -1513,10 +1520,13 @@ public class Quilter<S : Quilted<S>>(
      *     bounce whole states for as long as the writes outpace the link, each push-back landing
      *     behind the other's newest write, and no request starts that chain, so not answering
      *     requested states with whole states does not end it. Any other peer may run a build
-     *     that drops the variant, and gets the plain [QuiltMessage.FullState] it always did. So a
-     *     chain between current peers is at most three whole states: an unasked one, a plain
-     *     push-back if it landed before the receiver had latched [everSentUsVector] for us, and
-     *     a [QuiltMessage.StateReply].
+     *     that drops the variant, and gets the plain [QuiltMessage.FullState] it always did. So
+     *     on a FIFO link, once each side's announcement has landed, a chain between current
+     *     peers is at most three whole states: an unasked one, a plain push-back if it landed
+     *     before the receiver had latched [everSentUsVector] for us, and a
+     *     [QuiltMessage.StateReply]. On a fabric that reorders, or with an announcement lost,
+     *     peers not yet latched bounce plain states as they did before #3629 until a digest
+     *     lands, which is never worse than that.
      *   - **Asked for** (our [outstandingRequest] names the sender): send the sender our digests
      *     with the grant armed, as the tick does, and not our whole state (#3629). On a lagged
      *     link under churn, a requested state usually lands behind only because our newest
@@ -1952,9 +1962,8 @@ internal fun contiguousFrontier(dots: Set<Dot>, floor: VersionVector): VersionVe
  * every send asked for since the last was a [QuiltMessage.StateReply]. Mutated only under the owning
  * [Quilter]'s lock.
  */
-private class FullStateSlot(val job: Job) {
+private class FullStateSlot(val job: Job, var plainOwed: Boolean) {
     var dirty: Boolean = false
-    var plainOwed: Boolean = true
 }
 
 /**

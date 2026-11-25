@@ -201,10 +201,12 @@ arriving every 60 s. Each of these was traced and survives:
   behind *its* receiver draws that receiver's digests with the grant armed, never a whole state.
   Without it, two lagged peers that both write bounced whole states from first contact for as long
   as the writes outpaced the link, since no request starts that chain (224 whole states against
-  20 requests over two minutes on `QuilterSolicitedFullStateTest`'s rig, 30 after). A chain
-  between current peers now ends by its third whole state: an unasked `FullState`, a plain
-  push-back if it landed before the receiver had seen a `VectorDigest` from its sender, and a
-  `StateReply`. The request answer, the first contact, its retries and the unproven-peer fallback
+  20 requests over two minutes on `QuilterSolicitedFullStateTest`'s rig, 30 after). On a FIFO
+  link, once each side's announcement has landed, a chain between current peers now ends by its
+  third whole state: an unasked `FullState`, a plain push-back if it landed before the receiver
+  had seen a `VectorDigest` from its sender, and a `StateReply`. On a fabric that reorders, or
+  with an announcement lost, peers not yet latched bounce plain states as they did before, until
+  a digest lands; that is never worse than before. The request answer, the first contact, its retries and the unproven-peer fallback
   all stay plain `FullState`; a peer's send slot sends a plain one whenever a request is owed, so a
   `StateReply` never stands in for a request's answer.
 - **Sender-side GC.** The match branch's ack drives `onAck` → `ackedThrough` →

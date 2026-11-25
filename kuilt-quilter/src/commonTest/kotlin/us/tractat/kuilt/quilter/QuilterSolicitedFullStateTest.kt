@@ -365,6 +365,8 @@ class QuilterSolicitedFullStateTest {
             val rig = laggedPair(this, writers = 2, settle = Duration.ZERO)
 
             assertAll(
+                { assertTrue(rig.stateReplies > 0, "rig: a push-back must have gone as a state reply (${rig.counts})") },
+                { assertTrue(rig.churnWholeStates > rig.churnRequests, "rig: some whole states must answer no request (${rig.counts})") },
                 {
                     assertTrue(
                         rig.churnWholeStates <= rig.churnRequests + UNASKED_CHAIN_BOUND,
@@ -401,9 +403,11 @@ class QuilterSolicitedFullStateTest {
         val b: Quilter<GSet<String>>,
         val churnWholeStates: Int,
         val churnRequests: Int,
+        val stateReplies: Int,
         val ringHits: Long,
     ) {
-        val counts get() = "churnWholeStates=$churnWholeStates churnRequests=$churnRequests ringHits=$ringHits"
+        val counts get() =
+            "churnWholeStates=$churnWholeStates churnRequests=$churnRequests stateReplies=$stateReplies ringHits=$ringHits"
     }
 
     /**
@@ -451,6 +455,7 @@ class QuilterSolicitedFullStateTest {
             b = b,
             churnWholeStates = churn.count { it is QuiltMessage.FullState || it is QuiltMessage.StateReply },
             churnRequests = churn.count { it is QuiltMessage.FullStateRequest },
+            stateReplies = churn.count { it is QuiltMessage.StateReply },
             ringHits = a.recentRootHitsForTest + b.recentRootHitsForTest,
         )
     }
