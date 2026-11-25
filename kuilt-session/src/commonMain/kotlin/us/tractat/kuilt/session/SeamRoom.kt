@@ -2755,14 +2755,20 @@ internal class SeamRoom(
      * The direct Welcome carries the member's pass back in ([AdmitMessage.Welcome.grant], #3221),
      * issued here on its membership's terms, and its renewals start once the burst is sent
      * ([startGrantRenewals]). Every seating sends one: an admission, a restore and a takeover alike,
-     * so a member's pass is always dated from its latest Welcome.
+     * so a member's pass is always dated from its latest Welcome. A pass that fails to sign leaves
+     * this Welcome without one, and the renewals start all the same.
      */
     private suspend fun sendAdmissionBurst(burst: AdmissionBurst, answers: ByteArray, returnKind: ReturnKind?) {
         val member = burst.member
         val welcome = rosterWelcome(member)
-        val grant = issueGrant(member.id, member.key, burst.membership)
+        val issued = issueGrant(member.id, member.key, burst.membership)
         val direct = AdmitMessage.encode(
-            welcome.copy(returnKind = returnKind, answers = answers, membership = burst.membership.id, grant = grant?.wire),
+            welcome.copy(
+                returnKind = returnKind,
+                answers = answers,
+                membership = burst.membership.id,
+                grant = (issued as? PassIssue.Issued)?.grant?.wire,
+            ),
         )
         runCatchingCancellable { seam.sendTo(member.id, direct) }
 
@@ -2797,39 +2803,55 @@ internal class SeamRoom(
             ),
         )
         runCatchingCancellable { seam.sendTo(member.id, hostIntro) }
-        if (grant != null) startGrantRenewals(member.id, member.key, burst.membership.id, grant)
+        if (issued !is PassIssue.Withheld) startGrantRenewals(member.id, member.key, burst.membership)
+    }
+
+    /** What [issueGrant] made of one membership's pass. */
+    private sealed interface PassIssue {
+        /** Signed: send it. */
+        class Issued(val grant: Grant) : PassIssue
+
+        /**
+         * None is owed, now or later: the membership has no terms (no policy was asked about it), or
+         * its device was revoked after it was admitted ([GrantIssuer.mayIssue], Decided 14).
+         */
+        data object Withheld : PassIssue
+
+        /** Owed, but signing failed on this platform: logged, and tried again at the next renewal. */
+        data object Failed : PassIssue
     }
 
     /**
-     * **Host only; outside [lock].** The pass [subject]'s membership is to be issued now (#3221), or
-     * null when it is issued none: its membership has no terms (no policy was asked about it), its
-     * device was revoked after it was admitted ([GrantIssuer.mayIssue], Decided 14), or signing failed
-     * on this platform, which is logged and leaves the Welcome without a pass rather than unsent.
+     * **Host only; outside [lock].** The pass [subject]'s membership is to be issued now (#3221). A
+     * failure to sign is logged here and answered [PassIssue.Failed], so the Welcome goes without a
+     * pass rather than unsent.
      */
-    private suspend fun issueGrant(peerId: PeerId, subject: DidKey, membership: Membership): Grant? {
-        val terms = membership.terms ?: return null
+    private suspend fun issueGrant(peerId: PeerId, subject: DidKey, membership: Membership): PassIssue {
+        val terms = membership.terms ?: return PassIssue.Withheld
         val cutoff = checkNotNull(admission) { "only a host issues passes" }.revocations.notBefore(subject)
         if (!GrantIssuer.mayIssue(membership.admittedAtMs, cutoff)) {
             logger.info { "room.grant.withheld peer=${peerId.value}: its device was revoked after it was admitted" }
-            return null
+            return PassIssue.Withheld
         }
         return try {
-            GrantIssuer.issue(device.key, subject, terms, signedRoomId(), clock().toEpochMilliseconds())
+            PassIssue.Issued(GrantIssuer.issue(device.key, subject, terms, signedRoomId(), clock().toEpochMilliseconds()))
         } catch (failure: Throwable) {
             currentCoroutineContext().ensureActive()
             logger.warn(failure) { "room.grant.issue-failed peer=${peerId.value}" }
-            null
+            PassIssue.Failed
         }
     }
 
     /**
-     * **Host only.** Renew [peerId]'s pass every half of [first]'s lifetime from now on (#3221),
-     * replacing any renewals an earlier Welcome to it started. Nothing for a pass that never expires
-     * ([GrantIssuer.refreshPeriodMillis]), and nothing when the membership [membershipId] is no longer
-     * the one [peerId] holds: it left, or a newer admission holds the id, while the burst was sent.
+     * **Host only.** Renew [peerId]'s pass every half of its [membership]'s term from now on (#3221),
+     * replacing any renewals an earlier Welcome to it started. Nothing for a term that never ends
+     * ([GrantIssuer.refreshPeriodMillis]), and nothing when [membership] is no longer the one [peerId]
+     * holds: it left, or a newer admission holds the id, while the burst was sent.
      */
-    private fun startGrantRenewals(peerId: PeerId, subject: DidKey, membershipId: String, first: Grant) {
-        val periodMs = GrantIssuer.refreshPeriodMillis(first) ?: return
+    private fun startGrantRenewals(peerId: PeerId, subject: DidKey, membership: Membership) {
+        val terms = membership.terms ?: return
+        val periodMs = GrantIssuer.refreshPeriodMillis(terms) ?: return
+        val membershipId = membership.id
         lock.withLock {
             if (closed || memberships[peerId]?.id != membershipId) return
             grantRenewals.remove(peerId)?.cancel()
@@ -2854,14 +2876,16 @@ internal class SeamRoom(
             // Until the member is connected again, or gone; a gone member's loop is cancelled anyway.
             _roster.first { roster -> roster.none { it.id == peerId && it.liveness != Liveness.Connected } }
             val membership = lock.withLock { memberships[peerId]?.takeIf { it.id == membershipId } } ?: return
-            val cutoff = checkNotNull(admission) { "only a host issues passes" }.revocations.notBefore(subject)
-            if (!GrantIssuer.mayIssue(membership.admittedAtMs, cutoff)) {
-                logger.info { "room.grant.renewals-stopped peer=${peerId.value}: its device was revoked after it was admitted" }
-                return
+            when (val issued = issueGrant(peerId, subject, membership)) {
+                is PassIssue.Issued ->
+                    runCatchingCancellable { seam.sendTo(peerId, AdmitMessage.encode(AdmitMessage.GrantRenewal(issued.grant.wire))) }
+                        .onFailure { logger.debug { "room.grant.renewal-unsent peer=${peerId.value}: $it" } }
+                PassIssue.Withheld -> {
+                    logger.info { "room.grant.renewals-stopped peer=${peerId.value}" }
+                    return
+                }
+                PassIssue.Failed -> Unit
             }
-            val grant = issueGrant(peerId, subject, membership) ?: continue
-            runCatchingCancellable { seam.sendTo(peerId, AdmitMessage.encode(AdmitMessage.GrantRenewal(grant.wire))) }
-                .onFailure { logger.debug { "room.grant.renewal-unsent peer=${peerId.value}: $it" } }
         }
     }
 

@@ -30,14 +30,16 @@ internal object GrantIssuer {
     }
 
     /**
-     * How long after [grant] the next pass is due, in milliseconds: half its lifetime, so a member
-     * that drops just before a renewal still holds a pass for half a lifetime after its last contact.
-     * Never under 1 ms: a 1 ms term halves to 0 in whole milliseconds, which would spin the renewal
-     * loop at one instant, signing without end and freezing a test's virtual clock. Null for a pass
-     * that never expires, which is never renewed.
+     * How long after one pass on [terms] the next is due, in milliseconds: half of
+     * [GrantTerms.readmitFor], so a member that drops just before a renewal still holds a pass for half
+     * a term after its last contact. Never under 1 ms: a 1 ms term halves to 0 in whole milliseconds,
+     * which would spin the renewal loop at one instant, signing without end and freezing a test's
+     * virtual clock. Null for a term that never ends, whose pass is never renewed.
+     *
+     * Read from the terms, not from a pass, so renewals run whether or not the first pass was signed.
      */
-    fun refreshPeriodMillis(grant: Grant): Long? =
-        if (grant.notAfter == Grant.NO_EXPIRY) null else maxOf(1L, (grant.notAfter - grant.issuedAt) / 2)
+    fun refreshPeriodMillis(terms: GrantTerms): Long? =
+        if (terms.readmitFor.isInfinite()) null else maxOf(1L, terms.readmitFor.inWholeMilliseconds / 2)
 
     /**
      * Whether a membership admitted at [admittedAtMs] may be issued a pass, given its device's
