@@ -126,6 +126,30 @@ class TopologyNestedTemplateTest {
         )
     }
 
+    /**
+     * A detach that landed only in part, its repository's close and nothing else, as an interpreter
+     * that stopped part-way leaves it: the author is still attached beneath a repository nothing
+     * wants. The next diff closes her too, because a nested child is wanted only while its parent
+     * is. Without that rule the diff keeps her, live beneath a closed edge.
+     */
+    @Test
+    fun aDiffAfterAPartialDetachClosesWhatIsLeftBeneath() {
+        var ledger = bootFrom(t)
+        ledger = applyClean(t.attach(alice, ledger, generation = 0L), ledger)
+        val detach = t.detach(kuilt, ledger)
+        val prefix = applyClean(detach.take(1), ledger)
+        val rest = Topology.diff(t, prefix, generation = 1L)
+        val after = applyClean(rest, prefix)
+        assertAll(
+            { assertEquals(Close::class to kuiltId, detach.first().let { it::class to it.child }, "the rig: the prefix is the repository's close") },
+            { assertTrue(prefix.liveInboundEdges(aliceId).isNotEmpty(), "the rig: alice is still attached after the prefix") },
+            { assertTrue(Close::class to aliceId in rest.map { it::class to it.child }, "the diff closes alice: $rest") },
+            // Her lineage is gone either way once the repository retires; her own edge is what tells.
+            { assertEquals(emptyList(), after.liveInboundEdges(aliceId), "alice's own edge is not left live beneath a retired repository") },
+            { assertTrue(after.lineageOf(aliceId) == null && after.lineageOf(kuiltId) == null, "and nothing beneath the repository is left") },
+        )
+    }
+
     @Test
     fun aReloadThatDropsTheNestedTemplateClosesTheAuthorsAndKeepsTheRepositories() {
         var ledger = bootFrom(t)
