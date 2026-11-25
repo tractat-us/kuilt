@@ -336,6 +336,59 @@ class SupersededMembershipTest {
         host.leave()
     }
 
+    /**
+     * Gate finding I1 (Decided 32, #3695): A's process dies and B, on the same key store, takes its
+     * partitioned seat over. Then a **new** process of the device comes up reusing A's id and key. It
+     * has never been admitted, so it has no host to honour a `Farewell` from. The host answers its
+     * Hello with a `Reject` that names that Hello, and the new process ends
+     * `Left(self, Superseded(by = B))` at once, well inside its admit timeout, and never says Hello
+     * again.
+     */
+    @Test
+    fun aRelaunchedProcessUnderItsSupersededIdEndsSupersededWithoutTimingOut() = runTest(timeout = us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP) {
+        val a = PeerId("tab-a")
+        val b = PeerId("tab-b")
+        val board = Switchboard(setOf(KEY_SEAT_HOST, a, b))
+        val host = boardRoom(board, KEY_SEAT_HOST, fakeKeyStore(HOST_DEVICE), SessionRole.Host)
+        val shared = fakeKeyStore(1)
+        val firstProcess = processScope()
+        boardRoom(board, a, shared, SessionRole.Joiner, scope = firstProcess)
+        testScheduler.runCurrent()
+        assertTrue(host.roster.value.any { it.id == a }, "rig: A was admitted")
+
+        firstProcess.cancel()
+        board.unplug(a)
+        testScheduler.advanceTimeBy(PARTITION_DETECTED)
+        testScheduler.runCurrent()
+        assertIs<Liveness.Partitioned>(host.roster.value.single { it.id == a }.liveness, "rig: the host holds A as partitioned")
+        val roomB = boardRoom(board, b, shared, SessionRole.Joiner)
+        testScheduler.runCurrent()
+        assertEquals(setOf(b), host.roster.value.map { it.id }.toSet(), "rig: B took A's seat over")
+
+        val helloMark = board.sent(from = a, to = KEY_SEAT_HOST).size
+        val relaunched = boardRoom(board, a, shared, SessionRole.Joiner)
+        val relaunchedLog = EventLog(relaunched, backgroundScope)
+        testScheduler.advanceTimeBy(KEY_SEAT_ADMIT_TIMEOUT / 10)
+        testScheduler.runCurrent()
+        val promptly = relaunchedLog.since(0)
+        testScheduler.advanceTimeBy(KEY_SEAT_ADMIT_TIMEOUT * 10)
+        testScheduler.runCurrent()
+        val fromRelaunched = board.sent(from = a, to = KEY_SEAT_HOST).drop(helloMark)
+        val everything = relaunchedLog.since(0)
+
+        assertAll(
+            { assertEquals(listOf(superseded(a, by = b)), promptly.filterIsInstance<MembershipEvent.Left>(), promptly.render()) },
+            { assertTrue(everything.none { it is MembershipEvent.AdmissionFailed }, "it ended superseded, not timed out: ${everything.render()}") },
+            { assertEquals(listOf(superseded(a, by = b)), everything.filterIsInstance<MembershipEvent.Left>(), everything.render()) },
+            { assertEquals(1, fromRelaunched.count { it is AdmitMessage.Hello }, "one Hello, never another: ${fromRelaunched.map { it::class.simpleName }}") },
+            { assertEquals(0, fromRelaunched.count { it is AdmitMessage.Proof }, "the host challenged nothing") },
+            { assertTrue(relaunched.roster.value.isEmpty(), "the relaunched room has ended") },
+            { assertEquals(setOf(b), host.roster.value.map { it.id }.toSet(), "one membership, B's") },
+        )
+        roomB.leave()
+        host.leave()
+    }
+
     private suspend fun kotlinx.coroutines.test.TestScope.supersededJoinerDoesNotReHelloBody() {
         val a = PeerId("tab-a")
         val b = PeerId("tab-b")
