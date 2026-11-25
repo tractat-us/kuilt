@@ -174,6 +174,7 @@ internal fun MembershipEvent.describe(): String = when (this) {
     is MembershipEvent.Joined -> "Joined(${member.id.value})"
     is MembershipEvent.Left -> "Left(${peerId.value}, $reason)"
     is MembershipEvent.Resumed -> "Resumed(${peerId.value})"
+    is MembershipEvent.Readmitted -> "Readmitted(${peerId.value})"
     else -> toString()
 }
 
