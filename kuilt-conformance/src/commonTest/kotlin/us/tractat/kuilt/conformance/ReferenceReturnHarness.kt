@@ -48,6 +48,10 @@ import kotlin.time.Instant
  * closes that displaced connection, as a server that deduplicates links would. The victim's room
  * reads the tear and comes back through its own re-weave, which takes the id back from the impostor.
  *
+ * [ReturnDevice.launchBeside] and [ReturnHarness.hostTab] each start a process of their own over
+ * a key store index already in use — the device's, or the host's 0 — so their rooms prove that key
+ * under an id of their own while the other process stays live.
+ *
  * The host runs a short hold ([REFERENCE_HOST_HEARTBEAT]) and a device a long reconnect window
  * ([REFERENCE_JOINER_HEARTBEAT]), so a joiner is still trying when the host lets its seat go.
  */
@@ -65,6 +69,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
     )
     val seeds = atomic(1)
     val devices = atomic(0)
+    val hostTabs = atomic(0)
 
     // One process: its own scope, its own client loom and its own link, under one peer id.
     class Process(val peerId: PeerId, deviceIndex: Int) {
@@ -117,6 +122,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
     fun newDevice(): ReturnDevice {
         val index = devices.incrementAndGet()
         val launches = atomic(0)
+        val besides = atomic(0)
         val current = atomic<Process?>(null)
         val priorHeals = atomic(0)
         return object : ReturnDevice {
@@ -133,6 +139,14 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
                 }
                 previous?.let { priorHeals.addAndGet(it.heals()) }
                 return Process(id, index).also { current.value = it }.factory
+            }
+
+            override suspend fun launchBeside(): RoomFactory {
+                val running = checkNotNull(current.value) { "launch() a process before launching another beside it" }
+                check(running.scope.coroutineContext.job.isActive) { "the process launch() started has ended; launch() again" }
+                // Its own link and peer id, on this device's key store; never `current`, so the
+                // other hooks keep acting on the first process.
+                return Process(PeerId("device-$index.beside-${besides.incrementAndGet()}"), index).factory
             }
 
             override suspend fun kill(socketCloses: Boolean) {
@@ -183,6 +197,8 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
         hostHeartbeat = REFERENCE_HOST_HEARTBEAT,
         joinerHeartbeat = REFERENCE_JOINER_HEARTBEAT,
         device = { newDevice() },
+        // The host's own key store (index 0), under a joiner's link and an id of its own.
+        hostTab = { Process(PeerId("host-tab-${hostTabs.incrementAndGet()}"), deviceIndex = 0).factory },
     )
 }
 

@@ -74,9 +74,23 @@ public class ReturnHarness(
     /** The config every device's room runs: how long a joiner keeps trying to come back. */
     public val joinerHeartbeat: HeartbeatConfig,
     private val device: suspend () -> ReturnDevice,
+    private val hostTab: suspend () -> RoomFactory,
 ) {
     /** A new device, with a key of its own and no process running yet. */
     public suspend fun newDevice(): ReturnDevice = device()
+
+    /**
+     * Start another process on the **host's** device — a second tab of the browser the host runs in —
+     * and return its factory. Rooms it makes prove the host's own key, under a peer id of their own:
+     * a fresh one on every call, never the host's.
+     *
+     * It is a joiner like any other, and there is nothing to drop or kill on it: the host-key row
+     * needs only that the key is the host's. The row reads the key back off the host's roster and
+     * off a joiner's view of the host, so a hook handing out some other key reds as the rig's own
+     * failure. What it cannot see is *how* the key got there — a shared key store or a copy of one —
+     * which the host cannot see either.
+     */
+    public suspend fun hostTab(): RoomFactory = hostTab.invoke()
 }
 
 /**
@@ -101,6 +115,20 @@ public interface ReturnDevice {
      * does; without it, a fresh one, as most fabrics do.
      */
     public suspend fun launch(reusePeerId: Boolean = false): RoomFactory
+
+    /**
+     * Start a **second** process on this device while the one [launch] started is still running — a
+     * second tab over the same key store — and return its factory. Rooms it makes prove this device's
+     * key under a fresh peer id of their own, so the host meets a known key under a new id with every
+     * seat of that key still connected (Decided 30).
+     *
+     * The process [launch] started is untouched, and stays the one every other hook acts on: [kill],
+     * [drop], [restore], [impostor] and [heals] never reach a process launched beside it, which runs
+     * until its room leaves. So a row can end the first process's link and watch the second hold its
+     * seat. The hook cannot show that the two share a key *store* rather than two stores holding one
+     * key; a row reads the key off the host's roster, which is all the host decides on.
+     */
+    public suspend fun launchBeside(): RoomFactory
 
     /**
      * End the running process without a goodbye, as an operating system kills an app: its rooms send

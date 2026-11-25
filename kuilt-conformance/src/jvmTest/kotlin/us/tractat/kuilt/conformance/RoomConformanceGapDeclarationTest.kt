@@ -11,7 +11,7 @@ import kotlin.test.assertFailsWith
 import kotlin.time.Instant
 
 /**
- * Runs [RoomConformanceSuite]'s five fault-injection-gated obligations, and its eight return rows, against a harness that
+ * Runs [RoomConformanceSuite]'s five fault-injection-gated obligations, and its eleven return rows, against a harness that
  * declares [RoomConformanceSuite.FaultInjection.Unsupported] — **the first time in this suite's
  * life that its skip path has been executed at all** (#2306).
  *
@@ -27,7 +27,7 @@ import kotlin.time.Instant
  *  - a **blank** tracking URL fails every gated obligation — this is the one runtime hole the sealed
  *    fixture leaves, since `Unsupported("")` is the only way left to write a declaration that
  *    declares nothing;
- *  - a **real** tracking URL lets all thirteen skip cleanly, which is the survivability check above.
+ *  - a **real** tracking URL lets all sixteen skip cleanly, which is the survivability check above.
  *
  * ## Why `jvmTest` and not `commonTest`
  *
@@ -129,19 +129,22 @@ class RoomConformanceGapDeclarationTest {
             { assertFailsWith<AssertionError> { suite.aDifferentKeyOnAPartitionedIdReleasesTheSeat() } },
             { assertFailsWith<AssertionError> { suite.processRebuiltInsideWindowRestores() } },
             { assertFailsWith<AssertionError> { suite.processRebuiltWithFreshIdRestores() } },
+            { assertFailsWith<AssertionError> { suite.aSecondLiveProcessGetsAnAdditionalSeat() } },
+            { assertFailsWith<AssertionError> { suite.aJoinerPresentingTheHostsKeyGetsAJoinerSeat() } },
             { assertFailsWith<AssertionError> { suite.aReturnAfterTheSeatWentIsReadmitted() } },
             { assertFailsWith<AssertionError> { suite.aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage() } },
+            { assertFailsWith<AssertionError> { suite.anAwayJoinerHearsASupersedeThroughItsRosterRebuild() } },
         )
     }
 
     // ── A declared gap skips cleanly — the survivability half ──
 
     /**
-     * All thirteen gated obligations skip without throwing, without hanging and without leaking a
+     * All sixteen gated obligations skip without throwing, without hanging and without leaking a
      * coroutine, so a harness that genuinely cannot partition its links can still subclass this
-     * suite. Deliberately **one** test over all thirteen rather than thirteen: what is under assertion is
+     * suite. Deliberately **one** test over all sixteen rather than sixteen: what is under assertion is
      * that the declared-gap path is survivable as a whole, and a per-obligation split would report
-     * thirteen identical greens for one property.
+     * sixteen identical greens for one property.
      *
      * Note what this cannot do: it cannot tell a harness that *truly* cannot fault-inject from one
      * that could and declared otherwise. Nothing at this layer can — the declaration is a claim
@@ -162,8 +165,11 @@ class RoomConformanceGapDeclarationTest {
         suite.aDifferentKeyOnAPartitionedIdReleasesTheSeat()
         suite.processRebuiltInsideWindowRestores()
         suite.processRebuiltWithFreshIdRestores()
+        suite.aSecondLiveProcessGetsAnAdditionalSeat()
+        suite.aJoinerPresentingTheHostsKeyGetsAJoinerSeat()
         suite.aReturnAfterTheSeatWentIsReadmitted()
         suite.aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage()
+        suite.anAwayJoinerHearsASupersedeThroughItsRosterRebuild()
     }
 
     // ── The ungated obligations are unaffected by the declaration ──

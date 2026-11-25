@@ -371,8 +371,8 @@ public abstract class RoomConformanceSuite {
     // Table row "new id, same key, seat held partitioned" has no tear-and-heal row: a seam healed in
     // place keeps its peer id (`Room.selfId` is the seam's, fixed for the room's life), so a device
     // reaches the host under a new id only as a new room — [processRebuiltWithFreshIdRestores]
-    // (Amendment H). "New id, same key, every seat connected" needs a second live process, which
-    // [ReturnDevice] has no hook for (#3656); `:kuilt-session` pins it meanwhile.
+    // (Amendment H). "New id, same key, every seat connected" runs on a second live process
+    // ([ReturnDevice.launchBeside], #3656), and its host-key form on [ReturnHarness.hostTab].
 
     /**
      * A device whose link tears and heals comes back to the seat the host held for it: the same id,
@@ -761,6 +761,159 @@ public abstract class RoomConformanceSuite {
         }
 
     /**
+     * A second live process on one device — a second tab over the same key store — gets a seat of
+     * its own (Decided 30): the host meets a known key under a new id while that key's only seat is
+     * still connected, so it adds a seat and supersedes nothing. Both processes stay members under
+     * the one key, and each lists the other.
+     *
+     * Then the first process's link dies. Its seat is not handed to the second, which already holds
+     * one: the host holds it partitioned, then lets it go `PartitionExpired`, and the second process
+     * keeps its seat throughout. The only app calls are the two processes' own `join`s.
+     */
+    @Test
+    public fun aSecondLiveProcessGetsAnAdditionalSeat(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a second live process on one key gets an additional seat")
+                ?: return@runTest
+            val host = h.hostFactory.host(h.hostPattern)
+            val device = h.newDevice()
+            val app = AppCalls()
+            val first = app.factory(device.launch()).join(h.joinTag)
+            var second: Room? = null
+            try {
+                val one = first.selfId
+                val admitted = host.awaitRoster("the first process is admitted") { roster -> roster.any { it.id == one } }
+                first.awaitRoster("the first process sees the host") { it.isNotEmpty() }
+                val key = admitted.single { it.id == one }.key
+                val hostTape = EventTape(host, backgroundScope)
+                val firstTape = EventTape(first, backgroundScope)
+
+                val tab = app.factory(device.launchBeside()).join(h.joinTag).also { second = it }
+                val two = tab.selfId
+                val tabTape = EventTape(tab, backgroundScope)
+                host.awaitRoster("both processes hold a seat") { roster -> roster.any { it.id == one } && roster.any { it.id == two } }
+                tab.awaitRoster("the second process lists the first") { roster -> roster.any { it.id == one } }
+                first.awaitRoster("the first process lists the second") { roster -> roster.any { it.id == two } }
+                // Long enough for a host that supersedes late, or a room that says Hello again, to show.
+                advanceTimeBy(h.hostHeartbeat.timeout + h.hostHeartbeat.reconnectWindow)
+                runCurrent()
+                val both = host.roster.value.filter { it.id == one || it.id == two }
+                val callsWhileBoth = app.snapshot()
+                assertAll(
+                    { assertTrue(two != one, "rig: the second process presents an id of its own") },
+                    { assertEquals(listOf(key, key), both.map { it.key }, "rig: both seats are under the device's one key: ${both.map { it.id to it.key }}") },
+                    { assertEquals(listOf(Liveness.Connected, Liveness.Connected), both.map { it.liveness }, "both seats stay connected: $both") },
+                    { assertEquals(listOf("Joined(${two.value})"), hostTape.edges().map { it.edge() }, "the host adds a seat and supersedes nothing") },
+                    { assertTrue(firstTape.events().none { it is MembershipEvent.Left || it is MembershipEvent.HostLost }, "the first process was never displaced: ${firstTape.events()}") },
+                    { assertTrue(tabTape.events().none { it is MembershipEvent.Left || it is MembershipEvent.HostLost }, "nor the second: ${tabTape.events()}") },
+                    { assertEquals(listOf("join", "join"), callsWhileBoth, "each process's own join is the app's only call") },
+                )
+
+                device.kill()
+                host.awaitRoster("the host holds the first process's seat Partitioned") { roster ->
+                    roster.any { it.id == one && it.liveness is Liveness.Partitioned }
+                }
+                val partitionedAt = testScheduler.currentTime
+                val mark = hostTape.events().size
+                val after = host.awaitRoster("the host lets the first process's seat go") { roster -> roster.none { it.id == one } }
+                val heldFor = (testScheduler.currentTime - partitionedAt).milliseconds
+                tab.awaitRoster("the second process drops the first's seat too") { roster -> roster.none { it.id == one } }
+                runCurrent()
+                assertAll(
+                    {
+                        assertEquals(
+                            listOf("Left(${one.value}, ${LeaveReason.PartitionExpired})"),
+                            hostTape.events().drop(mark).filter { it is MembershipEvent.Joined || it is MembershipEvent.Left || it is MembershipEvent.Resumed }.map { it.edge() },
+                            "the dead process's seat expires: not superseded by the live one, which already has a seat",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            heldFor >= h.hostHeartbeat.reconnectWindow,
+                            "the seat went when its hold ran out ($heldFor after it went Partitioned, against a ${h.hostHeartbeat.reconnectWindow} hold)",
+                        )
+                    },
+                    { assertEquals(Liveness.Connected, after.singleOrNull { it.id == two }?.liveness, "the second process keeps its seat: $after") },
+                    { assertEquals(key, after.singleOrNull { it.id == two }?.key, "under the device's key") },
+                    {
+                        assertEquals(
+                            listOf<MembershipEvent>(MembershipEvent.Left(one, LeaveReason.PartitionExpired)),
+                            tabTape.events().filter { it is MembershipEvent.Left },
+                            "a member present for it hears the same expiry",
+                        )
+                    },
+                    { assertEquals(callsWhileBoth, app.snapshot(), "the app made no call while the first process's seat went") },
+                )
+            } finally {
+                second?.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * A joiner presenting the **host's own** key — the host's second tab — gets a joiner seat of its
+     * own, and the host stays the host (Decided 30, the design's host-key row): the host decides that
+     * key against the joiner seats it holds, never against its own membership. So the first tab is
+     * admitted beside the host rather than refused or taken for it, and a second tab, arriving while
+     * the first is connected, gets an additional seat. A member present for both hears two `Joined`s,
+     * and still lists the host under its own id and key.
+     *
+     * What the first tab's admission is *called* is open for slice 2 (plan Amendment I: rules 6–7, or
+     * an additional seat), so the row asserts the seat and not which admission path made it.
+     */
+    @Test
+    public fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a joiner presenting the host's own key gets a joiner seat")
+                ?: return@runTest
+            val host = h.hostFactory.host(h.hostPattern)
+            val bystander = h.newDevice().launch().join(h.joinTag)
+            val app = AppCalls()
+            var firstTab: Room? = null
+            var secondTab: Room? = null
+            try {
+                val hostId = host.selfId
+                host.awaitRoster("the bystander is admitted") { roster -> roster.any { it.id == bystander.selfId } }
+                val hostAsSeen = bystander.awaitRoster("the bystander sees the host") { roster -> roster.any { it.id == hostId } }
+                val hostKey = hostAsSeen.single { it.id == hostId }.key
+                val bystanderKey = host.roster.value.single { it.id == bystander.selfId }.key
+                val hostTape = EventTape(host, backgroundScope)
+                val bystanderTape = EventTape(bystander, backgroundScope)
+
+                val tab1 = app.factory(h.hostTab()).join(h.joinTag).also { firstTab = it }
+                host.awaitRoster("the host's first tab holds a seat") { roster -> roster.any { it.id == tab1.selfId && it.liveness == Liveness.Connected } }
+                tab1.awaitRoster("the first tab sees the host") { roster -> roster.any { it.id == hostId && it.liveness == Liveness.Connected } }
+                val tab2 = app.factory(h.hostTab()).join(h.joinTag).also { secondTab = it }
+                val seated = host.awaitRoster("the host's second tab holds a seat beside the first") { roster ->
+                    roster.any { it.id == tab2.selfId && it.liveness == Liveness.Connected } && roster.any { it.id == tab1.selfId }
+                }
+                tab2.awaitRoster("the second tab sees the host and the first tab") { roster -> roster.any { it.id == hostId } && roster.any { it.id == tab1.selfId } }
+                bystander.awaitRoster("the bystander lists both tabs") { roster -> roster.any { it.id == tab1.selfId } && roster.any { it.id == tab2.selfId } }
+                runCurrent() // let the events that announce the admissions reach the tapes
+                val tabs = listOf(tab1.selfId, tab2.selfId)
+                val tabSeats = tabs.map { id -> seated.singleOrNull { it.id == id } }
+                assertAll(
+                    { assertTrue(hostKey != bystanderKey, "rig: the bystander's key is its own, so the host's key is told apart") },
+                    { assertEquals(listOf(hostKey, hostKey), tabSeats.map { it?.key }, "rig: both tabs proved the host's own key") },
+                    { assertTrue(hostId !in tabs && tab1.selfId != tab2.selfId, "rig: each tab presents an id of its own: $tabs") },
+                    { assertEquals(listOf(Liveness.Connected, Liveness.Connected), tabSeats.map { it?.liveness }, "each tab holds a connected joiner seat") },
+                    { assertEquals(SessionRole.Host, host.role.value, "the host is still the host") },
+                    { assertEquals(listOf(SessionRole.Joiner, SessionRole.Joiner), listOf(tab1.role.value, tab2.role.value), "each tab is a joiner") },
+                    { assertEquals(tabs.map { "Joined(${it.value})" }, hostTape.edges().map { it.edge() }, "the host adds two seats and lets none go") },
+                    { assertEquals(tabs.map { "Joined(${it.value})" }, bystanderTape.edges().map { it.edge() }, "a member present for it hears the same two joins") },
+                    { assertEquals(hostKey, bystander.roster.value.singleOrNull { it.id == hostId }?.key, "the bystander still lists the host under its own id and key") },
+                    { assertEquals(hostKey, tab1.roster.value.singleOrNull { it.id == hostId }?.key, "the first tab lists the host as the host") },
+                    { assertEquals(listOf("join", "join"), app.snapshot(), "each tab's own join is the app's only call") },
+                )
+            } finally {
+                secondTab?.leave()
+                firstTab?.leave()
+                bystander.leave()
+                host.leave()
+            }
+        }
+
+    /**
      * A device whose link heals only after the host let its seat go is admitted afresh, and its room
      * says so: `Readmitted(self)`, never `Recovered(host)` (plan Amendment G). The room stays in
      * session, the host sees the old membership leave and a new one join, and the app makes no call.
@@ -893,6 +1046,112 @@ public abstract class RoomConformanceSuite {
             } finally {
                 joiner.leave()
                 stayer.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * `Superseded` is promised to the members present for it (plan Amendment G). A member that was
+     * away when another device's process came back under a fresh id and took its old seat over hears
+     * neither half of the takeover: the host's `Farewell` naming the successor went down its dead
+     * link. When it comes back inside the host's hold, the host restores its seat and re-sends the
+     * burst, so it hears `Joined(new)` from the burst, and its roster rebuild then drops the old id as
+     * `LeaveReason.Unobserved`. It never says `Superseded`, which would claim a takeover it did not
+     * see, and keeps no ghost of the old id. The away member's app makes no call.
+     *
+     * The row first proves the ghost is real, as [aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage]
+     * does: until the return, the away member still lists the old id and has heard nothing of the new.
+     * It also proves the return was a **restore**, not a readmission, since that row already covers a
+     * readmission's rebuild.
+     */
+    @Test
+    public fun anAwayJoinerHearsASupersedeThroughItsRosterRebuild(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("an away joiner hears a supersede through its roster rebuild")
+                ?: return@runTest
+            val host = h.hostFactory.host(h.hostPattern)
+            val rebuiltDevice = h.newDevice()
+            val firstProcess = rebuiltDevice.launch().join(h.joinTag)
+            val awayDevice = h.newDevice()
+            val app = AppCalls()
+            val away = app.factory(awayDevice.launch()).join(h.joinTag)
+            var successor: Room? = null
+            try {
+                val old = firstProcess.selfId
+                val me = away.selfId
+                host.awaitRoster("both devices are admitted") { roster -> roster.any { it.id == old } && roster.any { it.id == me } }
+                away.awaitRoster("the away member lists the other device") { roster -> roster.any { it.id == old } }
+                val hostTape = EventTape(host, backgroundScope)
+                val awayTape = EventTape(away, backgroundScope)
+                val callsAtDrop = app.snapshot()
+                val healsAtDrop = awayDevice.heals
+
+                // The member goes away, and the other device's process dies.
+                awayDevice.drop()
+                host.awaitRoster("the host holds the away member's seat Partitioned") { roster ->
+                    roster.any { it.id == me && it.liveness is Liveness.Partitioned }
+                }
+                val droppedAt = testScheduler.currentTime
+                rebuiltDevice.kill()
+                host.awaitRoster("the host holds the dead process's seat Partitioned") { roster ->
+                    roster.any { it.id == old && it.liveness is Liveness.Partitioned }
+                }
+
+                // It comes back under a fresh id and takes its old seat over while the member is away.
+                val rebuilt = rebuiltDevice.launch(reusePeerId = false).join(h.joinTag).also { successor = it }
+                val new = rebuilt.selfId
+                host.awaitRoster("the new id took the old seat over") { roster -> roster.any { it.id == new } && roster.none { it.id == old } }
+                runCurrent()
+                val hostEdgesAtTakeover = hostTape.edges().map { it.edge() }
+                val awayHeldAtTakeover = host.roster.value.singleOrNull { it.id == me }?.liveness
+                val ghostBeforeReturn = away.roster.value.any { it.id == old }
+                val heardBeforeReturn = awayTape.events().filter { it.isAbout(old, new) }
+
+                awayDevice.restore()
+                away.awaitEvent("the away member's own Resumed") { (it as? MembershipEvent.Resumed)?.takeIf { e -> e.peerId == me } }
+                away.awaitRoster("the away member lists the new id") { roster -> roster.any { it.id == new } }
+                runCurrent()
+                val rosterAtReturn = away.roster.value.map { it.id }.toSet()
+                val returnedAfter = (testScheduler.currentTime - droppedAt).milliseconds
+                // Then past every window, so a later drop of the old id by some other route would show.
+                advanceTimeBy(h.joinerHeartbeat.reconnectWindow * 2)
+                runCurrent()
+                val awayEvents = awayTape.events()
+                assertAll(
+                    { assertTrue(new != old, "rig: the rebuilt process presents a fresh id") },
+                    {
+                        assertEquals(
+                            listOf("Left(${old.value}, ${LeaveReason.Superseded(new)})", "Joined(${new.value})"),
+                            hostEdgesAtTakeover,
+                            "rig: the host superseded the old id while the member was away",
+                        )
+                    },
+                    { assertIs<Liveness.Partitioned>(awayHeldAtTakeover, "rig: the host held the away member's seat, so its return is a restore") },
+                    { assertTrue(ghostBeforeReturn, "rig: the away member still listed the old id before its return — the ghost was reached") },
+                    { assertEquals(emptyList(), heardBeforeReturn, "rig: nothing of the takeover reached the away member") },
+                    { assertTrue(awayDevice.heals > healsAtDrop, "rig: the member's own reconnect healed its seam (heals ${awayDevice.heals}, was $healsAtDrop)") },
+                    { assertTrue(awayEvents.none { it is MembershipEvent.Readmitted }, "rig: a restore, not a readmission: $awayEvents") },
+                    {
+                        assertTrue(
+                            returnedAfter < h.joinerHeartbeat.reconnectWindow,
+                            "rig: the member was back ($returnedAfter after its drop) before its own ${h.joinerHeartbeat.reconnectWindow} window could drop the old id",
+                        )
+                    },
+                    {
+                        assertEquals(
+                            listOf("Joined(${new.value})", "Left(${old.value}, ${LeaveReason.Unobserved})"),
+                            awayEvents.filter { it.isAbout(old, new) }.map { it.edge() },
+                            "the away member hears the successor in its burst, then drops the old id at the rebuild: $awayEvents",
+                        )
+                    },
+                    { assertTrue(awayEvents.none { it is MembershipEvent.Left && it.reason is LeaveReason.Superseded }, "it never says Superseded: $awayEvents") },
+                    { assertTrue(old !in rosterAtReturn && new in rosterAtReturn, "no ghost of the old id once it is back: $rosterAtReturn") },
+                    { assertTrue(away.roster.value.none { it.id == old }, "nor later: ${away.roster.value.map { it.id }}") },
+                    { assertEquals(callsAtDrop, app.snapshot(), "the away member's app made no call between drop and return") },
+                )
+            } finally {
+                successor?.leave()
+                away.leave()
                 host.leave()
             }
         }
@@ -2191,6 +2450,10 @@ public abstract class RoomConformanceSuite {
                 "lets its seat go and no readmission is reachable.",
         )
     }
+
+    /** Whether this is [old] leaving or [new] joining: the two halves of a takeover. */
+    private fun MembershipEvent.isAbout(old: PeerId, new: PeerId): Boolean =
+        (this is MembershipEvent.Left && peerId == old) || (this is MembershipEvent.Joined && member.id == new)
 
     /** A membership edge as one line naming its peer, for comparing whole sequences. */
     private fun MembershipEvent.edge(): String = when (this) {
