@@ -590,6 +590,7 @@ public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public final fun broadcastDeliversRoomFrameTaggedWithSender ()V
 	public final fun channelStateTornAfterLeave ()V
 	public final fun differentKeyOnLiveIdIsRefused ()V
+	public final fun expiredGrantIsVetted ()V
 	public fun getAwaitBudget-FghU774 ()Lkotlin/time/Duration;
 	public final fun getFastHeartbeatConfig ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
 	public fun getMemberInboxCapacity ()I
@@ -626,7 +627,9 @@ public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public final fun processRebuiltWithFreshIdRestores ()V
 	public final fun rejoinAfterLeaveWorks ()V
 	public final fun resumeWithinWindowFiresResumed ()V
+	public final fun returnInsideGrantNoVetting ()V
 	public final fun returnRestoresHeldSeatSameId ()V
+	public final fun revokedSubjectIsVetted ()V
 	public final fun rosterIsEmptyBeforeAnyHandshake ()V
 	public final fun theTeardownFaultReallyFires ()V
 }

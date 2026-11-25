@@ -2301,13 +2301,15 @@ internal class SeamRoom(
      *
      * A seat of [key] admitted before [key]'s revocation cutoff ([HostAdmission.revocations]) is not
      * the device's to come back to:
-     * - the claimed id's own is answered [SeatDecision.ReleaseAndAdmit], so it is released in this
-     *   pass and the key decided again without it — an ordinary admission, the policy's to decide;
+     * - the claimed id's own is answered [SeatDecision.ReleaseAndAdmit], and [settleRelease] decides
+     *   the key again without it: a newcomer, which the policy must admit before the seat is
+     *   released, or a return on a pass issued at or after the cutoff, for which it is released at
+     *   once, unvetted;
      * - any other is left out of what [decideSeat] reads, so it can never come back as
      *   [SeatDecision.RestoreUnderNewId]. A partitioned one then ends when its window does.
      *
      * Revoking does not evict (Decided 12): a seat is only ever given up here, when a Hello under its
-     * key asks for it back. Checked per key, so once for every seat that key holds, before any restore
+     * key and its own id asks for it back. Checked per key, so once for every seat that key holds, before any restore
      * verdict is trusted.
      *
      * [pass] is the pass the joiner presented that [GrantTrust] found good when its Proof was checked
@@ -2945,8 +2947,10 @@ internal class SeamRoom(
      * an [AdmitMessage.GrantRenewal], while the member is [Liveness.Connected] (#3221).
      *
      * A renewal that falls due while the host holds the member as partitioned waits for the member's
-     * next contact and goes then, so the member gets nothing while it is away and its pass counts down
-     * from its last contact, as `readmitFor` promises. It stops for good when the membership ends —
+     * next contact and goes then, so the member gets nothing while it is away. The pass it holds runs
+     * out at most a whole term after its last contact and, provided the last renewal reached it, at
+     * least half a term after: a renewal is sent once, so one lost on the way leaves the member on the
+     * pass before it, as does a failure to sign (#3709). It stops for good when the membership ends —
      * [detachMember] cancels it — and when the device is revoked after this membership's admission
      * (Decided 14, R2(i)): a revoked present member keeps its seat (Decided 12) but its pass runs out.
      * A failure to sign skips one renewal and tries again a period later.

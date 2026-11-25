@@ -275,7 +275,7 @@ class GrantIssueTest {
 
     /**
      * A member the host holds as partitioned is sent nothing, so the pass it left with runs out while
-     * it is away: it counts from its last contact. The renewal that fell due meanwhile goes once the
+     * it is away. The renewal that fell due meanwhile goes once the
      * member is heard from again.
      */
     @Test
@@ -362,6 +362,91 @@ class GrantIssueTest {
             { assertEquals(4, host.renewalsTo(carol), "control: Carol is still renewed") },
             { assertEquals<GrantVerdict>(GrantVerdict.Revoked, lastVerdict, "the last pass Bob holds is void") },
         )
+    }
+
+    /**
+     * A takeover cannot launder a revocation (Decided 14). Bob's phone is admitted at T0, killed, and
+     * its seat taken over by a relaunch under a new id at T1. The successor inherits the seat's
+     * admission at T0, so a revocation dated between T0 and T1 still catches it: no pass is renewed,
+     * and its next Hello is decided again, as a newcomer's. Had the takeover dated the seat afresh,
+     * the revocation would be blind to it.
+     */
+    @Test
+    fun aTakeoverDoesNotLaunderARevocation() = runTest {
+        val revocations = RevocationList.inMemory()
+        val asked = mutableListOf<DidKey>()
+        val admission = HostAdmission(AdmissionPolicy { request -> asked += request.key; AdmissionDecision.Admit(GrantTerms(2.seconds)) }, revocations)
+        val host = rawHost(joiners = setOf(bob, bobTab, carol), admission = admission)
+        val admittedAt = now()
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+        val mark = host.events.mark()
+        host.admit(bobTab, bobKey, nonce = 3) // the relaunch takes the seat over
+        val takenOverAt = now()
+        val edgesAtTakeover = host.events.edgesSince(mark).map { it.describe() }
+        val cutoff = admittedAt + 1
+        revocations.revoke(bobKey.id, notBefore = cutoff)
+        val renewalsAtRevocation = host.renewalsTo(bobTab)
+        val carolsAtRevocation = host.renewalsTo(carol)
+
+        host.advanceKeeping(setOf(bobTab, carol), 3.seconds)
+        val renewsAfter = (host.room as SeamRoom).renewsPassForTest(bobTab)
+        val vettedBeforeHello = asked.toList()
+        host.admit(bobTab, bobKey, nonce = 4)
+
+        assertAll(
+            { assertEquals(listOf("Left(bob, ${LeaveReason.Superseded(bobTab)})", "Joined(bob-tab)"), edgesAtTakeover, "rig: the relaunch took the seat over") },
+            { assertTrue(cutoff in (admittedAt + 1)..takenOverAt, "rig: the cutoff falls after the admission and no later than the takeover") },
+            { assertEquals(listOf(bobKey.id, carolKey.id), vettedBeforeHello, "rig: the takeover asked nobody") },
+            { assertEquals(renewalsAtRevocation, host.renewalsTo(bobTab), "the successor is renewed no more") },
+            { assertFalse(renewsAfter, "its renewals stopped") },
+            { assertTrue(host.renewalsTo(carol) > carolsAtRevocation, "control: Carol is still renewed") },
+            { assertEquals(listOf(bobKey.id, carolKey.id, bobKey.id), asked, "the successor's next Hello is vetted: its seat is revoked") },
+        )
+    }
+
+    /**
+     * The negative half of the Welcome's exception (Amendment L). A host whose clock ran ahead renewed
+     * Bob's pass with one dated an hour on, which Bob keeps: it is the newest. Renewals after that,
+     * dated now, are older, and a renewal names no Hello, so it can be a replay: it never displaces the
+     * pass held, and nor does a replay of an old renewal. Only the `Welcome` answering Bob's own Hello
+     * may replace a post-dated pass.
+     */
+    @Test
+    fun aRenewalNeverDisplacesAPostDatedPassHeld() = runTest {
+        val board = Switchboard(setOf(KEY_SEAT_HOST, bob))
+        val host = boardRoom(board, KEY_SEAT_HOST, fakeKeyStore(HOST_DEVICE), SessionRole.Host, admission = admitting(GrantTerms(1.hours)))
+        val bobStore = fakeKeyStore(1)
+        val joiner = boardRoom(board, bob, bobStore, SessionRole.Joiner)
+        testScheduler.runCurrent()
+        val bobId = bobStore.deviceKey().id
+        val welcomed = bobStore.grants()
+        val room = GrantScope.Room(KEY_SEAT_ROOM.value)
+        val hostDevice = fakeDeviceKey(HOST_DEVICE)
+
+        suspend fun renew(wire: ByteArray) {
+            board.inject(from = KEY_SEAT_HOST, to = bob, message = AdmitMessage.GrantRenewal(wire))
+            testScheduler.runCurrent()
+        }
+        val postDated = Grant.issue(hostDevice, bobId, room, now() + 1.hours.inWholeMilliseconds, now() + 2.hours.inWholeMilliseconds)
+        renew(postDated.wire)
+        val afterPostDated = bobStore.grants()
+        renew(Grant.issue(hostDevice, bobId, room, now() + 1, now() + 1.hours.inWholeMilliseconds).wire)
+        val afterCurrent = bobStore.grants()
+        renew(welcomed.single().wire)
+        val afterReplay = bobStore.grants()
+        val postDatedNow = trust().verify(postDated, bobId, KEY_SEAT_ROOM.value, now())
+
+        assertAll(
+            { assertEquals(1, welcomed.size, "rig: Bob holds the pass his Welcome carried") },
+            { assertEquals(listOf(postDated), afterPostDated, "rig: the post-dated renewal is kept, as the newest") },
+            { assertEquals<GrantVerdict>(GrantVerdict.NotYetValid, postDatedNow, "rig: the host would refuse it now") },
+            { assertEquals(listOf(postDated), afterCurrent, "a renewal dated now does not displace it") },
+            { assertEquals(listOf(postDated), afterReplay, "nor does a replayed old renewal") },
+        )
+        joiner.leave()
+        host.leave()
     }
 
     // ── What a joiner keeps ──────────────────────────────────────────────────

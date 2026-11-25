@@ -363,7 +363,8 @@ public suspend fun flushThenLeaveSample(
 /**
  * Decide who gets into a room you host, and for how long each may come back without being asked
  * again. A friend's pass is good in any room you host and never runs out; a stranger's is good in
- * this room for an hour after last contact; a device the app has blocked gets the app's own refusal
+ * this room for an hour after it is issued, renewed every half hour while the stranger stays
+ * connected; a device the app has blocked gets the app's own refusal
  * code, until the app unblocks it.
  *
  * Revoking and blocking are separate. Revoking a key voids the passes it already holds, so it has to
@@ -373,7 +374,9 @@ public suspend fun flushThenLeaveSample(
  * set across restarts as you keep the revocations: a forgotten block lets a revoked device back in as
  * a newcomer. To keep a device out from its next return, block it and revoke it: blocking alone
  * leaves a held seat or a pass it holds working, and revoking alone only sends it back to this
- * policy. Neither removes a device that is in the room now.
+ * policy. With both, each Hello it sends is refused, and a seat the room still holds for it is not let
+ * go by the refusal: it stays held, empty, until its hold runs out. Neither removes a device that is in
+ * the room now.
  */
 public suspend fun hostAdmissionSample(
     friends: Set<DidKey>,
@@ -400,6 +403,26 @@ public suspend fun hostAdmissionSample(
         }
     }
     return HostAdmission(policy, revocations)
+}
+
+/**
+ * Stop a lost or stolen device coming back on the pass a room you host gave it: revoke its key in the
+ * revocations the room's [HostAdmission] holds, which are the ones it checks every returning device
+ * against. Every pass issued to that key before the cutoff is void from then on, and so is every seat
+ * admitted before it. When the device next says Hello your admission policy decides it as a newcomer,
+ * unless it holds a pass issued at or after the cutoff, which still lets it back unvetted. A seat the
+ * room still holds for it is let go only for a Hello under that seat's own peer id: at once on such a
+ * later pass, and otherwise only if the policy admits the device, a refusal leaving the seat held until
+ * its hold runs out. A Hello under a new peer id, which an app reopened after a kill normally sends,
+ * never lets the old seat go or takes it over: it ends when its hold does, whatever the policy says.
+ *
+ * It removes nobody. A device in the room now keeps its seat, but the host stops renewing its pass, so
+ * the pass runs out. Nor is it a ban: if the policy admits the device again, the fresh pass it gets
+ * works. Refuse it in the policy as well to keep it out ([hostAdmissionSample]).
+ */
+public suspend fun revokeALostDeviceSample(admission: HostAdmission, lost: DidKey, clock: () -> Instant) {
+    // One past the clock, so a pass issued in this same millisecond is void too.
+    admission.revocations.revoke(lost, notBefore = clock().toEpochMilliseconds() + 1)
 }
 
 /**
@@ -441,6 +464,14 @@ public suspend fun whoCameBackSample(room: Room) {
                 // room's own id it means another process of this device took the seat: this room is over.
                 is LeaveReason.Superseded -> Unit // "Ada is back"
                 else -> Unit // gone
+            }
+            // A new membership. Marked when the device came back on the pass its host gave it, after
+            // its seat was let go: move whatever you keyed on the mark's `previousId` over to
+            // event.member.id (it is null once the host has forgotten the old id). Unmarked, it is a
+            // newcomer the host's admission policy let in.
+            is MembershipEvent.Joined -> when (event.returning) {
+                null -> Unit // a stranger
+                else -> Unit // "Ada is back", on her pass
             }
             else -> Unit
         }

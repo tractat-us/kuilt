@@ -31,6 +31,7 @@ import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -48,13 +49,20 @@ import kotlin.time.Duration.Companion.minutes
  * been good but for the one thing the case changes.
  */
 class ReturningAdmissionTest {
+    private companion object {
+        /** A host key that is not this room's host's. */
+        const val ANOTHER_HOST = 7
+    }
+
     private val bob = PeerId("bob")
     private val bobAgain = PeerId("bob-again")
     private val carol = PeerId("carol")
+    private val eve = PeerId("eve")
     private val hostTab = PeerId("host-tab")
 
     private val bobKey: DeviceKey = fakeDeviceKey(1)
     private val carolKey: DeviceKey = fakeDeviceKey(2)
+    private val eveKey: DeviceKey = fakeDeviceKey(3)
 
     /** A policy that counts the requests it is asked about and admits each on [terms]. */
     private class Counted(private val terms: (AdmissionRequest) -> GrantTerms = { GrantTerms(1.hours) }) {
@@ -72,27 +80,40 @@ class ReturningAdmissionTest {
     }
 
     /**
-     * The host's own store, whose scheme throws, while [failing], on checking a pass's signature: a
-     * platform provider that cannot run. Every other check — a joiner's proof — goes through.
+     * The host's own store, whose scheme counts every pass signature it is asked to check ([checks]),
+     * and throws on one, while [failing]: a platform provider that cannot run. Every other check — a
+     * joiner's proof — goes through uncounted.
+     *
+     * The count is what pins the host's cap on signature checks and its cheap-field filter, which no
+     * verdict shows: a pass checked and found bad, and a pass set aside unchecked, both leave the
+     * device vetted.
      */
     private class FailsPassChecks(private val inner: DeviceKeyStore) : DeviceKeyStore by inner {
         var failing = false
         var failed = 0
+        var checks = 0
 
         override val keyScheme: KeyScheme
             get() {
                 val scheme = inner.keyScheme
                 return object : KeyScheme by scheme {
                     override suspend fun verify(key: DidKey, message: ByteArray, signature: ByteArray): Boolean {
-                        if (failing && "kuilt/grant" in message.decodeToString()) {
-                            failed++
-                            error("the platform provider failed")
+                        if ("kuilt/grant" in message.decodeToString()) {
+                            checks++
+                            if (failing) {
+                                failed++
+                                error("the platform provider failed")
+                            }
                         }
                         return scheme.verify(key, message, signature)
                     }
                 }
             }
     }
+
+    /** This pass with its signature's last byte changed: the same fields, signed by nobody. */
+    private fun Grant.withForgedSignature(): Grant =
+        assertNotNull(Grant.decode(wire.also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }), "a forged signature still decodes")
 
     private fun RawHost.directWelcomesTo(peer: PeerId): List<AdmitMessage.Welcome> =
         sentTo(peer).welcomesFor(peer).filter { it.membership != null }
@@ -248,14 +269,15 @@ class ReturningAdmissionTest {
 
     /**
      * The host's half of the same: a Proof crowded with passes from this host for other rooms, or run
-     * out, ahead of the good one. The host sets aside every pass whose issuer, subject, scope or end
-     * already rules it out, before checking any signature, so the good one is reached however many
-     * come first.
+     * out, or for another device, or from another host, ahead of the good one. The host sets aside
+     * every pass whose issuer, subject, scope or end already rules it out, before checking any
+     * signature, so the good one is reached however many come first.
      */
     @Test
     fun aGoodPassBehindManyThatCannotApplyIsStillFound() = runTest {
         val counted = Counted()
-        val host = rawHost(joiners = setOf(bob), admission = counted.admission)
+        val hostStore = FailsPassChecks(fakeKeyStore(HOST_DEVICE))
+        val host = rawHost(joiners = setOf(bob), store = hostStore, admission = counted.admission)
         host.admit(bob, bobKey, nonce = 1)
         val good = host.passesTo(bob).single()
         host.say(bob, AdmitMessage.Goodbye)
@@ -266,12 +288,91 @@ class ReturningAdmissionTest {
         }
         val runOut = Grant.issue(hostSigner, bobKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now - 2, notAfter = now - 1)
         val anotherDevices = Grant.issue(hostSigner, carolKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
+        // As many as the cap, so the good pass is reached only if every one is set aside unchecked: a
+        // signature check on another host's pass stops at its issuer, so only the cap can see it counted.
+        val anotherHosts = (1..4).map {
+            Grant.issue(fakeDeviceKey(ANOTHER_HOST), bobKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
+        }
 
-        host.admit(bob, bobKey, nonce = 2, grants = otherRooms + runOut + anotherDevices + good)
+        val anotherHostSigned = anotherHosts.all { it.isSignedByIssuer(hostStore.keyScheme) }
+        val checksBefore = hostStore.checks
+        host.admit(bob, bobKey, nonce = 2, grants = otherRooms + runOut + anotherDevices + anotherHosts + good)
 
         assertAll(
-            { assertEquals(1, counted.asked.size, "the good pass is found behind eight that cannot apply") },
+            { assertTrue(anotherHosts.none { it.issuer == host.hostKey } && anotherHostSigned, "rig: four genuine passes, from another host") },
+            { assertEquals(1, counted.asked.size, "the good pass is found behind twelve that cannot apply") },
             { assertEquals(ReturnKind.Returning, host.directWelcomesTo(bob).last().returnKind) },
+            {
+                assertEquals(
+                    1,
+                    hostStore.checks - checksBefore,
+                    "the twelve are set aside on their fields — room, end, subject and issuer: only the good pass's signature is checked",
+                )
+            },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * [revokeALostDeviceSample], run: Bob's pass is void the moment his device is revoked, so his
+     * return on it is vetted as a newcomer's. The cutoff is one past the clock, so even a pass issued in
+     * that same millisecond is void.
+     */
+    @Test
+    fun revokeALostDeviceSampleVoidsThePassTheDeviceHolds() = runTest {
+        val counted = Counted()
+        val host = rawHost(joiners = setOf(bob), admission = counted.admission)
+        host.admit(bob, bobKey, nonce = 1)
+        val pass = host.passesTo(bob).single()
+        host.say(bob, AdmitMessage.Goodbye)
+        val clock = virtualClock()
+
+        revokeALostDeviceSample(counted.admission, bobKey.id, clock)
+        host.admit(bob, bobKey, nonce = 2, grants = listOf(pass))
+
+        assertAll(
+            { assertEquals(pass.issuedAt, clock().toEpochMilliseconds(), "rig: the pass was issued in the same millisecond as the revocation") },
+            { assertEquals(clock().toEpochMilliseconds() + 1, counted.revocations.notBefore(bobKey.id), "the cutoff is one past the clock") },
+            { assertEquals(listOf(bobKey.id, bobKey.id), counted.keys(), "Bob's return on the voided pass is vetted") },
+            { assertNull(host.directWelcomesTo(bob).last().returnKind, "an ordinary admission, not a return") },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * Anyone sent a challenge may send a Proof, so the host checks at most four pass signatures from
+     * one, however many passes it carries. Six passes that the cheap fields cannot rule out — this
+     * host's, for this device and this room, not run out — with signatures nobody made cost four
+     * checks, and the device is vetted as a newcomer.
+     */
+    @Test
+    fun atMostFourPassSignaturesAreCheckedPerProof() = runTest {
+        val counted = Counted()
+        val hostStore = FailsPassChecks(fakeKeyStore(HOST_DEVICE))
+        val host = rawHost(joiners = setOf(bob), store = hostStore, admission = counted.admission)
+        val hostSigner = fakeDeviceKey(HOST_DEVICE)
+        val now = testScheduler.currentTime
+        val forged = (1..6).map {
+            Grant.issue(hostSigner, bobKey.id, GrantScope.Room(KEY_SEAT_ROOM.value), issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
+                .withForgedSignature()
+        }
+
+        val checksBefore = hostStore.checks
+        host.admit(bob, bobKey, nonce = 1, grants = forged)
+        val checks = hostStore.checks - checksBefore
+        val signedByTheHost = forged.count { it.isSignedByIssuer(hostStore.keyScheme) }
+
+        assertAll(
+            { assertEquals(6, forged.map { it.id.toList() }.toSet().size, "rig: six distinct passes") },
+            {
+                assertTrue(
+                    forged.all { it.issuer == host.hostKey && it.subject == bobKey.id && it.scope == GrantScope.Room(KEY_SEAT_ROOM.value) && it.notAfter > now },
+                    "rig: no field rules any of them out, so each would cost a check",
+                )
+            },
+            { assertEquals(0, signedByTheHost, "rig: none is signed by the host") },
+            { assertEquals(4, checks, "the host checks four signatures, not six") },
+            { assertEquals(listOf(bobKey.id), counted.keys(), "none is good: an ordinary admission") },
         )
         host.room.leave()
     }
@@ -435,6 +536,91 @@ class ReturningAdmissionTest {
             { assertEquals(0, anyMinted, "an any-room pass, minted id: unvetted") },
             { assertEquals(ReturningMark(previousId = null), anyMintedJoin?.returning) },
         )
+    }
+
+    // ── A seat released for a device that holds a good pass (rules 6–7) ──────
+
+    /**
+     * Eve's device claims Bob's id while Bob's seat is held partitioned, and Eve holds a good pass of
+     * her own from an earlier visit. Bob's seat is released for her (Decided 18), and the key decided
+     * again without it holds a good pass, so she comes back on it: the policy is not asked, and she is
+     * marked as her own device returning (Decided 23, the design's row 6, its Returning arm).
+     */
+    @Test
+    fun aDifferentDeviceOnAPartitionedIdReturnsOnItsOwnPass() = runTest {
+        val counted = Counted()
+        val host = rawHost(joiners = setOf(bob, carol, eve), admission = counted.admission)
+        host.admit(eve, eveKey, nonce = 1)
+        val evesPass = host.passesTo(eve).single()
+        host.say(eve, AdmitMessage.Goodbye)
+        host.admit(bob, bobKey, nonce = 2)
+        host.admit(carol, carolKey, nonce = 3)
+        host.partition(bob, alive = setOf(carol))
+        val vettedBefore = counted.keys()
+
+        val mark = host.events.mark()
+        host.admit(bob, eveKey, nonce = 4, grants = listOf(evesPass))
+
+        assertAll(
+            { assertEquals(listOf(eveKey.id, bobKey.id, carolKey.id), vettedBefore, "rig: each device was vetted once") },
+            { assertTrue(host.member(eve) == null, "rig: Eve's own seat was gone") },
+            { assertEquals(vettedBefore, counted.keys(), "Eve comes back on her pass: the policy is not asked") },
+            {
+                assertEquals(
+                    listOf("Left(bob, ${LeaveReason.PartitionExpired})", "Joined(bob)"),
+                    host.events.edgesSince(mark).map { it.describe() },
+                    "Bob's seat is released, and Eve joins under the id",
+                )
+            },
+            { assertEquals(listOf(ReturningMark(previousId = eve)), host.events.since(mark).joins().map { it.returning }, "marked as Eve's device returning") },
+            { assertEquals(ReturnKind.Returning, host.directWelcomesTo(bob).last().returnKind) },
+            { assertEquals(eveKey.id, host.member(bob)?.key, "the id is Eve's now") },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * A revoked device's held seat is released at its own Hello, and the device is decided again
+     * without it (Decided 14). When it holds a pass issued at or after the cutoff — here the one its
+     * second process was given on an ordinary admission after the revocation — it comes back on that
+     * pass, unvetted (Amendment M): pass revocation reads the pass's `issuedAt`, seat revocation the
+     * seat's admission.
+     */
+    @Test
+    fun aRevokedSeatIsReleasedForAPassIssuedAfterTheCutoff() = runTest {
+        val counted = Counted()
+        val host = rawHost(joiners = setOf(bob, bobAgain, carol), admission = counted.admission)
+        val admittedAt = testScheduler.currentTime
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+        val cutoff = testScheduler.currentTime
+        counted.revocations.revoke(bobKey.id, notBefore = cutoff)
+        host.admit(bobAgain, bobKey, nonce = 3)
+        val laterPass = host.passesTo(bobAgain).single()
+        host.say(bobAgain, AdmitMessage.Goodbye)
+        val heldWhenBobReturns = host.member(bob)?.liveness
+        val vettedBefore = counted.keys()
+
+        val mark = host.events.mark()
+        host.admit(bob, bobKey, nonce = 4, grants = listOf(laterPass))
+
+        assertAll(
+            { assertTrue(admittedAt < cutoff, "rig: Bob's seat was admitted before the cutoff") },
+            { assertTrue(laterPass.issuedAt >= cutoff, "rig: the pass Bob presents was issued at or after it") },
+            { assertIs<Liveness.Partitioned>(heldWhenBobReturns, "rig: Bob's revoked seat was still held") },
+            { assertEquals(listOf(bobKey.id, carolKey.id, bobKey.id), vettedBefore, "rig: the second process was vetted, after the revocation") },
+            { assertEquals(vettedBefore, counted.keys(), "on the later pass Bob comes back unvetted") },
+            {
+                assertEquals(
+                    listOf("Left(bob, ${LeaveReason.PartitionExpired})", "Joined(bob)"),
+                    host.events.edgesSince(mark).map { it.describe() },
+                    "the revoked seat is released, and Bob joins as a new membership",
+                )
+            },
+            { assertEquals(ReturnKind.Returning, host.directWelcomesTo(bob).last().returnKind, "marked as a return") },
+        )
+        host.room.leave()
     }
 
     // ── A pass is good only with the host that issued it (Decided 11) ────────

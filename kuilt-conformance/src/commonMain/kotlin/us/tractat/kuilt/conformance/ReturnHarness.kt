@@ -23,6 +23,7 @@ import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 
 /**
  * Whether a harness can make a device drop off and come back — and, when it cannot, **where that is
@@ -65,6 +66,17 @@ public sealed interface ReturnFixture {
  *
  * Rooms run on the test scheduler, so the rows wait in **virtual** time. A harness whose fabric does
  * real I/O cannot use these rows as written.
+ *
+ * That includes a device keeping the pass its host's `Welcome` carried: a room keeps it in work it
+ * schedules after handling the `Welcome`, and a row that is about to kill the process waits for it by
+ * running the test scheduler's pending work once the device sees its host. A harness whose rooms keep
+ * the pass anywhere else — another dispatcher, a key store that waits on real I/O — loses it to the
+ * kill. The relaunch then has nothing to present, and the pass rows red on the admission policy being
+ * asked: `returnInsideGrantNoVetting`, the in-term arm of `expiredGrantIsVetted`, and the last arm of
+ * `revokedSubjectIsVetted`.
+ *
+ * The rows read the host's clock only off the host's own roster (a partition's `since`), so the
+ * harness's clock may start wherever it likes; it has to move with the test scheduler.
  */
 public class ReturnHarness(
     /** The host's device. The rows call [RoomFactory.host] on it exactly once. */
@@ -121,6 +133,11 @@ public interface ReturnDevice {
      * The first launch presents a peer id of the harness's choosing. A later launch follows a [kill]:
      * with [reusePeerId] it presents the id the killed process had, as a fabric with durable peer ids
      * does; without it, a fresh one, as most fabrics do.
+     *
+     * Every launch of a device works on the device's **one** key store, as an app's launches share its
+     * platform store: a pass the host handed an earlier process is kept where the next one finds it
+     * (#3223). The relaunch rows come back on that pass, so a harness that gives each launch a copy of
+     * the key and a store of its own reds there, on the policy being asked.
      */
     public suspend fun launch(reusePeerId: Boolean = false): RoomFactory
 
@@ -215,7 +232,8 @@ internal class EventTape(room: Room, scope: CoroutineScope) {
 
 /**
  * The host's admission policy for a return row (#3220): it admits everyone, as
- * [AdmissionPolicy.open] does, and records the key of every newcomer it is asked about, oldest first.
+ * [AdmissionPolicy.open] does with a pass good for [readmitFor], and records the key of every newcomer
+ * it is asked about, oldest first.
  *
  * The friction bar is also a count of vetting. A restore — the same seat back, under the same id or a
  * new one — never asks the policy, and nor does a return on a good pass once the seat is gone (#3222).
@@ -223,10 +241,13 @@ internal class EventTape(room: Room, scope: CoroutineScope) {
  * second live process are new memberships, which it asks about once each (plan Amendments C, H and
  * J). The rows read [keys] before and after their return to say which happened.
  */
-internal class VettingCount {
+internal class VettingCount(readmitFor: Duration = 1.hours) {
     private val lock = reentrantLock()
     private val asked = mutableListOf<DidKey>()
-    private val open = AdmissionPolicy.open()
+    private val open = AdmissionPolicy.open(readmitFor)
+
+    /** The host's revocations, which a row revokes a device in. Its own per row: no row shares another's. */
+    val revocations: RevocationList = RevocationList.inMemory()
 
     /** What a row hosts its room with. */
     val admission: HostAdmission = HostAdmission(
@@ -234,7 +255,7 @@ internal class VettingCount {
             lock.withLock { asked += request.key }
             open.decide(request)
         },
-        revocations = RevocationList.inMemory(),
+        revocations = revocations,
     )
 
     /** The key of every newcomer the policy was asked about so far, oldest first. */

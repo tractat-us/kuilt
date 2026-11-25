@@ -9,8 +9,8 @@ import kotlin.time.Duration.Companion.hours
 
 /**
  * Test your own admission policy without a room: build the request the room would hand it, and ask
- * it. Here the policy keeps out devices on an app-owned blocked list and lets everyone else in for an
- * hour after last contact.
+ * it. Here the policy keeps out devices on an app-owned blocked list and lets everyone else in, with
+ * a pass good for an hour.
  */
 @OptIn(AdmissionTestApi::class)
 public suspend fun admissionPolicyTestSample(blocked: DidKey, stranger: DidKey): List<AdmissionDecision> {

@@ -546,6 +546,39 @@ class HostAdmissionPolicyTest {
         )
     }
 
+    /**
+     * Eve claims Bob's id while his seat is held partitioned, and the policy is slow to answer. Bob
+     * heals meanwhile. When the policy admits Eve, the room decides again under the lock, sees a
+     * different key on a connected seat, and refuses her `KeyConflict`: Bob's seat is not released for
+     * an answer to a question that no longer stands (plan Amendment K).
+     */
+    @Test
+    fun aMemberWhoHealsWhileANewcomerIsVettedKeepsTheSeat() = runTest {
+        val gate = CompletableDeferred<AdmissionDecision>()
+        val recorded = Recorded { request -> if (request.key == eveKey.id) gate.await() else admitAll }
+        val host = rawHost(joiners = setOf(bob, carol), admission = recorded.admission)
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+
+        val mark = host.events.mark()
+        host.admit(bob, eveKey, nonce = 3) // Eve, under Bob's id
+        val askedWhilePartitioned = recorded.keys()
+        host.advanceKeeping(alive = setOf(bob, carol), duration = KEY_SEAT_HEARTBEAT.interval)
+        val healedBeforeTheAnswer = host.member(bob)?.liveness
+        gate.complete(admitAll)
+        runCurrent()
+
+        assertAll(
+            { assertEquals(listOf(bobKey.id, carolKey.id, eveKey.id), askedWhilePartitioned, "rig: Eve was being vetted while Bob's seat was partitioned") },
+            { assertEquals(Liveness.Connected, healedBeforeTheAnswer, "rig: Bob healed before the policy answered") },
+            { assertEquals(listOf<RejectCode>(RejectCode.KeyConflict), host.rejectsTo(bob).map { it.code }, "Eve is refused for the key") },
+            { assertTrue(host.events.edgesSince(mark).none { it is MembershipEvent.Left || it is MembershipEvent.Joined }, "nothing released, nobody joined: ${host.events.edgesSince(mark).render()}") },
+            { assertEquals(bobKey.id, host.member(bob)?.key, "the seat is still Bob's") },
+            { assertEquals(Liveness.Connected, host.member(bob)?.liveness) },
+        )
+    }
+
     // ── Revocation (Decided 14) ──────────────────────────────────────────────
 
     /**
@@ -577,6 +610,37 @@ class HostAdmissionPolicyTest {
             { assertEquals(2, welcomes.size, "rig: two direct Welcomes") },
             { assertTrue(welcomes.last().membership != firstMembership, "a new membership, not the old one restored") },
             { assertIs<Liveness.Connected>(host.member(bob)?.liveness) },
+        )
+    }
+
+    /**
+     * The same revoked device, refused this time: the policy is asked first, with the seat still held,
+     * and a refusal releases nothing (plan Amendment K). Bob hears the policy's code, and his seat is
+     * still held partitioned under his key, to end when its hold does.
+     */
+    @Test
+    fun aRevokedDevicesHeldSeatStaysHeldWhenThePolicyRefuses() = runTest {
+        val notWelcome = RejectCode.Unknown("not-welcome")
+        var bobsAdmissions = 0
+        val recorded = Recorded { request ->
+            if (request.key == bobKey.id && bobsAdmissions++ > 0) AdmissionDecision.Reject(notWelcome) else admitAll
+        }
+        val host = rawHost(joiners = setOf(bob, carol), admission = recorded.admission)
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+        recorded.revocations.revoke(bobKey.id, notBefore = testScheduler.currentTime)
+
+        val mark = host.events.mark()
+        host.admit(bob, bobKey, nonce = 3)
+        val seat = host.member(bob)
+
+        assertAll(
+            { assertEquals(listOf(bobKey.id, carolKey.id, bobKey.id), recorded.keys(), "rig: the revoked device was vetted again") },
+            { assertEquals(listOf<RejectCode>(notWelcome), host.rejectsTo(bob).map { it.code }, "Bob hears the policy's code") },
+            { assertEquals(emptyList(), host.events.edgesSince(mark).render(), "a refusal releases nothing") },
+            { assertIs<Liveness.Partitioned>(seat?.liveness, "Bob's seat is still held partitioned") },
+            { assertEquals(bobKey.id, seat?.key, "under Bob's key") },
         )
     }
 
