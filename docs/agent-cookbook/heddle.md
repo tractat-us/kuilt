@@ -479,8 +479,8 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
    [Editing the tree as a document](#editing-the-tree-as-a-document).
 3. **Validate** with `Topology.from`. Every `TopologyProblem` carries the path to edit; see
    [Loading the tree from a config file](#loading-the-tree-from-a-config-file).
-4. **List what the save changes** with `startedFrom.changesTo(candidate)`, and warn on the changes
-   that lose history; the list is under
+4. **List what the save changes** with `startedFrom.changesTo(candidate)`, and warn on each change
+   whose `history` is `LOST`; the list is under
    [Showing an admin what an edit changes](#showing-an-admin-what-an-edit-changes).
 5. **Preview** with `previewApply(candidate, generation, startedFrom)`; see
    [Previewing a change to the tree](#previewing-a-change-to-the-tree).
@@ -508,9 +508,12 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
     document = (document.setWeight(problem.path, "1") as TopologyEdit.Edited).document
     val candidate = (Topology.from(document) as TopologyParse.Valid).topology
 
-    // List what the save changes against the tree the editor loaded: the rename drains light.
-    val drains = startedFrom.changesTo(candidate).filterIsInstance<TopologyChange.Removed>()
-    check(drains.single().names == listOf("pool", "light"))
+    // List what the save changes against the tree the editor loaded. A new tree is refused, not
+    // saved; the changes that lose history are the warning, and here the rename drains light.
+    val changes = startedFrom.changesTo(candidate)
+    check(changes.none { it.history == TopologyChange.History.NEW_TREE })
+    val warnings = changes.filter { it.history == TopologyChange.History.LOST }
+    check(warnings.single().names == listOf("pool", "light"))
 
     // Preview what the save would do to the running engine, checked against the same tree.
     val preview = heddle.previewApply(candidate, generation = 2L, startedFrom = startedFrom)
@@ -539,10 +542,10 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
 - **The page's state is two values:** the tree it loaded (`startedFrom`) and the document being
   edited. Every check after an edit is against `startedFrom`, never against the previous edit, so
   a rename and the rename back show no change at all.
-- **The sample warns on `Removed` only, because that is the one its edit makes.** A real page
-  warns on every change that loses history, which also takes in `WeightChanged`,
-  `TemplateRemoved`, and a `TemplateChanged` with a new weight. A page refuses a root rename before
-  it previews, because `apply` throws on it.
+- **Each change says what it costs in `history`.** The page warns on every `LOST`, which takes in
+  a `Removed`, a `WeightChanged`, a `TemplateRemoved`, and a `TemplateChanged` with a new weight,
+  without listing them itself. It refuses a `NEW_TREE`, a renamed root, before it previews,
+  because `apply` throws on it.
 - **Preview and save with the same `generation`**, and preview again after a reload: the tree the
   preview was taken against has gone.
 - **A save refused as `TreeChanged` changed nothing.** The page does not retry it blind. It lists

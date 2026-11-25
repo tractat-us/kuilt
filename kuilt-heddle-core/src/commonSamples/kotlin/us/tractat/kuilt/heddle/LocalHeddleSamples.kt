@@ -1038,9 +1038,12 @@ internal fun sampleMinimalEditor() {
     document = (document.setWeight(problem.path, "1") as TopologyEdit.Edited).document
     val candidate = (Topology.from(document) as TopologyParse.Valid).topology
 
-    // List what the save changes against the tree the editor loaded: the rename drains light.
-    val drains = startedFrom.changesTo(candidate).filterIsInstance<TopologyChange.Removed>()
-    check(drains.single().names == listOf("pool", "light"))
+    // List what the save changes against the tree the editor loaded. A new tree is refused, not
+    // saved; the changes that lose history are the warning, and here the rename drains light.
+    val changes = startedFrom.changesTo(candidate)
+    check(changes.none { it.history == TopologyChange.History.NEW_TREE })
+    val warnings = changes.filter { it.history == TopologyChange.History.LOST }
+    check(warnings.single().names == listOf("pool", "light"))
 
     // Preview what the save would do to the running engine, checked against the same tree.
     val preview = heddle.previewApply(candidate, generation = 2L, startedFrom = startedFrom)
