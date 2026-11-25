@@ -1,5 +1,6 @@
 package us.tractat.kuilt.gossip
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -24,6 +25,8 @@ import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.GossipView")
 
 /**
  * The live, self-healing partial view of the gossip overlay for one peer.
@@ -111,7 +114,11 @@ public class GossipView(
     private sealed interface Command {
         data class RosterChanged(val roster: Set<PeerId>) : Command
 
-        data class EdgeDown(val peer: PeerId) : Command
+        /** [detector] reported [peer]'s edge down; it counts only while [detector] still watches [peer]. */
+        data class EdgeDown(
+            val peer: PeerId,
+            val detector: HeartbeatPartitionDetector,
+        ) : Command
     }
 
     private class DetectorHandle(
@@ -150,6 +157,16 @@ public class GossipView(
         when (command) {
             is Command.RosterChanged -> reconcile(scope, command.roster)
             is Command.EdgeDown -> {
+                // An edge-down from a detector that has since been stopped, and perhaps replaced, is
+                // stale (#3672): the peer it names may be back under a new detector that never saw it
+                // go quiet. Acted on, it would drop that healthy neighbour and hold it in [failed] for
+                // as long as it stays rostered. It gets here two ways: queued behind the roster change
+                // that stopped its detector, or sent late by a collector that lost its thread, since a
+                // send to the unlimited [commands] does not suspend and so ignores the cancel.
+                if (detectors[command.peer]?.detector !== command.detector) {
+                    logger.debug { "gossip view: ignoring an edge-down of ${command.peer} from a replaced detector" }
+                    return
+                }
                 failed = failed + command.peer
                 reconcile(scope, roster.value)
             }
@@ -217,12 +234,16 @@ public class GossipView(
     ) {
         val link = PerPeerSeam(seam, peer, rawIncoming)
         val detector = HeartbeatPartitionDetector(link, peer, config, clock)
-        detector.start(scope)
         val eventsJob =
             scope.launch {
                 detector.events.collect { event -> onDetectorEvent(event, detector) }
             }
+        // Registered before it starts, so the first event it reports already names the current
+        // detector. Not load-bearing today: the identity is checked only by this same command
+        // processor, which cannot reach an EdgeDown before this call returns, and the detector's
+        // events channel buffers whatever it reports in the meantime.
         detectors[peer] = DetectorHandle(detector, eventsJob)
+        detector.start(scope)
     }
 
     private suspend fun onDetectorEvent(
@@ -232,7 +253,7 @@ public class GossipView(
         when (event) {
             is PartitionEvent.PeerUnresponsive,
             is PartitionEvent.PeerLost,
-            -> commands.send(Command.EdgeDown(event.peerId))
+            -> commands.send(Command.EdgeDown(event.peerId, detector))
             // A still-active peer that recovers needs no overlay change;
             // anti-entropy backstops any data missed during the blip.
             is PartitionEvent.PeerRecovered -> Unit
