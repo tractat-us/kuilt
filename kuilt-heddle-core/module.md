@@ -43,7 +43,9 @@ The rest of the surface, by what you would ask it:
   `explain` returns a `WaitExplanation`; `entitlement` is a leaf's
   fair share of the slots as an exact `Rational`; `shareLine(waiting)` reads the
   tree once and its `ShareLine.share` gives any group's share of the pool, the
-  root and every group above a lane included. A reader holding only a stored
+  root and every group above a lane included, and `ShareLine.lag` how far the
+  group stands from that share at its parent, in units of service, positive when
+  it is owed. A reader holding only a stored
   snapshot asks the same four of `LocalHeddleSnapshot.view(policy)` (from `persist()`), with no engine.
 - **No more than N of these at once.** A `maxConcurrent` on a group, a lane or a
   group's template is a ceiling: the most leases open beneath it at once, `0` to

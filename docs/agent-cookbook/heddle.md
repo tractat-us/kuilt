@@ -584,9 +584,10 @@ in the page. Read one `ShareLine` per table instead, and look each row up.
 - **A ceiling is all or nothing.** A group at its `maxConcurrent` is owed `0`; one below it keeps
   its whole weight share, even when that is more than the leases it has room for. A share is not
   a capped rate.
-- **A line keeps what it read.** Take a new one when the waiting set or the tree changes. Each row
-  is worked out when the page asks for it, so a share too fine to fit a `Long` fraction throws
-  `ArithmeticException` for that row alone.
+- **A line keeps what it read.** Take a new one when the waiting set or the tree changes, and,
+  for `lag`, after any lease, since it reads the books. Each row is worked out when the page asks
+  for it, so a share too fine to fit a `Long` fraction throws `ArithmeticException` for that row
+  alone.
 
 ### How far each group stands from its share
 
@@ -610,15 +611,18 @@ a leaf loses. The same line answers it for every row.
 - **Positive is owed, negative is ahead.** It is `weight × (front − position)` at the group's
   parent, so the lags of one parent's competing children add up to `0`. Where `explain` answers
   `BehindAtLevel` for a leaf beneath the group, it equals `weight × (frontWide −
-  leafSideVirtualServiceWide)`.
+  leafSideVirtualServiceWide)`, unless a competing child of that parent holds `2⁶¹` units
+  outstanding: the pick then counts it idle and the line does not, so the two can differ even in
+  sign (#3707).
 - **It is read as the next pick there would read it.** A group that comes back after idling is
   moved first, as the pick moves it: one the engine saw stop keeps the lag it left with; one
-  clamped, or a newborn, reads `0` or under a sixteenth of a unit below. So a group just served is
-  not always below zero.
+  clamped, or a newborn, reads `0` or under a sixteenth of a unit below, or above zero under a
+  `sleeperCredit`. So a group just served is not always below zero.
 - **`null` where there is no distance to read:** the root, a group that does not compete (off the
-  root, `lag` is not `null` exactly when `share` is above `0`), and the children of a parent whose
-  weights fail the weight budget or whose step passes the position limit. It throws only when the
-  lag itself does not fit a `Long` fraction, never because the parent has run a long time.
+  root, one whose `share` is `0`), and the children of a parent whose weights fail the weight
+  budget or whose step passes the position limit, which still compete and have a share. It
+  throws only when the lag itself does not fit a `Long` fraction, never because the parent has run
+  a long time.
 
 ## Editing the tree as a document
 

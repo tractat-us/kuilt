@@ -74,19 +74,25 @@ public class ShareLine internal constructor(
      * position is [group]'s virtual service there, and the front its competing siblings' weighted
      * mean, the one [WaitExplanation.BehindAtLevel] reports. So wherever [LocalHeddleView.explain]
      * answers [WaitExplanation.BehindAtLevel] at that parent for a leaf beneath [group], this is
-     * `weight × (frontWide − leafSideVirtualServiceWide)`.
+     * `weight × (frontWide − leafSideVirtualServiceWide)`, while every competing child of that
+     * parent holds less than `2⁶¹` units outstanding. One past that still competes, so it counts in
+     * this front, but the pick and `explain` count it as idle and leave it out of theirs, and the two
+     * can then differ even in sign (#3707). Only `2¹⁷` leases of the largest reservation open at once
+     * beneath one edge, or as many extensions of one, reach it.
      *
      * A child that has competed since its parent began reads what it is owed of the service handed
      * out beneath that parent. A child coming back to compete does not always read `0`. One the
      * engine saw stop asking keeps the lag it left with. One clamped as it wakes, or a newborn, lands
      * at the front on its own grid: `0`, or less than a sixteenth of a unit below it, one tick of
-     * that grid. A [LocalPolicy.sleeperCredit] leaves a clamped one that much above. So "just served
-     * reads negative" holds from a level start, not in general.
+     * that grid. A [LocalPolicy.sleeperCredit] `c` leaves a clamped one above zero instead, by up to
+     * `c × (1 − w / Σw)`, since it counts in the front it lands behind. So "just served reads
+     * negative" holds from a level start, not in general.
      *
-     * `null` for the root; for a group that does not compete, so off the root a lag is not `null`
-     * exactly when [share] is above `0`; and for each child of a parent where no step can be taken,
-     * because its competing weights fail the weight budget or the step would pass the position
-     * limit. Such a parent fails only the rows beneath it, never the line.
+     * `null` for the root; for a group that does not compete, which off the root is exactly a
+     * group whose [share] is `0`; and for each child of a parent where no step can be taken,
+     * because its weights fail the weight budget or the step would pass the position limit. Such
+     * a child still competes, so its share is above `0` while its lag is `null`. The parent fails
+     * only the rows beneath it, never the line.
      *
      * Each answer is formed when it is asked for, exactly, from what the line took once. How far the
      * parent has climbed costs nothing: the front and the position are subtracted in full before
@@ -99,7 +105,9 @@ public class ShareLine internal constructor(
         val parent = parentOf[group] ?: return null
         val family = checkNotNull(families[parent]) { "${parent.value} has a competing child but no family" }
         val front = family.front as? Front.Fits ?: return null
-        val sum = family.sum as? WeightSum.Fits ?: return null
+        // A placed step passed the weight budget over every active child, and the competing ones
+        // are among them, so their sum fits.
+        val sum = checkNotNull(family.sum as? WeightSum.Fits) { "${parent.value}'s step was placed, yet its competing weights leave Long" }
         val weight = checkNotNull(family.weights[group]) { "${group.value} is not among ${parent.value}'s competing children" }
         val position = checkNotNull(front.positions[group]) { "${group.value} competes beneath ${parent.value} but was not placed" }
         return lagOf(weight, position, front.total, sum)

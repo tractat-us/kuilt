@@ -2210,11 +2210,11 @@ public class LocalHeddle private constructor(
         /**
          * The waiting view a pick's seat and wake step reads ([Demands.waiting]), over [competing],
          * a set already lifted by the descent's own predicate ([reachable]). For a read that takes
-         * that step at every parent at once ([ShareLine]); the step reads no grant size, so
-         * [reservation] only fills the demand in.
+         * that step at every parent at once ([ShareLine]). The step reads no grant size, so the
+         * largest reservation only fills the demand in.
          */
-        internal fun waitingOver(ledger: EntitlementLedger, competing: Set<GroupId>, reservation: Long): (AttachmentId) -> Demand =
-            demandOver(ledger, competing, Demand(targetOutstanding = UNBOUNDED_TARGET, maximumUsefulGrant = reservation))
+        internal fun waitingOver(ledger: EntitlementLedger, competing: Set<GroupId>): (AttachmentId) -> Demand =
+            demandOver(ledger, competing, Demand(targetOutstanding = UNBOUNDED_TARGET, maximumUsefulGrant = MAX_RESERVATION))
 
         /** [wants] for an edge whose child is in [groups], [Demand.NONE] for every other. */
         private fun demandOver(ledger: EntitlementLedger, groups: Set<GroupId>, wants: Demand): (AttachmentId) -> Demand =

@@ -174,7 +174,7 @@ class ShareLineLagTest {
             assertEquals(before, h.allocator.memory)
             val competing = ledger.reachable(waiting, h.root, Leasable.ByTopology(h.persist().lastApplied))
             val fork = h.allocator.fork()
-            for (parent in parentsOf(ledger, competing)) fork.settle(parent, ledger, LocalHeddle.waitingOver(ledger, competing, 1L))
+            for (parent in parentsOf(ledger, competing)) fork.settle(parent, ledger, LocalHeddle.waitingOver(ledger, competing))
             if (fork.memory != before) stepsThatMove++
         }
         assertTrue(stepsThatMove > SEEDS, "lines whose steps move the memory they run on: $stepsThatMove")
@@ -223,7 +223,7 @@ class ShareLineLagTest {
         forEachState { h, ledger, _, rng ->
             val waiting = ViewHistories.names.filter { rng.nextInt(3) != 0 }.toSet()
             val competing = ledger.reachable(waiting, h.root, Leasable.ByTopology(h.persist().lastApplied))
-            val view = LocalHeddle.waitingOver(ledger, competing, 1L)
+            val view = LocalHeddle.waitingOver(ledger, competing)
             val parents = parentsOf(ledger, competing)
             for (parent in parents) {
                 val placed = positionsOf(h.allocator.place(parent, ledger, view))
@@ -397,6 +397,51 @@ class ShareLineLagTest {
             { assertFailsWith<ArithmeticException> { line.lag(ids.a) } },
             { assertFailsWith<ArithmeticException> { line.lag(ids.b) } },
             { assertEquals(Rational.ZERO, checkNotNull(line.lag(ids.p)) + checkNotNull(line.lag(ids.x))) },
+        )
+    }
+
+    /**
+     * Pins today's behaviour where "competing" and "demanding" part (#3707). Lane `a` holds `2⁶¹`
+     * units outstanding, so it still competes, since its lane waits, but the step and `explain`
+     * count it as idle. The line's front counts `a`, far ahead, and so reads `b` as owed. `explain`'s
+     * front leaves it out and reads `b` half a unit ahead. The public API reaches the same state
+     * with one `MAX_RESERVATION` lease and 131,072 `extend`s; here one delegation down `a`'s edge,
+     * made outside the engine, stands in for them.
+     */
+    @Test
+    fun pastTheUnboundedTargetALagAndExplainDisagree() {
+        val tree = draft("root") {
+            lane("a")
+            lane("b")
+            lane("c")
+        }
+        val a = tree.groupId("a")
+        val b = tree.groupId("b")
+        val c = tree.groupId("c")
+        val all = setOf(a, b, c)
+        val h = LocalHeddle.bootWhole(tree, policy, epoch = 0L).also { it.mintSupply(Long.MAX_VALUE / 2) }
+        repeat(3) { h.lease(all) }
+        val aEdge = edgeTo(h, a)
+        val huge = 1L shl 61
+        val booked = h.snapshot().ledger
+        val ledger = booked.piece(checkNotNull(booked.delegate(LocalHeddle.SELF, aEdge, huge)) { "the delegation down a" }.delta)
+        val engine = LocalHeddle.scratch(h.root, policy, 0L, ledger, h.allocator.fork(), Leasable.ByTopology(tree), Capacity.NONE, emptyMap())
+        repeat(2) { check(engine.acquire(all, eligible = setOf(b), startedAt = 0L) is AcquireOutcome.Acquired) }
+        check(engine.acquire(all, eligible = setOf(c), startedAt = 0L) is AcquireOutcome.Acquired)
+        val outstanding = engine.snapshot().ledger.activeChildren(h.root).single { it.attachment == aEdge }.outstanding
+        val line = engine.shareLine(all)
+        val why = engine.explain(b, all, all)
+        val lags = listOf(a, b, c).map { checkNotNull(line.lag(it)) }
+        assertAll(
+            { assertTrue(outstanding >= huge, "the rig: a's outstanding is past UNBOUNDED_TARGET, $outstanding") },
+            { assertTrue(line.share(a) > Rational.ZERO, "the rig: a still competes") },
+            { assertTrue(why is WaitExplanation.BehindAtLevel && why.parent == h.root, "the rig: explain answers at the root, $why") },
+            {
+                val behind = why as WaitExplanation.BehindAtLevel
+                assertEquals(Rational.of(-1L, 2L), checkNotNull(behind.frontWide).toRational() - checkNotNull(behind.leafSideVirtualServiceWide).toRational(), "explain: b half a unit ahead")
+            },
+            { assertTrue(lags[1] > Rational.of(1L shl 40), "the line: b owed a share of a's lead, ${lags[1]}") },
+            { assertEquals(Rational.ZERO, lags.fold(Rational.ZERO, Rational::plus), "the lags still add up to zero") },
         )
     }
 

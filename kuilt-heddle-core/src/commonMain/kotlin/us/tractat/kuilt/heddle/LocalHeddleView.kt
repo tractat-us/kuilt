@@ -282,7 +282,7 @@ public class LocalHeddleView internal constructor(
     public fun shareLine(waiting: Set<GroupId>): ShareLine {
         val competing = ledger.reachable(ledger.belowCeilings(waiting, openBeneath, root, leasable), root, leasable)
         // Placing copies what each parent's step reads of the wake memory, so the engine's own is never moved.
-        return ShareLine.over(ledger, root, competing, allocator, LocalHeddle.waitingOver(ledger, competing, policy.defaultReservation))
+        return ShareLine.over(ledger, root, competing, allocator, LocalHeddle.waitingOver(ledger, competing))
     }
 }
 
