@@ -26,7 +26,6 @@ import us.tractat.kuilt.session.election.ElectionLobby
 import us.tractat.kuilt.session.election.ElectionOutcome
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
-import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.random.Random
 import kotlin.time.Duration

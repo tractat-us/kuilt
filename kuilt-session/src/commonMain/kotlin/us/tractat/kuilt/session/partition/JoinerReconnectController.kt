@@ -199,16 +199,15 @@ public sealed interface JoinerReconnectEvent {
 }
 
 /**
- * How a resume attempt turned out — on **either** side of the protocol.
+ * What a host's [JoinerReconnectController.tryResume] decided about its own window state.
  *
- * The two sides see disjoint halves of this hierarchy, and the halves are named so the compiler
- * can enforce it (#2364):
+ * [HostVerdict] is the half a consumer meets: a hold policy returns one. It never leaves the host as
+ * a value: the room acts on it, restoring the seat or releasing it.
  *
- * - [HostVerdict] is what a host's [JoinerReconnectController.tryResume] renders from its own
- *   window state. It never leaves the host as a value: the room acts on it, restoring the seat or
- *   releasing it.
- * - [JoinerOutcome] is how one attempt of a joiner's reconnect turned out, and it includes outcomes
- *   no host can produce: silence ([TimedOut]) and a room that is already over ([WindowClosed]).
+ * A joiner's reconnect has outcomes of its own that no host renders: silence, and a room that is
+ * already over. Those are `JoinerOutcome`, which is `internal`. Since a return became a Hello (#3159)
+ * no public call hands a consumer one; the room's events say how a return went. [Success] and
+ * [WindowClosed] are on both sides, as the same values.
  *
  * **Why the split is typed rather than documented.** Both halves used to be one type, so a `when`
  * over a joiner's outcome could carry arms for host verdicts it can never receive. It compiled, so
@@ -218,29 +217,13 @@ public sealed interface ResumeResult {
     /** The half a host renders: what [JoinerReconnectController.tryResume] decided about its own window state. */
     public sealed interface HostVerdict : ResumeResult
 
-    /**
-     * The half a joiner's reconnect observes for one Hello: the host's answer ([Success] /
-     * [Refused]), its silence ([TimedOut]), or the local room having nothing left to resume onto
-     * ([WindowClosed]).
-     */
-    public sealed interface JoinerOutcome : ResumeResult
-
     /** The seat was held and has come back: the same membership. */
     public data object Success : HostVerdict, JoinerOutcome
 
     /**
-     * There is **no window to resume onto**, and no host refusal was involved.
-     *
-     * As a [HostVerdict]: the window for this peer elapsed, or was already spent on a restore.
-     * Terminal — no later attempt can restore this seat. Distinct from [WindowNotYetOpen], which
-     * looks identical from the outside but is transient (#1572).
-     *
-     * As a [JoinerOutcome] it is a **local** answer: the room is already terminal (it was left, or
-     * the host was lost), or the Hello could not be sent. A host `Welcome` handled once the room is
-     * terminal is moot and settles as this (#3094). It is also what a return reports when the seat
-     * was gone and the host admitted this member afresh — a `Welcome` naming another membership
-     * (#3215): the room keeps that admission and stays in session. A host's refusal arrives as
-     * [Refused] instead (#2364), so this value never carries a reason the host gave.
+     * There is **no window to resume onto**: the window for this peer elapsed, or was already spent
+     * on a restore. Terminal — no later attempt can restore this seat. Distinct from
+     * [WindowNotYetOpen], which looks identical from the outside but is transient (#1572).
      */
     public data object WindowClosed : HostVerdict, JoinerOutcome
 
@@ -252,17 +235,33 @@ public sealed interface ResumeResult {
      * as a seat still held, and restores it.
      */
     public data object WindowNotYetOpen : HostVerdict
+}
 
+/**
+ * How one attempt of a joiner's reconnect turned out: the host's answer ([ResumeResult.Success] /
+ * [Refused]), its silence ([TimedOut]), or the local room having nothing left to resume onto
+ * ([ResumeResult.WindowClosed]).
+ *
+ * `internal`, because only the joiner's reconnect machinery produces and reads it — [JoinerResumeMachine]
+ * and the room's `sayHelloAgain` — and nothing public returns or accepts it.
+ *
+ * As a joiner outcome [ResumeResult.WindowClosed] is a **local** answer: the room is already terminal
+ * (it was left, or the host was lost), or the Hello could not be sent. A host `Welcome` handled once
+ * the room is terminal is moot and settles as it (#3094). It is also what a return reports when the
+ * seat was gone and the host admitted this member afresh — a `Welcome` naming another membership
+ * (#3215): the room keeps that admission and stays in session. A host's refusal arrives as [Refused]
+ * instead (#2364), so [ResumeResult.WindowClosed] never carries a reason the host gave.
+ */
+internal sealed interface JoinerOutcome {
     /**
      * The host **answered, and said no** — an `AdmitMessage.Reject` carrying its raw [message] and
      * structured [code] (#2364), answering the Hello this attempt sent.
      *
-     * The joiner-side counterpart of the host's [HostVerdict], and the same
-     * `(message, code)` shape [us.tractat.kuilt.session.FailureReason.Refused] already uses for a
-     * refusal that ended the session. Before it existed, every reject completed as [WindowClosed],
-     * so "the grace window elapsed", "that token names a room I don't serve" and "I haven't noticed
-     * your drop yet" were one value — and the last of those is *transient*, the one case where
-     * re-joining fresh is the wrong move.
+     * The same `(message, code)` shape [us.tractat.kuilt.session.FailureReason.Refused] uses for a
+     * refusal that ended the session. Before it existed, every reject completed as
+     * [ResumeResult.WindowClosed], so "the grace window elapsed", "that token names a room I don't
+     * serve" and "I haven't noticed your drop yet" were one value — and the last of those is
+     * *transient*, the one case where re-joining fresh is the wrong move.
      *
      * **Branch on [code], not [message]:** the text is for a human reading a log. Treat an
      * unrecognised code as retryable — [RejectCode.retryable] already defaults that way, and a host
@@ -272,7 +271,7 @@ public sealed interface ResumeResult {
      * whose [RejectCode.Unspecified] is retryable, and quietly satisfy a test asking whether a
      * terminal refusal stops the retry loop.
      */
-    public data class Refused(
+    data class Refused(
         val message: String,
         val code: RejectCode,
     ) : JoinerOutcome
@@ -283,11 +282,11 @@ public sealed interface ResumeResult {
      * or the seam the Hello went out on tore first, so that no verdict could arrive (#3151).
      *
      * The host is unreachable *right now*: it is gone, the link is black-holed, or the reply
-     * was lost. **Not** a refusal — deliberately distinct from [WindowClosed], which conflates
-     * "expired" with "not yet open" (#1571); folding a silent host into that pile would hide a
-     * fourth, honest outcome. A later attempt with the same credentials may still succeed once
-     * the host is reachable again, so callers (and the internal auto-reconnect loop) treat it as
-     * a transient retry signal, not a terminal verdict.
+     * was lost. **Not** a refusal — deliberately distinct from [ResumeResult.WindowClosed], which
+     * conflates "expired" with "not yet open" (#1571); folding a silent host into that pile would
+     * hide a fourth, honest outcome. A later attempt with the same credentials may still succeed once
+     * the host is reachable again, so the auto-reconnect loop treats it as a transient retry signal,
+     * not a terminal verdict.
      */
-    public data object TimedOut : JoinerOutcome
+    data object TimedOut : JoinerOutcome
 }

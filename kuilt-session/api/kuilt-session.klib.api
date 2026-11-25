@@ -746,37 +746,13 @@ sealed interface us.tractat.kuilt.session.partition/JoinerReconnectEvent { // us
 sealed interface us.tractat.kuilt.session.partition/ResumeResult { // us.tractat.kuilt.session.partition/ResumeResult|null[0]
     sealed interface HostVerdict : us.tractat.kuilt.session.partition/ResumeResult // us.tractat.kuilt.session.partition/ResumeResult.HostVerdict|null[0]
 
-    sealed interface JoinerOutcome : us.tractat.kuilt.session.partition/ResumeResult // us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome|null[0]
-
-    final class Refused : us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome { // us.tractat.kuilt.session.partition/ResumeResult.Refused|null[0]
-        constructor <init>(kotlin/String, us.tractat.kuilt.session.admit/RejectCode) // us.tractat.kuilt.session.partition/ResumeResult.Refused.<init>|<init>(kotlin.String;us.tractat.kuilt.session.admit.RejectCode){}[0]
-
-        final val code // us.tractat.kuilt.session.partition/ResumeResult.Refused.code|{}code[0]
-            final fun <get-code>(): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session.partition/ResumeResult.Refused.code.<get-code>|<get-code>(){}[0]
-        final val message // us.tractat.kuilt.session.partition/ResumeResult.Refused.message|{}message[0]
-            final fun <get-message>(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.Refused.message.<get-message>|<get-message>(){}[0]
-
-        final fun component1(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.Refused.component1|component1(){}[0]
-        final fun component2(): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session.partition/ResumeResult.Refused.component2|component2(){}[0]
-        final fun copy(kotlin/String = ..., us.tractat.kuilt.session.admit/RejectCode = ...): us.tractat.kuilt.session.partition/ResumeResult.Refused // us.tractat.kuilt.session.partition/ResumeResult.Refused.copy|copy(kotlin.String;us.tractat.kuilt.session.admit.RejectCode){}[0]
-        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/ResumeResult.Refused.equals|equals(kotlin.Any?){}[0]
-        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/ResumeResult.Refused.hashCode|hashCode(){}[0]
-        final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.Refused.toString|toString(){}[0]
-    }
-
-    final object Success : us.tractat.kuilt.session.partition/ResumeResult.HostVerdict, us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome { // us.tractat.kuilt.session.partition/ResumeResult.Success|null[0]
+    final object Success : us.tractat.kuilt.session.partition/JoinerOutcome, us.tractat.kuilt.session.partition/ResumeResult.HostVerdict { // us.tractat.kuilt.session.partition/ResumeResult.Success|null[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/ResumeResult.Success.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/ResumeResult.Success.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.Success.toString|toString(){}[0]
     }
 
-    final object TimedOut : us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome { // us.tractat.kuilt.session.partition/ResumeResult.TimedOut|null[0]
-        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/ResumeResult.TimedOut.equals|equals(kotlin.Any?){}[0]
-        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/ResumeResult.TimedOut.hashCode|hashCode(){}[0]
-        final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.TimedOut.toString|toString(){}[0]
-    }
-
-    final object WindowClosed : us.tractat.kuilt.session.partition/ResumeResult.HostVerdict, us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome { // us.tractat.kuilt.session.partition/ResumeResult.WindowClosed|null[0]
+    final object WindowClosed : us.tractat.kuilt.session.partition/JoinerOutcome, us.tractat.kuilt.session.partition/ResumeResult.HostVerdict { // us.tractat.kuilt.session.partition/ResumeResult.WindowClosed|null[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/ResumeResult.WindowClosed.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/ResumeResult.WindowClosed.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.WindowClosed.toString|toString(){}[0]

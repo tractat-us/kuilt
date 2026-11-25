@@ -43,6 +43,7 @@ import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.admit.ReturnKind
+import us.tractat.kuilt.session.partition.JoinerOutcome
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ProvenResume
@@ -967,7 +968,7 @@ class ProvenRestoreConcurrencyTest {
                         val stale = AdmitMessage.Reject("key-conflict: stale", RejectCode.KeyConflict, staleHello.joinerNonce)
                         val forceCheckFirst = round % 2 == 0
                         val g = StaleRejectGap()
-                        val call: Deferred<ResumeResult.JoinerOutcome>
+                        val call: Deferred<JoinerOutcome>
                         if (forceCheckFirst) {
                             // The caller starts from inside the section that checked the stale Reject.
                             g.onCheck = {
@@ -1069,7 +1070,7 @@ class ProvenRestoreConcurrencyTest {
 
         @Volatile var onCheck: (() -> Unit)? = null
 
-        @Volatile var call: Deferred<ResumeResult.JoinerOutcome>? = null
+        @Volatile var call: Deferred<JoinerOutcome>? = null
 
         @Volatile var installedInGap = false
 

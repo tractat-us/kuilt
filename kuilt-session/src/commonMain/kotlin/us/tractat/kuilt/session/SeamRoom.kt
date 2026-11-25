@@ -74,6 +74,7 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
+import us.tractat.kuilt.session.partition.JoinerOutcome
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.JoinerResumeHost
@@ -2943,7 +2944,7 @@ internal class SeamRoom(
     private fun closeReconnect(
         sender: PeerId,
         restored: Boolean,
-    ): Pair<CompletableDeferred<ResumeResult.JoinerOutcome>?, ResumeResult.JoinerOutcome>? {
+    ): Pair<CompletableDeferred<JoinerOutcome>?, JoinerOutcome>? {
         val (flight, closes) = resumeMachine?.takeFlightForWelcome() ?: return null
         if (closes) {
             updateMemberLiveness(sender, Liveness.Connected)
@@ -5152,7 +5153,7 @@ internal class SeamRoom(
      * retired it; a reconnect is the room's own business now, and this is how a test drives one
      * attempt without first tearing the link. [ResumeResult.WindowClosed] on a host.
      */
-    internal suspend fun sayHelloAgain(): ResumeResult.JoinerOutcome =
+    internal suspend fun sayHelloAgain(): JoinerOutcome =
         resumeMachine?.resume() ?: ResumeResult.WindowClosed
 
     /**
