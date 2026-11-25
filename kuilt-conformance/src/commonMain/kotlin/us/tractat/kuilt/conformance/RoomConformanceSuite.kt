@@ -791,18 +791,19 @@ public abstract class RoomConformanceSuite {
                 val tab = app.factory(device.launchBeside()).join(h.joinTag).also { second = it }
                 val two = tab.selfId
                 val tabTape = EventTape(tab, backgroundScope)
-                host.awaitRoster("both processes hold a seat") { roster -> roster.any { it.id == one } && roster.any { it.id == two } }
-                tab.awaitRoster("the second process lists the first") { roster -> roster.any { it.id == one } }
-                first.awaitRoster("the first process lists the second") { roster -> roster.any { it.id == two } }
+                host.awaitRoster("the second process holds a seat") { roster -> roster.any { it.id == two } }
+                tab.awaitRoster("the second process sees the host") { it.isNotEmpty() }
                 // Long enough for a host that supersedes late, or a room that says Hello again, to show.
                 advanceTimeBy(h.hostHeartbeat.timeout + h.hostHeartbeat.reconnectWindow)
                 runCurrent()
-                val both = host.roster.value.filter { it.id == one || it.id == two }
+                val both = listOf(one, two).map { id -> host.roster.value.singleOrNull { it.id == id } }
                 val callsWhileBoth = app.snapshot()
                 assertAll(
                     { assertTrue(two != one, "rig: the second process presents an id of its own") },
-                    { assertEquals(listOf(key, key), both.map { it.key }, "rig: both seats are under the device's one key: ${both.map { it.id to it.key }}") },
-                    { assertEquals(listOf(Liveness.Connected, Liveness.Connected), both.map { it.liveness }, "both seats stay connected: $both") },
+                    { assertEquals(key, both[1]?.key, "rig: the second process proved the device's key: ${host.roster.value.map { it.id to it.key }}") },
+                    { assertEquals(listOf(key, key), both.map { it?.key }, "the key holds two seats, the first process's and the second's: ${host.roster.value.map { it.id to it.key }}") },
+                    { assertEquals(listOf(Liveness.Connected, Liveness.Connected), both.map { it?.liveness }, "both seats stay connected: $both") },
+                    { assertTrue(first.roster.value.any { it.id == two } && tab.roster.value.any { it.id == one }, "each process lists the other") },
                     { assertEquals(listOf("Joined(${two.value})"), hostTape.edges().map { it.edge() }, "the host adds a seat and supersedes nothing") },
                     { assertTrue(firstTape.events().none { it is MembershipEvent.Left || it is MembershipEvent.HostLost }, "the first process was never displaced: ${firstTape.events()}") },
                     { assertTrue(tabTape.events().none { it is MembershipEvent.Left || it is MembershipEvent.HostLost }, "nor the second: ${tabTape.events()}") },
@@ -881,20 +882,31 @@ public abstract class RoomConformanceSuite {
                 val bystanderTape = EventTape(bystander, backgroundScope)
 
                 val tab1 = app.factory(h.hostTab()).join(h.joinTag).also { firstTab = it }
-                host.awaitRoster("the host's first tab holds a seat") { roster -> roster.any { it.id == tab1.selfId && it.liveness == Liveness.Connected } }
-                tab1.awaitRoster("the first tab sees the host") { roster -> roster.any { it.id == hostId && it.liveness == Liveness.Connected } }
+                val tab1Tape = EventTape(tab1, backgroundScope)
+                // A bounded settle rather than a wait for the seat, so a host that refuses the tab reds
+                // on the assertion below, naming the refusal, instead of on a wait's budget.
+                advanceTimeBy(h.hostHeartbeat.timeout + h.hostHeartbeat.reconnectWindow)
+                runCurrent()
+                val firstSeat = host.roster.value.singleOrNull { it.id == tab1.selfId }
+                assertAll(
+                    { assertTrue(tab1Tape.events().none { it is MembershipEvent.AdmissionFailed }, "the host's first tab is not refused: ${tab1Tape.events()}") },
+                    { assertEquals(Liveness.Connected, firstSeat?.liveness, "the host's first tab holds a connected joiner seat: ${host.roster.value}") },
+                    { assertTrue(firstSeat == null || firstSeat.key == hostKey, "rig: the first tab proved the host's own key: ${firstSeat?.key}") },
+                    { assertEquals(Liveness.Connected, tab1.roster.value.singleOrNull { it.id == hostId }?.liveness, "the first tab sees the host") },
+                )
                 val tab2 = app.factory(h.hostTab()).join(h.joinTag).also { secondTab = it }
-                val seated = host.awaitRoster("the host's second tab holds a seat beside the first") { roster ->
-                    roster.any { it.id == tab2.selfId && it.liveness == Liveness.Connected } && roster.any { it.id == tab1.selfId }
-                }
-                tab2.awaitRoster("the second tab sees the host and the first tab") { roster -> roster.any { it.id == hostId } && roster.any { it.id == tab1.selfId } }
-                bystander.awaitRoster("the bystander lists both tabs") { roster -> roster.any { it.id == tab1.selfId } && roster.any { it.id == tab2.selfId } }
-                runCurrent() // let the events that announce the admissions reach the tapes
+                host.awaitRoster("the host's second tab holds a seat") { roster -> roster.any { it.id == tab2.selfId && it.liveness == Liveness.Connected } }
+                tab2.awaitRoster("the second tab sees the host") { roster -> roster.any { it.id == hostId } }
+                // Long enough for a host that supersedes late, or a fan-out to land, to show.
+                advanceTimeBy(h.hostHeartbeat.timeout + h.hostHeartbeat.reconnectWindow)
+                runCurrent()
+                val seated = host.roster.value
                 val tabs = listOf(tab1.selfId, tab2.selfId)
                 val tabSeats = tabs.map { id -> seated.singleOrNull { it.id == id } }
                 assertAll(
                     { assertTrue(hostKey != bystanderKey, "rig: the bystander's key is its own, so the host's key is told apart") },
-                    { assertEquals(listOf(hostKey, hostKey), tabSeats.map { it?.key }, "rig: both tabs proved the host's own key") },
+                    { assertEquals(hostKey, tabSeats[1]?.key, "rig: the second tab proved the host's own key") },
+                    { assertEquals(listOf(hostKey, hostKey), tabSeats.map { it?.key }, "the host's key holds both tab seats: ${seated.map { it.id to it.key }}") },
                     { assertTrue(hostId !in tabs && tab1.selfId != tab2.selfId, "rig: each tab presents an id of its own: $tabs") },
                     { assertEquals(listOf(Liveness.Connected, Liveness.Connected), tabSeats.map { it?.liveness }, "each tab holds a connected joiner seat") },
                     { assertEquals(SessionRole.Host, host.role.value, "the host is still the host") },
@@ -903,6 +915,8 @@ public abstract class RoomConformanceSuite {
                     { assertEquals(tabs.map { "Joined(${it.value})" }, bystanderTape.edges().map { it.edge() }, "a member present for it hears the same two joins") },
                     { assertEquals(hostKey, bystander.roster.value.singleOrNull { it.id == hostId }?.key, "the bystander still lists the host under its own id and key") },
                     { assertEquals(hostKey, tab1.roster.value.singleOrNull { it.id == hostId }?.key, "the first tab lists the host as the host") },
+                    { assertTrue(bystander.roster.value.map { it.id }.containsAll(tabs), "the bystander lists both tabs: ${bystander.roster.value.map { it.id }}") },
+                    { assertTrue(tab2.roster.value.any { it.id == tab1.selfId }, "the second tab lists the first") },
                     { assertEquals(listOf("join", "join"), app.snapshot(), "each tab's own join is the app's only call") },
                 )
             } finally {
