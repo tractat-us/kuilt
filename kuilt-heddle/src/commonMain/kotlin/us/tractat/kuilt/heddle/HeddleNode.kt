@@ -744,19 +744,24 @@ public class HeddleNode internal constructor(
             )
             detectors[peer] = fresh
             lostPeers -= replica
+            // In the same section as the registration, so a detector's event is judged against
+            // a state that already includes this clear (#3672).
+            _unreachable.update { it - replica }
             fresh
         }
-        _unreachable.update { it - replica }
         detector.start(scopeRef)
         scopeRef.launch {
             detector.events.collect { event -> onDetectorEvent(event, detector) }
         }
     }
 
-    /** What the collector of [detector] does with each [event] it takes. */
+    /**
+     * What the collector of [detector] does with each [event] it takes: apply it, and announce it
+     * on [partitionEvents] only if it was applied. A refused event came from a detector that no
+     * longer watches its peer, so it is not news about the peer.
+     */
     private suspend fun onDetectorEvent(event: PartitionEvent, detector: HeartbeatPartitionDetector) {
-        _partitionEvents.emit(event)
-        applyLivenessEvent(event)
+        if (applyLivenessEvent(event, detector)) _partitionEvents.emit(event)
     }
 
     /** The detector now watching [peer], or `null` if none is. */
@@ -775,18 +780,36 @@ public class HeddleNode internal constructor(
      */
     internal var afterLivenessDecisionForTest: ((PartitionEvent) -> Unit)? = null
 
-    private fun applyLivenessEvent(event: PartitionEvent) {
+    /**
+     * Apply [event], taken by [detector]'s collector, and say whether it was applied (#3672).
+     *
+     * **One locked section decides all of it**, because each half is a decision about the same
+     * peer. It checks that [detector] still watches the peer, and only then records a Lost peer
+     * and moves [unreachable]. Split, the gap between them let an enrollment land: it saw the
+     * Lost peer, attached a fresh detector and cleared the peer, and the late write then marked it
+     * unreachable behind a healthy detector that, reporting only transitions, would never clear it.
+     *
+     * The check refuses an event from a detector [remonitorOnEnrollment] has replaced, which a
+     * collector stalled on a multi-threaded dispatcher hands over late. [detectors] is written only
+     * under [lock], and [attachDetector] registers a detector before starting it.
+     */
+    private fun applyLivenessEvent(event: PartitionEvent, detector: HeartbeatPartitionDetector): Boolean {
         val r = ReplicaId(event.peerId.value)
-        // Remember the terminal transition: only a Lost peer is eligible for enrollment-driven
-        // re-monitoring, and its detector can never report anything again.
-        if (event is PartitionEvent.PeerLost) lock.withLock { lostPeers += r }
-        afterLivenessDecisionForTest?.invoke(event)
-        _unreachable.update { current ->
-            when (event) {
-                is PartitionEvent.PeerRecovered -> current - r
-                is PartitionEvent.PeerUnresponsive, is PartitionEvent.PeerLost -> current + r
+        val applied = lock.withLock {
+            if (detectors[event.peerId] !== detector) return@withLock false
+            // Remember the terminal transition: only a Lost peer is eligible for enrollment-driven
+            // re-monitoring, and its detector can never report anything again.
+            if (event is PartitionEvent.PeerLost) lostPeers += r
+            _unreachable.update { current ->
+                when (event) {
+                    is PartitionEvent.PeerRecovered -> current - r
+                    is PartitionEvent.PeerUnresponsive, is PartitionEvent.PeerLost -> current + r
+                }
             }
+            true
         }
+        afterLivenessDecisionForTest?.invoke(event)
+        return applied
     }
 
     /**
