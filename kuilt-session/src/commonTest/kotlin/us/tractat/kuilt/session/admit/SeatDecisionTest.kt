@@ -7,7 +7,6 @@ import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.time.Instant
 
@@ -115,9 +114,18 @@ class SeatDecisionTest {
         )
     }
 
+    /**
+     * Rule 3 answers a release whatever else the table holds. What follows a release, deciding the
+     * key again without that seat (Decided 23), is `SeamRoom.settleSeat`'s second pass, not this
+     * function's, so it is pinned at room level by
+     * `ProvenRestoreTest.releasedSeatsClaimantTakesItsOwnPartitionedSeatOver`, where the re-decision
+     * takes the claiming key's own partitioned seat over. `clearedKeyStoreOnADurableIdIsAdmittedAfresh`
+     * and `releasedSeatsClaimantIsDecidedAgainUnderDecided30` cover the release too, but an ordinary
+     * admission and an additional seat both admit a new member, so neither can tell a re-decision
+     * from no re-decision.
+     */
     @Test
-    fun aReleasedSeatIsDecidedAgainWithoutIt() = seatTest { a, b, c ->
-        // Decided 23's "decide again without the seat", stated as the caller would compute it.
+    fun aPartitionedSeatUnderAnotherKeyIsReleasedWhateverElseIsHeld() = seatTest { a, b, c ->
         val helds = listOf(
             mapOf(p1 to away(b)),
             mapOf(p1 to away(b), p3 to live(c)),
@@ -129,10 +137,7 @@ class SeatDecisionTest {
         val checks = helds.flatMap { held ->
             listOf(false, true).map { grant ->
                 {
-                    val again = settle(p1, a, held, grant)
-                    assertEquals(SeatDecision.ReleaseAndAdmit(released = p1), again.first(), "held=$held grant=$grant")
-                    assertIs<SeatDecision.FreshId>(again.last(), "held=$held grant=$grant")
-                    assertEquals(decideSeat(p1, a, held - p1, grant), again.last(), "held=$held grant=$grant")
+                    assertEquals(SeatDecision.ReleaseAndAdmit(released = p1), decideSeat(p1, a, held, grant), "held=$held grant=$grant")
                 }
             }
         }
