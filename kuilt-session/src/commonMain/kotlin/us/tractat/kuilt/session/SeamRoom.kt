@@ -3086,13 +3086,26 @@ internal class SeamRoom(
      */
     private suspend fun runDetectorRouteWatcher() {
         var previous = emptySet<PeerId>()
-        seam.peers.collect { reachable ->
+        seam.peers.collect { emitted ->
+            // The emitted list was read before anything here and may already be stale: a sender that
+            // left and came back with a fresh Hello since would be "gone" in it. So the list that
+            // decides is read again, after marking the challenges: every challenge at or below the
+            // mark was opened before that read (#3610).
+            val (mark, reachable) = pendingChallenges.markBefore { seam.peers.value }
             lock.withLock {
                 // A sender still waiting on its challenge is not a member, so no detector reports it
                 // lost. Its leaving the seam is the loss: forget its challenge (#3211). Only a sender
                 // that was reachable and no longer is — a Hello may arrive before a fabric lists its
-                // sender, and dropping on mere absence would forget that challenge at once.
-                for (gone in previous - reachable) pendingChallenges.drop(gone)
+                // sender, and dropping on mere absence would forget that challenge at once. And only a
+                // challenge opened before the list was read: the challenges are not under this lock,
+                // so a sender back with a fresh Hello while this waits for it opens a newer one, which
+                // belongs to its new link (#3610).
+                //
+                // "Was reachable" counts the emitted list as well as the last read. `collect` decides
+                // what to emit next against what it emitted, not against what was read here, so a
+                // sender listed in [emitted] and gone by the read would otherwise never be seen leaving
+                // (review of #3664).
+                for (gone in (previous + emitted) - reachable) pendingChallenges.dropOpenedBy(gone, mark)
                 previous = reachable
                 if (closed) return@withLock
                 for (member in admittedById.values.toList()) {
