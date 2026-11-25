@@ -7,7 +7,10 @@ package us.tractat.kuilt.identity
  * treated as a newcomer, and which one tells the host why.
  */
 public sealed interface GrantVerdict {
-    /** Issued by this host, signed by it, to this device, for this room, not revoked, not dated ahead, not expired. */
+    /**
+     * Issued by this host, signed by it, to this device, for this room, not revoked, not dated ahead,
+     * not expired.
+     */
     public data object Valid : GrantVerdict
 
     /**
@@ -31,7 +34,14 @@ public sealed interface GrantVerdict {
     /**
      * Dated in the future: its [Grant.issuedAt] is more than [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS]
      * past the time it was checked at. The host's clock ran ahead when it issued the pass and has
-     * since been set back. The pass is refused rather than trusted, and the device is admitted afresh.
+     * since been set back. The pass is refused rather than trusted, and the device goes through
+     * ordinary admission, which the host's policy may refuse.
+     *
+     * The device keeps the bad pass meanwhile. A [DeviceKeyStore] replaces a held grant only with
+     * one whose [Grant.issuedAt] is strictly later, so the fresh pass ordinary admission hands the
+     * device is dropped, and every return goes through ordinary admission until the bad pass's date
+     * comes near. This is latent while no room checks a presented pass; identity task 2.5 (#3221),
+     * which wires grants into the room, owns the remedy.
      */
     public data object NotYetValid : GrantVerdict
 

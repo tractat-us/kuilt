@@ -96,7 +96,7 @@ class GrantTrustTest {
         // it, and a host that must picks a cutoff past its date.
         val nearItsDate = f.verify(pass, now = aYearOut - SKEW)
         assertAll(
-            { assertEquals(GrantVerdict.NotYetValid, afterRevoking, "refused, so the device is admitted afresh") },
+            { assertEquals(GrantVerdict.NotYetValid, afterRevoking, "refused, so the device goes through ordinary admission") },
             { assertEquals(GrantVerdict.Valid, nearItsDate, "the check bounds the skew; the cutoff still decides") },
         )
     }
