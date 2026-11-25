@@ -2807,11 +2807,10 @@ internal class SeamRoom(
             //
             // Any Welcome is by definition minted by the host, so the sender of the first one IS
             // the host. Keying on the self-introduction instead (`assignedId == sender`) left
-            // `hostPeerId` null across `sendAdmissionBurst`'s whole K+1-send burst — the roster-sync
-            // Welcome, one bootstrap Welcome per pre-existing member, and only THEN the host
-            // intro (`SeamRoom.kt:1250-1270`) — while `addToRoster` had already run under lock
-            // before the first of those sends (`:1215-1219`). Across that window a joiner holds
-            // co-members with no identified host, which is both:
+            // `hostPeerId` null across `sendAdmissionBurst`'s whole K+1-send burst — this joiner's
+            // own Welcome, one bootstrap Welcome per pre-existing member, and only THEN the host
+            // intro — while each bootstrap Welcome had already added its member to this roster.
+            // Across that window a joiner holds co-members with no identified host, which is both:
             //   * the capture window for a forged host identity, and
             //   * a transient re-run of #1994 itself: a Quilter collecting `rosterPeers` fires
             //     onPeersChanged -> sendFullStateTo(coJoiner) into PeerNotConnected.

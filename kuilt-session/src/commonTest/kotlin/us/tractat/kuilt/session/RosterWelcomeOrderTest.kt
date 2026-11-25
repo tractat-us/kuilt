@@ -125,6 +125,7 @@ class RosterWelcomeOrderTest {
         val supersededWhileParked = host.member(bob) == null && host.member(bobAgain) != null
 
         host.say(bobAgain, AdmitMessage.Goodbye)
+        val farewellWhileParked = host.sentTo(carol).drop(toCarol).farewellsFor(bobAgain).size
         park.release()
         testScheduler.runCurrent()
 
@@ -132,6 +133,7 @@ class RosterWelcomeOrderTest {
         assertAll(
             { assertEquals(1, park.fired, "rig: the direct Welcome to bob-2 was parked") },
             { assertTrue(supersededWhileParked, "rig: bob-2 took bob's seat over before the park") },
+            { assertEquals(1, farewellWhileParked, "rig: bob-2's Goodbye Farewell reached carol while the Welcome was parked") },
             { assertEquals(null, host.member(bobAgain), "rig: the host no longer holds bob-2") },
             {
                 assertEquals(
