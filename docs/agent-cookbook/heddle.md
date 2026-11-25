@@ -551,6 +551,43 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
 - **A save refused as `TreeChanged` changed nothing.** The page does not retry it blind. It lists
   the changes again from `current`, and saves once the admin has confirmed them.
 
+### Each group's share on the page
+
+The page shows every row's share of the pool beside its weight: a team as well as its lanes.
+`entitlement` answers only for a lane, so a team summed from its lanes would be fairness arithmetic
+in the page. Read one `ShareLine` per table instead, and look each row up.
+
+**Primitive:** `LocalHeddle.shareLine(waiting)` or `LocalHeddleView.shareLine(waiting)` →
+`ShareLine`, then `share(group)` → `Rational`, a fraction of `1` (`:kuilt-heddle-core`).
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/ShareLineSamples.kt#sampleShareLine -->
+```kotlin
+    // Docs has nothing queued, so research (weight 2) and ops (weight 1) split the pool 2 : 1.
+    val queued = setOf(gpu, cpu, ops)
+    val line = heddle.shareLine(queued)
+    check(line.share(pool) == Rational.ONE)
+    check(line.share(research) == Rational.of(2L, 3L))
+    check(line.share(ops) == Rational.of(1L, 3L))
+    check(line.share(docs) == Rational.ZERO)
+    // Research's share is its lanes' entitlements of one slot, added up.
+    check(line.share(gpu) == heddle.entitlement(gpu, queued, totalSlots = 1L))
+    check(line.share(research) == heddle.entitlement(gpu, queued, 1L) + heddle.entitlement(cpu, queued, 1L))
+
+    // With nothing queued anywhere, nothing competes, and even the pool is owed nothing.
+    check(heddle.shareLine(emptySet()).share(pool) == Rational.ZERO)
+```
+
+- **A share is its weight's fraction among the siblings that compete, times its parent's, up to
+  the root.** A sibling competes when work it could run is waiting below it, below every ceiling,
+  the same set `entitlement` counts; one that does not takes nothing from the rest. The root is
+  `1` when anything competes and `0` when nothing does.
+- **A ceiling is all or nothing.** A group at its `maxConcurrent` is owed `0`; one below it keeps
+  its whole weight share, even when that is more than the leases it has room for. A share is not
+  a capped rate.
+- **A line keeps what it read.** Take a new one when the waiting set or the tree changes. Each row
+  is worked out when the page asks for it, so a share too fine to fit a `Long` fraction throws
+  `ArithmeticException` for that row alone.
+
 ## Editing the tree as a document
 
 **Intent:** an editor changes one weight three levels down, adds a lane, renames or moves a
@@ -1058,7 +1095,8 @@ than one sixteenth of a unit of the side's own service above it, the side was no
 or below, it lost on its deadline), and `front`, the share line over everyone waiting (above it,
 the side has had more than its share). **Log `kind`**, a stable ordered enum, and the group ids,
 not the rationals, which move every pick. `entitlement` is the leaf's fair share of the slots,
-as an exact fraction, over the same competing set: work no pick can reach is owed nothing.
+as an exact fraction, over the same competing set: work no pick can reach is owed nothing. For a
+group's share, read a `ShareLine`; see [Each group's share on the page](#each-groups-share-on-the-page).
 
 `previewPicks` comes in two shapes. Give it a count per leaf and one reservation per slot, or
 give it each leaf's queue of job estimates, head first, and each pick does what your loop would:

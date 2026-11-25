@@ -4,8 +4,9 @@ import us.tractat.kuilt.heddle.LocalHeddle.Companion.MAX_RESERVATION
 
 /**
  * The questions you can ask a [LocalHeddle] without changing it, asked of a saved state instead of
- * a running engine: who goes next ([previewPicks]), why a leaf is waiting ([explain]), and what
- * share it is owed ([entitlement]). An admin screen that holds only the last stored snapshot gets
+ * a running engine: who goes next ([previewPicks]), why a leaf is waiting ([explain]), what share
+ * a leaf is owed ([entitlement]), and what share every group is owed ([shareLine]). An admin
+ * screen that holds only the last stored snapshot gets
  * the same answers the engine that took it would give, with no engine to start and nothing to move.
  *
  * Get one from a snapshot with [LocalHeddleSnapshot.view]. The engine answers these questions
@@ -14,8 +15,9 @@ import us.tractat.kuilt.heddle.LocalHeddle.Companion.MAX_RESERVATION
  *
  * A view is a value. It reads the snapshot's books, wake memory, capacity and last applied topology,
  * with a count of the leases open beneath each node that has a ceiling
- * ([Topology.Node.maxConcurrent]). Each question plays its picks forward on a throwaway engine built
- * from them, so asking twice gives the same answer twice. It needs the policy too, which a snapshot does not keep: pass the one
+ * ([Topology.Node.maxConcurrent]). Each question that picks plays its picks forward on a throwaway
+ * engine built from them, so asking twice gives the same answer twice; the share questions read
+ * the books and pick nothing. It needs the policy too, which a snapshot does not keep: pass the one
  * the engine ran with.
  *
  * A view from a snapshot shares nothing with any engine, and each question only reads it, so any
@@ -255,6 +257,26 @@ public class LocalHeddleView internal constructor(
         }
         return share
     }
+
+    /**
+     * What every group is owed of the whole pool while [waiting] holds still, read once and
+     * answered group by group: see [ShareLine.share]. Where [entitlement] answers for a leaf a pick
+     * can end at, a line answers for any group, the root and every group above a lane included.
+     *
+     * A group competes exactly when [entitlement] would count it: when a leaf of [waiting] that a
+     * pick could end at lies beneath it, and that leaf is below every ceiling on its lineage. So on
+     * a leaf, `share(leaf)` is `entitlement(leaf, waiting, 1)`, and on a group it is the sum of
+     * its competing leaves' entitlements of one slot.
+     *
+     * A ceiling is binary here, as it is in [entitlement]. A group at its
+     * [Topology.Node.maxConcurrent] does not compete and is owed `0`. One below it keeps its whole
+     * weight share, even when that share is more slots than the leases it has room for, so a
+     * share is not a capped GPS rate.
+     *
+     * @sample us.tractat.kuilt.heddle.sampleShareLine
+     */
+    public fun shareLine(waiting: Set<GroupId>): ShareLine =
+        ShareLine.over(ledger, root, ledger.reachable(ledger.belowCeilings(waiting, openBeneath, root, leasable), root, leasable))
 }
 
 /** [slots] as last reconciled, and the root holdings it sizes: the [low] watermark and the [target] a top-up leaves. */

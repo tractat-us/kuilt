@@ -97,6 +97,9 @@ class HeddleSamplesRunTest {
     fun snapshotViewHolds() = sampleSnapshotView()
 
     @Test
+    fun shareLineHolds() = sampleShareLine()
+
+    @Test
     fun fairShareQueueHolds() = sampleFairShareQueue()
 
     @Test

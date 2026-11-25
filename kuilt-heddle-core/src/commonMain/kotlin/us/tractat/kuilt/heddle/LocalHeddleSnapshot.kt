@@ -147,8 +147,8 @@ public class LocalHeddleSnapshot internal constructor(
 
     /**
      * Ask this snapshot what the engine that took it would answer, with no engine: who goes next,
-     * why a leaf is waiting, and what share it is owed (see [LocalHeddleView]). Changes nothing,
-     * here or anywhere.
+     * why a leaf is waiting, what share it is owed, and what share every group is owed (see
+     * [LocalHeddleView]). Changes nothing, here or anywhere.
      *
      * [policy] is required because a snapshot does not keep one: pass the policy the engine ran
      * with, and the view answers exactly as that engine did when it took this snapshot. It sizes
