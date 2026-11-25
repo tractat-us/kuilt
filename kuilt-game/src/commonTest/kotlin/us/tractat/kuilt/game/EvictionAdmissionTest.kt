@@ -82,10 +82,9 @@ class EvictionAdmissionTest {
     private suspend fun TestScope.assertLatecomerTurnedAway(r: Replaced) {
         assertEquals(3, r.afterReplacement.voters.size, "rig: the replacement fills the roster: ${r.afterReplacement}")
         val zRaw = r.loom.join(InMemoryTag("zara"))
-        within("a full roster turns the latecomer away") {
-            assertFailsWith<RosterFullException> {
-                backgroundScope.gameJoin(zRaw, raftConfig = fastRaftConfig(seed = 8L))
-            }
+        // The bound sits inside, so a join left waiting fails as a named step, not a swallowed timeout.
+        assertFailsWith<RosterFullException>("a full roster turns the latecomer away") {
+            within("Zara is answered") { backgroundScope.gameJoin(zRaw, raftConfig = fastRaftConfig(seed = 8L)) }
         }
         val after = settledMembership(r.host.node)
         assertAll(
