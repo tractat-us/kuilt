@@ -11,13 +11,21 @@ public sealed interface LeaveReason {
     public data class Error(val message: String) : LeaveReason
 
     /**
-     * The peer's reconnect window expired without recovery.
+     * The peer's held seat ended without its membership coming back.
      *
      * Emitted for non-host peers whose [us.tractat.kuilt.liveness.PartitionEvent.PeerLost]
      * fires on the host or on any other room participant — i.e. genuine liveness-detected
      * loss: the peer vanished without a clean
      * [us.tractat.kuilt.session.admit.AdmitMessage.Goodbye] (crash, dead transport) and its
      * reconnect window elapsed.
+     *
+     * The host also releases a held seat with this reason, ahead of its window, in two cases. Both
+     * follow a Hello under the seat's own id, and both release only once the host's
+     * [us.tractat.kuilt.session.admit.AdmissionPolicy] has admitted that joiner as a new member:
+     * - a newcomer under another device key, while the seat is held partitioned (Decided 18);
+     * - the seat's own device, whose key was revoked after the seat was admitted, so its seat is not
+     *   restored (Decided 14). That seat may be **connected**: the device's new Hello is taken as its
+     *   old link being over, and the joiner joins afresh.
      *
      * A **clean** leave never carries this reason: the departing peer's Goodbye reaches the
      * host, which propagates an authoritative

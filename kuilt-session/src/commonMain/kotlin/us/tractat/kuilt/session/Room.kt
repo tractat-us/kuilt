@@ -481,8 +481,9 @@ public interface RoomFactory {
      * seats, and reusing an id does not give it any.
      *
      * [admission] decides who comes in: the room asks its [HostAdmission.policy] about every newcomer
-     * whose proven key holds no seat to restore, and gives every pass it checks its own device key and
-     * [HostAdmission.revocations]. It is required, and last, so a host is never opened without one and
+     * whose proven key holds no seat to restore, and reads [HostAdmission.revocations] so that a device
+     * revoked since its seat was admitted does not get that seat back. Passes are checked against the
+     * room's own device key and those revocations once the room checks passes (identity Task 2.6). It is required, and last, so a host is never opened without one and
      * a forwarding factory that drops it does not compile. `HostAdmission(AdmissionPolicy.open(),
      * RevocationList.inMemory())` admits everyone.
      */

@@ -1853,8 +1853,11 @@ internal class SeamRoom(
      *   Welcome, and the old member is sent the same `Farewell` directly (Decided 19), so a room
      *   still running there ends instead of saying Hello again. A refusal releases the seat as above.
      * - [SeatDecision.KeyConflict]: a terminal `Reject`.
-     * - [SeatDecision.ReleaseAndAdmit]: the partitioned seat is released, then the joiner is admitted
-     *   as the re-decision says (Decided 18, 30).
+     * - [SeatDecision.ReleaseAndAdmit]: the claimed id's seat — partitioned under another key, or
+     *   revoked under this one — is given up, and the joiner is admitted as the re-decision says
+     *   (Decided 14, 18, 30). When that re-decision is a newcomer, the policy is asked **first**, with
+     *   the seat still held, and the seat is released only for its `Admit` ([settleRelease]): a
+     *   newcomer the policy does not admit evicts nobody.
      * - a [SeatDecision.Newcomer] — [SeatDecision.Ordinary], or [SeatDecision.AdditionalSeat] for
      *   another tab of a device whose seats are all connected (Decided 30) — is asked about: the host's
      *   [AdmissionPolicy] decides it outside the lock ([askPolicy]), and the next pass decides again
@@ -2617,8 +2620,11 @@ internal class SeamRoom(
     /**
      * **Under [lock].** Release a held seat the key → seat table gave up on, in the critical section
      * that decided to, so the joiner's new membership is a `Joined` rather than a silent re-admission
-     * of the same id: its `Left` carries [LeaveReason.PartitionExpired], since the hold ended without
-     * its member coming back. The expired `Farewell` to every other member is enqueued in this section
+     * of the same id. Its `Left` carries [LeaveReason.PartitionExpired]: the hold ended and the
+     * membership with it, whether its window refused it, a newcomer the policy admitted took its id
+     * (Decided 18), or its own device came back revoked (Decided 14). In the last two the seat is
+     * released only once the policy has admitted the joiner ([settleRelease]). The expired `Farewell`
+     * to every other member is enqueued in this section
      * too, so it precedes on each lane whatever a later section enqueues about the id, the new
      * member's roster `Welcome` included (#1781). Enqueued after the lock, a second Proof's admission
      * could slip its `Welcome` in first. The caller closes the inbox.

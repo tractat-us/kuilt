@@ -55,11 +55,19 @@ internal sealed interface SeatDecision {
     data class RestoreUnderNewId(val previous: PeerId) : FreshId
 
     /**
-     * The claimed id holds a **partitioned** seat under a different key: the old seat is released, and
-     * the caller then decides the joiner's key again without it ([decideSeat] on the seats that
-     * remain), which answers one of the [FreshId] verdicts. This is how a device whose key store was
-     * cleared, and whose peer id is durable, gets back in with no prompt (Decided 18); the key it now
-     * holds may have seats of its own (Decided 30).
+     * The claimed id's seat is to be given up, and the joiner's key decided again without it
+     * ([decideSeat] on the seats that remain), which answers one of the [FreshId] verdicts. Two
+     * causes reach it:
+     * - [decideSeat]'s rule 3: the seat is held **partitioned** under a different key. This is how a
+     *   device whose key store was cleared, and whose peer id is durable, gets back in with no prompt
+     *   (Decided 18); the key it now holds may have seats of its own (Decided 30).
+     * - the room's revocation check, never [decideSeat]: the seat is held under the joiner's **own**
+     *   key, connected or partitioned, and that key was revoked after the seat was admitted (Decided
+     *   14).
+     *
+     * The caller **vets before it releases**: when the key decided without the seat is a [Newcomer],
+     * the host's policy is asked first with the seat still held, and the seat is released only for an
+     * `Admit` (#3220). A refusal, a failed policy or a challenge that runs out leaves the seat held.
      */
     data class ReleaseAndAdmit(val released: PeerId) : SeatDecision
 

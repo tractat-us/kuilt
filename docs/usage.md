@@ -147,8 +147,9 @@ the consumer decides what to do (tear down, start a new session, etc.).
 
 **Reconnect/resume.** Keep the existing room after a transport tear. A
 `SeamRoomFactory` joiner says Hello again automatically within the host's reconnect
-window, and the device key its Hello proves restores the held seat; there is no
-token and nothing to call. The loom must heal the same seam instance with the same
+window, and the device key its Hello proves restores the held seat, unless the
+device was revoked since it was admitted (then the host's `AdmissionPolicy` decides
+it afresh at that Hello); there is no token and nothing to call. The loom must heal the same seam instance with the same
 `selfId`; `MuxClientLoom` and `NwLoom` provide this. A loom that returns a new seam
 leaves the old room torn and reconnect ends in `HostLost`. A rebuilt room needs
 no token: its `Hello` proves the device key, and a host still holding the seat under
