@@ -6,6 +6,7 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
@@ -17,6 +18,8 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.RevocationList
@@ -29,6 +32,8 @@ import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.GrantTerms
 import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.RejectCode
+import us.tractat.kuilt.session.election.ElectionOutcome
+import us.tractat.kuilt.session.election.SeamElectionLobby
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -180,6 +185,49 @@ class HostAdmissionPolicyTest {
             },
             { assertEquals(vettedAtStart, recorded.keys(), "no restore asked the policy") },
         )
+    }
+
+    /**
+     * The lobby's host entry point is `ElectionLobby.start` (census P1): the room the elected host
+     * adopts decides its members with the admission `start` was given. The member waiting in
+     * `awaitRoom` supplies none.
+     */
+    @Test
+    fun theLobbysHostDecidesWithTheAdmissionStartWasGiven() = runTest {
+        val recorded = Recorded { admitAll }
+        val loom = InMemoryLoom()
+        val clock = virtualClock()
+        val stores = listOf(fakeKeyStore(5), fakeKeyStore(6))
+        // `electLobby` weaves `New` on every peer, which a flat InMemoryLoom refuses twice, so the
+        // second peer weaves `Existing`.
+        fun lobby(seam: Seam, device: Int) = SeamElectionLobby(
+            seam = seam,
+            factory = SeamRoomFactory(loom, backgroundScope, clock, stores[device]),
+            scope = backgroundScope,
+            clock = clock,
+            roomKey = null,
+        )
+        val lobbies = listOf(
+            lobby(loom.weave(Rendezvous.New(Pattern("lobby"))), device = 0),
+            lobby(loom.weave(Rendezvous.Existing(InMemoryTag("lobby"))), device = 1),
+        )
+        val elected = lobbies[0].host.first { lobbies[0].peers.value.size == 2 }
+        lobbies[1].host.first { lobbies[1].peers.value.size == 2 }
+        val hostIndex = lobbies.indexOfFirst { it.selfId == elected }
+        val member = lobbies[1 - hostIndex]
+
+        val outcome = async { member.awaitRoom(memberName = "Bob") }
+        val hostRoom = lobbies[hostIndex].start(memberName = "Alice", admission = recorded.admission)
+        val memberRoom = assertIs<ElectionOutcome.Adopted>(outcome.await()).room
+        hostRoom.roster.first { it.size == 1 }
+        val memberKey = stores[1 - hostIndex].deviceKey().id
+
+        assertAll(
+            { assertEquals(listOf(memberKey), recorded.keys(), "the elected host asked its policy about the member, once") },
+            { assertEquals(SessionRole.Host, hostRoom.role.value, "rig: start adopted the host's room") },
+        )
+        memberRoom.leave()
+        hostRoom.leave()
     }
 
     // ── A policy that misbehaves ─────────────────────────────────────────────
