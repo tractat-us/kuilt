@@ -1295,6 +1295,7 @@ public abstract class RoomConformanceSuite {
                     roster.any { it.id == old } && roster.any { it.id == bystander.selfId }
                 }
                 bystander.awaitRoster("the bystander lists the device") { roster -> roster.any { it.id == old } }
+                awaitPassKept(first)
                 val key = admitted.single { it.id == old }.key
                 val hostTape = EventTape(host, backgroundScope)
                 val bystanderTape = EventTape(bystander, backgroundScope)
@@ -1361,6 +1362,7 @@ public abstract class RoomConformanceSuite {
             try {
                 val one = first.selfId
                 val key = host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == one } }.single { it.id == one }.key
+                awaitPassKept(first)
                 val vettedAtFirst = vetting.keys()
                 val hostTape = EventTape(host, backgroundScope)
 
@@ -1370,6 +1372,7 @@ public abstract class RoomConformanceSuite {
                 val second = app.factory(device.launch()).join(h.joinTag).also { live = it }
                 val two = second.selfId
                 host.awaitRoster("the second process holds a seat") { roster -> roster.any { it.id == two && it.liveness == Liveness.Connected } }
+                awaitPassKept(second)
                 val vettedInsideTerm = vetting.keys()
 
                 // Past the term: every pass the device holds was issued while a seat of its was
@@ -1424,6 +1427,7 @@ public abstract class RoomConformanceSuite {
             try {
                 val one = first.selfId
                 val key = host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == one } }.single { it.id == one }.key
+                awaitPassKept(first)
                 val vettedAtFirst = vetting.keys()
                 val hostTape = EventTape(host, backgroundScope)
 
@@ -1435,6 +1439,7 @@ public abstract class RoomConformanceSuite {
                 val second = app.factory(device.launch()).join(h.joinTag).also { live = it }
                 val two = second.selfId
                 host.awaitRoster("the revoked device holds a seat again") { roster -> roster.any { it.id == two && it.liveness == Liveness.Connected } }
+                awaitPassKept(second)
                 val vettedOnTheVoidPass = vetting.keys()
 
                 device.kill()
@@ -2758,6 +2763,17 @@ public abstract class RoomConformanceSuite {
                 "interval (${joinerHeartbeat.interval}), or a device stops trying before the host " +
                 "lets its seat go and no readmission is reachable.",
         )
+    }
+
+    /**
+     * Wait until this joiner's room has its admission and has had the chance to keep the pass its
+     * `Welcome` carried. The joiner keeps the pass after handling the `Welcome`, so a row that kills
+     * the process the moment the host lists it can end the process first, and the relaunch then has no
+     * pass to present: a rig failure that would read as the host ignoring the pass.
+     */
+    private suspend fun TestScope.awaitPassKept(joiner: Room) {
+        joiner.awaitRoster("the joiner's room sees its host") { it.isNotEmpty() }
+        runCurrent()
     }
 
     /** Whether this is [old] leaving or [new] joining: the two halves of a takeover. */
