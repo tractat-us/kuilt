@@ -198,6 +198,87 @@ class QuilterSolicitedFullStateTest {
         }
 
     /**
+     * Writes {x, a}, records that state's root the way production does, by comparing a peer's
+     * digest against it, then writes {x, a, b}. Returns the earlier root.
+     */
+    private suspend fun TestScope.writePastAStateWhoseRootWeComputed(seam: FakeSeam, quilter: Quilter<GSet<String>>): Long {
+        quilter.apply(Patch(GSet.of("a")))
+        testScheduler.runCurrent()
+        seam.deliver(peer, vectorDigest(root = 0xBADL, selfReplica to 0L))
+        testScheduler.runCurrent()
+        val past = quilter.stateRootForTest()
+        quilter.apply(Patch(GSet.of("b")))
+        testScheduler.runCurrent()
+        return past
+    }
+
+    /** One dominated digest carrying [root] a second, for [seconds] seconds; the requests sent by the end. */
+    private suspend fun TestScope.dominatedDigestsFor(seam: FakeSeam, root: Long, seconds: Int): Int {
+        repeat(seconds) {
+            seam.deliver(peer, vectorDigest(root = root, selfReplica to 1L))
+            testScheduler.runCurrent()
+            testScheduler.advanceTimeBy(1.seconds)
+        }
+        testScheduler.runCurrent()
+        return seam.requests()
+    }
+
+    /**
+     * A dominated digest whose root is one we held proves the peer holds a state we once held, so
+     * it has nothing we lack: 40 s of them, past the 30 s backstop, ask nothing.
+     */
+    @Test
+    fun aDominatedDigestCarryingOurPastRootNeverReachesTheBackstop() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
+            val quilter = quilterOn(seam)
+            testScheduler.runCurrent()
+            val past = writePastAStateWhoseRootWeComputed(seam, quilter)
+
+            val requests = dominatedDigestsFor(seam, past, seconds = 40)
+
+            assertAll(
+                { assertTrue(past != quilter.stateRootForTest(), "rig: the root must be a past one, not our current one") },
+                { assertEquals(0, requests, "a peer holding our past state is never asked") },
+            )
+        }
+
+    /**
+     * The control: the same rig, the root one we never held. That peer may hold something no
+     * vector records, and at the backstop one request goes out.
+     */
+    @Test
+    fun aDominatedDigestCarryingAForeignRootStillReachesTheBackstop() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
+            val quilter = quilterOn(seam)
+            testScheduler.runCurrent()
+            writePastAStateWhoseRootWeComputed(seam, quilter)
+
+            assertEquals(1, dominatedDigestsFor(seam, 0xF0F0L, seconds = 40), "one request at the backstop")
+        }
+
+    /**
+     * The ring is bounded: a root [Quilter.RECENT_ROOTS] newer states ago has left it, so a peer
+     * still holding that state is asked at the backstop again.
+     */
+    @Test
+    fun aRootOlderThanTheRingStillReachesTheBackstop() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val seam = FakeSeam(selfId = self, initialPeers = setOf(self, peer))
+        val quilter = quilterOn(seam)
+        testScheduler.runCurrent()
+        val past = writePastAStateWhoseRootWeComputed(seam, quilter)
+        repeat(RECENT_ROOTS) { i ->
+            quilter.apply(Patch(GSet.of("later-$i")))
+            testScheduler.runCurrent()
+            seam.deliver(peer, vectorDigest(root = 0xBADL, selfReplica to 0L))
+            testScheduler.runCurrent()
+        }
+
+        assertEquals(1, dominatedDigestsFor(seam, past, seconds = 40), "an aged-out root asks at the backstop")
+    }
+
+    /**
      * Bounce: two replicas on a 2 s FIFO link with a 1 s tick settle for 10 s, then both write
      * every 3 s, offset, for two minutes, then go quiet. Neither ever lacks anything the other
      * cannot send it as a delta, so each whole state sent during the churn answers a
@@ -209,7 +290,7 @@ class QuilterSolicitedFullStateTest {
      */
     @Test
     fun churnOnALaggedLinkBouncesNoWholeStates() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-        val rig = laggedPair(this)
+        val rig = laggedPair(this, writers = 2)
 
         assertAll(
             { assertTrue(rig.churnRequests > 0, "rig: the backstop must have asked at least once (${rig.counts})") },
@@ -218,6 +299,24 @@ class QuilterSolicitedFullStateTest {
             { assertEquals(rig.a.stateRootForTest(), rig.b.stateRootForTest(), "with equal roots") },
         )
     }
+
+    /**
+     * The backstop under churn: one replica writes every 3 s on the same lagged link, so the
+     * other's state is always one the writer held a little earlier, and its dominated digests carry
+     * the writer's past roots. The writer never asks for its whole state, where before #3629 the
+     * backstop asked once per 30 s. They converge when writes stop.
+     */
+    @Test
+    fun aLaggedReaderOfOneWriterIsNeverAskedForItsWholeState() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = laggedPair(this, writers = 1)
+
+            assertAll(
+                { assertEquals(0, rig.churnRequests, "the backstop never asks (${rig.counts})") },
+                { assertEquals(0, rig.churnWholeStates, "so no whole state crosses (${rig.counts})") },
+                { assertEquals(rig.a.state.value, rig.b.state.value, "converged within lag + a tick (${rig.counts})") },
+            )
+        }
 
     private class LaggedPair(
         val a: Quilter<GSet<String>>,
@@ -229,12 +328,13 @@ class QuilterSolicitedFullStateTest {
     }
 
     /**
-     * Two replicas over [LagSeam]s. After [SETTLE], each writes every 3 s, offset by 1.5 s, for two
-     * minutes; then [LAG] plus a tick of quiet. Counts the whole states and requests both sent
+     * Two replicas over [LagSeam]s. After [SETTLE], A writes every 3 s for two minutes, and so
+     * does B, 1.5 s later each time, when [writers] is 2; then [LAG] plus a tick of quiet. Counts
+     * the whole states and requests both sent
      * after [SETTLE]. The settle keeps out the whole states every join sends before the first
      * digest crosses the link (a first contact and the unproven-peer fallback of each tick).
      */
-    private suspend fun laggedPair(scope: TestScope): LaggedPair = with(scope) {
+    private suspend fun laggedPair(scope: TestScope, writers: Int): LaggedPair = with(scope) {
         val loom = InMemoryLoom()
         val now = { testScheduler.currentTime }
         val seamA = LagSeam(loom.host(Pattern("lag")), LAG, backgroundScope, now)
@@ -249,13 +349,13 @@ class QuilterSolicitedFullStateTest {
         repeat(40) { i ->
             a.apply(Patch(GSet.of("a$i")))
             testScheduler.advanceTimeBy(1500.milliseconds)
-            b.apply(Patch(GSet.of("b$i")))
+            if (writers == 2) b.apply(Patch(GSet.of("b$i")))
             testScheduler.advanceTimeBy(1500.milliseconds)
         }
         testScheduler.advanceTimeBy(LAG + 1.seconds)
         testScheduler.runCurrent()
         val churn = seamA.sent.drop(settled.first) + seamB.sent.drop(settled.second)
-        println("#3629 bounce, after settling: " + churn.groupingBy { it::class.simpleName }.eachCount())
+        println("#3629 bounce, writers=$writers, after settling: " + churn.groupingBy { it::class.simpleName }.eachCount())
         LaggedPair(
             a = a,
             b = b,

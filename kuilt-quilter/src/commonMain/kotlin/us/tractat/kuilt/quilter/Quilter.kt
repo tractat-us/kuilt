@@ -43,6 +43,13 @@ import kotlin.time.Duration.Companion.seconds
 private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.Quilter")
 
 /**
+ * How many of its own recent state roots a [Quilter] keeps, so that a dominated
+ * [QuiltMessage.VectorDigest] carrying one of them ends the run toward
+ * [QuilterConfig.dominatedDigestBackstop] (#3629).
+ */
+internal const val RECENT_ROOTS: Int = 16
+
+/**
  * Configuration for [Quilter].
  *
  * @param evictionAfter how long a peer can be absent from [Seam.peers] before it
