@@ -44,7 +44,7 @@ abstract interface us.tractat.kuilt.conformance/ReturnDevice { // us.tractat.kui
     abstract fun restore() // us.tractat.kuilt.conformance/ReturnDevice.restore|restore(){}[0]
     abstract suspend fun drop() // us.tractat.kuilt.conformance/ReturnDevice.drop|drop(){}[0]
     abstract suspend fun impostor(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnDevice.impostor|impostor(){}[0]
-    abstract suspend fun kill() // us.tractat.kuilt.conformance/ReturnDevice.kill|kill(){}[0]
+    abstract suspend fun kill(kotlin/Boolean = ...) // us.tractat.kuilt.conformance/ReturnDevice.kill|kill(kotlin.Boolean){}[0]
     abstract suspend fun launch(kotlin/Boolean = ...): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnDevice.launch|launch(kotlin.Boolean){}[0]
 }
 

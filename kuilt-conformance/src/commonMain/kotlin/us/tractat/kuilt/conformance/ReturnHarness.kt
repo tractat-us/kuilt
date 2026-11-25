@@ -104,9 +104,14 @@ public interface ReturnDevice {
 
     /**
      * End the running process without a goodbye, as an operating system kills an app: its rooms send
-     * nothing more, and its link closes as the system would close a dead process's socket.
+     * nothing more.
+     *
+     * With [socketCloses], its link closes as the system closes a dead process's socket, and the host
+     * sees the seat go at once. Without it the link lingers, as a half-open connection does until
+     * something times it out, so the host still holds the seat **connected**: a process launched at once
+     * under the same peer id comes back faster than the host noticed it go.
      */
-    public suspend fun kill()
+    public suspend fun kill(socketCloses: Boolean = true)
 
     /**
      * Tear the running process's link. Its room reads the tear and starts its own reconnect; every

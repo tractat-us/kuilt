@@ -528,13 +528,15 @@ public abstract interface class us/tractat/kuilt/conformance/ReturnDevice {
 	public abstract fun drop (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun getHeals ()I
 	public abstract fun impostor (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun kill (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun kill (ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun kill$default (Lus/tractat/kuilt/conformance/ReturnDevice;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public abstract fun launch (ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun launch$default (Lus/tractat/kuilt/conformance/ReturnDevice;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public abstract fun restore ()V
 }
 
 public final class us/tractat/kuilt/conformance/ReturnDevice$DefaultImpls {
+	public static synthetic fun kill$default (Lus/tractat/kuilt/conformance/ReturnDevice;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static synthetic fun launch$default (Lus/tractat/kuilt/conformance/ReturnDevice;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
