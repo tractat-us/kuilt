@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.plusOrNull
 import us.tractat.kuilt.math.timesOrNull
 
 /**
@@ -17,8 +18,8 @@ public class ShareLine internal constructor(
     private val root: GroupId,
     /** The parent of every competing group but the root. */
     private val parentOf: Map<GroupId, GroupId>,
-    /** Each competing group's competing children, with the weight of the edge each hangs from. */
-    private val childrenOf: Map<GroupId, Map<GroupId, Weight>>,
+    /** The [Family] beneath every competing parent, by the parent. */
+    private val families: Map<GroupId, Family>,
 ) {
 
     /**
@@ -32,7 +33,8 @@ public class ShareLine internal constructor(
      * competing children's shares add up to its own exactly.
      *
      * Each answer is formed when it is asked for, so a share that does not fit throws for that
-     * group alone and the rest of a table still reads.
+     * group alone and the rest of a table still reads. A lookup walks only the group's own
+     * lineage: each level's sum was formed once, when the line was taken.
      *
      * @throws ArithmeticException when the share does not fit an exact [Rational] over `Long`, or a
      *   level's competing weights leave `Long` once brought to one denominator, which the weights of
@@ -40,30 +42,69 @@ public class ShareLine internal constructor(
      */
     public fun share(group: GroupId): Rational {
         if (group == root) return if (parentOf.isEmpty()) Rational.ZERO else Rational.ONE
+        var child = group
         var at = parentOf[group] ?: return Rational.ZERO
         val fractions = ArrayList<LongArray>()
-        fractions += fractionOf(group, checkNotNull(childrenOf[at]) { "${at.value} has a competing child but no children" })
-        while (at != root) {
-            val parent = checkNotNull(parentOf[at]) { "${at.value} competes but hangs from nothing" }
-            fractions += fractionOf(at, checkNotNull(childrenOf[parent]) { "${parent.value} has a competing child but no children" })
-            at = parent
+        while (true) {
+            fractions += fractionOf(child, at)
+            if (at == root) break
+            child = at
+            at = checkNotNull(parentOf[at]) { "${at.value} competes but hangs from nothing" }
         }
         return productOf(fractions)
     }
 
-    internal companion object {
-        /**
-         * [child]'s weight over the summed weights of [siblings], which hold it, as `[numerator,
-         * denominator]`: every weight brought to their least common denominator `L`, as
-         * [VirtualTime.mean] does, so the sum is the integer `S = Σ n · L / d` and the fraction is
-         * `(n · L / d) / S`. Its numerator is at most `S`, so only `L` and `S` can leave `Long`.
-         */
-        private fun fractionOf(child: GroupId, siblings: Map<GroupId, Weight>): LongArray {
-            val weight = checkNotNull(siblings[child]) { "${child.value} is not among its parent's competing children" }
-            val l = siblings.values.fold(1L) { acc, w -> checkedMul(acc / gcdOf(acc, w.denominator), w.denominator) }
-            val s = siblings.values.fold(0L) { acc, w -> checkedAdd(acc, checkedMul(w.numerator, l / w.denominator)) }
-            return longArrayOf(checkedMul(weight.numerator, l / weight.denominator), s)
+    /**
+     * [child]'s weight over the summed weights of its competing siblings beneath [parent], as
+     * `[numerator, denominator]`: `(n · L / d) / S`, over the sum the [Family] formed once. The
+     * numerator is at most `S`, so it fits whenever the sum does.
+     */
+    private fun fractionOf(child: GroupId, parent: GroupId): LongArray {
+        val family = checkNotNull(families[parent]) { "${parent.value} has a competing child but no family" }
+        val weight = checkNotNull(family.weights[child]) { "${child.value} is not among ${parent.value}'s competing children" }
+        return when (val sum = family.sum) {
+            is WeightSum.Fits -> longArrayOf(checkedMul(weight.numerator, sum.lcm / weight.denominator), sum.total)
+            WeightSum.Overflows -> throw ArithmeticException("the competing weights beneath ${parent.value} leave Long over one denominator")
         }
+    }
+
+    /**
+     * One competing parent's competing children, each with the weight of the edge it hangs from,
+     * and what a lookup reads about them all, formed once when the line is taken: their [sum].
+     * Anything else a level answers from its whole set of competing children belongs here too, so a
+     * table over many siblings stays linear.
+     */
+    internal class Family(val weights: Map<GroupId, Weight>, val sum: WeightSum) {
+        internal companion object {
+            fun of(weights: Map<GroupId, Weight>): Family = Family(weights, WeightSum.of(weights.values))
+        }
+    }
+
+    /**
+     * A level's competing weights summed over one denominator, or the word that they do not fit.
+     * An [Overflows] fails only the shares beneath its parent, never the line.
+     */
+    internal sealed interface WeightSum {
+
+        /** The weights' least common denominator [lcm], and their sum over it, [total] `= Σ n · lcm / d`. */
+        class Fits(val lcm: Long, val total: Long) : WeightSum
+
+        /** The least common denominator or the sum leaves `Long`. */
+        data object Overflows : WeightSum
+
+        companion object {
+            /** The sum of [weights] over their least common denominator, as [VirtualTime.mean] forms it. */
+            fun of(weights: Collection<Weight>): WeightSum {
+                var lcm = 1L
+                for (w in weights) lcm = (lcm / gcdOf(lcm, w.denominator)).timesOrNull(w.denominator) ?: return Overflows
+                var total = 0L
+                for (w in weights) total = total.plusOrNull(w.numerator.timesOrNull(lcm / w.denominator) ?: return Overflows) ?: return Overflows
+                return Fits(lcm, total)
+            }
+        }
+    }
+
+    internal companion object {
 
         /**
          * The product of [fractions], each `[numerator, denominator]` and positive, in lowest terms.
@@ -90,18 +131,19 @@ public class ShareLine internal constructor(
         /**
          * The line over [competing], a set [reachable] lifted: every group in it but [root] hangs
          * from its parent by the one ACTIVE edge its lineage ends in, which is what the lift checked.
+         * Each parent's [Family] is summed here, once.
          */
         fun over(ledger: EntitlementLedger, root: GroupId, competing: Set<GroupId>): ShareLine {
             val parentOf = HashMap<GroupId, GroupId>()
-            val childrenOf = HashMap<GroupId, HashMap<GroupId, Weight>>()
+            val weights = HashMap<GroupId, HashMap<GroupId, Weight>>()
             for (group in competing) {
                 if (group == root) continue
                 val edge = checkNotNull(ledger.lineageOf(group)?.lastOrNull()) { "${group.value} competes but has no lineage" }
                 val record = checkNotNull(ledger.record(edge)) { "lineage edge ${edge.value} has no record" }
                 parentOf[group] = record.parent
-                childrenOf.getOrPut(record.parent) { HashMap() }[group] = record.weight
+                weights.getOrPut(record.parent) { HashMap() }[group] = record.weight
             }
-            return ShareLine(root, parentOf, childrenOf)
+            return ShareLine(root, parentOf, weights.mapValues { (_, children) -> Family.of(children) })
         }
     }
 }

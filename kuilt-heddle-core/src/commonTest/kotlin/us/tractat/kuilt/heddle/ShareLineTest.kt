@@ -197,6 +197,158 @@ class ShareLineTest {
     }
 
     /**
+     * A group reshaped to a lane while a lease runs below it: the edge to its old child is left
+     * CLOSING, so the child competes for nothing, and `x` competes as a leaf beside `y`. The line
+     * agrees with `entitlement` on all three.
+     */
+    @Test
+    fun aClosingEdgeCompetesForNothing() {
+        val before = draft("root") {
+            group("x") { lane("x1") }
+            lane("y")
+        }
+        val h = LocalHeddle.bootWhole(before, LocalPolicy(defaultReservation = 1L), epoch = 0L).also { it.mintSupply(10L) }
+        val x = before.groupId("x")
+        val x1 = before.groupId("x", "x1")
+        val y = before.groupId("y")
+        h.lease(setOf(x1))
+        val reshaped = h.apply(draft("root") {
+            lane("x", Weight.of(3))
+            lane("y")
+        }, generation = 1L)
+        val draining = reshaped.refusals.filterIsInstance<StepRefusal.Draining>().single { it.child == x1 }
+        val waiting = setOf(x, x1, y)
+        val line = h.shareLine(waiting)
+        assertAll(
+            { assertEquals(Lifecycle.CLOSING, h.snapshot().ledger.lifecycle(draining.edge), "the rig: x1's edge is draining") },
+            *listOf(x, x1, y).map { g -> { assertEquals(h.entitlement(g, waiting, totalSlots = 1L), line.share(g), g.value) } }.toTypedArray(),
+            { assertEquals(Rational.ZERO, line.share(x1)) },
+            { assertTrue(line.share(x) > Rational.ZERO, "x competes as a lane") },
+            { assertEquals(Rational.ONE, line.share(x) + line.share(y)) },
+            { assertEquals(Rational.ONE, line.share(before.groupId())) },
+        )
+    }
+
+    /** A group with two live inbound edges has no lineage, so it, and both parents above it, are owed nothing. */
+    @Test
+    fun aGroupWithTwoLiveInboundEdgesCompetesForNothing() {
+        val o = GroupId("o")
+        val ledger = shapedLedger(root, listOf(edgeOf(root, p), edgeOf(root, q), edgeOf(root, o), edgeOf(p, c), edgeOf(q, c)))
+        val h = engineOver(ledger, root, supply = 0)
+        val waiting = setOf(c, o, p, q)
+        val line = h.shareLine(waiting)
+        assertAll(
+            { assertEquals(null, ledger.lineageOf(c), "the rig: c is quarantined") },
+            *listOf(c, o, p, q).map { g -> { assertEquals(h.entitlement(g, waiting, totalSlots = 1L), line.share(g), g.value) } }.toTypedArray(),
+            { assertEquals(listOf(Rational.ZERO, Rational.ZERO, Rational.ZERO), listOf(c, p, q).map(line::share)) },
+            { assertEquals(Rational.ONE, line.share(o)) },
+        )
+    }
+
+    /**
+     * Attached children three template levels deep (#3698), with the middle level capped at one
+     * lease and that lease held under `d/w`. The leaves agree with `entitlement` and sum to the
+     * root; each group's children sum to it. `a/z` and `b`, attached template groups with nothing
+     * attached under them, and `d`, whose only lane is capped, are owed nothing though all wait.
+     */
+    @Test
+    fun nestedAttachedGroupsSplitAsDeclaredOnesDo() {
+        val template = Topology.ChildTemplate(
+            Weight.of(2),
+            template = Topology.ChildTemplate(Weight.of(3, 2), maxConcurrent = 1, template = Topology.ChildTemplate(Weight.ONE)),
+        )
+        val tree = Topology(
+            "root",
+            listOf(Topology.Group("ci", Weight.ONE, listOf(Topology.Lane("manual")), template = template), Topology.Lane("other", Weight.of(3))),
+        )
+        val h = LocalHeddle.bootWhole(tree, LocalPolicy(defaultReservation = 1L), epoch = 0L).also { it.mintSupply(10L) }
+        fun path(vararg names: String): GroupPath =
+            names.drop(1).fold(GroupPath.Attached(listOf("ci"), names.first()) as GroupPath) { parent, name -> GroupPath.Nested(parent, name) }
+        fun id(vararg names: String): GroupId = checkNotNull(tree.findGroupId(path(*names)))
+        for (attached in listOf(path("a", "x", "m"), path("a", "x", "n"), path("a", "y", "m"), path("a", "z"), path("b"), path("d", "w", "k"))) {
+            check(h.attach(attached, generation = 1L).refusals.isEmpty()) { "attach $attached" }
+        }
+        h.lease(setOf(id("d", "w", "k")))
+        val leaves = listOf(
+            id("a", "x", "m"), id("a", "x", "n"), id("a", "y", "m"), id("a", "z"), id("b"), id("d", "w", "k"),
+            tree.groupId("ci", "manual"), tree.groupId("other"),
+        )
+        val groups = listOf(id("a"), id("a", "x"), id("a", "y"), id("d"), id("d", "w"), tree.groupId("ci"), tree.groupId())
+        val waiting = (leaves + groups).toSet()
+        val line = h.shareLine(waiting)
+        fun sum(ids: List<GroupId>) = ids.fold(Rational.ZERO) { s, g -> s + line.share(g) }
+        assertAll(
+            {
+                assertEquals(
+                    WaitExplanation.AtCeiling(id("d", "w"), 1L),
+                    h.explain(id("d", "w", "k"), waiting, waiting),
+                    "the rig: d/w is at its ceiling",
+                )
+            },
+            *leaves.map { g -> { assertEquals(h.entitlement(g, waiting, totalSlots = 1L), line.share(g), g.value) } }.toTypedArray(),
+            { assertEquals(Rational.ONE, sum(leaves), "the leaves split the root") },
+            { assertEquals(line.share(id("a")), sum(listOf(id("a", "x"), id("a", "y"), id("a", "z")))) },
+            { assertEquals(line.share(tree.groupId("ci")), sum(listOf(id("a"), id("b"), id("d"), tree.groupId("ci", "manual")))) },
+            { assertTrue(line.share(id("a", "x")) > Rational.ZERO, "a nested attached group is owed a share") },
+            { assertEquals(listOf(Rational.ZERO, Rational.ZERO, Rational.ZERO), listOf(id("a", "z"), id("b"), id("d")).map(line::share)) },
+        )
+    }
+
+    /** A line is a value: neither emptying the set it was read from nor reweighting the tree moves it. */
+    @Test
+    fun aLineKeepsWhatItRead() {
+        val tree = draft("root") {
+            lane("a")
+            lane("b", Weight.of(3))
+        }
+        val h = LocalHeddle.bootWhole(tree, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+        val a = tree.groupId("a")
+        val both = hashSetOf(a, tree.groupId("b"))
+        val line = h.shareLine(both)
+        both.clear()
+        h.apply(draft("root") {
+            lane("a", Weight.of(5))
+            lane("b", Weight.of(3))
+        }, generation = 1L)
+        assertAll(
+            { assertEquals(Rational.of(1L, 4L), line.share(a)) },
+            { assertEquals(Rational.of(5L, 8L), h.shareLine(setOf(a, tree.groupId("b"))).share(a), "the rig: the reweight took") },
+        )
+    }
+
+    /**
+     * A lookup reads each level's sum from the line and never sums the siblings again. Built by
+     * hand with a stored sum its weights disagree with, the line answers from the stored sum. When
+     * each lookup summed its siblings, a table over N siblings cost O(N²): 20,000 lanes under one
+     * root took 4.3 s to read. A return to that reds here, with no clock in the test.
+     *
+     * A level whose sum does not fit fails only the shares beneath it.
+     */
+    @Test
+    fun aLookupReadsTheSumTheLineFormedOnce() {
+        val x = GroupId("x")
+        val y = GroupId("y")
+        val z = GroupId("z")
+        val zz = GroupId("zz")
+        val line = ShareLine(
+            root,
+            parentOf = mapOf(x to root, y to root, z to x, zz to y),
+            families = mapOf(
+                root to ShareLine.Family(mapOf(x to Weight.ONE, y to Weight.ONE), ShareLine.WeightSum.Fits(lcm = 1L, total = 4L)),
+                x to ShareLine.Family(mapOf(z to Weight.ONE), ShareLine.WeightSum.Fits(lcm = 1L, total = 1L)),
+                y to ShareLine.Family(mapOf(zz to Weight.ONE), ShareLine.WeightSum.Overflows),
+            ),
+        )
+        assertAll(
+            { assertEquals(Rational.of(1L, 4L), line.share(x), "over the stored total of 4, not the 2 the weights sum to") },
+            { assertEquals(Rational.of(1L, 4L), line.share(z)) },
+            { assertEquals(Rational.of(1L, 4L), line.share(y), "y's own level fits") },
+            { assertFailsWith<ArithmeticException>("the level beneath y does not") { line.share(zz) } },
+            { assertEquals(Rational.ONE, line.share(root)) },
+        )
+    }
+
+    /**
      * A leaf whose share fits under a group whose share does not, in a topology `bootWhole` accepts:
      * `share(b)` is `(2³²−1)² / 2⁶⁴`, too fine for `Long`, while `share(c)` multiplies it by
      * `2²⁰ / (2³²−1)` and fits. Only cancelling one level's numerator against another level's
