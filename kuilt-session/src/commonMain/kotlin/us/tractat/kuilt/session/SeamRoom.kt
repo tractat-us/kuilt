@@ -2945,9 +2945,10 @@ internal class SeamRoom(
      * an [AdmitMessage.GrantRenewal], while the member is [Liveness.Connected] (#3221).
      *
      * A renewal that falls due while the host holds the member as partitioned waits for the member's
-     * next contact and goes then, so the member gets nothing while it is away: the pass it holds was
-     * issued at most half a term before its last contact, and runs out between half a term and a whole
-     * term after it. It stops for good when the membership ends —
+     * next contact and goes then, so the member gets nothing while it is away. The pass it holds runs
+     * out at most a whole term after its last contact and, provided the last renewal reached it, at
+     * least half a term after: a renewal is sent once, so one lost on the way leaves the member on the
+     * pass before it, as does a failure to sign (#3709). It stops for good when the membership ends —
      * [detachMember] cancels it — and when the device is revoked after this membership's admission
      * (Decided 14, R2(i)): a revoked present member keeps its seat (Decided 12) but its pass runs out.
      * A failure to sign skips one renewal and tries again a period later.
