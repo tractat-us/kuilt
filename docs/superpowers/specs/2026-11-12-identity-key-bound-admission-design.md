@@ -96,7 +96,8 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     whose key store was cleared, and whose peer id is durable, keeps working with no prompt.
 19. **A superseded joiner sees `Left(self, LeaveReason.Superseded(by))`, then the room closes (Iain,
     2026-11-12, slice 1–2 audit).** The host sends that `Farewell` directly to the superseded peer, not
-    only through `fanOutToOtherMembers`, which excludes its subject.
+    only through `fanOutToOtherMembers`, which excludes its subject. A new process that Hellos under
+    the superseded id and key is told by a named `Reject(Superseded)` instead (Decided 32).
 20. **The resume-only reject codes go with the `Resume` frame (Iain, 2026-11-12, slice 1–2 audit).**
     `ResumeTokenInvalid`, `ResumeWindowNotYetOpen` and `ResumeWindowExpired` are removed when
     `Resume` is retired, together with their readers.
@@ -203,7 +204,7 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     - Decided 18 stands. A bystander can take a *partitioned* member's id on a fabric with
       self-chosen peer ids, and *What this protects against* now says so. Seat-decision rule 3 is
       unchanged. Closing the gap needs channel binding, which is tracked separately.
-    - Gate finding I1: the Hello gate answers a Hello under a superseded id and its superseded key
+    - Gate finding I1: the Hello gate (and the Proof-time check, for a Hello challenged before the takeover) answers a Hello under a superseded id and its superseded key
       with a `Reject` naming it (`answers` = its nonce) under a new terminal code, instead of
       `Farewell(supersededBy)`. The joiner already honours a named `Reject` before admission. It
       ends `Left(self, LeaveReason.Superseded(by))`, as Decided 19 promises. This changes the v7
@@ -378,6 +379,7 @@ The host keeps, for each member, its key. On a verified Proof:
 
 | Peer id | Key | Seat | Outcome |
 |---|---|---|---|
+| superseded (in `SupersededIds` under this key) | same | successor seated | **Refused**, terminal: `Reject(Superseded, supersededBy, answers)`, at the Hello gate or at Proof time. Checked before every row below (Decided 32) |
 | same | same | held (partitioned or still connected) | **Restored**: the same membership (the `Welcome` carries its `membership` id). `MembershipEvent.Resumed` only if the seat was `Partitioned`; a still-connected seat's old link is superseded silently (plan Amendment E) |
 | new | same | held, **partitioned** | **Restored under the new id**: the old member leaves with a dedicated `LeaveReason` (superseded), the new one inherits the seat's identity and key under a fresh membership id (plan Amendment E); one event pair, ordered through `fanOutToOtherMembers`, for every member present for it. A joiner that was away hears the successor in its admission burst, and its roster rebuild drops the old id later (Amendment G). With several partitioned seats, the most recently connected (Decided 30) |
 | new | same | held, all **connected** | **Additional seat**: admitted as a new member under the same key; no seat is superseded (Decided 30). A joiner presenting the host's own key is decided against the joiner seats that key holds, never the host's: with none it falls to the rows below, and a later tab gets an additional seat. The TCK row is #3656 |
