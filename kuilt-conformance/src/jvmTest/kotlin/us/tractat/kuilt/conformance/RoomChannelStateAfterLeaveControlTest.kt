@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
@@ -61,6 +62,10 @@ class RoomChannelStateAfterLeaveControlTest {
                     advanceClock = { ms -> clockMs += ms },
                 )
             }
+
+            // The one obligation run here needs no return rig.
+            override fun newReturnHarness(scope: TestScope): ReturnFixture =
+                ReturnFixture.Unsupported("https://github.com/tractat-us/kuilt/issues/3129")
         }
 
     @Test

@@ -1,6 +1,7 @@
 package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -75,6 +76,8 @@ class RoomConformanceGapDeclarationTest {
                     advanceClock = { ms -> clockMs += ms },
                 )
             }
+
+            override fun newReturnHarness(scope: TestScope): ReturnFixture = ReturnFixture.Unsupported(trackingUrl)
         }
 
     private val tracked = "https://github.com/tractat-us/kuilt/issues/2306"

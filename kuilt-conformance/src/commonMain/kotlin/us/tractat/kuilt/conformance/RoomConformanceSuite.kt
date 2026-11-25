@@ -26,6 +26,7 @@ import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.identity.test.fakeKeyStore
@@ -41,6 +42,7 @@ import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.session.AdmissionFailure
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
@@ -53,6 +55,7 @@ import us.tractat.kuilt.session.RoomFrame
 import us.tractat.kuilt.session.RoomFramePrefix
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -344,16 +347,304 @@ public abstract class RoomConformanceSuite {
      */
     public open fun newHarness(scope: CoroutineScope): RoomHarness = defaultHarness(scope)
 
-    // ── retired with `Room.resume` (#3215) ─────────────────────────────────────
+    /**
+     * Bind the return rows — the friction bar (#3159, Task 1.9) — to the implementation under test.
+     *
+     * Abstract and not defaulted, unlike [newHarness]: a default reference rig would let a room over
+     * another fabric pass these rows by testing the reference instead of itself. A harness that cannot
+     * make a device drop off and come back says so with [ReturnFixture.Unsupported] and an issue.
+     *
+     * [scope] is the test's own: the rows wait in virtual time, so the rig's rooms, clock and fabric
+     * must run on its scheduler.
+     */
+    public abstract fun newReturnHarness(scope: TestScope): ReturnFixture
+
+    // ── (0) The friction bar: a device that comes back (#3159, Task 1.9) ─────
     //
-    // `aReturnRestoresAHeldSeat`, `aReturnAfterTheSeatWentIsAFreshAdmission` and
-    // `resumeAfterLeaveIsLocalWindowClosed`, and the `ResumeHarness` they ran on, drove a return by
-    // calling `Room.resume`, which no longer exists: a joiner's return is its room's own reconnect,
-    // started by a torn link, never by the app. The second also encoded `WindowClosed` as the answer
-    // to a fresh admission, which a caller could not tell from a room that had ended (Amendment D).
-    // A return property owes a harness that can tear a joiner's link under a loom that heals the same
-    // seam, and asserts that the app made no call between the drop and the return; that is the
-    // identity plan's Task 1.9.
+    // Each row is one line of the host's key → seat table, reached through the device's own return:
+    // the room's reconnect after a torn link, or the one `join` a relaunched process makes. Each asserts
+    // the app made no other room or factory call between the drop and the return, through [AppCalls],
+    // and that the rig reached the state the row is about before reading the outcome.
+    //
+    // Table row "new id, same key, seat held partitioned" has no tear-and-heal row: a seam healed in
+    // place keeps its peer id (`Room.selfId` is the seam's, fixed for the room's life), so a device
+    // reaches the host under a new id only as a new room — [processRebuiltWithFreshIdRestores].
+
+    /**
+     * A device whose link tears and heals comes back to the seat the host held for it: the same id,
+     * the same key, one `Resumed`, and no departure or new member — with no call from the app.
+     */
+    @Test
+    public fun returnRestoresHeldSeatSameId(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a healed link restores the held seat under the same id")
+                ?: return@runTest
+            val host = h.hostFactory.host(h.hostPattern)
+            val device = h.newDevice()
+            val app = AppCalls()
+            val joiner = app.factory(device.launch()).join(h.joinTag)
+            try {
+                val me = joiner.selfId
+                val admitted = host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == me } }
+                joiner.awaitRoster("the device sees the host") { it.isNotEmpty() }
+                val key = admitted.single { it.id == me }.key
+                val hostTape = EventTape(host, backgroundScope)
+                val joinerTape = EventTape(joiner, backgroundScope)
+                val callsAtDrop = app.snapshot()
+                val healsAtDrop = device.heals
+
+                device.drop()
+                host.awaitRoster("the host holds the dropped device's seat Partitioned") { roster ->
+                    roster.any { it.id == me && it.liveness is Liveness.Partitioned }
+                }
+                device.restore()
+                val back = host.awaitRoster("the held seat is Connected again") { roster ->
+                    roster.any { it.id == me && it.liveness == Liveness.Connected }
+                }
+                joiner.awaitRoster("the device's room sees the host connected again") { roster ->
+                    roster.any { it.liveness == Liveness.Connected }
+                }
+                runCurrent() // let the events that announce the return reach the tapes
+                val callsAtReturn = app.snapshot()
+                val hostEdges = hostTape.edges()
+                val joinerEvents = joinerTape.events()
+                assertAll(
+                    { assertEquals(listOf("join"), callsAtDrop, "rig: the call counter saw the launch's join") },
+                    { assertEquals(callsAtDrop, callsAtReturn, "the app made no room or factory call between drop and return") },
+                    { assertTrue(device.heals > healsAtDrop, "rig: the device's own reconnect healed its seam (heals ${device.heals}, was $healsAtDrop)") },
+                    { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(me)), hostEdges, "the host restores the seat: one Resumed, no Left or Joined") },
+                    { assertEquals(listOf(me), back.map { it.id }, "one seat, the same one") },
+                    { assertEquals(key, back.single().key, "under the key it was admitted with") },
+                    { assertTrue(joinerEvents.none { it is MembershipEvent.HostLost }, "the device's room did not end: $joinerEvents") },
+                )
+                joiner.broadcast(applicationPayload("back"))
+                val reached = host.awaitHeld(me, count = 1, expected = "a frame the restored device sent")
+                assertEquals(listOf("back"), reached.map { it.payload.decodeToString() }, "the room the app already held is the one back in session")
+            } finally {
+                joiner.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * `Resumed` marks the end of a partition, once per partition: two drops, two `Resumed`s on the
+     * host, and the device's room says it was restored each time. A retry that reaches a seat already
+     * restored says nothing more (plan Amendment E).
+     */
+    @Test
+    public fun resumeWithinWindowFiresResumed(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("Resumed fires once per partition") ?: return@runTest
+            val host = h.hostFactory.host(h.hostPattern)
+            val device = h.newDevice()
+            val app = AppCalls()
+            val joiner = app.factory(device.launch()).join(h.joinTag)
+            try {
+                val me = joiner.selfId
+                host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == me } }
+                joiner.awaitRoster("the device sees the host") { it.isNotEmpty() }
+                val hostTape = EventTape(host, backgroundScope)
+                val joinerTape = EventTape(joiner, backgroundScope)
+                val callsAtFirstDrop = app.snapshot()
+                val counts = mutableListOf<Pair<Int, Int>>()
+                repeat(2) { episode ->
+                    device.drop()
+                    host.awaitRoster("partition ${episode + 1}: the host holds the seat Partitioned") { roster ->
+                        roster.any { it.id == me && it.liveness is Liveness.Partitioned }
+                    }
+                    device.restore()
+                    host.awaitRoster("partition ${episode + 1}: the seat is Connected again") { roster ->
+                        roster.any { it.id == me && it.liveness == Liveness.Connected }
+                    }
+                    joiner.awaitRoster("partition ${episode + 1}: the device's room sees the host again") { roster ->
+                        roster.any { it.liveness == Liveness.Connected }
+                    }
+                    // Let every retry the episode started land before counting.
+                    advanceTimeBy(h.joinerHeartbeat.reconnectWindow)
+                    counts += hostTape.events().count { it == MembershipEvent.Resumed(me) } to
+                        joinerTape.events().count { it is MembershipEvent.Resumed }
+                }
+                assertAll(
+                    { assertEquals(listOf(1 to 1, 2 to 2), counts, "(host Resumed, device Resumed) after each partition") },
+                    { assertEquals(callsAtFirstDrop, app.snapshot(), "the app made no room or factory call across both partitions") },
+                    { assertTrue(device.heals >= 2, "rig: the device's own reconnect healed its seam each time (heals ${device.heals})") },
+                    {
+                        val partitions = hostTape.events().count { it is MembershipEvent.Partitioned && it.peerId == me }
+                        assertEquals(2, partitions, "rig: the host saw two partitions, not one long one")
+                    },
+                )
+            } finally {
+                joiner.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * A different device presenting a connected member's id is refused `KeyConflict`, terminally, and
+     * the member keeps its seat and its key; once the impostor is gone the member's room is back with
+     * no call from its app (Decided 18).
+     */
+    @Test
+    public fun differentKeyOnLiveIdIsRefused(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a different key on a connected member's id is refused")
+                ?: return@runTest
+            val host = h.hostFactory.host(h.hostPattern)
+            val victimDevice = h.newDevice()
+            val app = AppCalls()
+            val victim = app.factory(victimDevice.launch()).join(h.joinTag)
+            var impostor: Room? = null
+            try {
+                val me = victim.selfId
+                val admitted = host.awaitRoster("the member is admitted") { roster -> roster.any { it.id == me } }
+                victim.awaitRoster("the member sees the host") { it.isNotEmpty() }
+                val key = admitted.single { it.id == me }.key
+                val hostTape = EventTape(host, backgroundScope)
+                val callsBefore = app.snapshot()
+
+                val arrived = victimDevice.impostor().join(h.joinTag).also { impostor = it }
+                val impostorTape = EventTape(arrived, backgroundScope)
+                val refused = arrived.awaitEvent("the impostor's AdmissionFailed") { it as? MembershipEvent.AdmissionFailed }
+                runCurrent()
+                val seatAtRefusal = host.roster.value.singleOrNull { it.id == me }
+                val edgesAtRefusal = hostTape.edges()
+                assertAll(
+                    { assertEquals(me, arrived.selfId, "rig: the impostor presents the member's id") },
+                    { assertEquals(RejectCode.KeyConflict, (refused.reason as? AdmissionFailure.Rejected)?.code, "refused for the key, terminally: $refused") },
+                    { assertEquals(Liveness.Connected, seatAtRefusal?.liveness, "rig: the seat was connected when the impostor was refused") },
+                    { assertEquals(key, seatAtRefusal?.key, "the seat keeps the member's key") },
+                    { assertEquals(emptyList(), edgesAtRefusal, "the host neither drops the member nor admits the impostor") },
+                    { assertTrue(impostorTape.events().none { it is MembershipEvent.Joined }, "the impostor never entered a roster") },
+                )
+
+                victimDevice.restore()
+                val back = host.awaitRoster("the member's seat is Connected again") { roster ->
+                    roster.any { it.id == me && it.liveness == Liveness.Connected }
+                }
+                victim.broadcast(applicationPayload("still-here"))
+                val reached = host.awaitHeld(me, count = 1, expected = "a frame the member sent after the impostor left")
+                assertAll(
+                    { assertEquals(listOf("join"), callsBefore, "rig: the call counter saw the launch's join") },
+                    { assertEquals(callsBefore + "broadcast", app.snapshot(), "the member's app made no call to get its seat back") },
+                    { assertEquals(listOf(me), back.map { it.id }, "one seat, still the member's") },
+                    { assertEquals(key, back.single().key, "under the member's key") },
+                    { assertEquals(listOf("still-here"), reached.map { it.payload.decodeToString() }) },
+                    { assertTrue(hostTape.edges().none { it is MembershipEvent.Joined || it is MembershipEvent.Left }, "no departure and no new member: ${hostTape.edges()}") },
+                )
+            } finally {
+                impostor?.leave()
+                victim.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * A process killed without a goodbye and started again on the same device, under the same peer
+     * id, inside the host's hold, gets the held seat back. The only app call is the relaunch's `join`:
+     * no token, no `resume`.
+     */
+    @Test
+    public fun processRebuiltInsideWindowRestores(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a rebuilt process with the same id restores the held seat")
+                ?: return@runTest
+            val host = h.hostFactory.host(h.hostPattern)
+            val device = h.newDevice()
+            val app = AppCalls()
+            val first = app.factory(device.launch()).join(h.joinTag)
+            var rebuilt: Room? = null
+            try {
+                val me = first.selfId
+                val admitted = host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == me } }
+                first.awaitRoster("the device sees the host") { it.isNotEmpty() }
+                val key = admitted.single { it.id == me }.key
+                val hostTape = EventTape(host, backgroundScope)
+                val callsAtKill = app.snapshot()
+
+                device.kill()
+                host.awaitRoster("the host holds the dead process's seat Partitioned") { roster ->
+                    roster.any { it.id == me && it.liveness is Liveness.Partitioned }
+                }
+                val second = app.factory(device.launch(reusePeerId = true)).join(h.joinTag).also { rebuilt = it }
+                host.awaitEvent("the host's Resumed") { it as? MembershipEvent.Resumed }
+                val back = host.awaitRoster("the seat is Connected again") { roster ->
+                    roster.any { it.id == me && it.liveness == Liveness.Connected }
+                }
+                second.awaitRoster("the rebuilt room sees the host") { it.isNotEmpty() }
+                runCurrent() // let the events that announce the return reach the tapes
+                val callsAtReturn = app.snapshot()
+                assertAll(
+                    { assertEquals(me, second.selfId, "rig: the rebuilt process presents the same id") },
+                    { assertEquals(callsAtKill + "join", callsAtReturn, "the relaunch's join is the app's only call") },
+                    { assertEquals(listOf<MembershipEvent>(MembershipEvent.Resumed(me)), hostTape.edges(), "one Resumed, no Left or Joined") },
+                    { assertEquals(listOf(me), back.map { it.id }, "one seat, the same one") },
+                    { assertEquals(key, back.single().key, "under the device's key") },
+                )
+                second.broadcast(applicationPayload("Rebuilt"))
+                val reached = host.awaitHeld(me, count = 1, expected = "a frame the rebuilt process sent")
+                assertEquals(listOf("Rebuilt"), reached.map { it.payload.decodeToString() })
+            } finally {
+                rebuilt?.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * A process killed and started again under a **fresh** peer id, while the host holds its old seat,
+     * inherits that seat: the old id leaves `Superseded(by)` the new one, which joins — one pair of
+     * events, heard by the host and by a member who stayed — and the key holds one seat, not two.
+     */
+    @Test
+    public fun processRebuiltWithFreshIdRestores(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a rebuilt process with a fresh id inherits the held seat")
+                ?: return@runTest
+            val host = h.hostFactory.host(h.hostPattern)
+            val device = h.newDevice()
+            val bystander = h.newDevice().launch().join(h.joinTag)
+            val app = AppCalls()
+            val first = app.factory(device.launch()).join(h.joinTag)
+            var rebuilt: Room? = null
+            try {
+                val old = first.selfId
+                val admitted = host.awaitRoster("both devices are admitted") { roster ->
+                    roster.any { it.id == old } && roster.any { it.id == bystander.selfId }
+                }
+                bystander.awaitRoster("the bystander lists the device") { roster -> roster.any { it.id == old } }
+                val key = admitted.single { it.id == old }.key
+                val hostTape = EventTape(host, backgroundScope)
+                val bystanderTape = EventTape(bystander, backgroundScope)
+                val callsAtKill = app.snapshot()
+
+                device.kill()
+                host.awaitRoster("the host holds the dead process's seat Partitioned") { roster ->
+                    roster.any { it.id == old && it.liveness is Liveness.Partitioned }
+                }
+                val second = app.factory(device.launch(reusePeerId = false)).join(h.joinTag).also { rebuilt = it }
+                val fresh = second.selfId
+                val after = host.awaitRoster("the new id holds the seat and the old one is gone") { roster ->
+                    roster.any { it.id == fresh } && roster.none { it.id == old }
+                }
+                bystander.awaitRoster("the bystander lists the new id in place of the old") { roster ->
+                    roster.any { it.id == fresh } && roster.none { it.id == old }
+                }
+                runCurrent() // let the events that announce the return reach the tapes
+                val callsAtReturn = app.snapshot()
+                val expected = listOf("Left(${old.value}, ${LeaveReason.Superseded(fresh)})", "Joined(${fresh.value})")
+                assertAll(
+                    { assertTrue(fresh != old, "rig: the rebuilt process presents a fresh id") },
+                    { assertEquals(callsAtKill + "join", callsAtReturn, "the relaunch's join is the app's only call") },
+                    { assertEquals(expected, hostTape.edges().map { it.edge() }, "the host: the old id superseded, then the new one joined") },
+                    { assertEquals(expected, bystanderTape.edges().map { it.edge() }, "a member present for it hears the same pair") },
+                    { assertEquals(listOf(key), after.filter { it.id == fresh || it.id == old }.map { it.key }, "the key holds one seat") },
+                    { assertTrue(hostTape.edges().none { it is MembershipEvent.Left && it.reason == LeaveReason.PartitionExpired }, "the seat was inherited, not let go") },
+                )
+            } finally {
+                rebuilt?.leave()
+                bystander.leave()
+                host.leave()
+            }
+        }
 
     // ── (1) host → role = Host, selfId is non-blank ──────────────────────────
 
@@ -1614,6 +1905,47 @@ public abstract class RoomConformanceSuite {
                 null
             }
         }
+
+    /**
+     * The return rig for one row, or `null` when the harness declared it cannot build one — after
+     * asserting the declaration names an issue, as [injectorOrDeclaredGap] does.
+     *
+     * A supported rig also has to make a readmission reachable, so its configs are checked here,
+     * where a row that needs them starts: a device whose reconnect window ends before the host has
+     * noticed it and let its seat go gives up first, and a readmission row would then be measuring a
+     * `HostLost` the fixture chose.
+     */
+    private fun TestScope.returnHarnessOrDeclaredGap(obligation: String): ReturnHarness? =
+        when (val fixture = newReturnHarness(this)) {
+            is ReturnFixture.Supported -> fixture.harness.also { h ->
+                val hostGivesUp = h.hostHeartbeat.timeout + h.hostHeartbeat.reconnectWindow
+                assertTrue(
+                    h.joinerHeartbeat.reconnectWindow > hostGivesUp + h.joinerHeartbeat.interval,
+                    "RoomConformanceSuite: the return rig's joiner window (${h.joinerHeartbeat.reconnectWindow}) " +
+                        "must outlast the host's detection plus hold ($hostGivesUp) by more than one retry " +
+                        "interval (${h.joinerHeartbeat.interval}), or a device stops trying before the host " +
+                        "lets its seat go and no readmission is reachable.",
+                )
+            }
+            is ReturnFixture.Unsupported -> {
+                assertTrue(
+                    fixture.trackingUrl.isNotBlank(),
+                    "RoomConformanceSuite: \"$obligation\" is unproven on this harness, and an unproven " +
+                        "obligation must be tracked — ReturnFixture.Unsupported was declared with a blank " +
+                        "trackingUrl. Point it at the issue that would have to close for this harness to " +
+                        "return ReturnFixture.Supported, or return Supported and prove the obligation.",
+                )
+                null
+            }
+        }
+
+    /** A membership edge as one line naming its peer, for comparing whole sequences. */
+    private fun MembershipEvent.edge(): String = when (this) {
+        is MembershipEvent.Joined -> "Joined(${member.id.value})"
+        is MembershipEvent.Left -> "Left(${peerId.value}, $reason)"
+        is MembershipEvent.Resumed -> "Resumed(${peerId.value})"
+        else -> toString()
+    }
 
     /**
      * The [FaultySeam] this loom wove at [index], or fail naming what it actually has.
