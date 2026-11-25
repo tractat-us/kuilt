@@ -3199,6 +3199,12 @@ internal class SeamRoom(
         )
         val detectorJob = Job(scope.coroutineContext[Job])
         val detectorScope = CoroutineScope(scope.coroutineContext + detectorJob)
+        // Registered BEFORE anything is launched (#3609). [handlePartitionEvent] acts on an event
+        // only from the detector registered for its peer, and on an unconfined dispatcher the
+        // collector launched below can take an event and reach that check on this thread, under this
+        // reentrant lock, before this function returns: registered after, its first event would be
+        // dropped as a stale detector's.
+        detectors[member.id] = DetectorHandle(detectorJob, detector)
         detector.start(detectorScope)
         detectorScope.launch {
             logger.debug { "detector-collector.start peer=${member.id.value} role=${_role.value}" }
@@ -3211,7 +3217,6 @@ internal class SeamRoom(
                 handlePartitionEvent(event, detectorJob)
             }
         }
-        detectors[member.id] = DetectorHandle(detectorJob, detector)
         // #1618 suspect 1: the per-peer detector is now live. If this logs for every admitted mesh peer,
         // detector startup is NOT the break — attention moves to whether healthy pongs keep it alive
         // (suspect 2) and whether the drop fires PeerUnresponsive.
@@ -3293,13 +3298,29 @@ internal class SeamRoom(
      */
     internal fun lastResumeRefusal(): ResumeRefusal? = resumeMachine?.lastRefusal()
 
+    /**
+     * [detector] is the job of the detector that reported [event], and every arm acts only while
+     * that detector is still the one registered for the event's peer (#3609). A member's detector is
+     * stopped when the member leaves, and a joiner's host detector while a reconnect runs, so an
+     * event from one no longer registered is about a membership, or a link, that is over. Cancelling
+     * the detector does not stop its collector from handing over an event it has already taken: the
+     * collector suspends nowhere between taking an event and the room's lock, so on a multi-threaded
+     * dispatcher a thread that stalls there can deliver it after another detector is watching the
+     * same peer. Each arm checks in the critical section that acts, as [handlePeerLost] did first.
+     */
     private suspend fun handlePartitionEvent(event: PartitionEvent, detector: Job) {
         when (event) {
-            is PartitionEvent.PeerUnresponsive -> handleUnresponsive(event)
-            is PartitionEvent.PeerRecovered -> markRecovered(event.peerId, event.at)
+            is PartitionEvent.PeerUnresponsive -> handleUnresponsive(event, detector)
+            is PartitionEvent.PeerRecovered -> markRecovered(event.peerId, event.at, detector)
             is PartitionEvent.PeerLost -> handlePeerLost(event.peerId, event.at, detector)
         }
     }
+
+    /** Whether [detector] is the detector registered for [peerId]. Callers must hold [lock]. */
+    private fun isCurrentDetector(peerId: PeerId, detector: Job): Boolean = detectors[peerId]?.job === detector
+
+    /** What [handleUnresponsive] decided under [lock]. */
+    private enum class UnresponsiveFork { StaleDetector, Resume, Partition }
 
     /**
      * Maps a [PartitionEvent.PeerUnresponsive] to a membership event by role + reason.
@@ -3311,12 +3332,34 @@ internal class SeamRoom(
      * both into one attempt. Every other case (host watching a joiner; a joiner's non-host peer;
      * a silent [PartitionEvent.Reason.Timeout] partition that may still recover) opens the
      * reconnect window via [markPartitioned].
+     *
+     * The resume is claimed in the section that checks [detector] (#3609): checked in one section and
+     * claimed in another, a resume that ended in between, restarting the host detector, would leave
+     * this event from the one it replaced to start a second episode on the healed link.
+     * [JoinerResumeMachine.attemptReconnect] shares this room's reentrant [lock] and only launches,
+     * so nothing suspends under it. [markPartitioned] checks again in its own section.
      */
-    private suspend fun handleUnresponsive(event: PartitionEvent.PeerUnresponsive) {
-        val isHost = lock.withLock {
-            _role.value == SessionRole.Joiner && event.peerId == hostPeerId
+    private suspend fun handleUnresponsive(event: PartitionEvent.PeerUnresponsive, detector: Job) {
+        val (fork, isHost) = lock.withLock {
+            val isHost = _role.value == SessionRole.Joiner && event.peerId == hostPeerId
+            val fork = when {
+                !isCurrentDetector(event.peerId, detector) -> UnresponsiveFork.StaleDetector
+                isHost && event.reason == PartitionEvent.Reason.TransportClosed -> {
+                    resumeMachine?.attemptReconnect(event.at)
+                    UnresponsiveFork.Resume
+                }
+                else -> UnresponsiveFork.Partition
+            }
+            fork to isHost
         }
-        val hostTransportClose = isHost && event.reason == PartitionEvent.Reason.TransportClosed
+        if (fork == UnresponsiveFork.StaleDetector) {
+            logger.debug {
+                "membership.unresponsive.stale-detector peer=${event.peerId.value} reason=${event.reason}: " +
+                    "a detector no longer watching this peer reported it"
+            }
+            return
+        }
+        val hostTransportClose = fork == UnresponsiveFork.Resume
         logger.info {
             "membership.unresponsive peer=${event.peerId.value} reason=${event.reason} " +
                 "isHost=$isHost branch=${if (hostTransportClose) "resume" else "markPartitioned"}"
@@ -3331,11 +3374,8 @@ internal class SeamRoom(
             "detector.unresponsive peer=${event.peerId.value} self=${selfId.value} " +
                 "reason=${event.reason} fork=${if (hostTransportClose) "host-resume" else "markPartitioned"}"
         }
-        if (hostTransportClose) {
-            resumeMachine?.attemptReconnect(event.at)
-        } else {
-            markPartitioned(event.peerId, event.at, event.reason.toReconnectReason())
-        }
+        // The resume was claimed under the lock above.
+        if (!hostTransportClose) markPartitioned(event.peerId, event.at, event.reason.toReconnectReason(), detector)
     }
 
     /**
@@ -3357,8 +3397,14 @@ internal class SeamRoom(
      *
      * On the **host** the announcement is also a [AdmitMessage.Paused] fan-out to the remaining
      * members — see [propagatePaused] for why local detection alone is not enough.
+     *
+     * A no-op unless [detector], the job of the detector that reported the drop, is still the one
+     * registered for [peerId], checked in the section that writes the level (#3609). From a detector
+     * since replaced, the drop is about a membership or a link that is over: acted on, it would hold
+     * a newer, connected seat partitioned and open a window that seat's own detector never closes,
+     * since it never saw the peer go quiet.
      */
-    private fun markPartitioned(peerId: PeerId, at: Instant, reason: ReconnectReason) {
+    private fun markPartitioned(peerId: PeerId, at: Instant, reason: ReconnectReason, detector: Job) {
         // Hoisted above the role gate: previously computed only in the host-only propagatePaused
         // branch, so a joiner had no deadline at all (#1724). The level needs it on both roles.
         // Arithmetic in epoch-millis, converted once — same operands, same order, same truncation
@@ -3370,6 +3416,10 @@ internal class SeamRoom(
         // Read the role once: the level and the fan-out must agree on which side owns the window.
         val isHost = _role.value == SessionRole.Host
         val (wasPartitioned, level) = lock.withLock {
+            if (!isCurrentDetector(peerId, detector)) {
+                logger.debug { "membership.partitioned.stale-detector peer=${peerId.value}: a replaced detector reported it" }
+                return
+            }
             val current = admittedById[peerId] ?: return
             val existing = current.liveness as? Liveness.Partitioned
             // `since` is first-detection, so it agrees with the single MembershipEvent.Partitioned
@@ -3624,9 +3674,17 @@ internal class SeamRoom(
      * expiry on its own state regardless, which is what makes an injected policy that ignores this
      * merely noisy rather than destructive. Removing the cause and refusing to act on it are
      * separate obligations; this is the first.
+     *
+     * A no-op unless [detector] is still the one registered for [peerId], for [markPartitioned]'s
+     * reason (#3609): a recovery a replaced detector saw would release a seat the current detector
+     * holds partitioned, and close its window, while the link it watches is still silent.
      */
-    private fun markRecovered(peerId: PeerId, at: Instant) {
+    private fun markRecovered(peerId: PeerId, at: Instant, detector: Job) {
         val wasPartitioned = lock.withLock {
+            if (!isCurrentDetector(peerId, detector)) {
+                logger.debug { "membership.recovered.stale-detector peer=${peerId.value}: a replaced detector reported it" }
+                return
+            }
             val current = admittedById[peerId] ?: return
             val wasPartitioned = current.liveness is Liveness.Partitioned
             updateMemberLiveness(peerId, Liveness.Connected) ?: return
@@ -4591,16 +4649,20 @@ internal class SeamRoom(
      * from a detector no longer registered for [peerId] is about a membership that is over — and
      * evicting by peer id would remove a newer member admitted under the same id. The check and the
      * eviction share one critical section.
+     *
+     * The joiner's host arm is checked first, the same way (#3609). Its detector is stopped while a
+     * reconnect runs and another started when one succeeds, so a loss from one no longer registered
+     * would end a healed room as host-lost, and stop the detector watching it.
      */
     private suspend fun handlePeerLost(peerId: PeerId, at: Instant, detector: Job) {
         logger.info { "handlePeerLost peer=${peerId.value} role=${_role.value} at=$at" }
         val loss = lock.withLock {
             when {
+                !isCurrentDetector(peerId, detector) -> PeerLoss.StaleDetector
                 _role.value == SessionRole.Joiner && peerId == hostPeerId -> {
                     stopDetector(peerId)
                     PeerLoss.HostLost
                 }
-                detectors[peerId]?.job !== detector -> PeerLoss.StaleDetector
                 else -> {
                     stopDetector(peerId)
                     PeerLoss.Evicted(detachMember(peerId, LeaveReason.PartitionExpired))
@@ -4613,7 +4675,7 @@ internal class SeamRoom(
                 markHostLost(at, FailureReason.WindowExpired)
             }
             PeerLoss.StaleDetector ->
-                logger.debug { "handlePeerLost.stale-detector peer=${peerId.value}: its membership has ended" }
+                logger.debug { "handlePeerLost.stale-detector peer=${peerId.value}: the membership or link it watched has ended" }
             is PeerLoss.Evicted -> {
                 logger.info { "handlePeerLost.evict peer=${peerId.value} reason=PartitionExpired" }
                 loss.detached?.close()
