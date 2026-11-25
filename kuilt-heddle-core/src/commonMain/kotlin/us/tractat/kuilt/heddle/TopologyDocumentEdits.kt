@@ -330,7 +330,7 @@ private fun List<Node>.rewriteAt(path: List<Int>, rewrite: (Node) -> List<Node>)
 private fun List<Int>.shiftedPast(removed: List<Int>): List<Int> {
     val depth = removed.size - 1
     val sharesParent = size > depth && subList(0, depth) == removed.subList(0, depth)
-    return this
+    return if (sharesParent && this[depth] > removed[depth]) toMutableList().also { it[depth] -= 1 } else this
 }
 
 private fun Node.with(name: String = this.name, weight: String = this.weight, maxConcurrent: Long? = this.maxConcurrent): Node =
