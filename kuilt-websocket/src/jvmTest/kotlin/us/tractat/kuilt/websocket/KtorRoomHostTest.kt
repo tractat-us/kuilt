@@ -20,9 +20,12 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.session.Principal
 import us.tractat.kuilt.session.PrincipalAttested
 import us.tractat.kuilt.session.Room
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
@@ -50,6 +53,7 @@ class KtorRoomHostTest {
                     serverPeerId = serverPeerId,
                     pattern = serverPattern,
                     deviceKeyStore = InMemoryDeviceKeyStore(),
+                    admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
                 )
             val clientLoom = KtorClientLoom(createClient { install(ClientWebSockets) })
             val firstRoom = CompletableDeferred<Room>()
@@ -101,7 +105,7 @@ class KtorRoomHostTest {
     @Test
     fun `start a second time on same host throws IllegalStateException`() =
         testApplication {
-            val host = KtorRoomHost(application, serverPath, serverPeerId, serverPattern, InMemoryDeviceKeyStore())
+            val host = KtorRoomHost(application, serverPath, serverPeerId, serverPattern, InMemoryDeviceKeyStore(), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             coroutineScope {
                 val job = launch { host.start { awaitCancellation() } }
                 // Yield twice so the launched coroutine reaches `withLock`.
@@ -120,7 +124,7 @@ class KtorRoomHostTest {
     @Test
     fun `accept loop tears down cleanly when scope is cancelled`() =
         testApplication {
-            val host = KtorRoomHost(application, serverPath, serverPeerId, serverPattern, InMemoryDeviceKeyStore())
+            val host = KtorRoomHost(application, serverPath, serverPeerId, serverPattern, InMemoryDeviceKeyStore(), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             coroutineScope {
                 val job = launch { host.start { awaitCancellation() } }
                 yield()
@@ -152,6 +156,7 @@ class KtorRoomHostTest {
                 pattern = serverPattern,
                 deviceKeyStore = InMemoryDeviceKeyStore(),
                 loom = FailingLoom(error),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             )
             val result = runCatchingCancellable {
                 coroutineScope {
@@ -198,6 +203,7 @@ class KtorRoomHostTest {
                 pattern = serverPattern,
                 deviceKeyStore = InMemoryDeviceKeyStore(),
                 loom = SoleSeamLoom(seam),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             )
             val accepted = CompletableDeferred<Unit>()
 

@@ -9,8 +9,11 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -41,7 +44,7 @@ class JoinerWelcomeGateTest {
         runTest {
             val loom = InMemoryLoom()
             val host = factory(loom, backgroundScope)
-                .host(Pattern("HostA", roomKey = "room-A"), memberName = "HostA")
+                .host(Pattern("HostA", roomKey = "room-A"), memberName = "HostA", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joiner = factory(loom, backgroundScope)
                 .join(InMemoryTag("Bob", roomKey = "room-A"), memberName = "Bob")
 

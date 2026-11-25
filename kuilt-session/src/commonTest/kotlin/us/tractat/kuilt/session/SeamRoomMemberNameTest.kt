@@ -7,7 +7,10 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,7 +26,7 @@ class SeamRoomMemberNameTest {
         val loom = InMemoryLoom()
         val clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
         val host = SeamRoomFactory(loom, backgroundScope, clock = clock, deviceKeyStore = fakeKeyStore(0))
-            .host(Pattern(sessionName = "Alice's game"), memberName = "Alice")
+            .host(Pattern(sessionName = "Alice's game"), memberName = "Alice", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         // Joiner discovers the session ("Alice's game") but names itself "Bob".
         val joiner = SeamRoomFactory(loom, backgroundScope, clock = clock, deviceKeyStore = fakeKeyStore(1))
             .join(InMemoryTag("Alice's game"), memberName = "Bob")

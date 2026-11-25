@@ -8,10 +8,13 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.identity.DeviceKey
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeDeviceKey
 import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -210,7 +213,7 @@ class RosterWelcomeOrderTest {
             heartbeatConfig = KEY_SEAT_HEARTBEAT,
             admitTimeout = KEY_SEAT_ADMIT_TIMEOUT,
             reconnectControllerFactory = hold.factory,
-        ).adopt(parking, SessionRole.Host, memberName = "Host", roomId = KEY_SEAT_ROOM)
+        ).adopt(parking, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), roomId = KEY_SEAT_ROOM), memberName = "Host")
         val events = EventLog(room, backgroundScope)
         testScheduler.runCurrent()
         return RawHost(this, fake, room, hold, events, fakeDidKey(HOST_DEVICE)) to park

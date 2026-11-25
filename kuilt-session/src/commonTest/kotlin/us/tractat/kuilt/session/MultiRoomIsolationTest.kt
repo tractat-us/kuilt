@@ -11,7 +11,10 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
@@ -52,8 +55,8 @@ class MultiRoomIsolationTest {
                 clock = zeroClock,
                 deviceKeyStore = fakeKeyStore(0),
             )
-            val room1 = hostFactory.host(Pattern("room-1"))
-            val room2 = hostFactory.host(Pattern("room-2"))
+            val room1 = hostFactory.host(Pattern("room-1"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
+            val room2 = hostFactory.host(Pattern("room-2"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             // A joiner that targets ONLY room-1.
             val joinerLoom = fabric.clientLoom(PeerId("joiner"), Random(1L))

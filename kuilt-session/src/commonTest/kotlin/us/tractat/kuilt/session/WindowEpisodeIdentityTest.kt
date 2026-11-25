@@ -14,8 +14,11 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.ProvenResume
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
@@ -168,9 +171,9 @@ class WindowEpisodeIdentityTest {
             )
             val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), fastConfig)
 
-            val host = hostFactory.host(Pattern("Host"))
+            val host = hostFactory.host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-            val droppedRoom = joinerFactory.adopt(droppedLink, SessionRole.Joiner)
+            val droppedRoom = joinerFactory.adopt(droppedLink, AdoptRole.Joiner)
             host.roster.first { it.size == 1 }
             droppedRoom.roster.first { it.size == 1 }
             val dropped = droppedRoom.selfId
@@ -325,9 +328,9 @@ class WindowEpisodeIdentityTest {
             // The two joiners are two devices: one factory, and one key, each.
             fun joinerDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
 
-            val host = hostFactory.host(Pattern("Host"))
+            val host = hostFactory.host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-            val droppedRoom = joinerDevice(3).adopt(droppedLink, SessionRole.Joiner)
+            val droppedRoom = joinerDevice(3).adopt(droppedLink, AdoptRole.Joiner)
             val bystander = joinerDevice(13).join(InMemoryTag("Bystander"))
             host.roster.first { it.size == 2 }
             bystander.roster.first { it.size == 2 }
@@ -499,9 +502,9 @@ class WindowEpisodeIdentityTest {
             // The two joiners are two devices: one factory, and one key, each.
             fun joinerDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
 
-            val host = hostFactory.host(Pattern("Host"))
+            val host = hostFactory.host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-            val droppedRoom = joinerDevice(5).adopt(droppedLink, SessionRole.Joiner)
+            val droppedRoom = joinerDevice(5).adopt(droppedLink, AdoptRole.Joiner)
             val bystander = joinerDevice(15).join(InMemoryTag("Bystander"))
             host.roster.first { it.size == 2 }
             bystander.roster.first { it.size == 2 }

@@ -9,8 +9,11 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -45,7 +48,7 @@ class RoomBoundAdmissionTest {
         runTest {
             val loom = InMemoryLoom()
             val host = factory(loom, backgroundScope)
-                .host(Pattern("HostA", roomKey = "room-A"), memberName = "HostA")
+                .host(Pattern("HostA", roomKey = "room-A"), memberName = "HostA", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val joiner = factory(loom, backgroundScope)
                 .join(InMemoryTag("Bob", roomKey = "room-A"), memberName = "Bob")
@@ -73,7 +76,7 @@ class RoomBoundAdmissionTest {
     fun `joiner whose target room mismatches the host is rejected`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = factory(loom, backgroundScope).host(Pattern("HostA", roomKey = "room-A"))
+            val host = factory(loom, backgroundScope).host(Pattern("HostA", roomKey = "room-A"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             // Drive the joiner at the wire level so the Reject is directly observable.
             val joinerSeam = loom.join(InMemoryTag("Bob", roomKey = "room-B"))
@@ -115,7 +118,7 @@ class RoomBoundAdmissionTest {
         runTest {
             val loom = InMemoryLoom()
             val host = factory(loom, backgroundScope)
-                .host(Pattern("Alice", roomKey = "room-A"), memberName = "Alice")
+                .host(Pattern("Alice", roomKey = "room-A"), memberName = "Alice", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             // roomKey defaults null
             val joiner = factory(loom, backgroundScope)

@@ -12,8 +12,11 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -167,9 +170,9 @@ class LivenessRouteGateTest {
             fun slowDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), slowConfig)
             val fastFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1), fastConfig)
 
-            val hostRoom = slowDevice(0).host(Pattern("Mesh"))
+            val hostRoom = slowDevice(0).host(Pattern("Mesh"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-            val droppedRoom = slowDevice(2).adopt(droppedLink, SessionRole.Joiner)
+            val droppedRoom = slowDevice(2).adopt(droppedLink, AdoptRole.Joiner)
             val bystander = fastFactory.join(InMemoryTag("Bystander"))
 
             hostRoom.roster.first { it.size == 2 }
@@ -231,7 +234,7 @@ class LivenessRouteGateTest {
         val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(0L))
 
         val hostFactory = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock, fakeKeyStore(2), fastConfig)
-        val hostRoom = hostFactory.host(Pattern(ROOM))
+        val hostRoom = hostFactory.host(Pattern(ROOM), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
         val aLoom = fabric.clientLoom(PeerId("joiner-a"), Random(1L))
         val bLoom = fabric.clientLoom(PeerId("joiner-b"), Random(2L))
@@ -240,9 +243,9 @@ class LivenessRouteGateTest {
         val aSeam = aLoom.join(InMemoryTag(ROOM))
         val bSeam = bLoom.join(InMemoryTag(ROOM))
         val aRoom = SeamRoomFactory(aLoom, backgroundScope, clock, fakeKeyStore(3), fastConfig)
-            .adopt(aSeam, SessionRole.Joiner)
+            .adopt(aSeam, AdoptRole.Joiner)
         val bRoom = SeamRoomFactory(bLoom, backgroundScope, clock, fakeKeyStore(4), fastConfig)
-            .adopt(bSeam, SessionRole.Joiner)
+            .adopt(bSeam, AdoptRole.Joiner)
 
         hostRoom.roster.first { it.size == 2 }
         aRoom.roster.first { it.size == 2 }

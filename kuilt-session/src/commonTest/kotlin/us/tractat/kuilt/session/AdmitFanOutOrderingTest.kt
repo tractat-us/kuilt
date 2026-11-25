@@ -24,9 +24,12 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.ProvenResume
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
@@ -600,7 +603,7 @@ class AdmitFanOutOrderingTest {
 
         var doomedId: PeerId? = null
         val hostSeam = TimeoutMintingSeam(loom.host(Pattern("Host")), mintLimit) { doomedId }
-        val hostRoom = hostFactory.adopt(hostSeam, SessionRole.Host)
+        val hostRoom = hostFactory.adopt(hostSeam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())))
 
         // `Room.roster` excludes self, so a fully-formed four-peer session reads 3 everywhere. Joins
         // are awaited one at a time so `admittedById`'s insertion order — and therefore the fan-out's
@@ -613,7 +616,7 @@ class AdmitFanOutOrderingTest {
         hostRoom.roster.first { it.size == 2 }
 
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-        val droppedRoom = joinerDevice(5).adopt(droppedLink, SessionRole.Joiner)
+        val droppedRoom = joinerDevice(5).adopt(droppedLink, AdoptRole.Joiner)
         hostRoom.roster.first { it.size == 3 }
         healthyRoom.roster.first { it.size == 3 }
         droppedRoom.roster.first { it.size == 3 }
@@ -663,9 +666,9 @@ class AdmitFanOutOrderingTest {
         fun joinerDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), joinerConfig)
 
         val hostSeam = StallingSeam(loom.host(Pattern("Host")), stall)
-        val hostRoom = hostFactory.adopt(hostSeam, SessionRole.Host)
+        val hostRoom = hostFactory.adopt(hostSeam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())))
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-        val droppedRoom = joinerDevice(3).adopt(droppedLink, SessionRole.Joiner)
+        val droppedRoom = joinerDevice(3).adopt(droppedLink, AdoptRole.Joiner)
         val bystanderRoom = joinerDevice(6).join(InMemoryTag("Bystander"))
 
         hostRoom.roster.first { it.size == 2 }

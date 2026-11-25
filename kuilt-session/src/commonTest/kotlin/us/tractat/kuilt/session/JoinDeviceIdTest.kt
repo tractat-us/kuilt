@@ -10,7 +10,10 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.election.ElectionOutcome
 import us.tractat.kuilt.session.election.SeamElectionLobby
 import us.tractat.kuilt.test.assertAll
@@ -31,7 +34,7 @@ class JoinDeviceIdTest {
     fun helloCarriesTheSuppliedDeviceId() =
         runTest {
             val loom = InMemoryLoom()
-            val host = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0)).host(Pattern("Alice"))
+            val host = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0)).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val withId = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1))
                 .join(InMemoryTag("Alice"), memberName = "Bob", deviceId = "d-1")
             val withoutId = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(2))
@@ -59,8 +62,8 @@ class JoinDeviceIdTest {
             val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(3))
             val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(4))
 
-            val hostRoom = hostFactory.adopt(hostSeam, SessionRole.Host, memberName = "Alice")
-            val joinerRoom = joinerFactory.adopt(joinerSeam, SessionRole.Joiner, memberName = "Bob", deviceId = "d-2")
+            val hostRoom = hostFactory.adopt(hostSeam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())), memberName = "Alice")
+            val joinerRoom = joinerFactory.adopt(joinerSeam, AdoptRole.Joiner, memberName = "Bob", deviceId = "d-2")
 
             assertEquals("d-2", hostRoom.roster.first { it.size == 1 }.single().identity.deviceId)
 
@@ -96,7 +99,7 @@ class JoinDeviceIdTest {
             val memberLobby = lobbies.single { it.selfId != elected }
 
             val memberOutcome = async { memberLobby.awaitRoom(memberName = "Bob", deviceId = "d-lobby") }
-            val hostRoom = hostLobby.start(memberName = "Alice", deviceId = "d-host")
+            val hostRoom = hostLobby.start(memberName = "Alice", deviceId = "d-host", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val memberRoom = assertIs<ElectionOutcome.Adopted>(memberOutcome.await()).room
 
             // The rig: the host admitted exactly the one lobby joiner, so its Hello reached the host.

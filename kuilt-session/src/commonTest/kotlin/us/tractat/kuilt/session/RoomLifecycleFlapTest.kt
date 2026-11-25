@@ -16,7 +16,10 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.FaultySeam
@@ -71,7 +74,7 @@ class RoomLifecycleFlapTest {
         val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
         // One factory per device: the host and the joiner each have their own key.
         fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
-        val hostRoom = device(0).host(Pattern("host"))
+        val hostRoom = device(0).host(Pattern("host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val joinerRoom = device(1).join(InMemoryTag("joiner"))
 
         // Both rooms reach a non-empty roster (admit handshake completed).
@@ -98,7 +101,7 @@ class RoomLifecycleFlapTest {
         val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
         // One factory per device: the host and the joiner each have their own key.
         fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
-        val hostRoom = device(0).host(Pattern("host"))
+        val hostRoom = device(0).host(Pattern("host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val joinerRoom = device(1).join(InMemoryTag("joiner"))
         hostRoom.roster.first { it.isNotEmpty() }
 
@@ -127,7 +130,7 @@ class RoomLifecycleFlapTest {
         val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
         // One factory per device: the host and the joiner each have their own key.
         fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
-        val hostRoom = device(0).host(Pattern("host"))
+        val hostRoom = device(0).host(Pattern("host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         device(1).join(InMemoryTag("joiner"))
         hostRoom.roster.first { it.isNotEmpty() }
 
@@ -167,6 +170,7 @@ class RoomLifecycleFlapTest {
             clock = clock,
             device = RoomDevice.of(fakeKeyStore(0)),
             heartbeatConfig = fastConfig,
+            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
         ).also { it.start() }
 
         val joinerRoom = SeamRoom(
@@ -217,7 +221,7 @@ class RoomLifecycleFlapTest {
         val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
         // One factory per device: the host and the joiner each have their own key.
         fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), fastConfig)
-        val hostRoom = device(0).host(Pattern("host"))
+        val hostRoom = device(0).host(Pattern("host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val joinerRoom = device(1).join(InMemoryTag("joiner"))
         hostRoom.roster.first { it.isNotEmpty() }
 
@@ -274,6 +278,7 @@ class RoomLifecycleFlapTest {
             clock = clock,
             device = RoomDevice.of(fakeKeyStore(2)),
             heartbeatConfig = fastConfig,
+            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
         ).also { it.start() }
         SeamRoom(
             seam = joinerSeam,

@@ -18,6 +18,7 @@ import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.session.AdoptRole
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SeamRoom
@@ -133,7 +134,7 @@ class ResumeRefusalReportingTest {
             deviceKeyStore = fakeKeyStore(1),
             heartbeatConfig = config,
             admitTimeout = 1.seconds,
-        ).adopt(link, SessionRole.Joiner, memberName = "Joiner", reweave = { link }) as SeamRoom
+        ).adopt(link, AdoptRole.Joiner, memberName = "Joiner", reweave = { link }) as SeamRoom
         testScheduler.runCurrent()
         val rig = Rig(this, fake, link, room)
         val first = fake.broadcasts.mapNotNull { AdmitMessage.decode(it) as? AdmitMessage.Hello }.single()

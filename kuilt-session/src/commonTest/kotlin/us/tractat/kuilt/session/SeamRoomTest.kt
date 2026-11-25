@@ -19,7 +19,10 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -49,7 +52,7 @@ class SeamRoomTest {
     @Test
     fun `host returns Room with role Host`() =
         runTest {
-            val room = factory(loom(), backgroundScope).host(Pattern("Alice"))
+            val room = factory(loom(), backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             assertEquals(SessionRole.Host, room.role.value)
             room.leave()
         }
@@ -58,7 +61,7 @@ class SeamRoomTest {
     fun `join returns Room with role Joiner`() =
         runTest {
             val loom = loom()
-            factory(loom, backgroundScope).host(Pattern("Alice"))
+            factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = factory(loom, backgroundScope).join(InMemoryTag("Bob"))
             assertEquals(SessionRole.Joiner, joinerRoom.role.value)
             joinerRoom.leave()
@@ -69,7 +72,7 @@ class SeamRoomTest {
     @Test
     fun `roster is empty when no peer has completed handshake`() =
         runTest {
-            val room = factory(loom(), backgroundScope).host(Pattern("Alice"))
+            val room = factory(loom(), backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             assertEquals(emptySet(), room.roster.value)
             room.leave()
         }
@@ -78,7 +81,7 @@ class SeamRoomTest {
     fun `joiner appears in host roster only after completing handshake`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), memberName = "Alice")
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), memberName = "Alice", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = factory(loom, backgroundScope).join(InMemoryTag("Bob"), memberName = "Bob")
 
             val hostRoster = hostRoom.roster.first { it.size == 1 }
@@ -97,7 +100,7 @@ class SeamRoomTest {
     fun `host appears in joiner roster after handshake completes`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), memberName = "Alice")
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), memberName = "Alice", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = factory(loom, backgroundScope).join(InMemoryTag("Bob"), memberName = "Bob")
 
             val joinerRoster = joinerRoom.roster.first { it.isNotEmpty() }
@@ -115,7 +118,7 @@ class SeamRoomTest {
     fun `peer connected to Seam but not admitted is NOT in roster`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             // Connect a raw Seam without doing the admit handshake
             val rawSeam = loom.join(InMemoryTag("RawPeer"))
@@ -138,7 +141,7 @@ class SeamRoomTest {
     fun `Joined event fires when joiner completes handshake`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             // Subscribe before triggering join to avoid missing the event
             val joinedDeferred = CompletableDeferred<MembershipEvent.Joined>()
@@ -160,7 +163,7 @@ class SeamRoomTest {
     fun `Left event fires when admitted member leaves`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = factory(loom, backgroundScope).join(InMemoryTag("Bob"))
 
             hostRoom.roster.first { it.size == 1 }
@@ -187,7 +190,7 @@ class SeamRoomTest {
     fun `broadcast from host reaches admitted joiner via incoming`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = factory(loom, backgroundScope).join(InMemoryTag("Bob"))
 
             hostRoom.roster.first { it.size == 1 }
@@ -211,7 +214,7 @@ class SeamRoomTest {
     fun `sendTo delivers frame only to target peer`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = factory(loom, backgroundScope).join(InMemoryTag("Bob"))
 
             hostRoom.roster.first { it.size == 1 }
@@ -237,7 +240,7 @@ class SeamRoomTest {
     fun `frames from unadmitted peer are dropped from incoming`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val rawSeam = loom.join(InMemoryTag("Intruder"))
 
             var appFrameReceived = false
@@ -259,7 +262,7 @@ class SeamRoomTest {
     fun `application frames from admitted peer are NOT dropped`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = factory(loom, backgroundScope).join(InMemoryTag("Bob"))
 
             hostRoom.roster.first { it.size == 1 }
@@ -295,7 +298,7 @@ class SeamRoomTest {
     @Test
     fun `selfId is stable and non-blank`() =
         runTest {
-            val room = factory(loom(), backgroundScope).host(Pattern("Alice"))
+            val room = factory(loom(), backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             assertAll(
                 { assertTrue(room.selfId.value.isNotBlank()) },
                 { assertEquals(room.selfId, room.selfId) },
@@ -308,7 +311,7 @@ class SeamRoomTest {
     @Test
     fun `leave is idempotent`() =
         runTest {
-            val room = factory(loom(), backgroundScope).host(Pattern("Alice"))
+            val room = factory(loom(), backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             room.leave()
             room.leave()
         }
@@ -319,7 +322,7 @@ class SeamRoomTest {
     fun `two joiners both appear in host roster after handshake`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             factory(loom, backgroundScope).join(InMemoryTag("Bob"), memberName = "Bob")
             factory(loom, backgroundScope).join(InMemoryTag("Charlie"), memberName = "Charlie")
 
@@ -336,7 +339,7 @@ class SeamRoomTest {
     fun `Joined event member has liveness Connected`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val joinedDeferred = CompletableDeferred<MembershipEvent.Joined>()
             val collectJob = backgroundScope.launch {
@@ -370,7 +373,7 @@ class SeamRoomTest {
             val failingLoom = FailingLoom(IllegalStateException("loom closed"))
             val factory = SeamRoomFactory(failingLoom, backgroundScope, clock, fakeKeyStore(nextDevice++))
 
-            val result = runCatchingCancellable { factory.host(Pattern("Alice")) }
+            val result = runCatchingCancellable { factory.host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) }
 
             assertIs<IllegalStateException>(
                 result.exceptionOrNull(),
@@ -389,9 +392,9 @@ class SeamRoomTest {
     fun `two concurrent SeamRoomFactory hosts on one loom — the second is rejected`() =
         runTest {
             val loom = loom()
-            val room = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val room = factory(loom, backgroundScope).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
-            val result = runCatchingCancellable { factory(loom, backgroundScope).host(Pattern("Bob")) }
+            val result = runCatchingCancellable { factory(loom, backgroundScope).host(Pattern("Bob"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) }
 
             val failure = result.exceptionOrNull()
             assertIs<IllegalStateException>(

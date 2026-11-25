@@ -28,6 +28,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.InMemoryRaftStorage
@@ -41,6 +42,8 @@ import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
@@ -445,7 +448,7 @@ class ClusterClientCloseTest {
     private suspend fun TestScope.rig(): Rig {
         val inMemory = InMemoryLoom()
         val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        val server = SeamRoomFactory(inMemory, backgroundScope, clock, fakeKeyStore(0)).host(Pattern(SERVER))
+        val server = SeamRoomFactory(inMemory, backgroundScope, clock, fakeKeyStore(0)).host(Pattern(SERVER), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         return Rig(DialRecordingLoom(inMemory), server, backgroundScope, clock)
     }
 

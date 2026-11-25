@@ -19,9 +19,12 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -230,6 +233,7 @@ class LocalFabricTest {
                 clock = { AT },
                 device = RoomDevice.of(fakeKeyStore(0)),
                 heartbeatConfig = HeartbeatConfig(),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             ).also { it.start() }
             val seen = mutableListOf<MembershipEvent>()
             backgroundScope.launch { room.events.collect { seen += it } }
@@ -307,6 +311,7 @@ class LocalFabricTest {
                 clock = { AT },
                 device = RoomDevice.of(fakeKeyStore(1)),
                 heartbeatConfig = HeartbeatConfig(),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             )
             capability.value = TransportCapability(emptySet(), FabricAvailability.Unavailable("radio off"))
             room.start()
@@ -339,13 +344,13 @@ class LocalFabricTest {
             val loom = InMemoryLoom()
             // One factory per device: every room here is its own device, with its own key.
             fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(index), dropConfig)
-            device(0).host(Pattern("Table"))
+            device(0).host(Pattern("Table"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
             val radio = FaultySeam(loom.join(InMemoryTag("Table")), backgroundScope)
-            val joiner = device(1).adopt(CapabilitySeam(radio, capability), SessionRole.Joiner)
+            val joiner = device(1).adopt(CapabilitySeam(radio, capability), AdoptRole.Joiner)
             joiner.roster.first { it.size == 1 }
 
             val seen = mutableListOf<MembershipEvent>()
@@ -397,10 +402,10 @@ class LocalFabricTest {
             )
             val host = device(0).adopt(
                 CapabilitySeam(loom.host(Pattern("Table")), capability),
-                SessionRole.Host,
+                AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())),
             )
             val joinerLink = FaultySeam(loom.join(InMemoryTag("Table")), backgroundScope)
-            device(1).adopt(joinerLink, SessionRole.Joiner)
+            device(1).adopt(joinerLink, AdoptRole.Joiner)
             host.roster.first { it.size == 1 }
 
             val seen = mutableListOf<MembershipEvent>()
@@ -444,13 +449,13 @@ class LocalFabricTest {
             // Adopting the host's seam keeps a handle on it, so the authoritative Paused can be sent
             // by hand rather than waiting for a detector inside an advanceTimeBy.
             val hostLink = loom.host(Pattern("Table"))
-            device(0).adopt(hostLink, SessionRole.Host)
+            device(0).adopt(hostLink, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())))
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
             )
             val self = device(1).adopt(
                 CapabilitySeam(loom.join(InMemoryTag("Table")), capability),
-                SessionRole.Joiner,
+                AdoptRole.Joiner,
             )
             val other = device(2).join(InMemoryTag("Table"))
             self.roster.first { it.size == 2 }
@@ -488,10 +493,10 @@ class LocalFabricTest {
             val loom = InMemoryLoom()
             // One factory per device: every room here is its own device, with its own key.
             fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(index), dropConfig)
-            device(0).host(Pattern("Table"))
+            device(0).host(Pattern("Table"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val radio = FaultySeam(loom.join(InMemoryTag("Table")), backgroundScope)
-            val joiner = device(1).adopt(radio, SessionRole.Joiner)
+            val joiner = device(1).adopt(radio, AdoptRole.Joiner)
             joiner.roster.first { it.size == 1 }
 
             val seen = mutableListOf<MembershipEvent>()
@@ -570,6 +575,7 @@ class LocalFabricTest {
             clock = { AT },
             device = RoomDevice.of(fakeKeyStore(2)),
             heartbeatConfig = HeartbeatConfig(),
+            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
         ).also { it.start() }
 }
 

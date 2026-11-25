@@ -21,11 +21,14 @@ import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectController
@@ -349,7 +352,7 @@ internal suspend fun TestScope.rawHost(
         heartbeatConfig = KEY_SEAT_HEARTBEAT,
         admitTimeout = KEY_SEAT_ADMIT_TIMEOUT,
         reconnectControllerFactory = hold.factory,
-    ).adopt(seam, SessionRole.Host, memberName = "Host", roomId = KEY_SEAT_ROOM)
+    ).adopt(seam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), roomId = KEY_SEAT_ROOM), memberName = "Host")
     val events = EventLog(room, backgroundScope)
     testScheduler.runCurrent()
     return RawHost(this, seam, room, hold, events, fakeDidKey(HOST_DEVICE))
@@ -478,7 +481,6 @@ internal suspend fun TestScope.boardRoom(
 ).adopt(
     seam,
     role,
-    memberName = name,
-    roomId = if (role == SessionRole.Host) KEY_SEAT_ROOM else null,
+    memberName = name) KEY_SEAT_ROOM else null,
     reweave = reweave,
 )

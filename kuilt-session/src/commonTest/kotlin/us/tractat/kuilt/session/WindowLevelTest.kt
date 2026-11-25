@@ -20,8 +20,11 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -796,7 +799,7 @@ class WindowLevelTest {
         // SessionRole.Host still mints a RoomId, so the reconnect controller exists — the
         // characterization test above depends on that.
         val faultedLink = FaultySeam(loom.host(Pattern("Host")), backgroundScope)
-        val hostRoom = device(0).adopt(faultedLink, SessionRole.Host)
+        val hostRoom = device(0).adopt(faultedLink, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())))
         val joinerRoom = device(1).join(InMemoryTag("Joiner"))
         hostRoom.roster.first { it.size == 1 }
         joinerRoom.roster.first { it.size == 1 }
@@ -809,9 +812,9 @@ class WindowLevelTest {
     private suspend fun TestScope.joinerFaultedPair(): JoinerFaultedPair {
         val loom = InMemoryLoom()
         fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, virtualClock(), fakeKeyStore(index), fastConfig)
-        val hostRoom = device(0).host(Pattern("Host"))
+        val hostRoom = device(0).host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val faultedLink = FaultySeam(loom.join(InMemoryTag("Joiner")), backgroundScope)
-        val joinerRoom = device(1).adopt(faultedLink, SessionRole.Joiner)
+        val joinerRoom = device(1).adopt(faultedLink, AdoptRole.Joiner)
         hostRoom.roster.first { it.size == 1 }
         joinerRoom.roster.first { it.size == 1 }
         return JoinerFaultedPair(joinerRoom, faultedLink, hostRoom.selfId)
@@ -903,6 +906,7 @@ class WindowLevelTest {
             device = RoomDevice.of(fakeKeyStore(0)),
             heartbeatConfig = fastConfig,
             roomId = RoomId("room-1"),
+            admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
         ).also { it.start() }
 
         val clientId = PeerId("client")
@@ -943,9 +947,9 @@ class WindowLevelTest {
         // The two joiners are two devices: one factory, and one key, each.
         fun joinerDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), joinerConfig)
 
-        val hostRoom = hostFactory.host(Pattern("Host"))
+        val hostRoom = hostFactory.host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-        val droppedRoom = joinerDevice(3).adopt(droppedLink, SessionRole.Joiner)
+        val droppedRoom = joinerDevice(3).adopt(droppedLink, AdoptRole.Joiner)
         val bystander = joinerDevice(4).join(InMemoryTag("Bystander"))
 
         hostRoom.roster.first { it.size == 2 }

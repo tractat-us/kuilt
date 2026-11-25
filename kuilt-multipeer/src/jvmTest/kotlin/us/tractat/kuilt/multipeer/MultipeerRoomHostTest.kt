@@ -10,18 +10,21 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.session.Room
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 
 class MultipeerRoomHostTest {
 
     @Test
     fun `start hands a Room to onRoom and suspends until cancelled`() = runTest {
         val loom = InMemoryLoom()
-        val host = MultipeerRoomHost(loom, Pattern("test-room"), InMemoryDeviceKeyStore())
+        val host = MultipeerRoomHost(loom, Pattern("test-room"), InMemoryDeviceKeyStore(), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val received = CompletableDeferred<Room>()
 
         coroutineScope {
@@ -37,7 +40,7 @@ class MultipeerRoomHostTest {
 
     @Test
     fun `start a second time on the same host throws`() = runTest {
-        val host = MultipeerRoomHost(InMemoryLoom(), Pattern("dup"), InMemoryDeviceKeyStore())
+        val host = MultipeerRoomHost(InMemoryLoom(), Pattern("dup"), InMemoryDeviceKeyStore(), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
         coroutineScope {
             val firstStarted = CompletableDeferred<Unit>()

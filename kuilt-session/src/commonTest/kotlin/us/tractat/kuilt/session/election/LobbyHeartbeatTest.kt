@@ -14,9 +14,12 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -73,7 +76,7 @@ class LobbyHeartbeatTest {
             runCurrent()
             assertFalse(outcome.isCompleted, "a host that is alive and waiting must not read as unreachable")
 
-            val hostRoom = hostLobby.start()
+            val hostRoom = hostLobby.start(admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val memberOutcome = outcome.await()
             assertAll(
                 { assertIs<ElectionOutcome.Adopted>(memberOutcome, "the wait ends in the room the host opened") },
@@ -149,7 +152,7 @@ class LobbyHeartbeatTest {
             val lobby = lobbyOver(seam)
             var endedAt = -1L
             val started = backgroundScope.async {
-                runCatchingForTest { lobby.start() }.also { endedAt = testScheduler.currentTime }
+                runCatchingForTest { lobby.start(admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) }.also { endedAt = testScheduler.currentTime }
             }
             runCurrent()
 
@@ -191,7 +194,7 @@ class LobbyHeartbeatTest {
             val goes = PeerId("peer-c")
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, stays, goes))
             val lobby = lobbyOver(seam)
-            val started = backgroundScope.async { runCatchingForTest { lobby.start() } }
+            val started = backgroundScope.async { runCatchingForTest { lobby.start(admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) } }
             runCurrent()
 
             seam.removePeer(goes)
@@ -240,7 +243,7 @@ class LobbyHeartbeatTest {
             runCurrent()
             assertEquals(hostLobby.selfId, memberLobby.host.value, "rig: the second peer is the member")
 
-            val started = backgroundScope.async { runCatchingForTest { hostLobby.start() } }
+            val started = backgroundScope.async { runCatchingForTest { hostLobby.start(admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) } }
             // Several freeze timeouts, and far past the 6 s a silent member would take to be lost.
             advanceTimeBy(60.seconds)
             runCurrent()
@@ -295,7 +298,7 @@ class LobbyHeartbeatTest {
             val member = PeerId("peer-b")
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, member))
             val lobby = lobbyOver(seam)
-            val started = backgroundScope.async { runCatchingForTest { lobby.start() } }
+            val started = backgroundScope.async { runCatchingForTest { lobby.start(admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) } }
             runCurrent()
 
             val ended = started.await()

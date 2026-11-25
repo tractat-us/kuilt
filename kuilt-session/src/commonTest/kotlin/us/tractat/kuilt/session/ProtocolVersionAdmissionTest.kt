@@ -13,8 +13,11 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import kotlin.time.Duration.Companion.seconds
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.test.assertAll
@@ -50,7 +53,7 @@ class ProtocolVersionAdmissionTest {
     fun `joiner on an unsupported protocol version is rejected with ProtocolMismatch`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = factory(loom, backgroundScope).host(Pattern("HostA"))
+            val host = factory(loom, backgroundScope).host(Pattern("HostA"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             // Drive the joiner at the wire level so the Reject is directly observable, announcing a
             // version far beyond anything this build supports.
@@ -95,7 +98,7 @@ class ProtocolVersionAdmissionTest {
     fun `version-less joiner is refused since protocol version 2`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = factory(loom, backgroundScope).host(Pattern("HostA"), memberName = "HostA")
+            val host = factory(loom, backgroundScope).host(Pattern("HostA"), memberName = "HostA", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val legacySeam = loom.join(InMemoryTag("Bob"))
             legacySeam.broadcast(
@@ -146,7 +149,7 @@ class ProtocolVersionAdmissionTest {
     fun `a v2 joiner is refused with ProtocolMismatch`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = factory(loom, backgroundScope).host(Pattern("HostA"), memberName = "HostA")
+            val host = factory(loom, backgroundScope).host(Pattern("HostA"), memberName = "HostA", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val v2Seam = loom.join(InMemoryTag("Bob"))
             v2Seam.broadcast(GOLDEN_V2_HELLO_HEX.chunked(2).map { it.toInt(16).toByte() }.toByteArray())
@@ -169,7 +172,7 @@ class ProtocolVersionAdmissionTest {
     fun `a v3 hello missing its key or its nonce is refused with ProtocolMismatch`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = factory(loom, backgroundScope).host(Pattern("HostA"), memberName = "HostA")
+            val host = factory(loom, backgroundScope).host(Pattern("HostA"), memberName = "HostA", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val keyless = loom.join(InMemoryTag("Keyless"))
             keyless.broadcast(AdmitMessage.encode(currentHello("Keyless").copy(key = null)))
@@ -214,7 +217,7 @@ class ProtocolVersionAdmissionTest {
     fun `joiner on the current protocol version is admitted`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = factory(loom, backgroundScope).host(Pattern("HostA"), memberName = "HostA")
+            val host = factory(loom, backgroundScope).host(Pattern("HostA"), memberName = "HostA", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joiner = factory(loom, backgroundScope).join(InMemoryTag("Bob"), memberName = "Bob")
 
             val hostRoster = host.roster.first { it.size == 1 }

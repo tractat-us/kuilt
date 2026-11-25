@@ -14,12 +14,15 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 
 /**
  * Verifies that [RoomReplicator] produces identical convergence behaviour to the
@@ -38,7 +41,7 @@ class RoomReplicatorTest {
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(0)).host(Pattern("Alice"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(0)).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(1)).join(InMemoryTag("Bob"))
 
             hostRoom.roster.first { it.size == 1 }

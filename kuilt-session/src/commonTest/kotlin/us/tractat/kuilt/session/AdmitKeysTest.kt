@@ -18,9 +18,12 @@ import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.FakeKeyScheme
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
@@ -53,7 +56,7 @@ class AdmitKeysTest {
         val loom = InMemoryLoom()
         val hostStore = fakeKeyStore(0)
         val bobStore = fakeKeyStore(1)
-        val host = factory(loom, backgroundScope, hostStore).host(Pattern("HostA"), memberName = "HostA")
+        val host = factory(loom, backgroundScope, hostStore).host(Pattern("HostA"), memberName = "HostA", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val bob = factory(loom, backgroundScope, bobStore).join(InMemoryTag("Bob"), memberName = "Bob")
 
         val bobOnHost = host.roster.first { it.size == 1 }.single()
@@ -71,7 +74,7 @@ class AdmitKeysTest {
     fun `the joiner learns the host's key from the host intro`() = runTest {
         val loom = InMemoryLoom()
         val hostStore = fakeKeyStore(2)
-        val host = factory(loom, backgroundScope, hostStore).host(Pattern("HostA"), memberName = "HostA")
+        val host = factory(loom, backgroundScope, hostStore).host(Pattern("HostA"), memberName = "HostA", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val bob = factory(loom, backgroundScope, fakeKeyStore(3)).join(InMemoryTag("Bob"), memberName = "Bob")
 
         val hostOnBob = bob.roster.first { it.isNotEmpty() }.single()
@@ -94,7 +97,7 @@ class AdmitKeysTest {
         val loom = InMemoryLoom()
         val bobStore = fakeKeyStore(4)
         val carolStore = fakeKeyStore(5)
-        val host = factory(loom, backgroundScope, fakeKeyStore(6)).host(Pattern("HostA"), memberName = "HostA")
+        val host = factory(loom, backgroundScope, fakeKeyStore(6)).host(Pattern("HostA"), memberName = "HostA", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val bob = factory(loom, backgroundScope, bobStore).join(InMemoryTag("Bob"), memberName = "Bob")
         host.roster.first { it.size == 1 }
         val carol = factory(loom, backgroundScope, carolStore).join(InMemoryTag("Carol"), memberName = "Carol")
@@ -131,7 +134,7 @@ class AdmitKeysTest {
 
     private fun admitsDespiteLaterReadFailure(hostStore: KeyStore, bobStore: KeyStore) = runTest {
         val loom = InMemoryLoom()
-        val host = factory(loom, backgroundScope, hostStore).host(Pattern("HostA"), memberName = "HostA")
+        val host = factory(loom, backgroundScope, hostStore).host(Pattern("HostA"), memberName = "HostA", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val bob = factory(loom, backgroundScope, bobStore).join(InMemoryTag("Bob"), memberName = "Bob")
 
         // Bounded in virtual time, so a room that read its store again fails here with the read

@@ -13,8 +13,11 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FlakyLifecycleLoom
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -116,8 +119,8 @@ class AdoptTearTerminalTest {
             // current `adopt` overload wires NO reweave.
             val hostSeam = loom.weave(Rendezvous.New(Pattern("s")))
             val joinerSeam = loom.weave(Rendezvous.Existing(InMemoryTag("s")))
-            val hostRoom = device(0).adopt(hostSeam, SessionRole.Host, memberName = "Host")
-            val joinerRoom = device(1).adopt(joinerSeam, SessionRole.Joiner, memberName = "Joiner")
+            val hostRoom = device(0).adopt(hostSeam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())), memberName = "Host")
+            val joinerRoom = device(1).adopt(joinerSeam, AdoptRole.Joiner, memberName = "Joiner")
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }
@@ -194,10 +197,10 @@ class AdoptTearTerminalTest {
 
             val hostSeam = loom.weave(Rendezvous.New(Pattern("s")))
             val joinerSeam = loom.weave(Rendezvous.Existing(InMemoryTag("s")))
-            val hostRoom = device(0).adopt(hostSeam, SessionRole.Host, memberName = "Host")
+            val hostRoom = device(0).adopt(hostSeam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())), memberName = "Host")
             // The fix: adopt the self-healing seam WITH reweave = { seam }.
             val joinerRoom =
-                device(1).adopt(joinerSeam, SessionRole.Joiner, memberName = "Joiner", reweave = { joinerSeam })
+                device(1).adopt(joinerSeam, AdoptRole.Joiner, memberName = "Joiner", reweave = { joinerSeam })
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }
@@ -264,9 +267,9 @@ class AdoptTearTerminalTest {
 
             val hostSeam = loom.weave(Rendezvous.New(Pattern("s")))
             val joinerSeam = loom.weave(Rendezvous.Existing(InMemoryTag("s")))
-            val hostRoom = device(0).adopt(hostSeam, SessionRole.Host, memberName = "Host")
+            val hostRoom = device(0).adopt(hostSeam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())), memberName = "Host")
             val joinerRoom =
-                device(1).adopt(joinerSeam, SessionRole.Joiner, memberName = "Joiner", reweave = { joinerSeam })
+                device(1).adopt(joinerSeam, AdoptRole.Joiner, memberName = "Joiner", reweave = { joinerSeam })
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }

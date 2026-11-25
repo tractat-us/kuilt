@@ -17,7 +17,10 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.DeviceKeyStore
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -58,7 +61,7 @@ class FakeKeyVirtualTimeTest {
         val factory = { device: Int ->
             SeamRoomFactory(loom, backgroundScope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = fakeKeyStore(device))
         }
-        val host = factory(1).host(Pattern("Alice"))
+        val host = factory(1).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val joiner = factory(2).join(InMemoryTag("Bob"))
         host.roster.first { it.size == 1 }
         joiner.roster.first { it.isNotEmpty() }
@@ -84,7 +87,7 @@ class FakeKeyVirtualTimeTest {
         val factory = { device: Int ->
             SeamRoomFactory(loom, backgroundScope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = fakeKeyStore(device))
         }
-        val host = factory(1).host(Pattern("Alice"))
+        val host = factory(1).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val joiner = factory(2).join(InMemoryTag("Bob"))
         host.roster.first { it.size == 1 }
         val admittedAt = testScheduler.currentTime

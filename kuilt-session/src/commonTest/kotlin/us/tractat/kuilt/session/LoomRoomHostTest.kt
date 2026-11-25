@@ -17,7 +17,10 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
@@ -32,7 +35,7 @@ class LoomRoomHostTest {
     @Test
     fun `drives the admit handshake over an in-memory loom under virtual time`() = runTest {
         val loom = InMemoryLoom()
-        val host = LoomRoomHost(loom, Pattern("server"), fakeKeyStore(0), clock = zeroClock)
+        val host = LoomRoomHost(loom, Pattern("server"), fakeKeyStore(0), clock = zeroClock, admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val hostRoomReady = CompletableDeferred<Room>()
 
         val hostJob = backgroundScope.launch {
@@ -62,7 +65,7 @@ class LoomRoomHostTest {
 
     @Test
     fun `start a second time on the same host throws`() = runTest {
-        val host = LoomRoomHost(InMemoryLoom(), Pattern("dup"), fakeKeyStore(2), clock = zeroClock)
+        val host = LoomRoomHost(InMemoryLoom(), Pattern("dup"), fakeKeyStore(2), clock = zeroClock, admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
         val firstStarted = CompletableDeferred<Unit>()
         val job = backgroundScope.launch {
@@ -98,7 +101,7 @@ class LoomRoomHostTest {
     fun `leaves the room on the way out even though the teardown is a cancellation`() =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val seam = SuspendingCloseSeam(FakeSeam(selfId = PeerId("host")))
-            val host = LoomRoomHost(SoleSeamLoom(seam), Pattern("shielded"), fakeKeyStore(3), clock = zeroClock)
+            val host = LoomRoomHost(SoleSeamLoom(seam), Pattern("shielded"), fakeKeyStore(3), clock = zeroClock, admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val hosting = CompletableDeferred<Unit>()
 
             val hostJob = backgroundScope.launch { host.start { hosting.complete(Unit) } }

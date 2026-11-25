@@ -20,8 +20,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -65,7 +68,7 @@ class RouteWatcherMarkOrderTest {
             val seam = BlockingReadSeam(fake, without = bob)
             try {
                 val room = SeamRoomFactory(InMemoryLoom(), scope, { Clock.System.now() }, fakeKeyStore(HOST_DEVICE))
-                    .adopt(seam, SessionRole.Host, memberName = "Host", roomId = KEY_SEAT_ROOM)
+                    .adopt(seam, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), roomId = KEY_SEAT_ROOM), memberName = "Host")
 
                 // Its first read, of a list with bob, so that his leaving is a departure to it.
                 val started = seam.started.await(STEP, TimeUnit.SECONDS)

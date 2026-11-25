@@ -18,9 +18,12 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -274,7 +277,7 @@ class LobbyPromotionTest {
             // The recovery: start() on the SAME lobby. The co-member is still parked in its original
             // awaitRoom on the same seam, so it acks the freeze immediately — no re-weave, nothing
             // stranded. (Re-running electLobby would weave a fresh seam the parked member never sees.)
-            val promotedRoom = promoted.start(memberName = "Promoted")
+            val promotedRoom = promoted.start(memberName = "Promoted", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val parkedRoom = assertIs<ElectionOutcome.Adopted>(parkedOutcome.await()).room
 
             promotedRoom.roster.first { it.size == 1 }

@@ -22,8 +22,11 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.Direction
@@ -159,6 +162,7 @@ class ConcurrentResumeHangTest {
                 device = RoomDevice.of(fakeKeyStore(nextDevice++)),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             ).also { it.start() }
 
             val clientId = PeerId("client")

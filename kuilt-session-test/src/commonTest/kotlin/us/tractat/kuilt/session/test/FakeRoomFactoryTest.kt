@@ -7,9 +7,12 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -26,7 +29,7 @@ class FakeRoomFactoryTest {
     @Test
     fun `host seeds selfId from pattern displayName and role is Host`() = runTest {
         val factory = FakeRoomFactory()
-        val room = factory.host(Pattern("alice")) as FakeRoom
+        val room = factory.host(Pattern("alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) as FakeRoom
         assertAll(
             { assertEquals(PeerId("alice"), room.selfId) },
             { assertEquals(SessionRole.Host, room.role.value) },
@@ -54,15 +57,15 @@ class FakeRoomFactoryTest {
     @Test
     fun `host mints a different room id per call`() = runTest {
         val factory = FakeRoomFactory()
-        val first = factory.host(Pattern("alice"))
-        val second = factory.host(Pattern("alice"))
+        val first = factory.host(Pattern("alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
+        val second = factory.host(Pattern("alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         assertNotEquals(first.roomId.value, second.roomId.value)
     }
 
     @Test
     fun `host uses the caller-supplied room id verbatim`() = runTest {
         val supplied = RoomId("table-7")
-        val room = FakeRoomFactory().host(Pattern("alice"), roomId = supplied)
+        val room = FakeRoomFactory().host(Pattern("alice"), roomId = supplied, admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         assertEquals(supplied, room.roomId.value)
     }
 

@@ -14,14 +14,18 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.AdoptRole
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.FlakyLifecycleSeam
@@ -362,10 +366,10 @@ private suspend fun TestScope.blipHarness(
         deviceKeyStore = fakeKeyStore(index),
         heartbeatConfig = config,
     )
-    val hostRoom = device(0).adopt(hostLink, SessionRole.Host, memberName = "Host")
+    val hostRoom = device(0).adopt(hostLink, AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())), memberName = "Host")
     val joinerRoom = device(1).adopt(
         joinerLink,
-        SessionRole.Joiner,
+        AdoptRole.Joiner,
         memberName = "Joiner",
         reweave = { joinerLink },
     )

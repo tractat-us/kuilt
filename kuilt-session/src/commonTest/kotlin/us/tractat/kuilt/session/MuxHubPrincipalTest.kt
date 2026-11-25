@@ -11,7 +11,10 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
@@ -51,7 +54,7 @@ class MuxHubPrincipalTest {
                 clock = zeroClock,
                 deviceKeyStore = fakeKeyStore(0),
             )
-            val hostRoom = hostFactory.host(Pattern("room"))
+            val hostRoom = hostFactory.host(Pattern("room"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             // A joiner whose server-end connection is attested with a verified principal.
             val joinerLoom = fabric.clientLoom(PeerId("joiner"), Random(1L), principal = principal)

@@ -16,7 +16,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.time.Instant
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 
 class MemberPrincipalTest {
 
@@ -37,7 +40,7 @@ class MemberPrincipalTest {
             }
         }
 
-        val host = LoomRoomHost(attestingLoom, Pattern("server"), fakeKeyStore(0), clock = zeroClock)
+        val host = LoomRoomHost(attestingLoom, Pattern("server"), fakeKeyStore(0), clock = zeroClock, admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val hostRoomReady = CompletableDeferred<Room>()
         val hostJob = backgroundScope.launch { host.start { room -> hostRoomReady.complete(room) } }
         val hostRoom = hostRoomReady.await()

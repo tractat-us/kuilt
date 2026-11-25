@@ -11,8 +11,11 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.election.SeamElectionLobby
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.FakeSeam
@@ -51,7 +54,7 @@ class UnsignableEntryValueTest {
     @Test
     fun hostAdoptRefusesAnUnsignableRoomId() = runTest {
         for (bad in UNSIGNABLE) {
-            refusal("roomId") { factory().adopt(FakeSeam(PeerId("h")), SessionRole.Host, roomId = RoomId(bad)) }
+            refusal("roomId") { factory().adopt(FakeSeam(PeerId("h")), AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), roomId = RoomId(bad))) }
         }
     }
 
@@ -63,7 +66,7 @@ class UnsignableEntryValueTest {
     @Test
     fun joinerAdoptRefusesAnUnsignableDeviceId() = runTest {
         for (bad in UNSIGNABLE) {
-            refusal("deviceId") { factory().adopt(FakeSeam(PeerId("j")), SessionRole.Joiner, deviceId = bad) }
+            refusal("deviceId") { factory().adopt(FakeSeam(PeerId("j")), AdoptRole.Joiner, deviceId = bad) }
         }
     }
 
@@ -102,8 +105,8 @@ class UnsignableEntryValueTest {
     /** The longest values that do fit are accepted: the rule refuses past the field, not at it. */
     @Test
     fun theLongestSignableValuesAreAccepted() = runTest {
-        val host = factory().adopt(FakeSeam(PeerId("h")), SessionRole.Host, roomId = RoomId(LONGEST))
-        val joiner = factory(store = 1).adopt(FakeSeam(PeerId("j")), SessionRole.Joiner, deviceId = LONGEST)
+        val host = factory().adopt(FakeSeam(PeerId("h")), AdoptRole.Host(HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()), roomId = RoomId(LONGEST)))
+        val joiner = factory(store = 1).adopt(FakeSeam(PeerId("j")), AdoptRole.Joiner, deviceId = LONGEST)
         assertAll(
             { assertEquals(FIELD_LIMIT, LONGEST.encodeToByteArray().size, "rig: the value fills the field exactly") },
             { assertEquals(RoomId(LONGEST), host.roomId.value) },
@@ -123,6 +126,7 @@ class UnsignableEntryValueTest {
                 clock = { Instant.fromEpochMilliseconds(0) },
                 device = RoomDevice.of(fakeKeyStore(0)),
                 heartbeatConfig = HeartbeatConfig(),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             )
         }
         assertTrue(e.message.orEmpty().contains("roomId"), "refused for its missing room id: ${e.message}")

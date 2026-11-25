@@ -18,8 +18,11 @@ import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.HoldableConnection
@@ -315,7 +318,7 @@ class RoomFlushTest {
         val hostEnd = HoldableConnection(hostConnection)
         val (hostLoom, joinerLoom) = identifiedLoomPair(hostEnd to HoldableConnection(joinerConnection))
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        val host = SeamRoomFactory(hostLoom, backgroundScope, clock, fakeKeyStore(0), relayHeartbeat).host(Pattern("table"))
+        val host = SeamRoomFactory(hostLoom, backgroundScope, clock, fakeKeyStore(0), relayHeartbeat).host(Pattern("table"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val joiner = SeamRoomFactory(
             joinerLoom,
             backgroundScope,

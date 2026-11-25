@@ -19,9 +19,12 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.ProvenResume
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
@@ -206,9 +209,9 @@ class StarTopologyPresenceFanoutTest {
             // One factory per device: the host and both joiners each have their own key.
             fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), hostConfig)
 
-            val hostRoom = device(0).host(Pattern("Host"))
+            val hostRoom = device(0).host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-            val droppedRoom = device(1).adopt(droppedLink, SessionRole.Joiner)
+            val droppedRoom = device(1).adopt(droppedLink, AdoptRole.Joiner)
             val bystander = device(2).join(InMemoryTag("Bystander"))
 
             hostRoom.roster.first { it.size == 2 }
@@ -553,11 +556,11 @@ class StarTopologyPresenceFanoutTest {
         // The two joiners are two devices: one factory, and one key, each.
         fun joinerDevice(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), joinerConfig)
 
-        val hostRoom = hostFactory.host(Pattern("Host"))
+        val hostRoom = hostFactory.host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
-        val droppedRoom = joinerDevice(2).adopt(droppedLink, SessionRole.Joiner)
+        val droppedRoom = joinerDevice(2).adopt(droppedLink, AdoptRole.Joiner)
         val bystanderWire = AdmitWireTap(loom.join(InMemoryTag("Bystander")))
-        val bystanderRoom = joinerDevice(3).adopt(bystanderWire, SessionRole.Joiner)
+        val bystanderRoom = joinerDevice(3).adopt(bystanderWire, AdoptRole.Joiner)
 
         hostRoom.roster.first { it.size == 2 }
         droppedRoom.roster.first { it.size == 2 }

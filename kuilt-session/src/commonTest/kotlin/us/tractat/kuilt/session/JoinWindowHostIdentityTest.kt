@@ -13,8 +13,11 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
@@ -182,13 +185,13 @@ class JoinWindowHostIdentityTest {
         }
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(0L))
-        val hostRoom = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock, fakeKeyStore(0)).host(Pattern(ROOM))
+        val hostRoom = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock, fakeKeyStore(0)).host(Pattern(ROOM), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         return admitSequentially(hostRoom, coJoiners) { index ->
             val loom = fabric.clientLoom(PeerId("joiner-$index"), Random(index.toLong() + 1L))
             // `adopt` (rather than `join`) mirrors LivenessRouteGateTest.star(): the spoke's own
             // client loom is its single edge, and the room is built over that seam.
             val seam = loom.join(InMemoryTag(ROOM))
-            SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index + 1)).adopt(seam, SessionRole.Joiner) to seam
+            SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index + 1)).adopt(seam, AdoptRole.Joiner) to seam
         }
     }
 
@@ -198,10 +201,10 @@ class JoinWindowHostIdentityTest {
         val loom = InMemoryLoom()
         // One factory per device, each with its own key store, so every member is its own device.
         fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index))
-        val hostRoom = device(2).host(Pattern(ROOM))
+        val hostRoom = device(2).host(Pattern(ROOM), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         return admitSequentially(hostRoom, coJoiners) { index ->
             val seam = loom.join(InMemoryTag("joiner-$index"))
-            device(index + 3).adopt(seam, SessionRole.Joiner) to seam
+            device(index + 3).adopt(seam, AdoptRole.Joiner) to seam
         }
     }
 

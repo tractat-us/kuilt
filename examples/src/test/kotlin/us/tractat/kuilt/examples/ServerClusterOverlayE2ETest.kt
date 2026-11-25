@@ -17,9 +17,12 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorRoomHost
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
@@ -67,6 +70,7 @@ class ServerClusterOverlayE2ETest {
                 serverPeerId = serverPeerId,
                 pattern = roomPattern,
                 deviceKeyStore = InMemoryDeviceKeyStore(),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             )
             val clientLoom = KtorClientLoom(createClient { install(WebSockets) })
 
@@ -153,6 +157,7 @@ class ServerClusterOverlayE2ETest {
                 serverPeerId = serverPeerId,
                 pattern = Pattern("overlay-overload-room"),
                 deviceKeyStore = InMemoryDeviceKeyStore(),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             )
 
             coroutineScope {

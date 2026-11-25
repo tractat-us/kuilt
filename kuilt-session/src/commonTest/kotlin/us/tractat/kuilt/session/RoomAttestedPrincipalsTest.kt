@@ -12,7 +12,10 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
@@ -49,7 +52,7 @@ class RoomAttestedPrincipalsTest {
                 clock = zeroClock,
                 deviceKeyStore = fakeKeyStore(0),
             )
-            val hostRoom = hostFactory.host(Pattern("room"))
+            val hostRoom = hostFactory.host(Pattern("room"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
 
             val joinerLoom = fabric.clientLoom(PeerId("joiner"), Random(1L), principal = principal)
             val joinerFactory = SeamRoomFactory(joinerLoom, backgroundScope, clock = zeroClock, deviceKeyStore = fakeKeyStore(1))
@@ -68,7 +71,7 @@ class RoomAttestedPrincipalsTest {
     @Test
     fun `a non-roster room reports an empty attested-principals roster`(): TestResult = runTest {
         val mesh = InMemoryLoom()
-        val hostRoom = SeamRoomFactory(mesh, backgroundScope, zeroClock, fakeKeyStore(2)).host(Pattern("server"))
+        val hostRoom = SeamRoomFactory(mesh, backgroundScope, zeroClock, fakeKeyStore(2)).host(Pattern("server"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
         assertTrue(
             hostRoom.attestedPrincipals.value.isEmpty(),
             "a seam with no PrincipalRoster carries an empty attested-principals roster",

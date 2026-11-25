@@ -21,10 +21,13 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAbortsOnMidHandshakeCollapse
@@ -104,7 +107,7 @@ class SeamElectionLobbyTest {
             val memberLobby = if (l1.selfId == electedHost) l2 else l1
 
             val memberRoomDeferred = async { memberLobby.awaitRoom(memberName = "Member") }
-            val hostRoom = hostLobby.start(memberName = "Host")
+            val hostRoom = hostLobby.start(memberName = "Host", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val memberRoom = assertIs<ElectionOutcome.Adopted>(memberRoomDeferred.await()).room
 
             // Both rooms complete their admit handshake: one member each.
@@ -137,7 +140,7 @@ class SeamElectionLobbyTest {
             // Both members await concurrently; the host runs the freeze round. The Commit must reach
             // BOTH members (the multi-member path the single-member test cannot exercise).
             val memberRooms = memberLobbies.map { async { it.awaitRoom(memberName = it.selfId.value) } }
-            val hostRoom = hostLobby.start(memberName = "Host")
+            val hostRoom = hostLobby.start(memberName = "Host", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val rooms = memberRooms.map { assertIs<ElectionOutcome.Adopted>(it.await()).room }
 
             // Host admits both members; each member sees host + the other member.
@@ -219,7 +222,7 @@ class SeamElectionLobbyTest {
             val room = CompletableDeferred<Room>()
             val driver = launch {
                 try {
-                    room.complete(l.start(memberName = "Host"))
+                    room.complete(l.start(memberName = "Host", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())))
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
@@ -276,7 +279,7 @@ class SeamElectionLobbyTest {
             assertEquals(self, l.host.first()) // self is the elected host, so start is the right call
 
             assertAbortsOnMidHandshakeCollapse<LobbyTornException>(seam, drainedPeer = memberId) {
-                l.start(memberName = "Host")
+                l.start(memberName = "Host", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             }
         }
 
@@ -455,7 +458,7 @@ class SeamElectionLobbyTest {
             val loom = InMemoryLoom()
             val s1 = loom.weave(Rendezvous.New(Pattern("g")))
             val l1 = lobby(s1, loom, backgroundScope)
-            val room = l1.start(memberName = "Solo") // no members → immediate commit
+            val room = l1.start(memberName = "Solo", admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) // no members → immediate commit
             assertEquals(SessionRole.Host, room.role.value)
             room.leave()
         }

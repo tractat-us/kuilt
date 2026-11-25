@@ -10,12 +10,16 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.AdoptRole
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -96,11 +100,11 @@ class NwMeshRoomPartitionTest {
             // sequential setup would deadlock (peer 0 has no one to connect to yet). Mirrors
             // NwMeshConformanceTest.newMeshOfSize. The dropped peer weaves its NwSeam, wraps it in a
             // FaultySeam, then adopts it (adopt takes an already-woven seam — no second weave).
-            val hostD = async { hostFactory.host(Pattern("mesh")) }
+            val hostD = async { hostFactory.host(Pattern("mesh"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())) }
             val droppedD = async {
                 val seam = droppedLoom.join(InMemoryTag(sessionName = "mesh", peerKey = "dev-1"))
                 val faulty = FaultySeam(seam, backgroundScope)
-                faulty to droppedFactory.adopt(faulty, SessionRole.Joiner)
+                faulty to droppedFactory.adopt(faulty, AdoptRole.Joiner)
             }
             val bystanderD = async { bystanderFactory.join(InMemoryTag(sessionName = "mesh", peerKey = "dev-2")) }
 

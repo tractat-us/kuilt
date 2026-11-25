@@ -11,8 +11,11 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -48,6 +51,7 @@ class SeamRoomDetectorTeardownTest {
                 device = RoomDevice.of(fakeKeyStore(0)),
                 heartbeatConfig = HeartbeatConfig(),
                 roomId = RoomId("room-1"),
+                admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
             ).also { it.start() }
 
             // Joiner on backgroundScope — only the host's scope is inspected.

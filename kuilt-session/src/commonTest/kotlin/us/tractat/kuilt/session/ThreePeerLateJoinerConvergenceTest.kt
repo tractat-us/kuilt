@@ -15,10 +15,13 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -70,7 +73,7 @@ class ThreePeerLateJoinerConvergenceTest {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
 
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(0)).host(Pattern("Host"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(0)).host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joiner1Room = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(1)).join(InMemoryTag("Joiner1"))
             val joiner2Room = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(2)).join(InMemoryTag("Joiner2"))
 
@@ -119,7 +122,7 @@ class ThreePeerLateJoinerConvergenceTest {
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
 
             // ── Phase 1: two-peer convergence ─────────────────────────────────
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(3)).host(Pattern("Host"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(3)).host(Pattern("Host"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joiner1Room = SeamRoomFactory(loom, backgroundScope, testClock, fakeKeyStore(4)).join(InMemoryTag("Joiner1"))
 
             hostRoom.roster.first { it.size == 1 }

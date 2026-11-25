@@ -10,7 +10,10 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -34,7 +37,7 @@ class PerMemberFramesSampleTest {
                 backgroundScope,
                 clock = clock,
                 deviceKeyStore = fakeKeyStore(0),
-            ).host(Pattern("Alice"))
+            ).host(Pattern("Alice"), admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()))
             val joiner = SeamRoomFactory(
                 loom,
                 backgroundScope,

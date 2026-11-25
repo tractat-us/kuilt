@@ -18,9 +18,12 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -93,6 +96,7 @@ class SeamRoomCloseResurrectionTest {
                     clock = { Instant.fromEpochMilliseconds(0L) },
                     device = RoomDevice.of(fakeKeyStore(0)),
                     heartbeatConfig = HeartbeatConfig(),
+                    admission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
                 )
             room.start()
             advanceTimeBy(100)
