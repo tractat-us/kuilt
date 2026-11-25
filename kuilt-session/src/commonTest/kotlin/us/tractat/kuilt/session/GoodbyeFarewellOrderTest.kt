@@ -28,13 +28,14 @@ import kotlin.test.assertTrue
  * a member who said `Goodbye`, and dropped the clean `Farewell` after it as a repeat.
  *
  * **How the gap is forced, without a production hook.** The removal closes the member's
- * [Room.incomingFrom] stream after the lock is released, in the gap. A consumer collecting that
- * stream on an [UnconfinedTestDispatcher] is resumed inline, on the frame that is handling the
- * `Goodbye`, when the stream ends. This test's collector lets the held window answer go and runs the
- * scheduler there, so the exchange decides while the `Goodbye` handler is parked between its removal
- * and its fan-out: on virtual time, on every target. The rig asserts that its collector fired, that
- * bob was already gone when it did, and that the exchange's expired `Farewell` reached carol from
- * inside the gap.
+ * [Room.incomingFrom] stream after the lock is released, after the `Goodbye`'s section, which is
+ * where the gap was. A consumer collecting that stream on an [UnconfinedTestDispatcher] is resumed
+ * inline, on the frame that is handling the `Goodbye`, when the stream ends. This test's collector
+ * lets the held window answer go and runs the scheduler there, so the exchange decides while the
+ * `Goodbye` handler is parked at that point: on virtual time, on every target. Before #3628 that point
+ * lay between the removal and the fan-out; with the fix the clean `Farewell` is already enqueued by
+ * then. The rig asserts that its collector fired, that bob was already gone when it did, and that the
+ * exchange's expired `Farewell` reached carol while the handler was parked there.
  */
 class GoodbyeFarewellOrderTest {
     private val bob = PeerId("bob")
@@ -52,7 +53,7 @@ class GoodbyeFarewellOrderTest {
         val toCarol = host.sentTo(carol).size
 
         // The consumer reading bob's frames. Its stream ends when the Goodbye removes bob, and it
-        // resumes inline, inside the Goodbye handler's gap.
+        // resumes inline, after the Goodbye's section, which is where the gap was.
         var gapRuns = 0
         var bobGoneInGap = false
         var expiredInGap = 0
@@ -67,7 +68,7 @@ class GoodbyeFarewellOrderTest {
         testScheduler.runCurrent()
 
         // Bob proves his key again while his seat is held: the window is asked and answers Success,
-        // and the exchange holds that answer until the gap lets it go.
+        // and the exchange holds that answer until the inbox consumer lets it go.
         host.hold.holdAnswer = answer
         host.admit(bob, bobKey, nonce = 3)
         val askedBeforeGoodbye = host.hold.verdicts.toList()
@@ -81,8 +82,14 @@ class GoodbyeFarewellOrderTest {
         assertAll(
             { assertEquals(listOf<ResumeResult.HostVerdict>(ResumeResult.Success), askedBeforeGoodbye, "rig: bob's window was spent before his Goodbye") },
             { assertEquals(1, gapRuns, "rig: the inbox consumer ran once, in the Goodbye handler") },
-            { assertTrue(bobGoneInGap, "rig: the host had removed bob when the gap ran") },
-            { assertEquals(1, expiredInGap, "rig: the spent window's expired Farewell reached carol from inside the gap: $heard") },
+            { assertTrue(bobGoneInGap, "rig: the host had removed bob when the inbox consumer ran") },
+            {
+                assertEquals(
+                    1,
+                    expiredInGap,
+                    "rig: the spent window's expired Farewell reached carol after the Goodbye's section, which is where the gap was: $heard",
+                )
+            },
             { assertEquals(null, host.member(bob), "rig: the host no longer holds bob") },
             {
                 assertEquals(
