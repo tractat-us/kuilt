@@ -1229,6 +1229,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun differentKeyOnLiveIdIsRefused() // us.tractat.kuilt.conformance/RoomConformanceSuite.differentKeyOnLiveIdIsRefused|differentKeyOnLiveIdIsRefused(){}[0]
 
     // Targets: [apple]
+    final fun expiredGrantIsVetted() // us.tractat.kuilt.conformance/RoomConformanceSuite.expiredGrantIsVetted|expiredGrantIsVetted(){}[0]
+
+    // Targets: [apple]
     final fun hostFactoryAssignsHostRole() // us.tractat.kuilt.conformance/RoomConformanceSuite.hostFactoryAssignsHostRole|hostFactoryAssignsHostRole(){}[0]
 
     // Targets: [apple]
@@ -1322,7 +1325,13 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun resumeWithinWindowFiresResumed() // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeWithinWindowFiresResumed|resumeWithinWindowFiresResumed(){}[0]
 
     // Targets: [apple]
+    final fun returnInsideGrantNoVetting() // us.tractat.kuilt.conformance/RoomConformanceSuite.returnInsideGrantNoVetting|returnInsideGrantNoVetting(){}[0]
+
+    // Targets: [apple]
     final fun returnRestoresHeldSeatSameId() // us.tractat.kuilt.conformance/RoomConformanceSuite.returnRestoresHeldSeatSameId|returnRestoresHeldSeatSameId(){}[0]
+
+    // Targets: [apple]
+    final fun revokedSubjectIsVetted() // us.tractat.kuilt.conformance/RoomConformanceSuite.revokedSubjectIsVetted|revokedSubjectIsVetted(){}[0]
 
     // Targets: [apple]
     final fun rosterIsEmptyBeforeAnyHandshake() // us.tractat.kuilt.conformance/RoomConformanceSuite.rosterIsEmptyBeforeAnyHandshake|rosterIsEmptyBeforeAnyHandshake(){}[0]
@@ -1356,6 +1365,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
 
     // Targets: [wasmJs]
     final fun differentKeyOnLiveIdIsRefused(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.differentKeyOnLiveIdIsRefused|differentKeyOnLiveIdIsRefused(){}[0]
+
+    // Targets: [wasmJs]
+    final fun expiredGrantIsVetted(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.expiredGrantIsVetted|expiredGrantIsVetted(){}[0]
 
     // Targets: [wasmJs]
     final fun hostFactoryAssignsHostRole(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.hostFactoryAssignsHostRole|hostFactoryAssignsHostRole(){}[0]
@@ -1451,7 +1463,13 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun resumeWithinWindowFiresResumed(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.resumeWithinWindowFiresResumed|resumeWithinWindowFiresResumed(){}[0]
 
     // Targets: [wasmJs]
+    final fun returnInsideGrantNoVetting(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.returnInsideGrantNoVetting|returnInsideGrantNoVetting(){}[0]
+
+    // Targets: [wasmJs]
     final fun returnRestoresHeldSeatSameId(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.returnRestoresHeldSeatSameId|returnRestoresHeldSeatSameId(){}[0]
+
+    // Targets: [wasmJs]
+    final fun revokedSubjectIsVetted(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.revokedSubjectIsVetted|revokedSubjectIsVetted(){}[0]
 
     // Targets: [wasmJs]
     final fun rosterIsEmptyBeforeAnyHandshake(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.rosterIsEmptyBeforeAnyHandshake|rosterIsEmptyBeforeAnyHandshake(){}[0]
