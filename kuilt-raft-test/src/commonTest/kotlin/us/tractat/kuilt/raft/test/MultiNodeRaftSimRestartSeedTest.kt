@@ -42,10 +42,11 @@ class MultiNodeRaftSimRestartSeedTest {
             sim.nodes.getValue(followerId).leader.value == leaderId
         }
         val after = proposeOn(sim, followerId, "after the restart")
+        val leaderAfter = sim.awaitLeaderId()
 
         assertAll(
             { assertNotSame(oldNode, sim.nodes.getValue(followerId), "the rig: the node was restarted") },
-            { assertEquals(leaderId, sim.awaitLeaderId(), "the rig: the leader that cached the old forward still leads") },
+            { assertEquals(leaderId, leaderAfter, "the rig: the leader that cached the old forward still leads") },
             { assertEquals(1L, before.requestIdOf(), "the rig: the old incarnation used serial 1") },
             { assertEquals(1L, after.requestIdOf(), "the rig: the new incarnation reuses serial 1") },
             { assertNotEquals(before.clientIdOf(), after.clientIdOf(), "the restart minted a new client id") },
