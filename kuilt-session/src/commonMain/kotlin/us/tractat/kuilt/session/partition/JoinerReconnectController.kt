@@ -29,6 +29,25 @@ import us.tractat.kuilt.session.admit.RejectCode
  * [onPeerUnresponsive] directly.
  *
  * **Thread safety:** implementations must be safe for concurrent calls.
+ *
+ * **Calls can arrive out of order, so order them by the instant they carry (#3673).** A room calls
+ * [onPeerUnresponsive] and [onPeerRecovered] outside its own lock, so that this controller's code
+ * never runs under it (#1614). A thread can stall between the room's decision and the call, and a
+ * peer can meanwhile leave, be admitted again under the same [PeerId] and drop again. The stalled
+ * call then arrives after the newer membership's, carrying its own, older instant. An
+ * implementation that keeps one window per peer must therefore:
+ * - ignore an [onPeerUnresponsive] whose `at` is no later than a window it holds that is still
+ *   live, one neither resumed, expired nor ended by a recovery. Acted on, an older one replaces the
+ *   newer window with one that expires early, so a valid return is admitted fresh.
+ * - disarm a window on [onPeerRecovered] only when its `at` is **strictly later** than the window's.
+ *   Acted on, an earlier recovery disarms the newer window, so its seat never expires and no other
+ *   member is told it is gone. A detector reports a recovery at least one poll after the drop it
+ *   recovers from, so a recovery at the window's own instant is about the episode before it.
+ *
+ * This ordering assumes the room's clock does not run backwards. A wall clock can step back, and
+ * one too coarse, or a test's fixed one, does not move: the next drop then carries an `at` no later
+ * than the last window, which has finished by then. Open a window for it: refused, the drop has no
+ * window, so nothing expires its seat.
  */
 public interface JoinerReconnectController {
     /**
@@ -100,8 +119,10 @@ public interface JoinerReconnectController {
      * **The obligation: emit no [JoinerReconnectEvent.WindowExpired] for the episode this closes.**
      * That is the whole contract — an implementation with no timer to cancel (a hold policy that
      * only ever answers questions) satisfies it by doing nothing, and should say so rather than
-     * leave a reader guessing. [at] identifies the recovery instant for logging; it is **not** an
-     * expiry, so do not treat it as one.
+     * leave a reader guessing. [at] is the recovery instant. It is **not** an expiry, so do not
+     * treat it as one; it orders this call against [onPeerUnresponsive] (see the interface KDoc):
+     * a recovery that is not strictly later than the held window's opening is about an earlier
+     * episode, and leaves that window armed.
      *
      * Distinct from [expire], deliberately, and not expressible in terms of it: [expire] *is* an
      * expiry — it emits [JoinerReconnectEvent.WindowExpired] and leaves the window terminally

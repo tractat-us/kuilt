@@ -111,6 +111,12 @@ internal class ObservedHold(
      */
     var lagOpening: CompletableDeferred<Unit>? = null
 
+    /**
+     * As [lagOpening], for a recovery the room reports: it reaches the real controller only once this
+     * completes. The room calls the controller outside its lock (#1614), so a thread can stall there.
+     */
+    var lagRecovering: CompletableDeferred<Unit>? = null
+
     /** The detection instant of every partition the real controller has been told of, in order. */
     val opened = mutableListOf<Long>()
 
@@ -141,8 +147,17 @@ internal class ObservedHold(
             }
 
             override fun onPeerRecovered(peerId: PeerId, at: Long) {
-                recovered += at
-                controller.onPeerRecovered(peerId, at)
+                val lag = lagRecovering
+                if (lag == null) {
+                    recovered += at
+                    controller.onPeerRecovered(peerId, at)
+                } else {
+                    scope.launch {
+                        lag.await()
+                        recovered += at
+                        controller.onPeerRecovered(peerId, at)
+                    }
+                }
             }
 
             override suspend fun tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict {
@@ -323,12 +338,13 @@ internal suspend fun TestScope.rawHost(
     joiners: Set<PeerId>,
     hold: ObservedHold = ObservedHold(),
     store: DeviceKeyStore = fakeKeyStore(HOST_DEVICE),
+    clock: () -> Instant = virtualClock(),
 ): RawHost {
     val seam = FakeSeam(selfId = KEY_SEAT_HOST, initialPeers = setOf(KEY_SEAT_HOST) + joiners)
     val room = SeamRoomFactory(
         loom = InMemoryLoom(),
         scope = backgroundScope,
-        clock = virtualClock(),
+        clock = clock,
         deviceKeyStore = store,
         heartbeatConfig = KEY_SEAT_HEARTBEAT,
         admitTimeout = KEY_SEAT_ADMIT_TIMEOUT,

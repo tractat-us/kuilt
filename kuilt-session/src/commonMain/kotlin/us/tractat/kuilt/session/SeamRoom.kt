@@ -4799,14 +4799,16 @@ internal class SeamRoom(
                             "episode=${event.detectedAt} at=${event.at}"
                     }
                 } else {
-                    // `info`, unlike [refineWindow]'s sibling drop: this one suppressed an
-                    // **irreversible** action against a healthy member whose membership is the one
-                    // the window was opened for. With the shipped [DefaultJoinerReconnectController]
-                    // it should be unreachable — `markRecovered` disarms the timer through
-                    // [JoinerReconnectController.onPeerRecovered]. Reaching it names a hold policy
-                    // (#1614) that does not honour that call, which is a contract breach nothing can
-                    // check at compile time and which this line is the only way to see.
-                    logger.info {
+                    // This suppressed an **irreversible** action against a healthy member whose
+                    // membership is the one the window was opened for. `debug`, because the shipped
+                    // [DefaultJoinerReconnectController] reaches it on purpose, ordering its calls by
+                    // their instant (#3673), in two ways: a stale open that lands on a finished newer
+                    // window opens a window of its own, and a recovery that is not strictly later than
+                    // the window (a clock that stepped back or did not move) is ignored, leaving the
+                    // window armed. The third cause is a hold policy (#1614) that does not honour
+                    // [JoinerReconnectController.onPeerRecovered], a contract breach nothing can check
+                    // at compile time.
+                    logger.debug {
                         "windowExpired.suppressed peer=${peerId.value} reason=recovered " +
                             "episode=${event.detectedAt} at=${event.at}"
                     }

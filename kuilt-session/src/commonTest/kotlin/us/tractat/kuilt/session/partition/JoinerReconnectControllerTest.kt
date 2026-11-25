@@ -447,6 +447,183 @@ class JoinerReconnectControllerTest {
             )
         }
 
+    // ── Calls ordered by their instant (#3673) ────────────────────────────────
+    //
+    // The fixture's clock reads 0, so a window opened at `at` expires at virtual `at + windowMs`.
+
+    /** A call for an ended membership arrives after the newer window opened, and changes nothing. */
+    @Test
+    fun `an older open is ignored while the held window is live`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val events = collect(ctrl)
+
+            ctrl.onPeerUnresponsive(peerA, at = 200L)
+            testScheduler.runCurrent()
+            ctrl.onPeerUnresponsive(peerA, at = 100L)
+            testScheduler.advanceTimeBy(150L + windowMs)
+            testScheduler.runCurrent()
+            val byOlderDeadline = events.map { it.normalised() }
+            testScheduler.advanceTimeBy(100L)
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(listOf(opened(200L)), byOlderDeadline, "the older open neither replaced nor expired it") },
+                { assertEquals(listOf(opened(200L), expired(200L)), events.map { it.normalised() }, "the held window expires at its own deadline") },
+            )
+        }
+
+    /** As above, with both opens launched before either runs: the older one is still the later to land. */
+    @Test
+    fun `two opens where the older lands last keep the newer window`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val events = collect(ctrl)
+
+            ctrl.onPeerUnresponsive(peerA, at = 200L)
+            ctrl.onPeerUnresponsive(peerA, at = 100L)
+            testScheduler.advanceTimeBy(250L + windowMs)
+            testScheduler.runCurrent()
+
+            assertEquals(listOf(opened(200L), expired(200L)), events.map { it.normalised() })
+        }
+
+    /**
+     * Once the held window has finished, an older `at` is not a stale call it must be protected from:
+     * it is what a wall clock that stepped back reports for the next drop. Refused, that drop would get
+     * no window, so nothing would ever expire its seat.
+     */
+    @Test
+    fun `an older open after a disarmed window opens one`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val events = collect(ctrl)
+
+            ctrl.onPeerUnresponsive(peerA, at = 200L)
+            testScheduler.runCurrent()
+            ctrl.onPeerRecovered(peerA, at = 300L)
+            testScheduler.runCurrent()
+            ctrl.onPeerUnresponsive(peerA, at = 100L)
+            testScheduler.advanceTimeBy(150L + windowMs)
+            testScheduler.runCurrent()
+
+            assertEquals(listOf(opened(200L), opened(100L), expired(100L)), events.map { it.normalised() })
+        }
+
+    @Test
+    fun `an older open after a resumed window opens one`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val token = ProvenResume(peerId = peerA, roomId = sessionId, key = keyA)
+
+            ctrl.onPeerUnresponsive(peerA, at = 200L)
+            testScheduler.runCurrent()
+            val first = ctrl.tryResume(token, at = 250L)
+            ctrl.onPeerUnresponsive(peerA, at = 100L)
+            testScheduler.runCurrent()
+            val second = ctrl.tryResume(token, at = 260L)
+
+            assertAll(
+                { assertEquals(ResumeResult.Success, first, "rig: the first window was spent on a resume") },
+                { assertEquals(ResumeResult.Success, second, "the next drop has a window of its own") },
+            )
+        }
+
+    /** A recovery older than the held window is about an earlier episode, and leaves it armed. */
+    @Test
+    fun `an older recovery leaves the window armed`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val events = collect(ctrl)
+
+            ctrl.onPeerUnresponsive(peerA, at = 200L)
+            testScheduler.runCurrent()
+            ctrl.onPeerRecovered(peerA, at = 100L)
+            testScheduler.advanceTimeBy(250L + windowMs)
+            testScheduler.runCurrent()
+
+            assertEquals(listOf(opened(200L), expired(200L)), events.map { it.normalised() })
+        }
+
+    /**
+     * A detector reports a recovery only after at least one poll past the drop it recovers from, so a
+     * recovery at the window's own instant is about the episode before it: a late frame's recovery,
+     * then a transport close at the same instant, whose two calls land in the other order.
+     */
+    @Test
+    fun `a recovery at the window's own instant leaves it armed`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val events = collect(ctrl)
+
+            ctrl.onPeerUnresponsive(peerA, at = 100L)
+            ctrl.onPeerRecovered(peerA, at = 100L)
+            testScheduler.advanceTimeBy(150L + windowMs)
+            testScheduler.runCurrent()
+
+            assertEquals(listOf(opened(100L), expired(100L)), events.map { it.normalised() })
+        }
+
+    /**
+     * An open at a live window's own instant is that episode again: the window is not re-armed or
+     * announced again, and keeps its deadline.
+     */
+    @Test
+    fun `an open at a live window's own instant is ignored`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val events = collect(ctrl)
+
+            ctrl.onPeerUnresponsive(peerA, at = 100L)
+            testScheduler.runCurrent()
+            ctrl.onPeerUnresponsive(peerA, at = 100L)
+            testScheduler.advanceTimeBy(150L + windowMs)
+            testScheduler.runCurrent()
+
+            assertEquals(listOf(opened(100L), expired(100L)), events.map { it.normalised() })
+        }
+
+    /**
+     * Once a window is spent, a drop at its instant opens one: a clock that did not move between two
+     * drops reports both at the same instant (`JoinerReconnectTest`'s repeated tears, on a fixed
+     * clock), so the room can return a second time.
+     */
+    @Test
+    fun `an open at a spent window's own instant opens one`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val token = ProvenResume(peerId = peerA, roomId = sessionId, key = keyA)
+
+            ctrl.onPeerUnresponsive(peerA, at = 100L)
+            testScheduler.runCurrent()
+            val first = ctrl.tryResume(token, at = 100L)
+            ctrl.onPeerUnresponsive(peerA, at = 100L)
+            testScheduler.runCurrent()
+            val second = ctrl.tryResume(token, at = 100L)
+
+            assertAll(
+                { assertEquals(ResumeResult.Success, first, "rig: the window was spent on a resume") },
+                { assertEquals(ResumeResult.Success, second, "the second drop has a window of its own") },
+            )
+        }
+
+    private fun kotlinx.coroutines.test.TestScope.collect(ctrl: JoinerReconnectController): MutableList<JoinerReconnectEvent> {
+        val events = mutableListOf<JoinerReconnectEvent>()
+        backgroundScope.launch { ctrl.events.collect { events += it } }
+        testScheduler.runCurrent()
+        return events
+    }
+
+    private fun opened(at: Long) = "opened($at)"
+
+    private fun expired(detectedAt: Long) = "expired($detectedAt)"
+
+    private fun JoinerReconnectEvent.normalised(): String = when (this) {
+        is JoinerReconnectEvent.WindowOpened -> opened(detectedAt)
+        is JoinerReconnectEvent.WindowExpired -> expired(detectedAt)
+        is JoinerReconnectEvent.Resumed -> "resumed"
+    }
+
     // ── Default constant ──────────────────────────────────────────────────────
 
     @Test
