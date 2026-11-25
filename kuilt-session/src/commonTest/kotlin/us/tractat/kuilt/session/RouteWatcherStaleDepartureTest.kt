@@ -116,6 +116,54 @@ class RouteWatcherStaleDepartureTest {
         host.leave()
     }
 
+    /**
+     * The watcher reads a list **with** bob, who has an open challenge, and is held there. Bob leaves,
+     * and only then does the watcher act: on its own live read, which no longer lists him. He is gone,
+     * so his challenge must go too, even though the list the watcher compares against next is the one
+     * it read and not the one it was handed. Bob is listed again afterwards; his proof must find
+     * nothing, and his room times out its admission as it would have without the hold.
+     */
+    @Test
+    fun aSenderListedOnlyInTheHeldListStillLosesItsChallenge() = runTest {
+        val board = Switchboard(setOf(KEY_SEAT_HOST, bob))
+        val hostSeam = ParkingPeersSeam(board.plug(KEY_SEAT_HOST))
+        val host = boardRoom(board, KEY_SEAT_HOST, fakeKeyStore(HOST_DEVICE), SessionRole.Host, seam = hostSeam)
+        testScheduler.runCurrent()
+        hostSeam.hide(bob)
+        testScheduler.runCurrent()
+
+        hostSeam.parkNextReadWith(bob)
+        hostSeam.show(bob)
+        testScheduler.runCurrent()
+        val parkedBeforeHello = hostSeam.parked.isCompleted
+        val stalled = board.stallFirst(from = KEY_SEAT_HOST, to = bob, duration = CHALLENGE_STALL) { it is AdmitMessage.Challenge }
+        val joiner = boardRoom(board, bob, fakeKeyStore(1), SessionRole.Joiner, name = "Bob")
+        val joinerLog = EventLog(joiner, backgroundScope)
+        testScheduler.runCurrent()
+        val challenged = board.sent(from = KEY_SEAT_HOST, to = bob).count { it is AdmitMessage.Challenge }
+
+        hostSeam.hide(bob)
+        hostSeam.release()
+        testScheduler.runCurrent()
+        hostSeam.show(bob)
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(KEY_SEAT_ADMIT_TIMEOUT * 2)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertTrue(parkedBeforeHello, "rig: the watcher was held on a list before bob's Hello") },
+            { assertEquals(setOf(KEY_SEAT_HOST, bob), hostSeam.parked.getCompleted(), "rig: the held list listed bob") },
+            { assertEquals(1, challenged, "rig: the host challenged bob before he left") },
+            { assertEquals(1, stalled(), "rig: the challenge was in flight when he left") },
+            { assertTrue(host.roster.value.none { it.id == bob }, "bob left, so his challenge is forgotten and his proof admits nobody") },
+            {
+                val failed = joinerLog.since(0).filterIsInstance<MembershipEvent.AdmissionFailed>()
+                assertEquals(1, failed.size, "bob's room times out its admission: $failed")
+            },
+        )
+        host.leave()
+    }
+
     private companion object {
         /** How long bob's challenge waits on its lane: well inside [KEY_SEAT_ADMIT_TIMEOUT]. */
         val CHALLENGE_STALL = 100.milliseconds
@@ -127,14 +175,14 @@ class RouteWatcherStaleDepartureTest {
  * Frames, sends and state go to the delegate untouched.
  *
  * [parkNextReadWithout] makes the next collector that reads a list lacking a given peer wait, holding
- * that list, until [release]. The collector then receives the list it read, not the current one: this
+ * that list, until [release]; [parkNextReadWith], one that reads a list listing it. The collector then receives the list it read, not the current one: this
  * is the route watcher read and then pre-empted, on a dispatcher with more than one thread.
  * [Seam.peers]'s `value` always answers the current list.
  */
 @OptIn(ExperimentalForInheritanceCoroutinesApi::class)
 internal class ParkingPeersSeam(private val delegate: Seam) : Seam by delegate {
     private val view = MutableStateFlow(delegate.peers.value)
-    private var parkWithout: PeerId? = null
+    private var parkWhen: ((Set<PeerId>) -> Boolean)? = null
     private val gate = CompletableDeferred<Unit>()
 
     /** The list the parked collector holds, once one is parked. */
@@ -150,7 +198,12 @@ internal class ParkingPeersSeam(private val delegate: Seam) : Seam by delegate {
 
     /** Once only: the next collector to read a list without [peer] waits for [release]. */
     fun parkNextReadWithout(peer: PeerId) {
-        parkWithout = peer
+        parkWhen = { peer !in it }
+    }
+
+    /** Once only: the next collector to read a list with [peer] waits for [release]. */
+    fun parkNextReadWith(peer: PeerId) {
+        parkWhen = { peer in it }
     }
 
     fun release() {
@@ -162,9 +215,9 @@ internal class ParkingPeersSeam(private val delegate: Seam) : Seam by delegate {
         override val replayCache: List<Set<PeerId>> get() = view.replayCache
 
         override suspend fun collect(collector: FlowCollector<Set<PeerId>>): Nothing = view.collect { read ->
-            val target = parkWithout
-            if (target != null && target !in read) {
-                parkWithout = null
+            val park = parkWhen
+            if (park != null && park(read)) {
+                parkWhen = null
                 parked.complete(read)
                 gate.await()
             }
