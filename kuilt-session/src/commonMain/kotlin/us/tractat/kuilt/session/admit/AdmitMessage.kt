@@ -20,15 +20,16 @@ import us.tractat.kuilt.identity.Challenge as ChallengeStatement
  * that application frames must not start with — this avoids a separate channel or
  * wrapper envelope.
  *
- * Handshake flow:
+ * Handshake flow, in its first form:
  * ```
  * Joiner → Host : Hello(identity)
  * Host   → Joiner : Welcome(assignedId, identity)
  * Host   → all others : Welcome(assignedId, identity)   [roster broadcast]
  * ```
- * If the host rejects the joiner (e.g. already admitted with same dedupKey):
+ * If the host refuses the joiner (a version it cannot admit, a room it does not serve, a proof that
+ * fails, another device's key on a connected member's id):
  * ```
- * Host → Joiner : Reject(reason)
+ * Host → Joiner : Reject(reason, code)
  * ```
  * The host-side runs this passively for incoming [Hello]s. The joiner
  * sends [Hello] immediately upon transport connection and waits for [Welcome] or [Reject].
@@ -61,7 +62,10 @@ public sealed interface AdmitMessage {
      *
      * [displayName] — human-readable display name.
      * [sessionId] — joiner-minted session identifier (UUID-style).
-     * [deviceId] — optional hardware-stable identifier for reconnect dedup.
+     * [deviceId] — the app's own id for this device, optional. The joiner's device key signs it into
+     *   its [Proof] (v4, #3211), and the host records it as the member's `MemberIdentity.deviceId`. It
+     *   does not recognise a returning member: the device key does, through the host's key → seat
+     *   table (#3159).
      * [targetRoom] — the host [us.tractat.kuilt.core.Pattern.roomKey] this joiner
      *   intends to enter, from [us.tractat.kuilt.core.Tag.roomKey]. `null` (the
      *   default) means the transport already bound the room, so the host admits
@@ -74,8 +78,9 @@ public sealed interface AdmitMessage {
      *   ([ProtocolVersion.CURRENT]). The host compares it against its supported range and
      *   rejects a mismatch at admit time with [RejectCode.ProtocolMismatch] (#1569). **Additive**,
      *   exactly like [targetRoom]: nullable + defaulted, so a peer that predates the field decodes
-     *   as `null` and is admitted as legacy (kotlinx omits the defaulted null, so a version-less
-     *   `Hello` is byte-identical to the pre-#1569 wire form).
+     *   as `null` (kotlinx omits the defaulted null, so a version-less `Hello` is byte-identical to
+     *   the pre-#1569 wire form). Since v2 the host refuses that `null` with
+     *   [RejectCode.ProtocolMismatch] rather than admitting it as legacy ([ProtocolVersion]).
      * [key] — the joiner's device key, from its [us.tractat.kuilt.identity.DeviceKeyStore] (v3, #3210).
      *   The joiner proves it holds the key by answering the host's [Challenge] with a [Proof] (v4, #3211).
      * [joinerNonce] — [JOINER_NONCE_SIZE] fresh random bytes, drawn for every Hello (v3, #3210). The
@@ -319,6 +324,13 @@ public sealed interface AdmitMessage {
      * the roster [Welcome] for that member follows on the same lane. The host also sends this
      * Farewell **directly** to the superseded member, which then ends its room and never says Hello
      * again. `null` on every other Farewell.
+     *
+     * **It is also the host's answer to a Hello from a superseded id** (v7), while the successor is
+     * seated: a superseded process whose link was dead when the direct Farewell went says Hello again,
+     * and hears this Farewell instead of a challenge. It names no Hello, unlike a [Reject]. A joiner
+     * honours it only from its identified host, as every Farewell, so a room that was admitted ends;
+     * a first-time joiner reusing that id has no host yet, drops it, and its join times out. #3662 is
+     * weighing whether to answer that Hello with a `Reject` naming it instead.
      *
      * Wire-compatible: an older build that doesn't know this message drops it as
      * malformed and degrades to its own heartbeat-window eviction (the prior behavior).

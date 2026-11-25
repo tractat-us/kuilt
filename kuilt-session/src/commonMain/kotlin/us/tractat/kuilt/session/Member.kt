@@ -44,11 +44,15 @@ public data class Member(
 )
 
 /**
- * Stable identity for a room member, used for dedup across reconnects.
+ * What a member says about itself: its display name and the ids its `Hello` carried.
  *
- * [deviceId] is a hardware-stable identifier (preferred for dedup — survives app restart).
- * [sessionId] is a session-scoped identifier minted at join time (fallback when
- * [deviceId] is absent, e.g. on platforms that don't expose a stable hardware id).
+ * All of it is self-asserted, and none of it recognises a returning member. The member's device
+ * [Member.key] does that, through the host's table of which key holds which seat (#3159).
+ *
+ * [deviceId] is the app's own id for the device, when its `join` passed one. The joiner's device key
+ * signs it into the admission proof, which binds the id to that key, and the host records it here.
+ * A host's own [deviceId] is never sent, so it is null on every joiner's roster. [sessionId] is
+ * minted by the joiner when it joins.
  */
 public data class MemberIdentity(
     val displayName: String,
@@ -56,8 +60,8 @@ public data class MemberIdentity(
     val deviceId: String? = null,
 ) {
     /**
-     * The stable key used for reconnect dedup. Prefers [deviceId] when present,
-     * falls back to [sessionId].
+     * [deviceId] when present, else [sessionId]. It was the reconnect dedup key before a returning
+     * member was recognised by its device key (#3159); the room no longer uses it for that.
      */
     val dedupKey: String get() = deviceId ?: sessionId
 }
