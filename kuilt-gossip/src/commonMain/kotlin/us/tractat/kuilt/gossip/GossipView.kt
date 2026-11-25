@@ -220,18 +220,43 @@ public class GossipView(
         detector.start(scope)
         val eventsJob =
             scope.launch {
-                detector.events.collect { event ->
-                    when (event) {
-                        is PartitionEvent.PeerUnresponsive,
-                        is PartitionEvent.PeerLost,
-                        -> commands.send(Command.EdgeDown(event.peerId))
-                        // A still-active peer that recovers needs no overlay change;
-                        // anti-entropy backstops any data missed during the blip.
-                        is PartitionEvent.PeerRecovered -> Unit
-                    }
-                }
+                detector.events.collect { event -> onDetectorEvent(event, detector) }
             }
         detectors[peer] = DetectorHandle(detector, eventsJob)
+    }
+
+    private suspend fun onDetectorEvent(
+        event: PartitionEvent,
+        detector: HeartbeatPartitionDetector,
+    ) {
+        when (event) {
+            is PartitionEvent.PeerUnresponsive,
+            is PartitionEvent.PeerLost,
+            -> commands.send(Command.EdgeDown(event.peerId))
+            // A still-active peer that recovers needs no overlay change;
+            // anti-entropy backstops any data missed during the blip.
+            is PartitionEvent.PeerRecovered -> Unit
+        }
+    }
+
+    /**
+     * **Test-visibility.** The detector currently watching [peer], or null. It reads state the
+     * command processor owns, so a test calls it only while that processor is idle — on virtual
+     * time, after `runCurrent`. No production caller reads this.
+     */
+    internal fun detectorForTest(peer: PeerId): HeartbeatPartitionDetector? = detectors[peer]?.detector
+
+    /**
+     * **Test-visibility.** Hand [event] over as the collector of [detector] would (#3672). A test
+     * passes a detector that has since been stopped and replaced, standing in for a collector that
+     * took the event, then lost its thread before handing it over while its peer left the active view
+     * and came back under a new detector.
+     */
+    internal suspend fun handleDetectorEventForTest(
+        event: PartitionEvent,
+        detector: HeartbeatPartitionDetector,
+    ) {
+        onDetectorEvent(event, detector)
     }
 
     private suspend fun stopDetector(peer: PeerId) {
