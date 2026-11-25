@@ -1,6 +1,8 @@
 package us.tractat.kuilt.session.partition
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -11,6 +13,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.PeerId
 
+private val logger = KotlinLogging.logger("us.tractat.kuilt.session.partition.DefaultJoinerReconnectController")
+
 /**
  * Default implementation of [JoinerReconnectController].
  *
@@ -20,6 +24,12 @@ import us.tractat.kuilt.core.PeerId
  *
  * Per-peer windows are independent: one peer's window expiring does not affect
  * another peer's window.
+ *
+ * **Calls are ordered by the instant they carry, not by when they arrive (#3673).** A peer has one
+ * window here, and a room makes these calls outside its lock, so a call about a membership that has
+ * since ended can arrive after the newer membership's window opened. An [onPeerUnresponsive] whose
+ * `at` is older than the window's `detectedAt` is ignored, and so is an [onPeerRecovered] whose `at`
+ * precedes it. An equal `at` is the same episode: it re-arms or disarms that window.
  *
  * @param roomId The Room this controller guards. A [ProvenResume] for a different
  *   Room holds no window here, so it is answered [ResumeResult.WindowClosed]; a room never builds one.
@@ -89,7 +99,7 @@ public class DefaultJoinerReconnectController(
         peerId: PeerId,
         at: Long,
     ) {
-        scope.launch { cancelWindowTimer(peerId) }
+        scope.launch { cancelWindowTimer(peerId, at) }
     }
 
     override fun expire(
@@ -107,17 +117,29 @@ public class DefaultJoinerReconnectController(
     ) {
         val expiresAt = at + reconnectWindowMs
 
-        // Cancel any in-flight timer for this peer (e.g. a refreshed window).
-        val existing = mutex.withLock { windows[peerId] }
-        existing?.timerJob?.cancel()
-
-        val timerJob = scope.launch { runTimer(peerId, expiresAt) }
-        mutex.withLock {
+        // The check, the cancel and the write are one section: split, two calls could both pass the
+        // check and the older one's write land last.
+        val timerJob = mutex.withLock {
+            val existing = windows[peerId]
+            // A drop older than this window's is about a membership that has ended (#3673). Acted
+            // on, it would replace the newer window with one that expires early, so a Proof inside
+            // the newer window would be refused and its expiry would never name it.
+            if (existing != null && at < existing.detectedAt) {
+                logger.debug { "window.open.stale peer=${peerId.value} at=$at held=${existing.detectedAt}" }
+                return
+            }
+            // Cancel any in-flight timer for this peer (e.g. a refreshed window).
+            existing?.timerJob?.cancel()
+            // Lazy, and started once the window is stored, so the timer never runs against the
+            // window it replaces.
+            val timer = scope.launch(start = CoroutineStart.LAZY) { runTimer(peerId, expiresAt) }
             // `detectedAt` is stored, not re-read later: it is this episode's identity, and
             // `forceExpire` has to echo the same value onto `WindowExpired` however it is reached
             // (timer or explicit `expire`). See [JoinerReconnectEvent.WindowExpired.detectedAt].
-            windows[peerId] = WindowState(timerJob = timerJob, detectedAt = at)
+            windows[peerId] = WindowState(timerJob = timer, detectedAt = at)
+            timer
         }
+        timerJob.start()
         // `detectedAt` is the `at` this controller was handed, echoed unchanged — NOT `clock()`.
         // The whole point is to name the episode this window belongs to, and a clock read here
         // would name the moment the announcement was made, which is the ambiguous quantity (#1781).
@@ -144,9 +166,20 @@ public class DefaultJoinerReconnectController(
      * Not [forceExpire]: that is an expiry, and it would leave `expiredAt` set, so the very next
      * fast-reconnect race would answer [ResumeResult.WindowClosed] — terminal, "re-join fresh" —
      * for a peer whose window merely stopped being needed.
+     *
+     * A recovery at an instant before the window's `detectedAt` is about an earlier episode, often
+     * of a membership that has ended (#3673), and leaves the window armed: disarmed, it would never
+     * expire, and nothing would tell the other members the seat is gone.
      */
-    private suspend fun cancelWindowTimer(peerId: PeerId) {
-        val timerJob = mutex.withLock { windows[peerId]?.takeIf { it.expiredAt == null }?.timerJob }
+    private suspend fun cancelWindowTimer(peerId: PeerId, at: Long) {
+        val timerJob = mutex.withLock {
+            val state = windows[peerId] ?: return
+            if (at < state.detectedAt) {
+                logger.debug { "window.recover.stale peer=${peerId.value} at=$at held=${state.detectedAt}" }
+                return
+            }
+            state.takeIf { it.expiredAt == null }?.timerJob
+        }
         timerJob?.cancel()
     }
 
