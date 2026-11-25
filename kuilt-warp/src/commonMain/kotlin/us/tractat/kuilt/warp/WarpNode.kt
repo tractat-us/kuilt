@@ -895,6 +895,25 @@ public class WarpNode(
     internal fun coordinatedTaskIds(): Set<TaskId> = coordQueueQuilter.state.value.elements
 
     /**
+     * **Test-visibility.** The umbrella job of the detector registered for [peerId], or null: the
+     * identity [handlePartitionEvent] is given for each event that detector reports (#3672). No
+     * production caller reads this.
+     */
+    internal fun detectorJobForTest(peerId: PeerId): Job? = lock.withLock { detectorJobs[peerId] }
+
+    /**
+     * **Test-visibility.** Handle [event] as the collector of the detector whose umbrella job is
+     * [detector] would. A test passes the job of a detector that has since been replaced to stand in
+     * for the one interleaving no single-threaded test can reach (#3672): a collector that took an
+     * event off its detector, then lost its thread before acting on it while the peer departed and
+     * reappeared, so its detector was cancelled and another started. The collector suspends nowhere
+     * between the two, so a stalled thread is the only way there, and it hands over exactly this pair.
+     */
+    internal fun handlePartitionEventForTest(event: PartitionEvent, detector: Job) {
+        handlePartitionEvent(event)
+    }
+
+    /**
      * Close this node's Quilter connections and stop all detectors. Idempotent.
      */
     public fun close() {
