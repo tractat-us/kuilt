@@ -6,6 +6,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.cbor.Cbor
@@ -910,7 +912,7 @@ public class WarpNode(
      * between the two, so a stalled thread is the only way there, and it hands over exactly this pair.
      */
     internal fun handlePartitionEventForTest(event: PartitionEvent, detector: Job) {
-        handlePartitionEvent(event)
+        handlePartitionEvent(event, detector)
     }
 
     /**
@@ -984,6 +986,11 @@ public class WarpNode(
      * children of the umbrella Job. The events-collector (`detector.events.collect { }`)
      * runs inside the same umbrella body. Cancelling the umbrella Job (via [detectorJobs])
      * atomically tears down all three coroutines. The umbrella Job is stored in [detectorJobs].
+     *
+     * The collector hands each event over with the umbrella Job, and the node acts on it only
+     * while that Job is still the one registered for [peerId] (#3672). A peer that departs and
+     * reappears is watched by a new detector; an event its old one took before being cancelled,
+     * handed over late by a collector that lost its thread, must not land on the new watch.
      */
     private fun startDetector(peerId: PeerId) {
         val perPeerSeam = PerPeerSeam(seam, peerId, rawIncoming)
@@ -996,32 +1003,55 @@ public class WarpNode(
         // The umbrella launch body is `this` CoroutineScope.
         // `detector.start(this)` makes the ping loop and incoming-collection loop children
         // of this coroutine so they are cancelled when this Job is cancelled.
-        val umbrellaJob = ownScope.launch {
+        //
+        // Started LAZY and registered BEFORE it runs (#3672): an event is acted on only from the
+        // detector registered for its peer, so on an unconfined dispatcher a collector that ran
+        // inline and reported before the registration would have its first event dropped as stale.
+        val umbrellaJob = ownScope.launch(start = CoroutineStart.LAZY) {
             detector.start(this)
-            detector.events.collect { event -> handlePartitionEvent(event) }
+            val self = coroutineContext.job
+            detector.events.collect { event -> handlePartitionEvent(event, self) }
         }
         lock.withLock { detectorJobs[peerId] = umbrellaJob }
+        umbrellaJob.start()
     }
 
-    private fun handlePartitionEvent(event: PartitionEvent) {
+    private fun handlePartitionEvent(event: PartitionEvent, detector: Job) {
         when (event) {
-            is PartitionEvent.PeerUnresponsive -> markPartitioned(event.peerId)
-            is PartitionEvent.PeerLost -> markPartitioned(event.peerId)
-            is PartitionEvent.PeerRecovered -> markRecovered(event.peerId)
+            is PartitionEvent.PeerUnresponsive -> markPartitioned(event.peerId, detector)
+            is PartitionEvent.PeerLost -> markPartitioned(event.peerId, detector)
+            is PartitionEvent.PeerRecovered -> markRecovered(event.peerId, detector)
         }
     }
 
-    private fun markPartitioned(peerId: PeerId) {
-        lock.withLock {
+    /** Is [detector] the umbrella Job registered for [peerId]? Caller holds [lock]. */
+    private fun isCurrentDetector(peerId: PeerId, detector: Job): Boolean = detectorJobs[peerId] === detector
+
+    private fun markPartitioned(peerId: PeerId, detector: Job) {
+        val acted = lock.withLock {
+            if (!isCurrentDetector(peerId, detector)) return@withLock false
             partitionedPeers.add(peerId)
             _failovers = _failovers.piece(_failovers.inc(replica).delta)
+            true
+        }
+        if (!acted) {
+            logger.debug { "WarpNode($selfId): ignoring a partition of $peerId from a replaced detector" }
+            return
         }
         logger.info { "WarpNode($selfId): peer $peerId partitioned — excluding from ring" }
         rebuildRingAndClaim()
     }
 
-    private fun markRecovered(peerId: PeerId) {
-        lock.withLock { partitionedPeers.remove(peerId) }
+    private fun markRecovered(peerId: PeerId, detector: Job) {
+        val acted = lock.withLock {
+            if (!isCurrentDetector(peerId, detector)) return@withLock false
+            partitionedPeers.remove(peerId)
+            true
+        }
+        if (!acted) {
+            logger.debug { "WarpNode($selfId): ignoring a recovery of $peerId from a replaced detector" }
+            return
+        }
         logger.info { "WarpNode($selfId): peer $peerId recovered — restoring to ring" }
         rebuildRingAndClaim()
     }
