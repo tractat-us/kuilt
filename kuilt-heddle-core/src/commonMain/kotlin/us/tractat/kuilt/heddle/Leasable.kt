@@ -64,10 +64,10 @@ internal sealed interface Leasable {
         }
 
         override fun declares(group: GroupId): Boolean =
-            group in lanes || (pathOf(group)?.attached == true && GroupId(group.value.substringBeforeLast('/')) in templated)
+            group in lanes || (pathOf(group)?.path is GroupPath.Attached && GroupId(group.value.substringBeforeLast('/')) in templated)
 
         override fun ceilingOf(group: GroupId): Long? =
-            ceilings[group] ?: templateCeilings.takeIf { it.isNotEmpty() && pathOf(group)?.attached == true }
+            ceilings[group] ?: templateCeilings.takeIf { it.isNotEmpty() && pathOf(group)?.path is GroupPath.Attached }
                 ?.get(GroupId(group.value.substringBeforeLast('/')))
 
         override val hasCeilings: Boolean get() = ceilings.isNotEmpty() || templateCeilings.isNotEmpty()

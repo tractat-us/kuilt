@@ -113,12 +113,8 @@ public fun Topology.findGroupId(path: GroupPath): GroupId? = when (path) {
  * @sample us.tractat.kuilt.heddle.sampleGroupPathRoundTrip
  */
 public fun Topology.findPath(group: GroupId): GroupPath? {
-    val parsed = pathOf(group) ?: return null
-    val below = parsed.names.drop(1)
-    // `pathOf` puts an attached segment only at depth two or deeper, so `below` holds its group.
-    val path = if (parsed.attached) GroupPath.Attached(below.dropLast(1), below.last()) else GroupPath.Declared(below)
     // Rebuilding the id checks the root, and that the path is declared, or under a template, here.
-    return path.takeIf { findGroupId(it) == group }
+    return pathOf(group)?.path?.takeIf { findGroupId(it) == group }
 }
 
 /**
@@ -207,19 +203,26 @@ public fun Topology.lower(generation: Long = 0L): List<AttachmentRecord> {
 }
 
 /**
- * A group id read back into names: [names] runs from the root down, and [attached] says the last
- * name is an attached child's. The inverse of [Topology.groupId] and [Topology.attachedChildId], so a
- * status page can name a group the current topology no longer declares.
+ * A group id read back without a topology: the [root] it hangs from, and the [path] below that root.
+ * The inverse of [Topology.groupId] and [Topology.attachedChildId], so a status page can name a group
+ * the current topology no longer declares.
+ *
+ * [root] is kept apart because a [GroupPath] starts below the root and has nowhere to hold it, while
+ * a diff has to read it: to refuse a change of root, and to tell which edges it owns.
  */
-internal data class ParsedPath(val names: List<String>, val attached: Boolean)
+internal data class ParsedGroupId(val root: String, val path: GroupPath)
 
 /**
- * The names [group] encodes, or `null` when it is not exactly what [Topology.groupId] or
- * [Topology.attachedChildId] would print. Every name is non-empty, and only the last segment may be
- * an attached child's, and only at depth two or deeper: the root carries no template, so
- * `root/!x` has no topology that prints it.
+ * The root and path [group] encodes, or `null` when it is not exactly what [Topology.groupId] or
+ * [Topology.attachedChildId] would print. Grammar only: whether a topology has that group is
+ * [Topology.findPath]'s question. Never throws.
+ *
+ * Every name is non-empty, and only the last segment may be an attached child's, and only at depth
+ * two or deeper: the root carries no template, so `root/!x` has no topology that prints it. Those are
+ * the rules [GroupPath]'s `init` enforces. The checks here refuse such an id before a [GroupPath] is
+ * built from it, so that its `require` never escapes.
  */
-internal fun pathOf(group: GroupId): ParsedPath? {
+internal fun pathOf(group: GroupId): ParsedGroupId? {
     val segments = group.value.split('/')
     var attached = false
     val names = segments.mapIndexed { index, segment ->
@@ -230,7 +233,9 @@ internal fun pathOf(group: GroupId): ParsedPath? {
         if (name.isEmpty()) return null
         name
     }
-    return ParsedPath(names, attached)
+    val below = names.subList(1, names.size)
+    val path = if (attached) GroupPath.Attached(below.dropLast(1), below.last()) else GroupPath.Declared(below)
+    return ParsedGroupId(names.first(), path)
 }
 
 /** The id of the edge into [child] at [weight] and [generation]. */
@@ -245,8 +250,9 @@ internal fun generationOf(id: AttachmentId): Long? {
     val text = id.value
     val at = text.indexOf('@').takeIf { it >= 0 } ?: return null
     val child = GroupId(text.substring(0, at))
-    val path = pathOf(child) ?: return null
-    if (path.names.size < 2) return null
+    val parsed = pathOf(child) ?: return null
+    // The root is no one's child, so no edge leads into it.
+    if (parsed.path.names.isEmpty()) return null
     val rest = text.substring(at + 1)
     val colon = rest.indexOf(':').takeIf { it >= 0 } ?: return null
     val hash = rest.indexOf('#').takeIf { it > colon } ?: return null
