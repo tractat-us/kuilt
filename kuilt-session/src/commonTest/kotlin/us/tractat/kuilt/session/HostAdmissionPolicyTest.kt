@@ -259,6 +259,25 @@ class HostAdmissionPolicyTest {
     }
 
     /**
+     * A policy that tries to refuse as `"superseded"` — the room's own code, sent only with a
+     * successor — throws building its answer, so the joiner hears `AdmissionPolicyFailed` and the room
+     * never builds a refusal it cannot send.
+     */
+    @Test
+    fun aPolicyRefusingAsSupersededFailsRetryably() = runTest {
+        val recorded = Recorded { AdmissionDecision.Reject(RejectCode.Unknown("superseded")) }
+        val host = rawHost(joiners = setOf(bob, eve), admission = recorded.admission)
+
+        host.admit(bob, bobKey, nonce = 1)
+
+        assertAll(
+            { assertEquals(listOf(bobKey.id), recorded.keys(), "rig: the policy was asked about Bob") },
+            { assertEquals(listOf<RejectCode>(RejectCode.AdmissionPolicyFailed), host.rejectsTo(bob).map { it.code }) },
+            { assertTrue(host.room.roster.value.isEmpty(), "nobody was seated") },
+        )
+    }
+
+    /**
      * The #1834 shape: a policy whose own `withTimeout` fires throws a cancellation the room did not
      * ask for. It is a failure like any other throw, so Bob hears `AdmissionPolicyFailed`. Rethrowing
      * it by type would cancel the admit coroutine silently, and Bob would hear nothing until his own
