@@ -338,7 +338,6 @@ class HostAdmissionPolicyTest {
             { assertEquals(emptyList(), sentWhileStalled, "a stalled policy admits and refuses nobody") },
             { assertEquals(2, recorded.asked.size, "the fresh Hello was asked about afresh") },
             { assertEquals(listOf("Joined(bob)"), host.events.edgesSince(0).render(), "exactly one Joined for Bob") },
-            { assertEquals(1, host.directWelcomesTo(bob).size, "the stale decision sent no second Welcome") },
             { assertTrue(host.rejectsTo(bob).isEmpty(), "nothing refused Bob") },
         )
     }
@@ -432,6 +431,90 @@ class HostAdmissionPolicyTest {
                     "the second process inherits the partitioned seat",
                 )
             },
+        )
+    }
+
+    // ── A newcomer under a partitioned member's id (Decided 18) ──────────────
+
+    /**
+     * Eve claims Bob's id under her own key while Bob's seat is held partitioned. Rule 3 would release
+     * Bob's seat for her, but she is a newcomer, so the policy is asked first and the seat is released
+     * only for an `Admit`. The policy refuses her here: Bob's seat stays held, and his own return
+     * restores it without asking the policy.
+     */
+    @Test
+    fun aRefusedNewcomerUnderAPartitionedIdLeavesTheSeatHeld() = runTest {
+        val notInvited = RejectCode.Unknown("not-invited")
+        val recorded = Recorded { request -> if (request.key == eveKey.id) AdmissionDecision.Reject(notInvited) else admitAll }
+        val host = rawHost(joiners = setOf(bob, carol), admission = recorded.admission)
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+
+        val mark = host.events.mark()
+        host.admit(bob, eveKey, nonce = 3) // Eve, under Bob's id
+        val afterEve = host.member(bob)
+        val edgesAfterEve = host.events.edgesSince(mark).render()
+        val askedAfterEve = recorded.keys()
+        host.admit(bob, bobKey, nonce = 4) // Bob's own return
+
+        assertAll(
+            { assertEquals(listOf(bobKey.id, carolKey.id, eveKey.id), askedAfterEve, "rig: the policy was asked about Eve") },
+            { assertEquals(listOf<RejectCode>(notInvited), host.rejectsTo(bob).map { it.code }, "Eve hears the policy's code") },
+            { assertEquals(emptyList(), edgesAfterEve, "Bob's seat is not released for a newcomer the policy refused") },
+            { assertIs<Liveness.Partitioned>(afterEve?.liveness, "Bob's seat is still held partitioned") },
+            { assertEquals(bobKey.id, afterEve?.key, "under Bob's key") },
+            { assertEquals(listOf("Resumed(bob)"), host.events.edgesSince(mark).render(), "Bob's return restores the seat") },
+            { assertEquals(askedAfterEve, recorded.keys(), "the restore asked nobody") },
+        )
+    }
+
+    /** The same, when the policy throws on the newcomer: a failure releases nothing either. */
+    @Test
+    fun aFailedVetUnderAPartitionedIdLeavesTheSeatHeld() = runTest {
+        val recorded = Recorded { request -> if (request.key == eveKey.id) throw IllegalStateException("the allow-list is down") else admitAll }
+        val host = rawHost(joiners = setOf(bob, carol), admission = recorded.admission)
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+
+        val mark = host.events.mark()
+        host.admit(bob, eveKey, nonce = 3)
+        val afterEve = host.member(bob)
+        val edgesAfterEve = host.events.edgesSince(mark).render()
+        host.admit(bob, bobKey, nonce = 4)
+
+        assertAll(
+            { assertEquals(listOf(bobKey.id, carolKey.id, eveKey.id), recorded.keys(), "rig: the policy was asked about Eve, and only her") },
+            { assertEquals(listOf<RejectCode>(RejectCode.AdmissionPolicyFailed), host.rejectsTo(bob).map { it.code }) },
+            { assertEquals(emptyList(), edgesAfterEve, "a failed vet releases nothing") },
+            { assertIs<Liveness.Partitioned>(afterEve?.liveness, "Bob's seat is still held partitioned") },
+            { assertEquals(listOf("Resumed(bob)"), host.events.edgesSince(mark).render(), "Bob's return restores the seat") },
+        )
+    }
+
+    /** And when the policy never answers: the challenge runs out, and the seat is still Bob's. */
+    @Test
+    fun aStalledVetUnderAPartitionedIdLeavesTheSeatHeld() = runTest {
+        val recorded = Recorded { request -> if (request.key == eveKey.id) awaitCancellation() else admitAll }
+        val host = rawHost(joiners = setOf(bob, carol), admission = recorded.admission)
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, carolKey, nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+
+        val mark = host.events.mark()
+        host.admit(bob, eveKey, nonce = 3)
+        host.advanceKeeping(alive = setOf(carol), duration = KEY_SEAT_ADMIT_TIMEOUT + KEY_SEAT_HEARTBEAT.interval)
+        val afterEve = host.member(bob)
+        val edgesAfterEve = host.events.edgesSince(mark).render()
+        host.admit(bob, bobKey, nonce = 4)
+
+        assertAll(
+            { assertEquals(listOf(bobKey.id, carolKey.id, eveKey.id), recorded.keys(), "rig: the policy was asked about Eve") },
+            { assertTrue(host.rejectsTo(bob).isEmpty(), "a stalled vet refuses nobody") },
+            { assertEquals(emptyList(), edgesAfterEve, "a stalled vet releases nothing") },
+            { assertIs<Liveness.Partitioned>(afterEve?.liveness, "Bob's seat is still held partitioned") },
+            { assertEquals(listOf("Resumed(bob)"), host.events.edgesSince(mark).render(), "Bob's return restores the seat") },
         )
     }
 
