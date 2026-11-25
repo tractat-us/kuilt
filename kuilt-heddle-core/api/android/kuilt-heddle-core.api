@@ -117,6 +117,31 @@ public final class us/tractat/kuilt/heddle/AllocatorMemory$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public abstract interface class us/tractat/kuilt/heddle/ApplyOutcome {
+}
+
+public final class us/tractat/kuilt/heddle/ApplyOutcome$Applied : us/tractat/kuilt/heddle/ApplyOutcome {
+	public fun <init> (Lus/tractat/kuilt/heddle/ApplyResult;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/ApplyResult;
+	public final fun copy (Lus/tractat/kuilt/heddle/ApplyResult;)Lus/tractat/kuilt/heddle/ApplyOutcome$Applied;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ApplyOutcome$Applied;Lus/tractat/kuilt/heddle/ApplyResult;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ApplyOutcome$Applied;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getResult ()Lus/tractat/kuilt/heddle/ApplyResult;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ApplyOutcome$TreeChanged : us/tractat/kuilt/heddle/ApplyOutcome, us/tractat/kuilt/heddle/PreviewOutcome {
+	public fun <init> (Lus/tractat/kuilt/heddle/Topology;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/Topology;
+	public final fun copy (Lus/tractat/kuilt/heddle/Topology;)Lus/tractat/kuilt/heddle/ApplyOutcome$TreeChanged;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ApplyOutcome$TreeChanged;Lus/tractat/kuilt/heddle/Topology;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ApplyOutcome$TreeChanged;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCurrent ()Lus/tractat/kuilt/heddle/Topology;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/heddle/ApplyResult {
 	public fun <init> (Ljava/util/List;Ljava/util/List;)V
 	public final fun component1 ()Ljava/util/List;
@@ -808,6 +833,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public final fun admit-mLLTQY0 (Ljava/lang/String;Ljava/util/Set;JJ)Lus/tractat/kuilt/heddle/AdmitOutcome;
 	public static synthetic fun admit-mLLTQY0$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/lang/String;Ljava/util/Set;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/AdmitOutcome;
 	public final fun apply (Lus/tractat/kuilt/heddle/Topology;J)Lus/tractat/kuilt/heddle/ApplyResult;
+	public final fun apply (Lus/tractat/kuilt/heddle/Topology;JLus/tractat/kuilt/heddle/Topology;)Lus/tractat/kuilt/heddle/ApplyOutcome;
 	public final fun attach (Ljava/util/List;Ljava/lang/String;J)Lus/tractat/kuilt/heddle/ApplyResult;
 	public final fun cancel (Lus/tractat/kuilt/heddle/LeaseId;)Lus/tractat/kuilt/heddle/LeaseOutcome;
 	public final fun complete (Lus/tractat/kuilt/heddle/LeaseId;JLjava/util/Set;)Lus/tractat/kuilt/heddle/LeaseOutcome;
@@ -823,6 +849,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public final fun getTopology ()Lus/tractat/kuilt/heddle/Topology;
 	public final fun persist ()Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;
 	public final fun previewApply (Lus/tractat/kuilt/heddle/Topology;J)Lus/tractat/kuilt/heddle/TopologyPreview;
+	public final fun previewApply (Lus/tractat/kuilt/heddle/Topology;JLus/tractat/kuilt/heddle/Topology;)Lus/tractat/kuilt/heddle/PreviewOutcome;
 	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;J)Ljava/util/List;
 	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;Ljava/util/List;)Ljava/util/List;
 	public static synthetic fun previewPicks$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/util/Map;Ljava/util/Set;JILjava/lang/Object;)Ljava/util/List;
@@ -1070,6 +1097,20 @@ public final class us/tractat/kuilt/heddle/PolicyEdge {
 	public final fun getOrigin ()Lus/tractat/kuilt/math/Int128;
 	public final fun getRecord ()Lus/tractat/kuilt/heddle/AttachmentRecord;
 	public final fun getSummary ()Lus/tractat/kuilt/heddle/EdgeSummary;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/PreviewOutcome {
+}
+
+public final class us/tractat/kuilt/heddle/PreviewOutcome$Previewed : us/tractat/kuilt/heddle/PreviewOutcome {
+	public fun <init> (Lus/tractat/kuilt/heddle/TopologyPreview;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/TopologyPreview;
+	public final fun copy (Lus/tractat/kuilt/heddle/TopologyPreview;)Lus/tractat/kuilt/heddle/PreviewOutcome$Previewed;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/PreviewOutcome$Previewed;Lus/tractat/kuilt/heddle/TopologyPreview;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/PreviewOutcome$Previewed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPreview ()Lus/tractat/kuilt/heddle/TopologyPreview;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
