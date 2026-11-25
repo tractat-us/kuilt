@@ -120,8 +120,9 @@ public class GamePresence(
      *
      * Driven by [declareAdmissionClosed] on the host side; observed by [gameJoin] to detect
      * roster-full rejections. The value is `null` while the admission loop is still running or
-     * has not yet converged. It is not monotone: an eviction calls [declareAdmissionOpen], which
-     * reverts it to `null` until the replacement is admitted and admission closes again.
+     * has not yet converged. It is not monotone. An eviction calls [declareAdmissionOpen], which
+     * reverts it to `null` until the replacement is admitted and admission closes again, and the
+     * host's own [declareVacate] overwrites the host slot and clears it.
      */
     public val admissionClosed: StateFlow<Set<NodeId>?> =
         quilter.state
@@ -133,7 +134,10 @@ public class GamePresence(
      * spectators are disabled or because [maxSpectators] has been reached.
      *
      * Driven by [declareSpectatorsClosed] on the host side; observed by [gameSpectate] to detect
-     * and throw [SpectatorsClosedException]. `false` until then; once `true`, never reverts.
+     * and throw [SpectatorsClosedException]. `false` until then. Once `true` it survives admission
+     * reopening and closing again, since [declareAdmissionOpen] and [declareAdmissionClosed] both
+     * carry the mark forward (#3689). Only the host's own [declareVacate] clears it, by
+     * overwriting the host slot.
      */
     public val spectatorsClosed: StateFlow<Boolean> =
         quilter.state
@@ -217,7 +221,9 @@ public class GamePresence(
      * [maxSpectators] has been reached. Appends [SPECTATORS_CLOSED_SUFFIX] to whatever value
      * the host's slot currently holds, so the signal coexists with [admissionClosed].
      *
-     * The signal is monotone — once published it is never retracted.
+     * No other host declaration retracts the signal: [declareAdmissionClosed] and
+     * [declareAdmissionOpen] both carry it forward. The exception is the host's own
+     * [declareVacate], which overwrites the whole slot.
      */
     public fun declareSpectatorsClosed() {
         declareIf { board ->

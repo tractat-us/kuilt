@@ -9,9 +9,11 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 /**
  * Real-threading regression harness for #2083 — a concurrent [GamePresence] declaration must
@@ -52,7 +54,7 @@ class GamePresenceDeclareConcurrencyTest {
         val startLine = CyclicBarrier(DECLARE_THREADS)
         (0 until DECLARE_THREADS).map { t ->
             thread(name = "declare-$t") {
-                startLine.await()
+                startLine.await(RACER_BOUND_SECONDS, TimeUnit.SECONDS)
                 // A peer really does toggle its slot: leave publishes `vacate`, a rejoin
                 // republishes `present`. Alternating keeps the values distinct so a dropped
                 // declaration is a dropped *signal*, not merely a dropped clock tick.
@@ -60,7 +62,7 @@ class GamePresenceDeclareConcurrencyTest {
                     if (i % 2 == 0) presence.declarePresent() else presence.declareVacate()
                 }
             }
-        }.forEach { it.join() }
+        }.joinBounded()
 
         val expected = (DECLARE_THREADS * DECLARES_PER_THREAD).toLong()
         val clock = presence.selfSlot()?.clock
@@ -101,15 +103,15 @@ class GamePresenceDeclareConcurrencyTest {
             (0 until SIGNAL_RACERS).flatMap { i ->
                 listOf(
                     thread(name = "spectators-closed-$round-$i") {
-                        startLine.await()
+                        startLine.await(RACER_BOUND_SECONDS, TimeUnit.SECONDS)
                         presence.declareSpectatorsClosed()
                     },
                     thread(name = "admission-closed-$round-$i") {
-                        startLine.await()
+                        startLine.await(RACER_BOUND_SECONDS, TimeUnit.SECONDS)
                         presence.declareAdmissionClosed(voters)
                     },
                 )
-            }.forEach { it.join() }
+            }.joinBounded()
 
             // The wire values are asserted literally rather than through the (private) marker
             // constants: the point of the test is that both published signals survive on the
@@ -153,15 +155,15 @@ class GamePresenceDeclareConcurrencyTest {
             (0 until SIGNAL_RACERS).flatMap { i ->
                 listOf(
                     thread(name = "spectators-closed-$round-$i") {
-                        startLine.await()
+                        startLine.await(RACER_BOUND_SECONDS, TimeUnit.SECONDS)
                         presence.declareSpectatorsClosed()
                     },
                     thread(name = "admission-open-$round-$i") {
-                        startLine.await()
+                        startLine.await(RACER_BOUND_SECONDS, TimeUnit.SECONDS)
                         presence.declareAdmissionOpen()
                     },
                 )
-            }.forEach { it.join() }
+            }.joinBounded()
 
             // Every reopen ran, so whichever order the threads took the slot ends open; the
             // question is only whether the mark survived the reopens that followed it.
@@ -177,7 +179,21 @@ class GamePresenceDeclareConcurrencyTest {
         )
     }
 
+    /**
+     * Joins every racer under a wall-clock bound and fails if one is still running. `runTest`'s
+     * timeout cannot interrupt a thread blocked in `join`, so an unbounded join on a wedged racer
+     * would hang the test instead of failing it. The bound fences real threads, so wall-clock is
+     * the right unit here.
+     */
+    private fun List<Thread>.joinBounded() = forEach { racer ->
+        racer.join(TimeUnit.SECONDS.toMillis(RACER_BOUND_SECONDS))
+        assertFalse(racer.isAlive, "racer ${racer.name} was still running after $RACER_BOUND_SECONDS s")
+    }
+
     private companion object {
+        /** Wall-clock bound on each racer's barrier wait and on joining it; see [joinBounded]. */
+        const val RACER_BOUND_SECONDS = 10L
+
         /**
          * Enough concurrency to make a collision overwhelmingly likely without making the
          * Quilter's pending-delta buffer (one slot snapshot per declaration) expensive.
