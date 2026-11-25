@@ -511,7 +511,8 @@ engine, see [Previewing a change to the tree](#previewing-a-change-to-the-tree).
 is running, and before applying an edit, show the admin what it changes in words they recognise,
 each change beside the line it is at.
 **Primitive:** `LocalHeddle.topology`, `Topology.toDocument()` and `Topology.changesTo(after)` →
-`TopologyChange`s (`:kuilt-heddle-core`). `heddle.topology` is the running tree, the same one
+`TopologyChange`s, and the checked `LocalHeddle.apply(new, generation, startedFrom)` →
+`ApplyOutcome` (`:kuilt-heddle-core`). `heddle.topology` is the running tree, the same one
 `persist()` stores as `lastApplied`. `toDocument` writes it out as the `TopologyDocument` an editor
 starts from, and `Topology.from` reads the edited one back, an exact round trip:
 
@@ -559,31 +560,58 @@ starts from, and `Topology.from` reads the edited one back, an exact round trip:
 To compare two documents, check each with `Topology.from` first: a change is defined only
 between valid trees.
 
-**Two admins at once.** Keep the tree the edit started from, and before applying, compare it with
-`heddle.topology` again. If someone else applied a tree in between, the edit as it stands would
-undo their change too, so list the changes again from the running tree:
+**Two admins at once.** Keep the tree the edit was loaded from, and save with the checked
+`apply(new, generation, startedFrom)`. It applies only while `heddle.topology` is still that tree.
+If someone else applied a tree in between, the edit as it stands would undo their change too, so
+the save returns `ApplyOutcome.TreeChanged` naming the running tree, and changes nothing. List the
+changes again from that tree, and save from it once someone has confirmed them. The checked
+`previewApply` takes the same `startedFrom`, so a page never previews what its save would refuse:
 
-<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleRunningTopology -->
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleCheckedApply -->
 ```kotlin
-    check(heddle.topology == startedFrom)
-    heddle.apply(first, generation = 1L)
-    check(heddle.topology == first && heddle.persist().lastApplied == first)
+    // Both pages load the running tree, and each admin adds a lane.
+    val startedFrom = heddle.topology
+    val first = startedFrom.withLane("batch")
+    val second = startedFrom.withLane("nightly")
 
-    // The second page's edit started from a tree that is no longer running. Applied as it stands,
-    // it would also take away the lane the first admin just added, so the page lists the changes
-    // again from the running tree before it asks anyone to confirm.
-    check(heddle.topology != startedFrom)
+    // Work goes on while they edit: a lease moves the revision, but not the tree.
+    val seen = heddle.revision
+    check(heddle.acquire(setOf(heavy), setOf(heavy), startedAt = 0L) is AcquireOutcome.Acquired)
+    check(heddle.revision != seen && heddle.topology == startedFrom)
+
+    // The first admin sees the change and its preview, confirms, and the save applies what was shown.
+    check(startedFrom.changesTo(first) == listOf(TopologyChange.Added(listOf(2), listOf("pool", "batch"), Topology.Lane("batch"))))
+    val preview = heddle.previewApply(first, generation = 1L, startedFrom = startedFrom)
+    check(preview is PreviewOutcome.Previewed && preview.preview.result.refusals.isEmpty())
+    check(heddle.apply(first, generation = 1L, startedFrom = startedFrom) == ApplyOutcome.Applied(preview.preview.result))
+
+    // The second edit started from a tree that is no longer running. Saved as it stands, it would
+    // also take away the lane the first admin just added, so the save refuses and changes nothing.
+    val before = heddle.revision
+    val refused = heddle.apply(second, generation = 2L, startedFrom = startedFrom)
+    check(refused is ApplyOutcome.TreeChanged && refused.current == first && heddle.revision == before)
     check(
-        heddle.topology.changesTo(second) == listOf(
+        refused.current.changesTo(second) == listOf(
             TopologyChange.Added(listOf(2), listOf("pool", "nightly"), Topology.Lane("nightly")),
             TopologyChange.Removed(listOf(2), listOf("pool", "batch"), Topology.Lane("batch")),
         ),
     )
+
+    // So the page reloads: the admin makes the edit again on the running tree, and saves from that.
+    val redone = refused.current.withLane("nightly")
+    check(refused.current.changesTo(redone) == listOf(TopologyChange.Added(listOf(3), listOf("pool", "nightly"), Topology.Lane("nightly"))))
+    check(heddle.apply(redone, generation = 2L, startedFrom = refused.current) is ApplyOutcome.Applied)
+    check(heddle.topology == redone)
 ```
 
-`heddle.revision` is the wrong guard here: every `acquire` moves it, so on a busy engine it would
-refuse every confirm. Reading `heddle.topology` moves nothing. It is the tree last asked for, so a
-group a reload left out is still in it; `ApplyResult` says what landed.
+- **It compares trees, not revisions.** `heddle.revision` moves on every `acquire`, so a save
+  checked against it would refuse every confirm on a busy engine. Leases, charges, `attach` and
+  `detach` leave the tree as it is, so none of them refuses a save.
+- **The tree is compared as written.** A change that only reordered siblings refuses a save too,
+  though `changesTo` lists nothing for it. Listed again from the running tree, such an edit shows no
+  change it did not show before.
+- **`topology` is the tree last asked for**, so a group a reload left out is still in it;
+  `ApplyResult` says what landed. Reading it moves nothing.
 
 ## Previewing a change to the tree
 
@@ -635,6 +663,9 @@ engine, its `revision` and what it persists are unchanged.
   will have moved by the time a person confirms: preview again rather than refuse the edit.
   `apply` still diffs against the ledger it applies to, so applying anyway is correct, just not
   necessarily what was shown.
+- **Whether someone else changed the tree is a different question**, and `basis` does not answer
+  it. Pass the tree the edit was loaded from as `startedFrom` to both `previewApply` and `apply`,
+  as [two admins at once](#showing-an-admin-what-an-edit-changes) shows.
 - **A page with no engine previews a stored snapshot** the same way, with the policy the engine
   ran with. `basis` is then `null`.
 
