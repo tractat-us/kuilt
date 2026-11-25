@@ -117,7 +117,7 @@ class TopologyGroupPathPropertyTest {
             // Floors set below the counts measured on every target, so a drifting generator reds.
             { assertTrue(tally.declared >= 1_500, "declared ${tally.declared}") },
             { assertTrue(tally.runtime >= 250, "runtime ${tally.runtime}") },
-            { assertTrue(tally.nested >= 100, "nested ${tally.nested}") },
+            { assertTrue(tally.nested >= 280, "nested ${tally.nested}") },
             { assertTrue(tally.collisions >= 120, "attached children named like a declared sibling ${tally.collisions}") },
             { assertTrue(tally.unresolvedPaths >= 1_500, "unresolved paths ${tally.unresolvedPaths}") },
             { assertTrue(tally.unresolvedIds >= 10_000, "unresolved ids ${tally.unresolvedIds}") },

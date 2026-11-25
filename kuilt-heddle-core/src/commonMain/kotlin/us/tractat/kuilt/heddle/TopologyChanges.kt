@@ -60,7 +60,7 @@ public sealed interface TopologyChange {
         get() = when (this) {
             is RootRenamed -> SaveEffect.NEW_TREE
             is Removed, is WeightChanged, is TemplateRemoved -> SaveEffect.LOST
-            is TemplateChanged -> if (before.weight == after.weight) SaveEffect.KEPT else SaveEffect.LOST
+            is TemplateChanged -> if (keepsHistory(before, after)) SaveEffect.KEPT else SaveEffect.LOST
             is Added, is LaneBecameGroup, is GroupBecameLane, is CeilingChanged, is TemplateAdded -> SaveEffect.KEPT
         }
 
@@ -83,7 +83,8 @@ public sealed interface TopologyChange {
          * A group loses its history. A [Removed] child drains and retires with everything beneath
          * it; a [WeightChanged] child restarts its share at its parent's front; a [TemplateRemoved]
          * closes every child the app attached under that group, for good; and a [TemplateChanged]
-         * with a new weight restarts every attached child's share.
+         * with a new weight at any level restarts the shares at that level, or with a nested
+         * template gone closes the children attached under it.
          */
         LOST,
 
@@ -218,7 +219,10 @@ public sealed interface TopologyChange {
 
     /**
      * The group's template went from [before] to [after]. A new template weight restarts the share
-     * of every attached child; a new ceiling keeps their history.
+     * of every attached child; a new ceiling keeps their history. The same holds a level down for a
+     * nested [template][Topology.ChildTemplate.template]: a new weight there restarts every child
+     * attached beneath an attached one, and a nested template going closes them all, while one
+     * arriving turns each attached leaf into a group and keeps its history.
      */
     public data class TemplateChanged(
         override val path: List<Int>,
@@ -315,6 +319,18 @@ private fun MutableList<TopologyChange>.compareNode(
         afterTemplate != null -> add(TopologyChange.TemplateAdded(path, names, afterTemplate))
     }
     compareChildren(beforeAt, before.declared, afterAt, after.declared)
+}
+
+/**
+ * Whether a template going from [before] to [after] costs no attached child its history: the weight
+ * is the same at every level both have, and no level [before] has is gone, since a nested template
+ * going closes every child attached under it. A level [after] adds turns leaves into groups, which
+ * keep their history, as a [TopologyChange.LaneBecameGroup] does.
+ */
+private fun keepsHistory(before: Topology.ChildTemplate, after: Topology.ChildTemplate): Boolean {
+    if (before.weight != after.weight) return false
+    val inner = before.template ?: return true
+    return after.template?.let { keepsHistory(inner, it) } ?: false
 }
 
 // A lane compares as a group with no children and no template, which is what lets a change of kind

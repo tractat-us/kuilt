@@ -152,11 +152,10 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
     }
 
     val edgesByChild = ledger.ownedEdges(new.root).groupBy { it.record.child }
-    val wants = new.declaredChildren().associateBy { it.child } + edgesByChild.mapNotNull { (child, edges) ->
-        val attached = pathOf(child)?.path as? GroupPath.Attached ?: return@mapNotNull null
-        val template = new.templateAt(attached.group) ?: return@mapNotNull null
-        if (!edges.attached()) return@mapNotNull null
-        child to WantedChild(child, parentOf(child), template.weight, group = false)
+    val edgesOf = { child: GroupId -> edgesByChild[child].orEmpty() }
+    val wants = new.declaredChildren().associateBy { it.child } + edgesByChild.keys.mapNotNull { child ->
+        val attached = pathOf(child)?.path?.takeIf { it.isAttached } ?: return@mapNotNull null
+        new.attachedWant(child, attached, edgesOf)?.let { child to it }
     }
     val children = (wants.keys + edgesByChild.keys).distinct().sorted()
     val adoptedByChild = wants.values.mapNotNull { want -> edgesByChild[want.child].orEmpty().adoptable(want)?.let { want.child to it } }.toMap()
@@ -168,7 +167,7 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
         val edges = edgesByChild[child].orEmpty()
         val want = wants[child]
         if (want == null) {
-            planned.planRemoval(edges, abandonPrepared = pathOf(child)?.path is GroupPath.Attached)
+            planned.planRemoval(edges, abandonPrepared = pathOf(child)?.path?.isAttached == true)
         } else {
             planned.planWanted(want, edges, adoptedByChild[child], ledger) { prepareGeneration }
         }
@@ -184,12 +183,12 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
  * - into a declared child, other than the edge it adopts;
  * - into a declared child this topology no longer has, since a removal leaves a prepared edge
  *   alone ([planRemoval]);
- * - into a child still attached under its group's template, other than the edge it adopts. Only
+ * - into a child still attached under its template, other than the edge it adopts. Only
  *   when there is one: otherwise this prepared edge may be what says the child is attached, and
  *   forgetting it would detach the child.
  *
- * An attached child whose group's template is gone is never in it, since the diff closes and retires its
- * prepared edges. Forgetting one of these changes this diff not at all, but a later one: a diff
+ * An attached child whose template is gone, or nested beneath a parent the diff no longer wants, is
+ * never in it, since the diff closes and retires its prepared edges. Forgetting one of these changes this diff not at all, but a later one: a diff
  * that wants the edge back, at the same weight, prepares a new edge above the generation floor
  * where it would have adopted the old one. Reads [candidates]' children's own edges from the
  * index, not every edge.
@@ -201,12 +200,12 @@ internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, led
         val owned = ledger.ownedEdge(id, root)?.takeIf { it.lifecycle == Lifecycle.PREPARED } ?: return@filter false
         val child = owned.record.child
         val edges = ledger.ownedEdgesInto(child, root)
-        val attached = pathOf(child)?.path as? GroupPath.Attached
+        val attached = pathOf(child)?.path?.takeIf { it.isAttached }
         val want = declared[child] ?: run {
             if (attached == null) return@filter true
-            // No attached() check: the candidate is itself a PREPARED edge in [edges].
-            val template = templateAt(attached.group) ?: return@filter false
-            WantedChild(child, parentOf(child), template.weight, group = false)
+            // No attached() check of the child itself: the candidate is a PREPARED edge in [edges].
+            // Its ancestors are checked: a child whose parent the diff closes is closed with it.
+            attachedWant(child, attached, { ledger.ownedEdgesInto(it, root) }, selfAttached = true) ?: return@filter false
         }
         val adopted = edges.adoptable(want)
         if (attached != null && adopted == null) return@filter false
@@ -215,24 +214,9 @@ internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, led
 }
 
 /**
- * The steps that attach the child [name] to the group at [group], read from
- * [root][Topology.root] down, at the weight that group's template in this topology gives: `[Prepare,
- * Activate]` for a new child, `[Activate]` when only the prepare landed, and `[]` when it is
- * already attached. [name] is opaque and lives in its own namespace, so it never collides with a
- * declared child, however it is spelt.
+ * The steps that attach the child [name] to the declared group at [group]: [attach] of the
+ * one-level path `GroupPath.Attached(group, name)`.
  *
- * Like [Topology.Companion.diff] it reads what exists from [ledger], so asking twice is harmless,
- * and the same contracts on [TopologyStep] apply. Two more shapes follow from them. A child detached
- * but still draining is re-attached on a new edge that waits for the old one to retire: `[Prepare,
- * Retire, Activate]`, and the prepared edge alone records that the child is wanted until the
- * activate lands. A child whose edge is at an older template weight is moved to the current one:
- * `[Prepare, Close, Retire, Activate]`.
- *
- * The edge is numbered as [Topology.Companion.diff] numbers its edges: at [generation], raised past
- * every generation the ledger holds, retired edges included, so a re-attach never reuses an id. The
- * ledger carries that floor, so an attach reads no more of it than the child's own edges.
- *
- * @param generation a counter, `>= 0`, for the edge this attach prepares.
  * @throws IllegalArgumentException if [group] does not name a group with a
  *   [template][Topology.Group.template], if [name] is empty, if [generation] is
  *   negative, or if [ledger] belongs to another root, as [Topology.Companion.diff] refuses it.
@@ -241,42 +225,119 @@ internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, led
  */
 public fun Topology.attach(group: List<String>, name: String, ledger: EntitlementLedger, generation: Long): List<TopologyStep> {
     require(generation >= 0L) { "a generation is >= 0, was $generation" }
-    val attached = attachedChild(group, name)
+    return attach(GroupPath.Attached(group, name), ledger, generation)
+}
+
+/**
+ * The steps that attach the child at [path], read from [root][Topology.root] down, at the weight
+ * the template it is attached under gives, and every attached group above it that is not attached
+ * yet, in the same list: `[Prepare, Activate]` for a new child of an attached group, the prepares
+ * top-down and then the activations top-down when its ancestors are new too, `[Activate]` when only
+ * the prepare landed, and `[]` when the whole path is attached. Each name is opaque and lives in its
+ * own namespace, so it never collides with a declared child, however it is spelt.
+ *
+ * An attached child whose template carries a [template][Topology.ChildTemplate.template] is a group:
+ * the consumer attaches children beneath it with a [GroupPath.Nested], and it is never leased
+ * itself. Attaching it alone attaches no child beneath it.
+ *
+ * Like [Topology.Companion.diff] it reads what exists from [ledger], so asking twice is harmless,
+ * and the same contracts on [TopologyStep] apply. Two more shapes follow from them, for each group on
+ * the path. A child detached but still draining is re-attached on a new edge that waits for the old
+ * one to retire: `[Prepare, Retire, Activate]`, and the prepared edge alone records that the child
+ * is wanted until the activate lands. A child whose edge is at an older template weight is moved to
+ * the current one: `[Prepare, Close, Retire, Activate]`.
+ *
+ * Each edge is numbered as [Topology.Companion.diff] numbers its edges: at [generation], raised past
+ * every generation the ledger holds, retired edges included, so a re-attach never reuses an id. The
+ * ledger carries that floor, so an attach reads no more of it than the path's own edges.
+ *
+ * @param generation a counter, `>= 0`, for the edges this attach prepares.
+ * @throws IllegalArgumentException if [path] is a [GroupPath.Declared], if no template reaches it
+ *   ([findGroupId] is `null`), if [generation] is negative, or if [ledger] belongs to another root,
+ *   as [Topology.Companion.diff] refuses it.
+ * @sample us.tractat.kuilt.heddle.sampleNestedAttach
+ */
+public fun Topology.attach(path: GroupPath, ledger: EntitlementLedger, generation: Long): List<TopologyStep> {
+    require(generation >= 0L) { "a generation is >= 0, was $generation" }
+    val chain = attachedChain(path)
     requireSameRoot(ledger)
-    val want = WantedChild(attached.id, attached.parent, attached.template.weight, group = false)
-    val edges = ledger.ownedEdgesInto(attached.id, root)
+    val prepareGeneration by lazy { effectiveGeneration(generation, ledger) }
     val planned = ArrayList<Planned>()
-    planned.planWanted(want, edges, edges.adoptable(want), ledger) { effectiveGeneration(generation, ledger) }
+    for (attached in chain) {
+        val want = WantedChild(attached.id, attached.parent, attached.template.weight, group = attached.template.template != null)
+        val edges = ledger.ownedEdgesInto(attached.id, root)
+        planned.planWanted(want, edges, edges.adoptable(want), ledger) { prepareGeneration }
+    }
     return planned.sortedWith(STEP_ORDER).map { it.step }
 }
 
 /**
- * The steps that detach the child [name] from the group at [group]: `[Close, Retire]` for
- * an attached child, `[Retire]` when it is already closing, and `[]` when there is nothing left to
- * do. A retire is refused while the child's work is outstanding; detach again, or diff, once it has
- * drained.
- *
- * A prepared edge the child has — a re-attach or a reweight still waiting for a drain — is closed
- * and retired too, its close ahead of the live edge's, and its retire never refused, since nothing
- * has crossed it. Otherwise it would record that the child is wanted, and a later reload would
- * bring the child back. Until that retire lands the child has two live inbound edges, so the list
- * is applied as one unit (see [TopologyStep]).
+ * The steps that detach the child [name] from the declared group at [group]: [detach] of the
+ * one-level path `GroupPath.Attached(group, name)`.
  *
  * @throws IllegalArgumentException if [group] does not name a group with a
  *   [template][Topology.Group.template], if [name] is empty, or if [ledger] belongs
  *   to another root.
  */
-public fun Topology.detach(group: List<String>, name: String, ledger: EntitlementLedger): List<TopologyStep> {
-    val child = attachedChild(group, name).id
+public fun Topology.detach(group: List<String>, name: String, ledger: EntitlementLedger): List<TopologyStep> =
+    detach(GroupPath.Attached(group, name), ledger)
+
+/**
+ * The steps that detach the child at [path], and every child attached beneath it: `[Close, Retire]`
+ * for an attached leaf, `[Retire]` when it is already closing, and `[]` when there is nothing left
+ * to do. Beneath an attached group the whole subtree goes, closes top-down and retires bottom-up, so
+ * nothing is retired while a child beneath it still has a live edge. A retire is refused while work
+ * beneath it is outstanding, and so is every retire above it; detach again, or diff, once it has
+ * drained. Attaching the group again brings none of its children back.
+ *
+ * A prepared edge a child has — a re-attach or a reweight still waiting for a drain — is closed
+ * and retired too, its close ahead of the live edge's, and its retire never refused, since nothing
+ * has crossed it. Otherwise it would record that the child is wanted, and a later reload would
+ * bring the child back. Until that retire lands the child has two live inbound edges, so the list
+ * is applied as one unit (see [TopologyStep]).
+ *
+ * @throws IllegalArgumentException if [path] is a [GroupPath.Declared], if no template reaches it,
+ *   or if [ledger] belongs to another root.
+ * @sample us.tractat.kuilt.heddle.sampleNestedAttach
+ */
+public fun Topology.detach(path: GroupPath, ledger: EntitlementLedger): List<TopologyStep> {
+    val child = attachedChild(path).id
     requireSameRoot(ledger)
     val planned = ArrayList<Planned>()
-    planned.planRemoval(ledger.ownedEdgesInto(child, root), abandonPrepared = true)
+    for (group in ledger.subtreeOf(child)) planned.planRemoval(ledger.ownedEdgesInto(group, root), abandonPrepared = true)
     return planned.sortedWith(STEP_ORDER).map { it.step }
 }
 
-public fun Topology.attach(path: GroupPath, ledger: EntitlementLedger, generation: Long): List<TopologyStep> = TODO("#3314")
+/**
+ * The attached groups from the topmost attached one on [path] down to [path] itself, each checked by
+ * [attachedChild].
+ *
+ * @throws IllegalArgumentException if [path] is a [GroupPath.Declared] or no template reaches it.
+ */
+private fun Topology.attachedChain(path: GroupPath): List<AttachedChild> = when (path) {
+    is GroupPath.Declared, is GroupPath.Attached -> listOf(attachedChild(path))
+    is GroupPath.Nested -> attachedChain(path.parent) + attachedChild(path)
+}
 
-public fun Topology.detach(path: GroupPath, ledger: EntitlementLedger): List<TopologyStep> = TODO("#3314")
+/**
+ * [group] and every group beneath it that an edge in this ledger leads to, in any lifecycle, read
+ * from the index. Only the groups whose ids extend [group]'s are followed, which is every group an
+ * owned edge can lead to, since ownership ties an edge's parent to its child's id.
+ */
+private fun EntitlementLedger.subtreeOf(group: GroupId): List<GroupId> {
+    val found = ArrayList<GroupId>()
+    val seen = hashSetOf(group)
+    val queue = ArrayDeque(listOf(group))
+    val beneath = group.value + "/"
+    while (queue.isNotEmpty()) {
+        val next = queue.removeFirst()
+        found += next
+        val children = childEdgesOf(next).mapNotNull { record(it)?.child }.filter { it.value.startsWith(beneath) }.sorted()
+        for (child in children) if (seen.add(child)) queue.addLast(child)
+    }
+    return found
+}
+
 
 // ── one child ───────────────────────────────────────────────────────────────────────────────────
 
@@ -342,6 +403,30 @@ private fun MutableList<Planned>.planRemoval(edges: List<OwnedEdge>, abandonPrep
  */
 private fun List<OwnedEdge>.attached(): Boolean =
     any { it.lifecycle == Lifecycle.ACTIVE || it.lifecycle == Lifecycle.PREPARED }
+
+/** Whether this path names an attached child, at any depth: everything but a [GroupPath.Declared]. */
+private val GroupPath.isAttached: Boolean get() = this !is GroupPath.Declared
+
+/**
+ * What a diff of this topology wants of the attached child [child] at [path], or `null` when it
+ * wants nothing: no template reaches [path], the child is not attached ([selfAttached], read from
+ * [edgesOf] unless the caller knows), or it is nested and its parent is not wanted. That last rule is
+ * what a detach's cascade rests on when a list lands only in part: an author still attached beneath
+ * a repository whose edge has closed is closed with it, not kept.
+ *
+ * A child whose template carries a [template][Topology.ChildTemplate.template] is wanted as a group.
+ */
+private fun Topology.attachedWant(
+    child: GroupId,
+    path: GroupPath,
+    edgesOf: (GroupId) -> List<OwnedEdge>,
+    selfAttached: Boolean = edgesOf(child).attached(),
+): WantedChild? {
+    val template = ownTemplate(path) ?: return null
+    if (!selfAttached) return null
+    if (path is GroupPath.Nested && attachedWant(parentOf(child), path.parent, edgesOf) == null) return null
+    return WantedChild(child, parentOf(child), template.weight, group = template.template != null)
+}
 
 /** The group one level above [child], which ownership ties every owned edge's parent to. */
 private fun parentOf(child: GroupId): GroupId = GroupId(child.value.substringBeforeLast('/'))

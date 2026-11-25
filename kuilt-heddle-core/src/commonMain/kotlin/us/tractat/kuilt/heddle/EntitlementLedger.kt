@@ -2437,6 +2437,9 @@ public class EntitlementLedger private constructor(
     /** Every edge any of whose records names [child] as its child, in any lifecycle, sorted; from the index. */
     internal fun inboundEdges(child: GroupId): List<AttachmentId> = index.value.inbound[child].orEmpty()
 
+    /** Every edge any of whose records names [parent] as its parent, in any lifecycle, sorted; from the index. */
+    internal fun childEdgesOf(parent: GroupId): List<AttachmentId> = childEdges(parent)
+
     /**
      * Whether any edge, in any lifecycle, names [group] as its parent: the edges [holdings] subtracts
      * from [group]. Deliberately not [isLeaf], whose meaning is a scheduling question (#3191).

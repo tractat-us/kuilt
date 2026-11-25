@@ -686,9 +686,9 @@ of adopting the old one.
   usually holds something, and `CHILD_HOLDS` refuses the old edge while it does.
   Only a child that is gone for good compacts reliably.
 - **A group whose children were forgotten is never forgotten itself.** Its row
-  in the fold keeps it counting as having child edges, and leaves go first. An
-  attached child is always a leaf, so this bites a declared group removed after
-  its attached children came and went.
+  in the fold keeps it counting as having child edges, and leaves go first. This
+  bites a declared group removed after its attached children came and went, and an
+  attached group (#3314) detached after its own attached children did.
 
 ## 6. Demand is an `EphemeralMap`, and that is not an accident
 
@@ -2712,12 +2712,18 @@ its group does, the child is closed. Each detach retires the child's edge, and t
 engine forgets it in the same swap once its books close (§5.5), so an attached child
 can be detached whenever it goes idle.
 
-An attached child is a leaf, one level below its group: it cannot carry a template
-itself, so nothing discovered while running has children of its own. §1's "any depth"
-is met today by declared groups, which nest freely and reshape on a reload, and not
-yet by attached ones. A tree found while running two levels deep (say, a repository and
-then its authors) has to declare each repository as a group with a template and reload as
-each one appears. Letting an attached child have attached children is tracked by #3314.
+A template may carry a template of its own (#3314), and then each child attached under
+it is a group: a tree found while running two levels deep (say, a repository and then its
+authors) is a declared group whose template's template is the authors'. Everything below
+an attached child is attached, so the id grammar marks a contiguous suffix with `!`
+(`pool/ci/!kuilt/!alice`), and a declared name never follows an attached one. Weights
+are per template. `attach(path, ledger, generation)` attaches any missing attached
+ancestor in the same list, and `detach(path, ledger)` takes the whole subtree beneath an
+attached group, closes top-down and retires bottom-up as a removal of a declared subtree
+does; attaching the group again brings none of its children back. An attached group is
+never leased, even before its first child arrives and the ledger reads it as a leaf. So
+§1's "any depth" now holds for attached groups too, with one difference from declared
+ones: an attached subtree is reshaped by detaching it, not by a reload.
 
 ### 11.2 A ceiling: "run no more than N of these"
 

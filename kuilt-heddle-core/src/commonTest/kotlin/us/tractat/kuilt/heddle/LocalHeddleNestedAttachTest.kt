@@ -8,7 +8,6 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -40,7 +39,8 @@ class LocalHeddleNestedAttachTest {
         check(result.refusals.isEmpty()) { "the rig: attaching $path landed, refused ${result.refusals}" }
     }
 
-    private fun LocalHeddle.live(group: GroupId): Boolean = snapshot().ledger.lineageOf(group) != null
+    /** Whether [group] has a live lineage: an empty one is the root's, or a group with no edge left at all. */
+    private fun LocalHeddle.live(group: GroupId): Boolean = snapshot().ledger.lineageOf(group)?.isNotEmpty() == true
 
     @Test
     fun attachingAnAuthorAttachesItsRepositoryAsOneUnit() {
@@ -66,7 +66,7 @@ class LocalHeddleNestedAttachTest {
         assertAll(
             { assertTrue(ledger.isLeaf(kuiltId) && ledger.lineageOf(kuiltId) != null, "the rig: attached, with nothing beneath it") },
             { assertEquals(AcquireOutcome.NoLiveLineage(kuiltId), admitted) },
-            { assertIs<AcquireOutcome.NothingEligible>(acquired) },
+            { assertIs<AcquireOutcome.NoLiveLineage>(acquired) },
             { assertEquals(Rational.ZERO, share) },
         )
     }
@@ -131,7 +131,7 @@ class LocalHeddleNestedAttachTest {
             { assertEquals(byNames, byPath) },
             { assertEquals(one.detach(listOf("ci"), "kuilt"), other.detach(kuilt)) },
             { assertTrue(byNames.applied.isNotEmpty(), "the rig: the attach did something") },
-            { assertNull(one.snapshot().ledger.lineageOf(kuiltId)) },
+            { assertTrue(!one.live(kuiltId)) },
         )
     }
 }

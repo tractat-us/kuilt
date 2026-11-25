@@ -96,13 +96,14 @@ class LocalHeddleNestedAttachPropertyTest {
         assertAll(
             { assertEquals(seeds, loops) },
             { assertEquals(emptyList(), failures.take(20), "${failures.size} failures") },
-            // Floors set below the counts measured on every target, so a drifting generator reds.
-            { assertTrue(tally.deepAttaches >= 300, "attaches three levels down ${tally.deepAttaches}") },
-            { assertTrue(tally.cascades >= 80, "detaches that took a subtree with them ${tally.cascades}") },
-            { assertTrue(tally.withBranches >= 800, "calls ending with a branch attached ${tally.withBranches}") },
-            { assertTrue(tally.compared >= 3_000, "shares compared ${tally.compared}") },
-            { assertTrue(tally.reloads >= 250, "reloads ${tally.reloads}") },
-            { assertTrue(tally.detaches >= 400, "detaches ${tally.detaches}") },
+            // Floors set below the counts measured on JVM, macosArm64 and wasmJs, identical on all three
+            // (646, 78, 1422, 4271, 399, 583), so a drifting generator reds.
+            { assertTrue(tally.deepAttaches >= 550, "attaches three levels down ${tally.deepAttaches}") },
+            { assertTrue(tally.cascades >= 60, "detaches that took a subtree with them ${tally.cascades}") },
+            { assertTrue(tally.withBranches >= 1_250, "calls ending with a branch attached ${tally.withBranches}") },
+            { assertTrue(tally.compared >= 3_800, "shares compared ${tally.compared}") },
+            { assertTrue(tally.reloads >= 350, "reloads ${tally.reloads}") },
+            { assertTrue(tally.detaches >= 500, "detaches ${tally.detaches}") },
         )
     }
 
@@ -111,7 +112,8 @@ class LocalHeddleNestedAttachPropertyTest {
         val ledger = h.snapshot().ledger
         for (names in universe) {
             val id = idOf(names)
-            val live = ledger.lineageOf(id) != null
+            // An empty lineage is a group with no edge left at all: the engine forgot the retired ones.
+            val live = ledger.lineageOf(id)?.isNotEmpty() == true
             if (live != (names in model)) failures += "$at: ${id.value} live=$live, the model says ${names in model}"
             if (t.findPath(id) != pathOf(names)) failures += "$at: findPath(${id.value}) = ${t.findPath(id)}"
         }
