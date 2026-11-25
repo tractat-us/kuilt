@@ -1152,7 +1152,8 @@ internal class SeamRoom(
     /**
      * **Joiner only.** The nonce of this joiner's latest `Hello`, which a challenge must echo to be
      * answered, and which a direct `Welcome` or a `Reject` must name ([AdmitMessage.Welcome.answers],
-     * [AdmitMessage.Reject.answers]) for this joiner to act on it (#3215). Null before the first
+     * [AdmitMessage.Reject.answers]) for this joiner to act on it (#3215). The rest of an admission
+     * burst names it too, and a burst frame naming another Hello is dropped (#3615). Null before the first
      * `Hello`, and from a reconnect episode's claim until its first Hello is minted
      * ([JoinerResumeHost.forgetLatestHello]), so an answer to the Hello before the episode cannot
      * close or end it. Guarded by [lock].
@@ -2452,9 +2453,10 @@ internal class SeamRoom(
      * which names the same Hello.
      *
      * The direct Welcome is the ONE frame that names the joiner's membership, and the one that
-     * answers its Hello (#3215). The intro names the Hello too, but only to say which burst it closes
-     * (#3615): a joiner takes it as the end of the burst answering its latest Hello, never as the
-     * answer.
+     * answers its Hello (#3215). Every other frame of the burst names the Hello too, but only to say
+     * which burst it belongs to (#3615): a joiner drops a member Welcome or an intro from a burst
+     * answering an older Hello, and takes the intro of the latest one as the end of its burst, never
+     * as the answer.
      * It and the two joiner-directed loops stay INLINE: they address the joiner, not the bystanders, so they share no
      * recipient with any queued fan-out and have no order to keep against one.
      *
@@ -2485,6 +2487,9 @@ internal class SeamRoom(
         if (announce) fanOutToOtherMembers(member.id, welcome)
 
         for (existing in burst.existing) {
+            // Names the Hello the burst answers, as the intro does, so a joiner can drop it when it
+            // arrives after the joiner has said a newer Hello (#3615): an earlier burst's view of who
+            // is a member may be stale by then.
             val existingWelcome = AdmitMessage.encode(
                 AdmitMessage.Welcome(
                     assignedPeerId = existing.id.value,
@@ -2492,6 +2497,7 @@ internal class SeamRoom(
                     sessionId = existing.identity.sessionId,
                     key = existing.key,
                     deviceId = existing.identity.deviceId,
+                    answers = answers,
                 ),
             )
             runCatchingCancellable { seam.sendTo(member.id, existingWelcome) }
@@ -2828,6 +2834,15 @@ internal class SeamRoom(
                 val restored = welcome.membership != null && welcome.membership == membership
                 welcome.membership?.let { membership = it }
                 return restored
+            }
+
+            // A burst's member Welcomes and its intro name the Hello the burst answers (#3615). One
+            // naming an older Hello comes from an earlier burst, whose view of the roster may be
+            // stale by now: a member it names may have left since, so it neither counts nor adds
+            // anyone. A roster fan-out copy names no Hello and is always taken.
+            if (welcome.answers != null && !answersLatestHello(welcome.answers)) {
+                logger.debug { "room.welcome.stale-burst from=${sender.value} names=${assignedId.value}: an earlier burst" }
+                return null
             }
 
             namedSinceHello += assignedId

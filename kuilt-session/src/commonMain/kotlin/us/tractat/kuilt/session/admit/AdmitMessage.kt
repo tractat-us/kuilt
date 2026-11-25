@@ -45,10 +45,13 @@ import us.tractat.kuilt.identity.Challenge as ChallengeStatement
  * Since v7 (#3215) a joiner's return after a dropped link is the same exchange: it says Hello again,
  * and there is no separate resume frame. The direct Welcome and every Reject name the Hello they
  * answer ([Welcome.answers], [Reject.answers]), and the direct Welcome names the membership it
- * admits ([Welcome.membership]):
+ * admits ([Welcome.membership]). The rest of the admission burst — a Welcome per existing member,
+ * then the host's intro — names the same Hello, only to say which burst it belongs to (#3615):
  * ```
  * Host   → Joiner : Welcome(…, answers = joinerNonce, membership)   or   Reject(code, answers = joinerNonce)
+ * Host   → Joiner : Welcome(member…, answers = joinerNonce) …, Welcome(host, answers = joinerNonce)
  * ```
+ * A roster copy to the other members names no Hello.
  */
 @Serializable
 @OptIn(ExperimentalSerializationApi::class)
@@ -162,12 +165,14 @@ public sealed interface AdmitMessage {
      *   admission. It describes the host's decision; a joiner reads a restore from [membership]
      *   instead, since only that names *which* membership came back.
      * [answers] — the [Hello.joinerNonce] of the Hello this Welcome answers (v7, #3215), on the direct
-     *   Welcome and the host intro. A joiner takes a direct Welcome as the answer to its Hello only
-     *   when this equals the nonce of the latest Hello it sent, so a Welcome that answers an older
-     *   Hello — the one before a reconnect, say — never closes the reconnect that followed it. On the
-     *   intro it says only which admission burst the intro closes (#3615): a joiner rebuilds its
-     *   roster on the intro of the burst answering its latest Hello, and never on a late one from an
-     *   earlier burst. The intro names the host, not the joiner, so it is never taken as the answer.
+     *   Welcome, the bootstrap Welcomes and the host intro; never on a roster copy. A joiner takes a
+     *   direct Welcome as the answer to its Hello only when this equals the nonce of the latest Hello
+     *   it sent, so a Welcome that answers an older Hello — the one before a reconnect, say — never
+     *   closes the reconnect that followed it. On a bootstrap Welcome and the intro it says only which
+     *   admission burst the frame belongs to (#3615): a joiner drops either when it names an older
+     *   Hello, since that burst's view of the roster may be stale, and rebuilds its roster on the
+     *   intro of the burst answering its latest Hello. Neither names the joiner, so neither is ever
+     *   taken as the answer.
      *   Width [Hello.JOINER_NONCE_SIZE], checked in the constructor.
      * [membership] — an opaque id the host minted when it admitted this membership (v7, #3215), on
      *   the direct Welcome only. A restored seat keeps the id it had, and every new admission gets a
