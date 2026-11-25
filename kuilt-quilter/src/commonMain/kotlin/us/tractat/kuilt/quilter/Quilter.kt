@@ -1300,6 +1300,7 @@ public class Quilter<S : Quilted<S>>(
             is QuiltMessage.Delta -> onDelta(sender, msg)
             is QuiltMessage.Ack -> onAck(sender, msg)
             is QuiltMessage.FullState -> onFullState(sender, msg)
+            is QuiltMessage.StateReply -> onFullState(sender, QuiltMessage.FullState(msg.sender, msg.state, msg.upThrough))
             is QuiltMessage.Resend -> onResend(sender, msg)
             is QuiltMessage.Delivered -> onDelivered(sender, msg)
             is QuiltMessage.RootDigest -> onRootDigest(sender, msg)

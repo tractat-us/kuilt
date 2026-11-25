@@ -273,6 +273,29 @@ public final class us/tractat/kuilt/quilter/QuiltMessage$RootDigest$Companion {
 	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
 }
 
+public final class us/tractat/kuilt/quilter/QuiltMessage$StateReply : us/tractat/kuilt/quilter/QuiltMessage {
+	public static final field Companion Lus/tractat/kuilt/quilter/QuiltMessage$StateReply$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Object;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getSender-ffK6qZA ()Ljava/lang/String;
+	public final fun getState ()Ljava/lang/Object;
+	public final fun getUpThrough ()J
+}
+
+public final synthetic class us/tractat/kuilt/quilter/QuiltMessage$StateReply$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/quilter/QuiltMessage$StateReply;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/quilter/QuiltMessage$StateReply;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$StateReply$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
 public final class us/tractat/kuilt/quilter/QuiltMessage$VectorDigest : us/tractat/kuilt/quilter/QuiltMessage {
 	public static final field Companion Lus/tractat/kuilt/quilter/QuiltMessage$VectorDigest$Companion;
 	public synthetic fun <init> (Ljava/lang/String;JLus/tractat/kuilt/crdt/VersionVector;Lkotlin/jvm/internal/DefaultConstructorMarker;)V

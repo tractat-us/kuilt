@@ -341,6 +341,40 @@ class QuilterSolicitedFullStateTest {
     }
 
     /**
+     * The same churn with no settle, so the pair's first contacts land in it (#3629). Both replicas
+     * write from t = 0, so each first-contact [QuiltMessage.FullState] lands behind the other's
+     * first write, and none of them was asked for: before [QuiltMessage.StateReply], each drew a
+     * whole state back, which landed behind the next write in turn, and the pair bounced whole
+     * states for the whole two minutes (222 on this rig, against 20 requests).
+     *
+     * Now a push-back to a peer proven current is a [QuiltMessage.StateReply], and a behind one draws
+     * digests, so a chain ends by its third whole state. What may start one unasked is bounded by
+     * the lag: each side's first contact, and its unproven-peer fallback on the ticks before the
+     * other's announcement lands, at t = 1 s and t = 2 s. That is three per side. A first contact
+     * lands before the receiver has latched [QuiltMessage.VectorDigest] for its sender, so it can draw
+     * a plain push-back and then a [QuiltMessage.StateReply]: three whole states. A fallback lands
+     * after the latch and draws at most a [QuiltMessage.StateReply]: two. So
+     * [UNASKED_CHAIN_BOUND] = 2 × (3 + 2 + 2) = 14 whole states answer no request, and every other
+     * whole state answers one.
+     */
+    @Test
+    fun churnFromFirstContactBouncesABoundedNumberOfWholeStates() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = laggedPair(this, writers = 2, settle = Duration.ZERO)
+
+            assertAll(
+                {
+                    assertTrue(
+                        rig.churnWholeStates <= rig.churnRequests + UNASKED_CHAIN_BOUND,
+                        "whole states past the requests are bounded by the unasked chains (${rig.counts})",
+                    )
+                },
+                { assertEquals(rig.a.state.value, rig.b.state.value, "converged within lag + a tick (${rig.counts})") },
+                { assertEquals(rig.a.stateRootForTest(), rig.b.stateRootForTest(), "with equal roots") },
+            )
+        }
+
+    /**
      * The backstop under churn: one replica writes every 3 s on the same lagged link, so the
      * other's state is always one the writer held a little earlier, and its dominated digests carry
      * the writer's past roots. With a 10 s backstop over two minutes of churn, the writer never
@@ -383,7 +417,7 @@ class QuilterSolicitedFullStateTest {
      * never retried early; and no ack-age skip, so nothing but the vector and the ring decides
      * whether a dominated digest asks.
      */
-    private suspend fun laggedPair(scope: TestScope, writers: Int): LaggedPair = with(scope) {
+    private suspend fun laggedPair(scope: TestScope, writers: Int, settle: Duration = SETTLE): LaggedPair = with(scope) {
         val loom = InMemoryLoom()
         val now = { testScheduler.currentTime }
         val seamA = LagSeam(loom.host(Pattern("lag")), LAG, backgroundScope, now)
@@ -398,7 +432,7 @@ class QuilterSolicitedFullStateTest {
         val a = quilterOn(seamA, config, GSet.empty())
         val b = quilterOn(seamB, config, GSet.empty())
         testScheduler.runCurrent()
-        testScheduler.advanceTimeBy(SETTLE)
+        testScheduler.advanceTimeBy(settle)
         val settled = seamA.sent.size to seamB.sent.size
 
         repeat(40) { i ->
@@ -413,7 +447,7 @@ class QuilterSolicitedFullStateTest {
         LaggedPair(
             a = a,
             b = b,
-            churnWholeStates = churn.count { it is QuiltMessage.FullState },
+            churnWholeStates = churn.count { it is QuiltMessage.FullState || it is QuiltMessage.StateReply },
             churnRequests = churn.count { it is QuiltMessage.FullStateRequest },
             ringHits = a.recentRootHitsForTest + b.recentRootHitsForTest,
         )
@@ -422,6 +456,9 @@ class QuilterSolicitedFullStateTest {
     private companion object {
         val LAG: Duration = 2.seconds
         val SETTLE: Duration = 10.seconds
+
+        /** Whole states that answer no request when the churn starts at first contact; see its test. */
+        const val UNASKED_CHAIN_BOUND: Int = 14
     }
 }
 

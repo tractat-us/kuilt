@@ -12,6 +12,7 @@ import us.tractat.kuilt.crdt.VersionVector
  * number. [Ack] tells the sender that the acker has absorbed all deltas through
  * [seq], enabling GC of the delta buffer. [FullState] ships the entire current
  * state — on first contact with a new peer, and in reply to a [FullStateRequest].
+ * [StateReply] ships it too, in answer to a [FullState] that landed behind.
  * [RootDigest] is what the anti-entropy tick sends instead of the state: a hash of
  * it, answered with a [FullStateRequest] only when the recipient's own hash differs.
  *
@@ -61,6 +62,29 @@ public sealed class QuiltMessage<S> {
         public val sender: ReplicaId,
         public val state: S,
         public val upThrough: Long = 0L,
+    ) : QuiltMessage<S>()
+
+    /**
+     * [sender]'s whole state, sent because a [FullState] from the recipient landed behind it
+     * (#3629): [sender] already held everything that state carried, so it pushes its own back. The
+     * recipient absorbs it exactly as it absorbs a [FullState] — merge, then resync its receive
+     * cursor to [upThrough] — with one difference: when this state lands strictly behind the
+     * recipient's in turn, the recipient answers with its digests, never with another whole state.
+     * That is what stops two lagged peers that both write bouncing whole states at each other, each
+     * answer landing behind the other's newest write.
+     *
+     * A new variant rather than a field on [FullState]: under `encodeDefaults = true` every
+     * [FullState] would carry the field, and a build that predates it rejects an unknown key, so
+     * it would drop every whole state it is sent. That build drops this variant whole instead,
+     * which is why a [Quilter] sends one only to a peer that has sent it a [VectorDigest], and
+     * a plain [FullState] to any other.
+     */
+    @Serializable
+    @SerialName("stateReply")
+    public class StateReply<S>(
+        public val sender: ReplicaId,
+        public val state: S,
+        public val upThrough: Long,
     ) : QuiltMessage<S>()
 
     /**
