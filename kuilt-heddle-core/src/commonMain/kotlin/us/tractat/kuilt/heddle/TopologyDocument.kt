@@ -76,6 +76,7 @@ public data class TopologyDocument(public val root: String, public val children:
     public data class ChildTemplate(
         public val weight: String = "1",
         public val maxConcurrent: Long? = null,
+        @IntroducedAt("0.7.7") public val template: ChildTemplate? = null,
     )
 
     /**

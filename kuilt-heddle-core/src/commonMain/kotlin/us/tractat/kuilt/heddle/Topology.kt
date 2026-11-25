@@ -145,6 +145,7 @@ public data class Topology(public val root: String, public val children: List<No
         // snapshot goldens always carry it.
         @Serializable(with = TopologyWeightSerializer::class) public val weight: Weight,
         public val maxConcurrent: Long? = null,
+        @IntroducedAt("0.7.7") public val template: ChildTemplate? = null,
     )
 
     public companion object {

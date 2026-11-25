@@ -85,6 +85,27 @@ public sealed interface GroupPath {
 
         override val names: List<String> get() = group + name
     }
+
+    /**
+     * An attached child [name] of the attached group at [parent]: a child the consumer attached
+     * beneath another attached child, whose template carries a
+     * [template][Topology.ChildTemplate.template] of its own.
+     *
+     * [parent] is always an [Attached] or another [Nested], never a [Declared]: a child of a declared
+     * group is an [Attached], so that every attached child has exactly one path. Everything below an
+     * attached child is attached; a declared name never follows an attached one.
+     *
+     * @throws IllegalArgumentException if [parent] is a [Declared], or [name] is empty.
+     * @sample us.tractat.kuilt.heddle.sampleNestedAttach
+     */
+    public data class Nested(public val parent: GroupPath, public val name: String) : GroupPath {
+        init {
+            require(parent !is Declared) { "a nested child's parent is attached; a child of the declared ${parent.names} is an Attached" }
+            require(name.isNotEmpty()) { "a nested child's path has no empty name: ${parent.names}, $name" }
+        }
+
+        override val names: List<String> get() = parent.names + name
+    }
 }
 
 /**
@@ -100,6 +121,7 @@ public sealed interface GroupPath {
 public fun Topology.findGroupId(path: GroupPath): GroupId? = when (path) {
     is GroupPath.Declared -> GroupId(idOf(path.names)).takeIf { path.names.isEmpty() || declaredAt(path.names) != null }
     is GroupPath.Attached -> templateAt(path.group)?.let { GroupId(attachedChildPath(idOf(path.group), path.name)) }
+    is GroupPath.Nested -> null
 }
 
 /**

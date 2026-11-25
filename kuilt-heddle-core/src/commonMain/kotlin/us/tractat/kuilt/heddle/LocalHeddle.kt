@@ -1310,6 +1310,12 @@ public class LocalHeddle private constructor(
     public fun detach(group: List<String>, name: String): ApplyResult =
         atomically { run(topology.detach(group, name, ledger), Attribution.CHILD) }
 
+    public fun attach(path: GroupPath, generation: Long): ApplyResult =
+        atomically { run(topology.attach(path, ledger, generation), Attribution.CHILD) }
+
+    public fun detach(path: GroupPath): ApplyResult =
+        atomically { run(topology.detach(path, ledger), Attribution.CHILD) }
+
     /**
      * Apply [steps] as one unit. Each [attempt] starts from the committed ledger. One that finds a
      * child whose change cannot land names it, and the unit is attempted again without any of that

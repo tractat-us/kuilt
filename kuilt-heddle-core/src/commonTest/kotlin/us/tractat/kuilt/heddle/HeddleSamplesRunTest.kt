@@ -88,6 +88,9 @@ class HeddleSamplesRunTest {
     fun buildFarmHolds() = sampleBuildFarm()
 
     @Test
+    fun nestedAttachHolds() = sampleNestedAttach()
+
+    @Test
     fun previewQueuesHolds() = samplePreviewQueues()
 
     @Test

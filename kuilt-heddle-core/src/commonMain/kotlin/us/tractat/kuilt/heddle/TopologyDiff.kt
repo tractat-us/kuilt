@@ -274,6 +274,10 @@ public fun Topology.detach(group: List<String>, name: String, ledger: Entitlemen
     return planned.sortedWith(STEP_ORDER).map { it.step }
 }
 
+public fun Topology.attach(path: GroupPath, ledger: EntitlementLedger, generation: Long): List<TopologyStep> = TODO("#3314")
+
+public fun Topology.detach(path: GroupPath, ledger: EntitlementLedger): List<TopologyStep> = TODO("#3314")
+
 // ── one child ───────────────────────────────────────────────────────────────────────────────────
 
 /**

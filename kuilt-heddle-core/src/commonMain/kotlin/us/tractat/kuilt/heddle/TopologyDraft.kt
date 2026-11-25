@@ -109,15 +109,23 @@ public sealed class TopologyDraft {
          * ceiling caps each child on its own, not all of them together. A group with a template may
          * declare no children of its own. Call it at most once per group: a group has one template.
          *
-         * Each child the app attaches here is a leaf, one level below this group: an attached child
-         * carries no template of its own, so it never has children. Declared groups nest to any
-         * depth; attached ones do not yet, and letting them is tracked by #3314.
+         * Each child the app attaches here is a leaf unless [template] is set: then each one is a
+         * group, never leased itself, and the app attaches children beneath it with what [template]
+         * gives them ([Topology.ChildTemplate.template]). Everything below an attached child is
+         * attached, to any depth the templates nest.
          *
+         * @param template the template of each attached child's own attached children; `null` when
+         *   each attached child is a leaf.
          * @throws IllegalStateException when this group already has a template.
+         * @sample us.tractat.kuilt.heddle.sampleNestedAttach
          */
-        public fun template(weight: Weight = Weight.ONE, maxConcurrent: Long? = null) {
-            check(template == null) { "group \"$name\" already has a template, $template" }
-            template = Topology.ChildTemplate(weight, maxConcurrent)
+        public fun template(
+            weight: Weight = Weight.ONE,
+            maxConcurrent: Long? = null,
+            @IntroducedAt("0.7.7") template: Topology.ChildTemplate? = null,
+        ) {
+            check(this.template == null) { "group \"$name\" already has a template, ${this.template}" }
+            this.template = Topology.ChildTemplate(weight, maxConcurrent, template)
         }
     }
 }

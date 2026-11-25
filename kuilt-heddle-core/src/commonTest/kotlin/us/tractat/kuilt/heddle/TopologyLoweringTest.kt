@@ -127,6 +127,20 @@ class TopologyLoweringTest {
                 "", "/", "root/", "root//x", "!root", "root/!x", "root/!a/b", "root/a/!", "root/a b", "root/a/b@1:1#0",
                 "root/%2f", "root/%41", "root/%2", "root/%ZZ", "root/%C3", "root/%C0%AF", "root/%FF",
             ).map { text -> { assertNull(pathOf(GroupId(text)), "pathOf(\"$text\")") } }.toTypedArray(),
+            // Nested attached children (#3314): `!` on every segment of a suffix from depth two.
+            *runtimeNames.flatMap { outer -> runtimeNames.map { outer to it } }.map { (outer, inner) ->
+                {
+                    val id = GroupId(awkward.attachedChildId(listOf("g"), outer).value + "/!" + escapeSegment(inner))
+                    assertEquals(ParsedGroupId("root", GroupPath.Nested(GroupPath.Attached(listOf("g"), outer), inner)), pathOf(id))
+                }
+            }.toTypedArray(),
+            {
+                val deep = GroupPath.Nested(GroupPath.Nested(GroupPath.Attached(listOf("a", "b"), "x"), "y"), "z")
+                assertEquals(ParsedGroupId("root", deep), pathOf(GroupId("root/a/b/!x/!y/!z")))
+            },
+            // A declared segment after `!`, or `!` starting at depth one, is still refused.
+            *listOf("root/g/!x/y", "root/!x/!y", "root/g/!x/!", "root/g/!x/y/!z", "root/g/!x/!y/z", "root/g/!x/!%2")
+                .map { text -> { assertNull(pathOf(GroupId(text)), "pathOf(\"$text\")") } }.toTypedArray(),
         )
     }
 
