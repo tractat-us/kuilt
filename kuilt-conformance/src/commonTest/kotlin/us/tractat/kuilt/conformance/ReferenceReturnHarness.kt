@@ -72,8 +72,9 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
     val devices = atomic(0)
     val hostTabs = atomic(0)
 
-    // One process: its own scope, its own client loom and its own link, under one peer id.
-    class Process(val peerId: PeerId, deviceIndex: Int, store: DeviceKeyStore = fakeKeyStore(deviceIndex)) {
+    // One process: its own scope, its own client loom and its own link, under one peer id, over the
+    // key store of the device it runs on.
+    class Process(val peerId: PeerId, store: DeviceKeyStore) {
         val scope = CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job]))
         // Atomics, not plain vars: the rig is driven from the test body and read from the rooms'
         // own coroutines, and nothing here may lean on the test dispatcher being single-threaded.
@@ -122,6 +123,9 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
 
     fun newDevice(): ReturnDevice {
         val index = devices.incrementAndGet()
+        // The device's one store, for every process it ever runs: a pass one launch keeps is the next
+        // launch's to present, as a platform store keeps it across launches (#3223).
+        val store = fakeKeyStore(index)
         val launches = atomic(0)
         val besides = atomic(0)
         val current = atomic<Process?>(null)
@@ -139,7 +143,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
                     else -> PeerId("device-$index.$launch")
                 }
                 previous?.let { priorHeals.addAndGet(it.heals()) }
-                return Process(id, index).also { current.value = it }.factory
+                return Process(id, store).also { current.value = it }.factory
             }
 
             override suspend fun launchBeside(): RoomFactory {
@@ -147,7 +151,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
                 check(running.scope.coroutineContext.job.isActive) { "the process launch() started has ended; launch() again" }
                 // Its own link and peer id, on this device's key store; never `current`, so the
                 // other hooks keep acting on the first process.
-                return Process(PeerId("device-$index.beside-${besides.incrementAndGet()}"), index).factory
+                return Process(PeerId("device-$index.beside-${besides.incrementAndGet()}"), store).factory
             }
 
             override suspend fun kill(socketCloses: Boolean) {
@@ -177,7 +181,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
                     victim.displaced.value = true
                 }
                 // A different device — a key of its own — under the victim's peer id.
-                return Process(victim.peerId, deviceIndex = IMPOSTOR_KEY_OFFSET + index).factory
+                return Process(victim.peerId, fakeKeyStore(IMPOSTOR_KEY_OFFSET + index)).factory
             }
 
             override val heals: Int
@@ -203,7 +207,7 @@ internal fun TestScope.referenceReturnHarness(): ReturnHarness {
         joinerHeartbeat = REFERENCE_JOINER_HEARTBEAT,
         device = { newDevice() },
         // The host's own key store, under a joiner's link and an id of its own.
-        hostTab = { Process(PeerId("host-tab-${hostTabs.incrementAndGet()}"), deviceIndex = 0, store = hostStore).factory },
+        hostTab = { Process(PeerId("host-tab-${hostTabs.incrementAndGet()}"), hostStore).factory },
     )
 }
 

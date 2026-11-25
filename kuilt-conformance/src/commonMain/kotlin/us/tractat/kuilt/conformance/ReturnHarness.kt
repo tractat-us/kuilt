@@ -121,6 +121,11 @@ public interface ReturnDevice {
      * The first launch presents a peer id of the harness's choosing. A later launch follows a [kill]:
      * with [reusePeerId] it presents the id the killed process had, as a fabric with durable peer ids
      * does; without it, a fresh one, as most fabrics do.
+     *
+     * Every launch of a device works on the device's **one** key store, as an app's launches share its
+     * platform store: a pass the host handed an earlier process is kept where the next one finds it
+     * (#3223). The relaunch rows come back on that pass, so a harness that gives each launch a copy of
+     * the key and a store of its own reds there, on the policy being asked.
      */
     public suspend fun launch(reusePeerId: Boolean = false): RoomFactory
 
