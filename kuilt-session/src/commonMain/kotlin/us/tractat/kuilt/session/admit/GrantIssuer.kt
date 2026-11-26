@@ -21,6 +21,27 @@ import kotlin.time.Duration.Companion.milliseconds
  */
 internal object GrantIssuer {
     /**
+     * How many renewals a pass gets in one term: while a member stays connected, the host issues it a
+     * fresh pass every [GrantTerms.readmitFor] / `RENEWALS_PER_TERM` ([refreshPeriodMillis], #3709).
+     *
+     * What it buys: the pass a member holds was issued at most one period before its last contact, so
+     * a member that drops can come back on it for at least `1 − 1/RENEWALS_PER_TERM` of the term after
+     * that contact, and never more than the whole term. At 4 that floor is three quarters: with
+     * [AdmissionPolicy.open]'s hour, a device away up to 45 minutes gets back in, and up to 60
+     * depending on when it dropped. The floor holds provided the last renewal reached the member: one
+     * that fails to sign or is lost on the way is not resent (tracked by #3711), so the member is left
+     * on the pass before it.
+     *
+     * What it costs: one signature and one [AdmitMessage.GrantRenewal] per connected member per period,
+     * four a term rather than two. A larger value lifts the floor toward the whole term and signs more.
+     *
+     * One constant, not a setting: a pass does not carry its renewal period, so a per-room value could
+     * not follow a device that returns on its pass, whose next passes are issued on the terms that pass
+     * carried ([termsOf]).
+     */
+    const val RENEWALS_PER_TERM: Int = 4
+
+    /**
      * A pass signed by [issuer] for the device whose key is [subject], issued at [issuedAt] on
      * [terms]: good until [GrantTerms.notAfter], in this room ([roomId]) or in every room [issuer]
      * hosts, as [GrantTerms.reach] says.
