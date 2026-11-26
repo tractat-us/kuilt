@@ -1,8 +1,8 @@
 # 0.7.7 release drafts — notes
 
 Drafted 2026-11-20 against `origin/main` at `d951b4c1d` and the epic/3159 plan. **Refreshed
-2026-11-26 against `origin/main` at `1f9ba99290`** (70 commits past `v0.7.6`), reading each merge's
-ABI dump diff and PR body. Nothing was posted, filed or tagged. No Gradle was run.
+2026-11-26; reviewed through `origin/main` at `f72f0aaaaf`** (73 commits past `v0.7.6`), reading
+each merge's ABI dump diff and PR body. `ProtocolVersion.CURRENT` is 9 there (MIN = MAX = 9). Nothing was posted, filed or tagged. No Gradle was run.
 
 ## Refresh 2026-11-26: what changed
 
@@ -25,7 +25,7 @@ ABI dump diff and PR body. Nothing was posted, filed or tagged. No Gradle was ru
   `RoomConformanceSuite` return harness and its one-store rule (#3708); `MultiNodeRaftSim`'s
   `NodeStart` (#3720); pass renewal (#3701), its 1.5× life (#3712) and retries (#3717); the key
   store's provider-fault fix (#3719); and an "Also in this release" section for heddle waves 1–2
-  and the first wave 3–4 merges (#3714, #3715, #3716, #3722), the quilter anti-entropy rounds, the detector-currency fixes and
+  and the wave 3–4 merges (#3714, #3715, #3716, #3722, #3723, #3725, #3726), the quilter anti-entropy rounds, the detector-currency fixes and
   the game/warp fixes.
 - **The 2026-11-20 finding for kuilt is fixed.** The raw-`sign` signing oracle it described is
   #3613: `DeviceKey.sign` is `@IdentityInternalApi`, and `signApp(context, message)` signs under an
@@ -35,19 +35,21 @@ ABI dump diff and PR body. Nothing was posted, filed or tagged. No Gradle was ru
 - **Lockstep.** All three posted notices now say outright that every peer of a room upgrades in one
   step, because the admit wire jumps from 2 to 9.
 
-## Assumptions still open (each is an `ASSUMES` comment)
+## Second pass, later on 2026-11-26
 
-Three PRs were OPEN on 2026-11-26 (all three reviewed, two with auto-merge armed):
-
-- **#3712** (#3709): a pass lives 1.5 × `readmitFor`, renewed every half of it, so `open()` gives
-  60–90 min after last contact; on `main` today it is 30–60. Markers in `release-notes.md` (the
-  table and the renewal bullet), `notice-fireworks-compose-3862.md` and `notice-bee-149.md`.
-- **#3717** (#3711): a failed renewal is retried with backoff. Stacked on #3712. Marker in
-  `release-notes.md`'s renewal bullet.
-- **#3719** (#3596): a key store keeps its key on a provider fault. Marker in `release-notes.md`.
-
-At the tag: `gh pr view <N> --json state` for each. MERGED: delete the comment. Not merged: delete
-the comment **and** apply the fallback wording it names.
+- **No `ASSUMES` markers remain.** The three PRs left open by the first pass merged: #3712 as
+  `f20c492b38` (a pass lives 1.5 × `readmitFor`, renewed every half of it, so `open()` gives 60–90
+  min after last contact), #3717 as `f72f0aaaaf` (a renewal that fails to sign or send is retried,
+  closing in on the pass's end) and #3719 as `f2aff6503c` (a key store keeps its key on a provider
+  fault). Their markers in `release-notes.md` (three comments), `notice-fireworks-compose-3862.md`
+  and `notice-bee-149.md` are removed, and the text reads as shipped. Checked against `main`'s
+  `AdmissionPolicy.open` KDoc ("60 to 90 minutes").
+- **The release notes now cover four more heddle merges.** #3726 (every governed act but a mint carries the run nonce; a reused
+  mint key is refused and logged; no wire change), #3723 (six queries leave `@HeddleInternalApi`;
+  a break, listed under Breaking changes: `FairShareAllocator.rebaseEnabled` and `rebases`, which
+  `v0.7.6`'s dump has, are deleted, and `peakPositionFraction` drops `demand`), #3725 (docs and
+  tests only: `cancel` is for work that never ran) and #3732 (tests only, no production change, so
+  it gets no line in the release notes).
 
 - A `ResumeToken` an app stored is now dead data, since the type is gone. The notes say "delete it".
 
@@ -122,10 +124,9 @@ OneScreen on `release-notes.md` and `NOTES.md`).
 ## Posting order, after the stack drains
 
 1. One `./gradlew clean && ./gradlew build --rerun-tasks` on `main` (the 0.7.6 ruling's condition).
-   Settle the three remaining `ASSUMES` comments (#3712, #3717, #3719) as above, and run
-   `git log --oneline 1f9ba99290..origin/main` for anything that merged after this refresh: the
-   heddle wave 3–4 items (the rest of #3238, #3648, #3707, #3057, #3170) and any identity slice past #3708
-   each want a line. Re-check `ProtocolVersion.CURRENT` is still 9; a later wire PR bumps it.
+   Run `git log --oneline f72f0aaaaf..origin/main` for anything that merged after this refresh: the
+   heddle wave 3–4 items still open (#3648, #3707, #3199, #3332, #3170 PRs 2–3, #3721 phase 2) and any identity
+   slice past #3708 each want a line. Re-check `ProtocolVersion.CURRENT` is still 9; a later wire PR bumps it.
 2. Tag `v0.7.7`; wait for the `maven-central` job, then release the PENDING deployment by hand at
    central.sonatype.com and confirm the artifacts resolve.
 3. Publish the GitHub release: `release-notes.md` (below its leading comment) above GitHub's

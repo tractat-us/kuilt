@@ -1,7 +1,7 @@
 <!--
 DRAFT comment for tractat-us/bee#149. Post after v0.7.7 is on Maven Central.
 Replace <v0.7.7 release link> with the release URL. Also carries #159's note (see notice-bee-159.md).
-Refreshed 2026-11-26 against kuilt main at 1f9ba99290; bee pins 0.7.0-dev.1926 (kuilt e979122a9),
+Refreshed 2026-11-26 against kuilt main at f72f0aaaaf; bee pins 0.7.0-dev.1926 (kuilt e979122a9),
 checked the same day.
 -->
 
@@ -9,7 +9,7 @@ checked the same day.
 
 kuilt [v0.7.7](<v0.7.7 release link>) ships the first slice of the identity work this issue waits on (tractat-us/kuilt#3159). It covers the **anonymous, self-carried** bullet. It does not cover SSO or OAuth.
 
-Every device now keeps a P-256 key that never leaves it, named by a `did:key`. A member of a kuilt `Room` proves that key when it joins, and the host sees it as `Member.key` and `AdmissionRequest.key`. While the member stays, the host keeps renewing a signed pass. A device that drops and comes back is let back in with no code in bee: into its held seat within 60 s, even after a restart, or past the policy inside its pass (at least an hour after its last contact under `AdmissionPolicy.open()`). A pass also survives a host restart if the host keeps its key in `DeviceKeyStore.platform(appId, dataDir)`, and, for a `GrantReach.ThisRoom` pass, hosts under the same room id.
+Every device now keeps a P-256 key that never leaves it, named by a `did:key`. A member of a kuilt `Room` proves that key when it joins, and the host sees it as `Member.key` and `AdmissionRequest.key`. While the member stays, the host keeps renewing a signed pass. A device that drops and comes back is let back in with no code in bee: into its held seat within 60 s, even after a restart, or past the policy inside its pass (an hour after its last contact under `AdmissionPolicy.open()`, sometimes up to 90 minutes). A pass also survives a host restart if the host keeps its key in `DeviceKeyStore.platform(appId, dataDir)`, and, for a `GrantReach.ThisRoom` pass, hosts under the same room id.
 
 What it means for bee:
 
@@ -19,5 +19,3 @@ What it means for bee:
 - **Upgrade every peer in one step.** The admit wire goes from version 2 to version 9, and each side accepts only its own, so the host, every page and every agent move to 0.7.7 together; a peer left on the old build gets `ProtocolMismatch`. In the code, every `clusterClient` (the page's `ClaimsLink`, the MCP bridge) takes a `DeviceKeyStore`, and the claims host's `KtorRoomHost` takes one plus a `HostAdmission`. An agent process that opens its own store has its own key. bee pins `0.7.0-dev.1926` (kuilt `e979122a9`), which has the first quilter fixes; the jump brings everything after it, from tractat-us/kuilt#3258 on, including the later quilter rounds. The migration list is in the release notes.
 
 Not met: SSO, OAuth for remote MCP clients, a pluggable identity provider, and linking one person's devices (personas are later in tractat-us/kuilt#3159).
-
-<!-- ASSUMES: tractat-us/kuilt#3712 merges before the tag. Without it the pass reads "at least half an hour after its last contact". -->

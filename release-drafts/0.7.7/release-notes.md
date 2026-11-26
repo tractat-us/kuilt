@@ -1,9 +1,8 @@
 <!--
 DRAFT — GitHub release body for v0.7.7. Paste everything below the closing `-->` into the
 release, above GitHub's generated "What's Changed" list. Refreshed 2026-11-26 against
-`origin/main` at `1f9ba99290`. Three `ASSUMES` comments remain, covering the three PRs still open on
-that date (#3712, #3717, #3719). At the tag, check each with `gh pr view <N> --json state`: delete the
-comment if it MERGED, or delete the comment and the text it covers if it did not.
+`origin/main` at `f72f0aaaaf`. No `ASSUMES` comments remain. At the tag, check
+`git log --oneline f72f0aaaaf..<tag>` for anything that merged after.
 -->
 
 ## Highlights
@@ -30,10 +29,8 @@ There are three ways back in, and the app sees each one differently.
 | Away for | What happens | What your app sees |
 |---|---|---|
 | Less than the seat is held (60 s by default) | Restored to the same membership, after a healed link **or a process restart** | `MembershipEvent.Resumed`; bystanders hear only `Unpaused`. No `Left`, no `Joined` |
-| Up to its pass's floor (1 h after last contact under `AdmissionPolicy.open()`, sometimes up to 1.5 h) | Let back in with no vetting | `Joined(member, returning = ReturningMark(previousId))` on the host and every bystander |
+| Up to `readmitFor` after last contact (60 min under `AdmissionPolicy.open()`, and up to 90 depending on when it dropped) | Let back in with no vetting | `Joined(member, returning = ReturningMark(previousId))` on the host and every bystander |
 | Longer | Asked again, like a newcomer | A plain `Joined` |
-
-<!-- ASSUMES: #3712 merges before the tag. Without it the middle row reads "30 to 60 min after last contact under `AdmissionPolicy.open()`", and the highlight above says "up to half an hour". -->
 
 In the last two rows the old membership is gone: the host and bystanders saw it leave with
 `PartitionExpired` when its hold ran out. A device whose room kept running through the outage
@@ -64,7 +61,6 @@ hears `MembershipEvent.Readmitted`. Whatever your app tied to the old membership
   times `GrantTerms.readmitFor` and is renewed every half of `readmitFor`, so `readmitFor` is the
   least time a device away after its last contact can still return on it (#3712). A renewal that
   fails to sign or send is tried again, closing in on the pass's end (#3717).
-  <!-- ASSUMES: #3712 and #3717 merge before the tag. Without #3712 a pass lives `readmitFor` and `readmitFor` is the most, not the least. Without #3717 a failed renewal waits a whole period. -->
 - `RevocationList.revoke(key, notBefore)` voids the passes a device already holds. It is **not a
   ban** and **does not remove anyone present**. Keep your own blocked set for that.
 - A pass dated more than five minutes in the host's future is refused as
@@ -81,7 +77,6 @@ where rooms start using them.
 
 - A store that checks its key at launch no longer replaces the key when the crypto provider
   fails for a moment. Only a check that ran and refused counts as a damaged key (#3719).
-  <!-- ASSUMES: #3719 merges before the tag. -->
 - `DeviceKey.sign` is now `@IdentityInternalApi`. To sign your app's own bytes, use
   `DeviceKey.signApp(context, message)` and check with `DidKey.verifyApp(context, message,
   signature)`. Those signatures can never be passed off as one of kuilt's own statements (#3613).
@@ -98,7 +93,13 @@ and how far it stands from it (`lag`). Templates can nest attached children. The
 has a minimal editor, end to end. Smaller fixes: a snapshot whose books do not balance decodes as
 `Corrupt`; a waker clamped after a restart keeps what its open leases reserve; `retire` takes an
 unused prepared edge; and `HeddleNode.reconcileOwn` lets a static peer repair its own row after a
-reweight. `LocalHeddle`'s KDoc now states what a wrong cost estimate costs a group, with sizing
+reweight. A governed node restarted under a reused incarnation no longer has an act silently
+deduplicated against an entry its earlier run left in the log: every act but a mint carries a
+per-run nonce, and a mint whose key is already taken is refused and logged. Six read-only queries
+leave `@HeddleInternalApi` and become stable: `EntitlementLedger.liveInboundEdges`, `mintedRoots`,
+`hasForgotten` and `activationFitsTheBudget`, `weightFitsTheBudget`, and
+`FairShareAllocator.peakPositionFraction`. The docs now say `cancel` is for work that never ran;
+work that held its slot settles with `complete(lease, elapsed)`. `LocalHeddle`'s KDoc now states what a wrong cost estimate costs a group, with sizing
 guidance on `LocalPolicy.defaultReservation` (#3652).
 
 **Replication (`:kuilt-quilter`).** Anti-entropy ships much less when peers are idle or slightly
@@ -158,6 +159,9 @@ only once the roster is full, and a queued vacate counts only while the voter is
   each launch its own store reds `returnInsideGrantNoVetting`, `expiredGrantIsVetted` and
   `revokedSubjectIsVetted`, on the policy being asked (#3708). `DeviceKeyStoreConformanceSuite`
   gains two rows on how a store keeps passes.
+- **`:kuilt-heddle-core`.** `FairShareAllocator.rebaseEnabled` and `rebases`, deprecated no-ops,
+  are removed, and `FairShareAllocator.peakPositionFraction` drops its unused `demand` parameter
+  (#3723).
 - **`:kuilt-raft-test`.** `MultiNodeRaftSim`'s `nodeFactory` takes one `NodeStart` and returns
   the `RaftNode`. Seed a custom node from `start.random`, so a restarted node draws a fresh seed.
 
