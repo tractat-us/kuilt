@@ -999,7 +999,8 @@ that may have run a long way (the position limit, below).
 - **The seat rules.** A newborn is seated at the front of the demanding children
   it joins, or level with the furthest-ahead child when none is demanding. A
   child seen idle and never seen to stop is clamped to that front, and past it
-  by its edge's outstanding (#3238, #3721). Neither rule
+  by its edge's outstanding (#3238, #3721), which can leave a sibling up to
+  that much lag it should have lost (§7.2, *two histories*). Neither rule
   read the origin: it cancelled out of both.
 - **The net-service clock for a returner (#3376, #3416).** It reads issuance and
   returns, never a position, and a shift is a distance, so an origin never
@@ -1842,14 +1843,17 @@ to 5 land together, never 3 alone (#3495 review).
   idled, and keeping its raw position would let a child that idled under
   another peer's scheduling, or before a restart, keep the whole gap as credit
   and take every slot it is eligible for until it caught up. Clamping costs it
-  its lag instead, once per allocator that first sees it: the penalty side
-  (§10.5, §10.6). An unseated child is a newborn, which the seat puts at the
-  front, so the rule is about seated ones.
+  its lag instead, once per allocator that first sees it, and a child that is
+  itself the front pays what it holds a second time: the penalty side for the
+  child clamped (§10.5, §10.6). Its siblings are another matter, below. An
+  unseated child is a newborn, which the seat puts at the front, so the rule is
+  about seated ones.
 
   Who meets it. A restarted `HeddleNode` keeps no wake memory, so every seated
   child it finds asking at its first call is clamped, and all of them are
   joining, so all come back level with the furthest-ahead one, past it by
-  what each holds unspent (`HeddleAcceptanceTest`'s two restart rows,
+  what each holds unspent (`HeddleAcceptanceTest`'s restart rows, one with the
+  runner's holdings spent before the crash and one with them intact, and
   `HeddleNodeRestartCreditTest`). A peer meeting a child another
   peer seated and ran is the same case (`aFirstObservationOfASeatedDemandingEdgeIsAWake`).
   `LocalHeddle` persists its observations, and every pick and every charging
@@ -1859,10 +1863,31 @@ to 5 land together, never 3 alone (#3495 review).
   dropped. The second is a restart, and costs what a restart costs: every
   seated child the engine finds demanding is clamped, and since all of them
   are joining, each comes back level with the furthest-ahead one, past it by
-  its outstanding, what its own open leases reserve. A clamped
-  waker lands where the memory had it, but a child that was owed service loses
-  it, and a returner is clamped rather than moved by its parent's clock
-  (`LocalHeddlePersistenceTest`). So the snapshot still keeps the memory.
+  its outstanding, what its own open leases reserve. A waker that idled
+  holding its leases lands where the memory had it. A sibling of a front that
+  holds grants may not, as the next paragraph says; a child that was owed
+  service loses it; and a returner is clamped rather than moved by its
+  parent's clock (`LocalHeddlePersistenceTest`). So the snapshot still keeps
+  the memory.
+
+  **Two histories a first sighting cannot tell apart** (#3721, ruling 3). Take
+  a child at `L + 8` holding 8, the front, and a sibling at `L` holding
+  nothing, both first seen asking. That ledger arises two ways. If the sibling
+  was competing when the 8 was granted, it is owed them, and kept memory
+  leaves a gap of 8. If it was idle, it should forfeit the gap, and kept memory
+  leaves 0. A restarted allocator watched neither. It clamps the front past
+  itself by its 8 and the sibling to the front, a gap of 8: right for the
+  first history, and in the second an idle sibling keeps lag it should have
+  lost, up to the front's outstanding. The other choice, clamping the front by
+  less, `front + min(outstanding, front − raw)`, credits the holder its unspent
+  grants instead: it reads `HeddleNodeRestartCreditTest`'s dropped column back
+  at 10, 10, 10, 10, the #3238 defect, ruled against twice. So the clamp keeps
+  the bounded error. Pinned by `FairShareAllocatorTest` and `HeddleNodeTest`'s
+  holdings-intact first observations (`e1` 100, `e3` 100, where kept memory
+  reads 150 and 50), by `HeddleAcceptanceTest`'s holdings-intact restart arm,
+  where the idle child comes back exactly the runner's outstanding behind it,
+  and by the running-front rows of `HeddleNodeRestartCreditTest` and
+  `WakeClampOpenLeaseTest` (kept 10, dropped 6 of 20).
 
   The rule replaced an older one, under which a first sighting was recorded as
   it stood and clamped only when it sat below its parent's origin, where only
@@ -1916,6 +1941,12 @@ to 5 land together, never 3 alone (#3495 review).
   sitting *ahead* of everyone pins the front at its own position for every
   joiner while nothing else competes. A cohort of fresh newborns lands at zero,
   the furthest-ahead origin among them.
+
+  That promise is about the front, not about where a clamp lands. Since #3721
+  a waker lands past the front by what it holds, the furthest-ahead child
+  included, so a joiner clamped level with that child's front stands behind
+  it by the outstanding, and gains up to that many turns: the *two histories*
+  above.
 
   It replaces three older rules. The maximum used to be taken over the idle
   survivors alone, which let a waker come back level with an idle bystander far
@@ -2028,7 +2059,12 @@ while it was away.
   `LocalHeddle` threaded the sum of its open reservations through the step and
   `HeddleNode` passed zero; reading the outstanding gives both the same clamp,
   and a preview, an explanation and a share line read it from the ledger they
-  are asked about rather than from a sum handed alongside.
+  are asked about rather than from a sum handed alongside. The price is the
+  *two histories* above: a sibling clamped beside a waker that holds grants
+  keeps up to that waker's outstanding of lag, which kept memory might have
+  taken. A crashed `HeddleNode` incarnation's grants stay outstanding, since v1
+  reclaims none of them (§8.1), so they are counted again at every later first
+  sighting (#3735).
 
 `FairShareAllocator` runs the clock in its seat-and-wake step, `settleJoiners`,
 which every pick, every `LocalHeddle.admit` with a waiting set and the first
@@ -2718,9 +2754,12 @@ Carried over from the source intact; each is a named property test (§13).
    is clamped to the front, and so is a seated child first seen asking, the
    restart rule (past the front by its edge's outstanding, its work in flight,
    #3238, #3721): an allocator with no memory of a child, a restarted one say,
-   gives it no credit for a gap it did not watch, at the cost of its lag, once
-   per allocator. Default sleeper credit is zero, and applies only to a
-   clamped waker (§7.2, #3376, #3472).
+   keeps none of that child's own gap as credit, at the cost of its lag, once
+   per allocator. One credit survives, bounded: a sibling clamped beside a
+   waker that holds grants keeps up to that waker's outstanding of lag, since
+   a first sighting cannot tell a sibling that idled from one that competed
+   (§7.2, *two histories*). Default sleeper credit is zero, and applies only to
+   a clamped waker (§7.2, #3376, #3472).
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
    post-heal convergence restores a single agreed ledger.
 8. **Projection homomorphism.**
