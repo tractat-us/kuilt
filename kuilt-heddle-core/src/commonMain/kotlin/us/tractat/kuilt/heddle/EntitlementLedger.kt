@@ -1017,6 +1017,14 @@ public class EntitlementLedger private constructor(
      * outstanding across the edge. Once retired, nothing crosses again and its history
      * stays queryable via [edge] forever.
      *
+     * **An unused [Lifecycle.PREPARED] edge retires too** (#3198): one that carries no counter
+     * slot and no [Gauge], the same test [forget] makes of a prepared edge. Nothing has crossed it,
+     * and RETIRED is the top of the lifecycle register, so the join skips CLOSING. That is what
+     * lets a caller abandon a prepared edge without closing it first: a CLOSING edge is live, so
+     * the close would give its child a second live inbound edge
+     * ([LedgerConflict.DualActiveInbound]) until the retire landed. A PREPARED edge that carries
+     * history is refused, whatever it adds up to.
+     *
      * The patch carries a **drain witness** — the edge's observed `issued`/`returned`/
      * `leafSpent`/`rollupSpent` counter slots at their absolute values (max-safe, same
      * house idiom as the feasibility mutators' [witness]). Retirement is causally after
@@ -1028,12 +1036,22 @@ public class EntitlementLedger private constructor(
      */
     public fun retire(edge: AttachmentId): Patch<EntitlementLedger>? {
         recordOf(edge) ?: return null
-        if (lifecycleOf(edge) != Lifecycle.CLOSING) return null
+        when (lifecycleOf(edge)) {
+            Lifecycle.CLOSING -> Unit
+            Lifecycle.PREPARED -> if (carriesHistory(edge)) return null
+            else -> return null
+        }
         val summary = edge(edge) ?: return null
         if (summary.outstanding != 0L) return null
         val retired = of(lifecycle = mapOf(edge to Lifecycle.RETIRED))
         return Patch(retired.piece(drainWitness(edge)))
     }
+
+    /**
+     * Whether any counter slot or a [Gauge] names [edge]: what a PREPARED edge never carries
+     * honestly, and what [retire] and [forget] both refuse one for.
+     */
+    private fun carriesHistory(edge: AttachmentId): Boolean = allEdgeCounters().any { edge in it } || edge in gauges
 
     /**
      * The counter slots of [edge] at their observed absolute values — the witness a
@@ -2448,7 +2466,7 @@ public class EntitlementLedger private constructor(
         val path = PathKey.of(edge)
         if (transferMatrices().any { path in it }) return ForgetRefusal.TRANSFER_ROWS
         if (lifecycle == Lifecycle.PREPARED) {
-            return if (allEdgeCounters().any { edge in it } || edge in gauges) ForgetRefusal.PREPARED_CARRIES_HISTORY else null
+            return if (carriesHistory(edge)) ForgetRefusal.PREPARED_CARRIES_HISTORY else null
         }
         val effLeaf = effLeafSpentTotal(edge)
         val effRollup = effRollupSpentTotal(edge)
