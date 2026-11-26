@@ -162,6 +162,11 @@ class FairShareAllocatorTest {
      * another scheduler, or before a restart, keep the whole gap as credit. Losing its lag once per
      * allocator that first sees it is the bounded side (§10.6, #3472).
      *
+     * e1 spends what it was granted before A's call. A clamped waker is counted past the front by
+     * its outstanding (#3721), so an e1 still holding its 100 would be clamped 100 past itself, and
+     * e3 would take all 100 of A's units, as an unclamped e3 would: the rig could not tell the two
+     * apart.
+     *
      * The node-level twin is `HeddleNodeTest.aFirstObservationOfASeatedDemandingEdgeIsAWake`.
      */
     @Test
@@ -172,9 +177,13 @@ class FairShareAllocatorTest {
         val e3 = newborn(onB, "e3")
         val filledAt60 = Demand(targetOutstanding = 60L, maximumUsefulGrant = 10L)
         FairShareAllocator(b, policy).schedule(root, onB, earmarked = 0L, demandOf(e1 to hungry, e2 to filledAt60))
+        // e1's work runs: a clamp counts what a waker still holds past the front (#3721), and the
+        // rig is about the front, so e1 holds nothing.
+        onB.apply(onB.current.spend(b, g1, 100L))
         val onA = InMemoryLedgerCell(onB.current)
         assertAll(
             { assertEquals(100L, issued(onA, e1), "A sees e1's run") },
+            { assertEquals(0L, assertNotNull(onA.current.edge(e1)).outstanding, "the rig: and e1 spent it all") },
             { assertEquals(60L, issued(onA, e2), "and e2's, filled at 60: the rig, a second-furthest-ahead child below e1") },
             { assertEquals(gaugeOfUnits(0L, 0L), onA.current.gauge(e3), "and e3 seated at the origin, 100 behind") },
         )

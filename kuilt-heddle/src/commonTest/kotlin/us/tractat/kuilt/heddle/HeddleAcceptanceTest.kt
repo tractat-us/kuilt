@@ -358,6 +358,11 @@ class HeddleAcceptanceTest {
      * idle child: the rig asserts that, and that the idle child read far behind the runner before
      * the boot call, which is what makes "level" mean something. The runs are short enough that
      * every position stays inside the window the public reads hold it in.
+     *
+     * The runner spends all it holds before the crash. A clamped waker is counted past the front by
+     * its outstanding (#3721), and the runner is the front, so a runner still holding the unused
+     * part of its last grants would be clamped that far past itself, and the idle child would come
+     * back behind it by exactly that.
      */
     @Test
     fun aRestartedSchedulerWithALongIdleChildDemandingAtBootComesBackLevel() = runTest(
@@ -383,6 +388,8 @@ class HeddleAcceptanceTest {
         val callsBefore: Int,
         val callsAfter: Int,
         val idleIssuedBefore: Long,
+        /** What the runner still held when it crashed: nothing, so the clamp counts nothing past the front. */
+        val lightOutstandingBefore: Long,
         val freshReplica: Boolean,
         /** The idle child's effective virtual service on the restarted scheduler, before its first call. */
         val idleAtRestart: Rational,
@@ -401,6 +408,7 @@ class HeddleAcceptanceTest {
             { assertEquals(plannedBefore, callsBefore, "the run before the restart made every call") },
             { assertEquals(plannedAfter + 1, callsAfter, "and the run after it made every call") },
             { assertEquals(0L, idleIssuedBefore, "the rig: the heavy child idled through the whole run before the crash") },
+            { assertEquals(0L, lightOutstandingBefore, "the rig: and the runner spent all it held before it") },
             { assertTrue(freshReplica, "the rig: the restarted process is a fresh replica") },
             {
                 assertTrue(
@@ -436,9 +444,17 @@ class HeddleAcceptanceTest {
         }
         // Its demand goes with it: the restarted process advertises its own.
         for (lane in spreadLanes) first.advertise(lane.id, Demand.NONE)
+        // And its work runs out: a clamp counts what a waker still holds past the front (#3721), and
+        // the rig is about the front, so the runner holds nothing across the restart.
+        for (lane in spreadLanes) {
+            val held = first.ledger.value.holdings(lane.child, first.self)
+            if (held == 0L) continue
+            first.execution.complete(assertIs<ReserveOutcome.Reserved>(first.execution.reserve(lane.child, held)).id, held)
+        }
         cluster.pump()
         val settledBefore = cluster.peers[0].node.ledger.value
         val idleIssuedBefore = first.ledger.value.edge(idle.id)?.issued ?: 0L
+        val lightOutstandingBefore = first.ledger.value.edge(light.id)?.outstanding ?: 0L
 
         cluster.restart(1)
         val restarted = cluster.peers[1]
@@ -479,6 +495,7 @@ class HeddleAcceptanceTest {
             callsBefore = before.calls,
             callsAfter = after.calls,
             idleIssuedBefore = idleIssuedBefore,
+            lightOutstandingBefore = lightOutstandingBefore,
             freshReplica = restarted.replica != first.self,
             idleAtRestart = idleAtRestart,
             lightAtRestart = lightAtRestart,

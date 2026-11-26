@@ -972,7 +972,10 @@ class HeddleNodeTest {
      *
      * Demand is replicated here, so B's advertisement of `e2` is live on A. `targetOutstanding = 60`
      * lets B fill it exactly, so on A it is active but not competing, and the front A reads before
-     * its call is the two competing edges' mean (the rig). The core twin is
+     * its call is the two competing edges' mean (the rig). `e1` spends what it was granted before
+     * A's call: a clamped waker is counted past the front by its outstanding (#3721), so an `e1`
+     * still holding its 100 would be clamped 100 past itself and `e3` would take all of A's units,
+     * as an unclamped `e3` would. The core twin is
      * `FairShareAllocatorTest.aFirstObservationOfASeatedDemandingChildIsAWake`.
      */
     @Test
@@ -994,9 +997,13 @@ class HeddleNodeTest {
         b.advertise(e1, hungrier)
         b.advertise(e2, Demand(targetOutstanding = 60L, maximumUsefulGrant = 10L))
         b.schedule(root)
+        // e1's work runs: a clamp counts what a waker still holds past the front (#3721), and the
+        // rig is about the front, so e1 holds nothing.
+        b.complete(assertIs<ReserveOutcome.Reserved>(b.reserve(g1, 100L), "e1's leaf holds its 100").id, 100L)
         h.pump()
         assertAll(
             { assertEquals(100L, a.ledger.value.edge(e1)!!.issued, "A merged e1's run") },
+            { assertEquals(0L, a.ledger.value.edge(e1)!!.outstanding, "the rig: and e1 spent it all") },
             {
                 assertEquals(
                     60L,
