@@ -300,7 +300,7 @@ class LocalHeddleShrinkTest {
             { assertEquals(listOf(open), draining.blockingLeases, "naming the lease") },
             { assertIs<LeaseOutcome.Done>(done) },
             { assertEquals(emptyList(), landed.refusals, "and lands once it settles") },
-            { assertEquals(null, h.snapshot().ledger.lineageOf(a), "a is gone") },
+            { assertEquals(emptyList(), h.snapshot().ledger.lineageOf(a), "a has no lineage left") },
             { assertTrue(decodes(h), "the snapshot after it decodes") },
         )
     }

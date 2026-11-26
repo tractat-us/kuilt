@@ -99,8 +99,10 @@ public data class LocalHeddleRevision(public val epoch: Long, public val count: 
 /**
  * One open lease: one slot of work running for [leaf].
  *
- * @property reserved the cost delegated to it so far: its reservation plus every extension. `0` for
- *   a lease [LocalHeddle.admit] opened past the lifetime limit, which reserved nothing.
+ * @property reserved the cost delegated to it so far: its reservation plus every extension, less
+ *   every [LocalHeddle.shrink]. `0` for a lease [LocalHeddle.admit] opened past the lifetime limit,
+ *   which reserved nothing, and for one shrunk by all it reserved. A lease at `0` is still open, and
+ *   a removal of its lane still waits on it.
  * @property startedAt when the work started, as the caller reported it, in the cost unit. Stored
  *   and handed back, never read by a pick: two runs that differ only in start times make the same
  *   picks.
@@ -213,7 +215,11 @@ public data class LeaseReconciliation(
             require(elapsed >= 0L) { "elapsed must be non-negative, was $elapsed" }
         }
 
-        /** What the engine handed this lease: its reservation plus every extension, [Lease.reserved]. */
+        /**
+         * What the engine handed this lease and it kept: its reservation plus every extension, less
+         * every [LocalHeddle.shrink], [Lease.reserved]. A shrunk orphan's [defaultSettlement] is so
+         * capped at its shrunk size, `0` for one shrunk whole.
+         */
         public val granted: Long get() = lease.reserved
 
         /**
@@ -1127,9 +1133,13 @@ public class LocalHeddle private constructor(
      * Returns [LeaseOutcome.Done] with nothing charged, or [LeaseOutcome.Unknown] or
      * [LeaseOutcome.Stale] when no lease is open under that id.
      *
+     * Shrunk by all it reserves, the lease stays open at `0`, and a reload removing its lane waits
+     * on it as on any open lease, as [StepRefusal.Draining] with nothing [outstanding][StepRefusal.Draining.outstanding]
+     * when it is the only one there, until it is completed or cancelled.
+     *
      * @throws IllegalArgumentException when [amount] is not in `1..`[Lease.reserved]: a lease cannot
-     *   hand back more than it reserves, and a lease admitted past the lifetime limit, which reserves
-     *   nothing, has nothing to hand back.
+     *   hand back more than it reserves, and a lease reserving nothing, one admitted past the lifetime
+     *   limit or shrunk whole already, has nothing to hand back.
      * @sample us.tractat.kuilt.heddle.sampleShrinkAfterPick
      */
     public fun shrink(lease: LeaseId, amount: Long): LeaseOutcome = atomically {
@@ -1290,8 +1300,8 @@ public class LocalHeddle private constructor(
      * move onto it the same way.
      *
      * **A removal drains.** A removed child is closed at once, so nothing new is leased there, and
-     * retires once its open leases complete; until then it is [StepRefusal.Draining], naming the
-     * leases it waits for. A removal under a reweighted group wins: that group's reweight waits
+     * retires once its open leases complete, whatever they reserve; until then it is
+     * [StepRefusal.Draining], naming the leases it waits for. A removal under a reweighted group wins: that group's reweight waits
      * too, as [StepRefusal.Draining], and changes nothing until every lease beneath it can move. A
      * lease whose work is gone is found by [reconcileLeases] and settled with [complete], so an
      * orphan holds a reload up no longer than that.
@@ -1715,8 +1725,8 @@ public class LocalHeddle private constructor(
         for (lease in moving) {
             val path = local.lineageOf(lease.lease.leaf)?.takeIf { p -> p.isNotEmpty() && p.all { local.lifecycle(it) == Lifecycle.ACTIVE } }
             val reserved = lease.lease.reserved
-            // A lease admitted past the lifetime limit reserves nothing, so there is nothing to move;
-            // one whose reservation the new path has no room for within `Long` is not moved (#3475).
+            // A lease reserving nothing, admitted past the lifetime limit or shrunk whole, has nothing
+            // to move; one whose reservation the new path has no room for within `Long` is not moved (#3475).
             val delegated = path?.let {
                 when {
                     reserved == 0L -> local
