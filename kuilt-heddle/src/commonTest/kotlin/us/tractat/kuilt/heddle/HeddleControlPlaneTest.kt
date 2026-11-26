@@ -497,6 +497,35 @@ class HeddleControlPlaneTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // #3198: a governed Retire is gated on CLOSING in log order, whatever the ledger's own
+    // `retire` admits. The ledger may retire an unused PREPARED edge; a logged Retire over one
+    // was refused before that, and must stay refused, or two builds decide one index differently.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun aGovernedRetireOfAPreparedEdgeIsRefused() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        val sink = RecordingSink()
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-prepared")
+        val prepared = AttachmentId("prepared")
+        val active = AttachmentId("active")
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(prepared, root, GroupId("p"), Weight.ONE))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(active, root, GroupId("a"), Weight.ONE))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(active)))
+        val before = plane.projectionSnapshot()
+
+        val retirePrepared = plane.submit(ControlCommand.Retire(prepared, witness = null))
+        val retireActive = plane.submit(ControlCommand.Retire(active, witness = null))
+        assertAll(
+            { assertEquals(Lifecycle.PREPARED, before.lifecycle(prepared), "the rig: the edge is PREPARED in log order") },
+            { assertEquals(Lifecycle.ACTIVE, before.lifecycle(active), "the rig: the edge is ACTIVE in log order") },
+            { assertIs<ControlConflict.Refused>(assertIs<ControlOutcome.Conflict>(retirePrepared).conflict) },
+            { assertIs<ControlConflict.Refused>(assertIs<ControlOutcome.Conflict>(retireActive).conflict) },
+            { assertEquals(Lifecycle.PREPARED, plane.projectionSnapshot().lifecycle(prepared), "the refused retire left the projection PREPARED") },
+            { assertEquals(Lifecycle.PREPARED, sink.snapshot().lifecycle(prepared), "no RETIRED patch reached the data plane") },
+        )
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // FIX 1: governed retire's advisory drain gate — a drained CLOSING edge retires;
     // a non-drained edge is refused LOCALLY (retiring it would strand entitlement).
     // ═══════════════════════════════════════════════════════════════════════════
