@@ -103,8 +103,12 @@ class WakeCreditSlotTest {
     }
 
     /**
-     * A cancelled job that held its slot is charged nothing, which is cancel's free ride. #3238 stays
-     * open until a control with no idle gap separates that ride from wake credit, so this is pinned.
+     * A cancelled job that held its slot is charged nothing, which is cancel's free ride, with an
+     * idle gap as without one ([aCancelledJobThatRanIsAFreeRideOfExactlyItsCost]). None of it is wake
+     * credit: a cancel charged its reservation, which here is the job's cost, takes every row below
+     * to 0.0. It is the contract, not a leak (#3238): `cancel` is for work that never ran, and work
+     * that held its slot settles with `complete(lease, elapsed)`. The sizes are pinned because they
+     * follow how much of the lane's slot time went uncharged, which the gap changes.
      */
     @Test
     fun theCancelResidualIsPinnedAtItsKnownSize() {
