@@ -409,15 +409,15 @@ class ShareLineLagTest {
     }
 
     /**
-     * Pins today's behaviour where "competing" and "demanding" part (#3707). Lane `a` holds `2⁶¹`
-     * units outstanding, so it still competes, since its lane waits, but the step and `explain`
-     * count it as idle. The line's front counts `a`, far ahead, and so reads `b` as owed. `explain`'s
-     * front leaves it out and reads `b` half a unit ahead. The public API reaches the same state
-     * with one `MAX_RESERVATION` lease and 131,072 `extend`s; here one delegation down `a`'s edge,
-     * made outside the engine, stands in for them.
+     * Where "competing" and "demanding" used to part (#3707), they agree. Lane `a` holds `2⁶¹`
+     * units outstanding, past the constant target a wanted edge once advertised, and still competes,
+     * since its lane waits. The step and `explain` count it as demanding too, so the line's front and
+     * `explain`'s are one front, and the lag is `explain`'s distance. The public API reaches the same
+     * state with one `MAX_RESERVATION` lease and 131,072 `extend`s; here one delegation down `a`'s
+     * edge, made outside the engine, stands in for them.
      */
     @Test
-    fun pastTheUnboundedTargetALagAndExplainDisagree() {
+    fun pastTheOldTargetALagAndExplainAgree() {
         val tree = draft("root") {
             lane("a")
             lane("b")
@@ -441,14 +441,15 @@ class ShareLineLagTest {
         val why = engine.explain(b, all, all)
         val lags = listOf(a, b, c).map { checkNotNull(line.lag(it)) }
         assertAll(
-            { assertTrue(outstanding >= huge, "the rig: a's outstanding is past UNBOUNDED_TARGET, $outstanding") },
+            { assertTrue(outstanding >= huge, "the rig: a's outstanding is past the old constant target, $outstanding") },
             { assertTrue(line.share(a) > Rational.ZERO, "the rig: a still competes") },
             { assertTrue(why is WaitExplanation.BehindAtLevel && why.parent == h.root, "the rig: explain answers at the root, $why") },
             {
                 val behind = why as WaitExplanation.BehindAtLevel
-                assertEquals(Rational.of(-1L, 2L), checkNotNull(behind.frontWide).toRational() - checkNotNull(behind.leafSideVirtualServiceWide).toRational(), "explain: b half a unit ahead")
+                val distance = checkNotNull(behind.frontWide).toRational() - checkNotNull(behind.leafSideVirtualServiceWide).toRational()
+                assertEquals(distance, lags[1], "the line's lag is explain's distance, at weight 1")
             },
-            { assertTrue(lags[1] > Rational.of(1L shl 40), "the line: b owed a share of a's lead, ${lags[1]}") },
+            { assertTrue(lags[1] > Rational.of(1L shl 40), "b is owed a share of a's lead, ${lags[1]}") },
             { assertEquals(Rational.ZERO, lags.fold(Rational.ZERO, Rational::plus), "the lags still add up to zero") },
         )
     }
