@@ -1137,16 +1137,18 @@ group's share, read a `ShareLine`; see [Each group's share on the page](#each-gr
 
 `previewPicks` comes in two shapes. Give it a count per leaf and one reservation per slot, or
 give it each leaf's queue of job estimates, head first, and each pick does what your loop would:
-`acquire` at the slot's reservation, then `extend` to the winner's head when that is larger.
+`acquire` at the slot's reservation, then `extend` to the winner's head when that is larger, or
+`shrink` to it straight after the pick when that is smaller (#3648). The slot's reservation decides
+each pick, and the head decides what the lease holds.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#samplePreviewQueues -->
 ```kotlin
     // Each lane's queued builds, by their estimates in minutes, the next one first.
-    val queues = mapOf(web to listOf(3L, 12L, 3L, 3L), mobile to listOf(3L, 3L, 3L))
+    val queues = mapOf(web to listOf(3L, 12L, 3L, 3L), mobile to listOf(3L, 1L, 3L))
     val both = setOf(web, mobile)
     val before = heddle.snapshot()
     val preview = heddle.previewPicks(queues, eligible = both)
-    check(preview == listOf(web, mobile, web, mobile, web, web, mobile))
+    check(preview == listOf(web, mobile, web, mobile, mobile, web, web))
     check(heddle.snapshot() == before)
 ```
 
@@ -1277,6 +1279,8 @@ the same step of the parent's clock. Later it is a refund like any other, and it
 back as `complete`'s remainder would. `amount` must be in `1..lease.reserved`; outside that it
 throws `IllegalArgumentException`. A shrunk lease reserves less wherever the engine counts open
 leases, so the wake clamp (#3238) and a restored snapshot both read the smaller size.
+`FairSharePool` and `previewPicks(queues, …)` already shrink at the grant: a waiter or a queued head
+below the slot's reservation gets a lease holding exactly its own.
 
 ## Surviving a restart
 

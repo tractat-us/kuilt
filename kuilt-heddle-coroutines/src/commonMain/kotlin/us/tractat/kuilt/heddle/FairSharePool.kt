@@ -33,9 +33,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.FairSharePool
  * pool holds open, and the slot count. After every change, while fewer than [slots] leases are open
  * and some leaf has a waiter, the pool asks the engine for the next lease, with every leaf that has
  * a waiter as both the waiting and the eligible set, and grants it to the head waiter of the leaf the
- * engine picked. A waiter that asked for more than the engine's default reservation has the lease
- * extended to it; if the engine cannot extend it, the lease is granted at the default and the rest
- * is charged as an overrun at [complete]. Waiters are resumed only once the lock is released.
+ * engine picked. The pick is made at the engine's default reservation, and the lease is then sized
+ * to the waiter's own: one that asked for less has the difference handed back at once with
+ * [LocalHeddle.shrink], which leaves every position and the wake memory as a lease opened at its
+ * size would (#3648), and one that asked for more has the lease extended to it. If the engine
+ * cannot extend it, the lease is granted at the default and the rest is charged as an overrun at
+ * [complete]. Waiters are resumed only once the lock is released.
  *
  * A grant's [Lease.startedAt] is [now] at the moment the grant is made, which can be a little
  * before its waiter runs. [withSlot] starts its clock when the block starts, so that gap is never
@@ -216,8 +219,9 @@ public class FairSharePool(
      * Cancelling the caller while it waits, or after its grant was made but before it resumed, frees
      * the slot: the lease is cancelled with nothing charged.
      *
-     * @param reservation the cost the caller expects the work to take. Below the engine's default the
-     *   lease holds the default: the pool does not [LocalHeddle.shrink] a lease. Above it, the lease holds [reservation]
+     * @param reservation the cost the caller expects the work to take. The slot is picked at the
+     *   engine's default whatever it is. Below the default, the lease holds [reservation]: the rest is
+     *   handed back at the grant with [LocalHeddle.shrink]. Above it, the lease holds [reservation]
      *   when the engine can extend it that far; otherwise it holds the default, and the rest arrives
      *   as an overrun at [complete].
      * @throws IllegalArgumentException when [reservation] is not in `1..`[LocalHeddle.MAX_RESERVATION],
@@ -485,19 +489,27 @@ public class FairSharePool(
         }
     }
 
-    /** Grant [acquired] to the head waiter of its leaf, extended to the waiter's reservation. */
+    /**
+     * Grant [acquired] to the head waiter of its leaf, sized to the waiter's reservation: shrunk to
+     * it straight after the pick, before any other call, or extended to it.
+     */
     private fun grant(acquired: Lease) {
         val queue = checkNotNull(queues[acquired.leaf]) { "the engine leased ${acquired.leaf.value}, which has no waiter" }
         val waiter = queue.removeFirst()
         if (queue.isEmpty()) queues.remove(acquired.leaf)
         open += acquired.id
-        // Collected at the default first, so an extend that throws still leaves the waiter its lease.
+        // Collected at the default first, so a resize that throws still leaves the waiter its lease.
         val at = pending.size
         pending += Resumption.Grant(waiter.cont, SlotOutcome.Granted(acquired))
-        if (waiter.reservation > acquired.reserved) {
+        val sized = acquired.copy(reserved = waiter.reservation)
+        if (waiter.reservation < acquired.reserved) {
+            val shrunk = engine.shrink(acquired.id, acquired.reserved - waiter.reservation)
+            check(shrunk == LeaseOutcome.Done(0L, 0L, 0L)) { "the shrink of ${acquired.id}, just granted, answered $shrunk" }
+            pending[at] = Resumption.Grant(waiter.cont, SlotOutcome.Granted(sized))
+        } else if (waiter.reservation > acquired.reserved) {
             val extended = engine.extend(acquired.id, waiter.reservation - acquired.reserved, queues.keys)
             if (extended is LeaseOutcome.Done && extended.unrecorded == 0L) {
-                pending[at] = Resumption.Grant(waiter.cont, SlotOutcome.Granted(acquired.copy(reserved = waiter.reservation)))
+                pending[at] = Resumption.Grant(waiter.cont, SlotOutcome.Granted(sized))
             }
         }
     }

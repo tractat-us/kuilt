@@ -456,11 +456,11 @@ class FairSharePoolTest {
         runCurrent()
         p.complete(held.id, 3L)
         jobs.joinAll()
-        val expected = reservations.map { (r, _, _) -> maxOf(r, default).let { Triple(r, it, it) } }
+        val expected = reservations.map { (r, _, _) -> Triple(r, r, r) }
         assertAll(
             { assertEquals(7, granted.size) },
             { assertEquals(listOf(12L), reservations.map { it.first }.filter { it > default }, "the rig: one waiter asks above the default") },
-            { assertEquals(expected, reservations, "each lease holds max(asked, default), on both sides") },
+            { assertEquals(expected, reservations, "each lease holds what it asked, on both sides") },
             { assertEquals(preview, granted) },
         )
     }

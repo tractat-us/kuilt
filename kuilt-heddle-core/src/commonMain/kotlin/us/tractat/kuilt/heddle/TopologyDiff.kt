@@ -123,10 +123,12 @@ public sealed interface TopologyStep {
  * preceded by the retires of its abandoned prepared edges, then retires from the bottom up,
  * the activations of replacement edges from the top down, and last the [TopologyStep.Reconcile]s
  * of internal groups whose old edges carried work. Within a phase, steps sort by depth, then child
- * id, then edge id, except that a child's steps that cannot be refused come first: the retire of
- * an abandoned prepared edge among the closes, and a retire with nothing outstanding. A
- * replacement edge activates only after its predecessor retires, so a child never has two inbound
- * edges carrying work.
+ * id, then edge id, except that a child's steps the ledger cannot refuse come first: the retire of
+ * an abandoned prepared edge among the closes, and a retire with nothing outstanding. The ledger
+ * is all the diff reads, so it cannot see an open lease: a [LocalHeddle] still holds that second
+ * retire back as [StepRefusal.Draining] while an open lease reserving nothing crosses the edge,
+ * and the held step ends that child's steps for the round. A replacement edge activates only after
+ * its predecessor retires, so a child never has two inbound edges carrying work.
  *
  * @param generation a counter, `>= 0`, for the edges this diff prepares. It is raised past every
  *   generation the ledger holds, so a caller that lost its counter still never reuses an id.
@@ -319,8 +321,8 @@ public fun Topology.detach(group: List<String>, name: String, ledger: Entitlemen
  * for an attached leaf, `[Retire]` when it is already closing, and `[]` when there is nothing left
  * to do. Beneath an attached group the whole subtree goes, closes top-down and retires bottom-up, so
  * nothing is retired while a child beneath it still has a live edge. A retire is refused while work
- * beneath it is outstanding, and so is every retire above it; detach again, or diff, once it has
- * drained. Attaching the group again brings none of its children back.
+ * beneath it is outstanding or an open lease crosses it, even one reserving nothing, and so is every
+ * retire above it; detach again, or diff, once it has drained. Attaching the group again brings none of its children back.
  *
  * A prepared edge a child has — a re-attach or a reweight still waiting for a drain — is retired
  * too, straight from PREPARED, and first: `[Retire p, Close a, Retire a]`. Otherwise it would
@@ -579,9 +581,11 @@ private enum class Phase { PREPARE, FRESH_ACTIVATE, CLOSE, RETIRE, REPLACEMENT_A
 
 /**
  * A step and where it sorts. [first] puts it ahead of the same child's other steps in its phase: a
- * retire, among the closes, of a prepared edge an attached child is abandoning, and a retire that
- * cannot be refused because nothing is outstanding on it. Neither changes as a prefix of the list applies,
- * so re-entrance holds.
+ * retire, among the closes, of a prepared edge an attached child is abandoning, and a retire with
+ * nothing outstanding on it, which the ledger cannot refuse. An engine can still hold the second
+ * back while an open lease reserving nothing crosses the edge, which the ledger cannot see; that
+ * held step then ends the child's steps for the round, as any refusal does. Neither changes as a
+ * prefix of the list applies, so re-entrance holds.
  */
 private class Planned(val phase: Phase, val step: TopologyStep, val first: Boolean = false) {
     // An escaped segment never contains `/`, so counting them is the depth.
