@@ -450,6 +450,14 @@ class TopologyDiffPropertyTest {
         if (closesPrepared.isNotEmpty()) failures += "$where closes prepared edges $closesPrepared"
         val applied = applyAll(steps, ledger)
         checkNoDualLive(applied.ledger, failures, where)
+        // An abandoned prepared edge carries nothing, so its retire is never the step that refuses:
+        // it is skipped only behind an earlier refusal of its child, or a group below it.
+        for ((i, step) in steps.withIndex()) {
+            if (step !is TopologyStep.Retire || ledger.lifecycle(step.edge) != Lifecycle.PREPARED || i in applied.applied) continue
+            val behindItsChild = steps.withIndex().any { (j, other) -> j < i && other.child == step.child && j !in applied.applied }
+            val behindBelow = applied.refused.any { it.value.startsWith(step.child.value + "/") }
+            if (!behindItsChild && !behindBelow) failures += "$where refused the retire of prepared ${step.edge.value}"
+        }
         return applied
     }
 
