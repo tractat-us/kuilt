@@ -195,38 +195,29 @@ class WebCryptoDeviceKeyStoreTest {
      * Two stores that share no in-page mutex, as two tabs share none, still make one key between them:
      * the Web Lock alone orders them.
      *
-     * The interleaving is forced: the first store to reach the gate waits there, in wall-clock time,
-     * for the other store to reach it too. Without the Web Lock the other store reads "no key" and
-     * arrives, so two keys are made, every time. With it, the other store waits for the lock, the gate
-     * gives up after [OVERLAP_MS], and the test checks that both calls were still in flight then.
+     * The witness is the browser's own lock manager. The first store to reach the gate is about to make
+     * the key, and holds there until `navigator.locks.query()` shows the other store's request waiting
+     * on the database's lock. With the Web Lock it is: one held, one pending. Without it nothing holds
+     * or waits on that name at all, so the rig reds whenever the other store gets there — a lagging
+     * store cannot let the missing lock pass by reading the first store's key after it is written.
      */
     @Test
     fun twoStoresWithTheirOwnMutexesMakeOneKey() = runTest {
         val database = freshDatabase()
-        val meeting = Meeting()
         var made = 0
-        var inFlight = 0
-        var inFlightWhileMaking = -1
+        var whileMaking: WebLockState? = null
         val gate: suspend () -> Unit = {
             made++
-            meeting.arrive()
-            if (inFlightWhileMaking < 0) inFlightWhileMaking = inFlight
+            if (made == 1) whileMaking = awaitAWaiter(database)
         }
         val stores = List(2) { WebCryptoDeviceKeyStore(database, IndexedDbGrantMedium(database), Mutex(), gate) }
-        val ids = stores.map { store ->
-            async {
-                inFlight++
-                try {
-                    store.deviceKey().id
-                } finally {
-                    inFlight--
-                }
-            }
-        }.awaitAll()
+        val ids = stores.map { store -> async { store.deviceKey().id } }.awaitAll()
         val kept = independentNameOf(publicKeyOf(assertNotNull(readRecord(database), "a key is kept")))
+        val witness = assertNotNull(whileMaking, "rig: a key was made")
 
         assertAll(
-            { assertEquals(2, inFlightWhileMaking, "precondition: both calls were in flight while the key was made") },
+            { assertEquals(1, witness.held, "rig: the store making the key holds the Web Lock") },
+            { assertEquals(1, witness.pending, "rig: and the other store is waiting on it") },
             { assertEquals(1, made, "one key made between two stores that share no in-page mutex") },
             { assertEquals(1, ids.toSet().size, "both stores name the same device") },
             { assertEquals(ids.first(), kept, "and that device's key is the one kept") },
@@ -237,39 +228,30 @@ class WebCryptoDeviceKeyStoreTest {
      * Two stores that share no in-page mutex, keeping a grant each at once, lose neither: the Web Lock
      * holds the grants record's read, merge and write together.
      *
-     * Forced as above, at the grants read: each store, having read the record, waits for the other to
-     * have read it too. Without the Web Lock both read the empty record and the second write drops the
-     * first grant. With it, the second read comes after the first write.
+     * Witnessed as above, at the first grants read: the store that has read the record holds there
+     * until the lock manager shows the other store waiting on the database's lock.
      */
     @Test
     fun twoStoresWithTheirOwnMutexesKeepBothGrants() = runTest {
         val database = freshDatabase()
         val me = store(database).deviceKey().id
-        val meeting = Meeting()
-        var inFlight = 0
-        var inFlightAtFirstRead = -1
+        var reads = 0
+        var atFirstRead: WebLockState? = null
         val medium = AfterGrantsRead(IndexedDbGrantMedium(database)) {
-            meeting.arrive()
-            if (inFlightAtFirstRead < 0) inFlightAtFirstRead = inFlight
+            reads++
+            if (reads == 1) atFirstRead = awaitAWaiter(database)
         }
         val stores = List(2) { WebCryptoDeviceKeyStore(database, medium, Mutex()) {} }
         val host = DeviceKey.generate()
         val grants = listOf("A", "B").map { room -> Grant.issue(host, me, GrantScope.Room(room), ISSUED_AT, ISSUED_AT + HOUR) }
-        stores.zip(grants) { store, grant ->
-            async {
-                inFlight++
-                try {
-                    store.keepGrant(grant)
-                } finally {
-                    inFlight--
-                }
-            }
-        }.awaitAll()
+        stores.zip(grants) { store, grant -> async { store.keepGrant(grant) } }.awaitAll()
         val kept = store(database).grants().toSet()
+        val witness = assertNotNull(atFirstRead, "rig: a store read the grants record")
 
         assertAll(
-            { assertEquals(2, inFlightAtFirstRead, "precondition: both calls were in flight at the first grants read") },
-            { assertEquals(2, meeting.arrivals, "precondition: both stores read the grants record") },
+            { assertEquals(1, witness.held, "rig: the store reading the grants holds the Web Lock") },
+            { assertEquals(1, witness.pending, "rig: and the other store is waiting on it") },
+            { assertEquals(2, reads, "precondition: both stores read the grants record") },
             { assertEquals(grants.toSet(), kept, "neither store's grant is lost to the other's write") },
         )
     }
@@ -284,32 +266,48 @@ class WebCryptoDeviceKeyStoreTest {
         idbCall("generating", start)
 }
 
-/** Long enough for an IndexedDB read and a WebCrypto key to finish many times over. */
-private const val OVERLAP_MS = 300
-
 private const val ISSUED_AT = 1_700_000_000_000L
 private const val HOUR = 3_600_000L
 
-/**
- * Two parties meeting in wall-clock time: the first to [arrive] waits for the second, or for
- * [OVERLAP_MS] of real time, whichever comes first. Real time, not the test's virtual clock, because
- * the other party is held up by the browser — a Web Lock, an IndexedDB callback — which virtual time
- * does not advance.
- */
-private class Meeting {
-    var arrivals = 0
-        private set
-    private val met = CompletableDeferred<Unit>()
+/** How long [awaitAWaiter] looks for a waiting request before it answers with what it last saw. */
+private const val WAITER_CEILING_MS = 10_000
+private const val WAITER_POLL_MS = 10
 
-    suspend fun arrive() {
-        arrivals++
-        if (arrivals >= 2) {
-            met.complete(Unit)
-        } else {
-            afterMillis(OVERLAP_MS) { met.complete(Unit) }
-        }
-        met.await()
+/** The requests the browser's lock manager reports for one Web Lock name: holding it, and waiting on it. */
+private class WebLockState(val held: Int, val pending: Int) {
+    override fun toString(): String = "WebLockState(held=$held, pending=$pending)"
+}
+
+/**
+ * The Web Lock [name] as `navigator.locks.query()` reports it, once that shows a request waiting on it.
+ * It answers at once when nothing holds the lock, since then nothing can be waiting on it, and with
+ * the last snapshot after [WAITER_CEILING_MS] of real time. Real time, not the test's virtual clock:
+ * the other request is held up by the browser, which virtual time does not advance.
+ */
+private suspend fun awaitAWaiter(name: String): WebLockState {
+    var waited = 0
+    while (true) {
+        val state = webLockState(name)
+        if (state.held == 0 || state.pending > 0 || waited >= WAITER_CEILING_MS) return state
+        realDelay(WAITER_POLL_MS)
+        waited += WAITER_POLL_MS
     }
+}
+
+private suspend fun webLockState(name: String): WebLockState {
+    val state = CompletableDeferred<WebLockState>()
+    queryWebLock(
+        name,
+        onDone = { held, pending -> state.complete(WebLockState(held, pending)) },
+        onError = { state.completeExceptionally(IllegalStateException("navigator.locks.query() failed ($it)")) },
+    )
+    return state.await()
+}
+
+private suspend fun realDelay(ms: Int) {
+    val done = CompletableDeferred<Unit>()
+    afterMillis(ms) { done.complete(Unit) }
+    done.await()
 }
 
 /** [inner], with [afterRead] run each time a call has read the grants record and before it goes on. */
@@ -324,6 +322,21 @@ private class AfterGrantsRead(private val inner: GrantMedium, private val afterR
 
 @JsFun("(ms, done) => { setTimeout(() => done(), ms); }")
 private external fun afterMillis(ms: Int, done: () -> Unit)
+
+/** Counts the requests `navigator.locks.query()` shows holding, and waiting on, the Web Lock [name]. */
+@JsFun(
+    """
+    (name, onDone, onError) => {
+        try {
+            navigator.locks.query().then((snapshot) => {
+                const named = (requests) => (requests || []).filter((request) => request.name === name).length;
+                onDone(named(snapshot.held), named(snapshot.pending));
+            }, (e) => onError(e && e.name ? e.name : String(e)));
+        } catch (e) { onError(e && e.name ? e.name : String(e)); }
+    }
+    """,
+)
+private external fun queryWebLock(name: String, onDone: (Int, Int) -> Unit, onError: (String) -> Unit)
 
 /**
  * Makes the next `crypto.subtle[method]` call reject with an `OperationError`, as a browser's own
