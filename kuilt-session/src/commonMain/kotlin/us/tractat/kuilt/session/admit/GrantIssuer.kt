@@ -32,8 +32,8 @@ internal object GrantIssuer {
      * life of the pass, depending on when it dropped. At 3, with [AdmissionPolicy.open]'s hour: a pass
      * lives 90 minutes, is renewed every 30, and a device gets back in on it 60 to 90 minutes after its
      * last contact. The floor holds provided the last renewal reached the member: one that fails to
-     * sign or is lost on the way is not resent (tracked by #3711), so the member is left on the pass
-     * before it.
+     * sign or to send is tried again ([retryDelayMillis], #3711), but one the link took and then lost
+     * is not known to be lost, and leaves the member on the pass before it.
      *
      * What it costs: one signature and one [AdmitMessage.GrantRenewal] per connected member per
      * period, and a pass that outlives the promise by up to `r/(N−1)`. A larger value brings the
@@ -95,6 +95,45 @@ internal object GrantIssuer {
      */
     fun refreshPeriodMillis(terms: GrantTerms): Long? =
         if (terms.readmitFor.isInfinite()) null else maxOf(1L, terms.readmitFor.inWholeMilliseconds / (PERIODS_PER_PASS - 1))
+
+    /** The first wait before a renewal that failed to sign or send is tried again (#3711): a second. */
+    const val RETRY_FIRST_DELAY_MS: Long = 1_000
+
+    /**
+     * Each retry waits at most this share of the time left on the pass the device is known to hold:
+     * a quarter (#3711). The waits therefore close up as that pass nears its end.
+     */
+    const val RETRY_SHARE_OF_REMAINING: Long = 4
+
+    /**
+     * The shortest wait the closing-in cap may impose: a quarter second (#3711). A cap with no floor
+     * would land a burst of tries in the pass's last second, each a platform signature and a logged
+     * failure; with it, about four.
+     */
+    const val RETRY_MIN_DELAY_MS: Long = 250
+
+    /**
+     * How long to wait before retry number [retry] (0 for the first) of a renewal that failed to sign
+     * or to send, in milliseconds (#3711). The wait doubles from [RETRY_FIRST_DELAY_MS], never past
+     * [periodMs], so a retry is never later than the schedule it replaces. While the pass the device
+     * is known to hold, ending at [sentNotAfter], has time left at [nowMs], the wait is also at most
+     * `1/`[RETRY_SHARE_OF_REMAINING] of that time, but not under [RETRY_MIN_DELAY_MS], so the last tries
+     * before it runs out come closest together without bunching. A try that would land at or past its
+     * end waits the plain doubling instead: there is nothing left to close in on. A [sentNotAfter] of
+     * null (no pass known), [Grant.NO_EXPIRY], or already past sets no cap. Never under 1 ms, so the
+     * loop cannot spin at one instant.
+     */
+    fun retryDelayMillis(retry: Int, nowMs: Long, sentNotAfter: Long?, periodMs: Long): Long {
+        val doubled = if (retry >= MAX_DOUBLINGS) Long.MAX_VALUE else RETRY_FIRST_DELAY_MS shl retry
+        val scheduled = maxOf(1L, minOf(doubled, periodMs))
+        val left = if (sentNotAfter == null || sentNotAfter == Grant.NO_EXPIRY) 0L else sentNotAfter - nowMs
+        if (left <= 0) return scheduled
+        val capped = maxOf(minOf(scheduled, left / RETRY_SHARE_OF_REMAINING), minOf(RETRY_MIN_DELAY_MS, scheduled))
+        return if (capped < left) capped else scheduled
+    }
+
+    /** Past this many doublings [RETRY_FIRST_DELAY_MS] would overflow a `Long`; the period caps it long before. */
+    private const val MAX_DOUBLINGS = 52
 
     /**
      * Whether a membership admitted at [admittedAtMs] may be issued a pass, given its device's

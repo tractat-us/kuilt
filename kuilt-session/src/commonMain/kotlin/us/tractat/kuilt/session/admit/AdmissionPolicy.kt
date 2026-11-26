@@ -54,7 +54,8 @@ public fun interface AdmissionPolicy {
          * back in on its pass, and up to one and a half times it, depending on when it dropped. With
          * the default hour that is 60 to 90 minutes: the pass lasts 90 minutes and is renewed every 30
          * while the device stays connected. That floor holds provided the last renewal reached the
-         * device: one that fails to sign or is lost on the way is not sent again (tracked by #3711).
+         * device: one that fails to sign or to send is tried again, more often as the device's pass
+         * nears its end (#3711), but one the link took and then lost is not known to be lost.
          *
          * [readmitFor] is checked here, so a bad value throws when the host is configured rather than
          * on some joiner's admission.
@@ -184,8 +185,9 @@ public enum class GrantReach {
  * first joined. The pass itself lasts one and a half times [readmitFor] ([notAfter]), and the room
  * issues a fresh one every half of [readmitFor] while the member stays connected, so the pass a device
  * holds when it drops has at least [readmitFor] left. That floor holds provided the last renewal
- * reached the device: one that fails to sign or is lost on the way is not sent again (tracked by
- * #3711). [Duration.INFINITE] means the pass never runs out.
+ * reached the device: one that fails to sign or to send is tried again, more often as the device's
+ * pass nears its end (#3711), but one the link took and then lost is not known to be lost.
+ * [Duration.INFINITE] means the pass never runs out.
  *
  * A grant is dated in whole epoch milliseconds and must end after it starts, so [readmitFor] is at
  * least one millisecond; a part millisecond beyond that is dropped.

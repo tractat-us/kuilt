@@ -408,11 +408,12 @@ class GrantIssueTest {
 
     /**
      * A pass the host fails to sign at seating leaves the Welcome without one, and renewals still
-     * start: the next pass arrives a period later. Renewals run on the membership's terms, not on a
-     * pass that happened to be signed.
+     * start: the next pass arrives on the first retry, here no later than a period (#3711;
+     * `GrantRenewalRetryTest` pins the retry's own wait). Renewals run on the membership's terms, not
+     * on a pass that happened to be signed.
      */
     @Test
-    fun aPassThatFailsToSignAtSeatingIsRenewedAPeriodLater() = runTest {
+    fun aPassThatFailsToSignAtSeatingIsStillRenewed() = runTest {
         val store = FailsFirstPass(fakeKeyStore(HOST_DEVICE))
         val host = rawHost(joiners = setOf(bob), store = store, admission = admitting(GrantTerms(term)))
         host.admit(bob, bobKey, nonce = 1)
@@ -425,7 +426,7 @@ class GrantIssueTest {
         assertAll(
             { assertEquals(1, store.refused, "rig: the signer refused the Welcome's pass") },
             { assertEquals(null, direct.grant, "rig: so the Welcome carries none") },
-            { assertEquals(1, host.renewalsTo(bob), "a renewal still arrives a period later") },
+            { assertEquals(1, host.renewalsTo(bob), "a renewal still arrives, a period later at most") },
             { assertEquals<GrantVerdict?>(GrantVerdict.Valid, verdict) },
         )
     }
