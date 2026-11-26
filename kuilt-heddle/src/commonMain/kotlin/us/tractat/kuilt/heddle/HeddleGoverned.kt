@@ -355,6 +355,8 @@ public class GovernedHeddleNode internal constructor(
      * retiring a non-drained edge would strand its outstanding entitlement, because a RETIRED edge
      * drops off the live lineage the data plane drains through. Once past the local drain check, the
      * committed retire is gated purely on the **log-order** lifecycle being CLOSING — a deterministic apply.
+     * A PREPARED edge is refused here even though [EntitlementLedger.retire] takes an unused one (#3198):
+     * a retire already in a log over a PREPARED edge was refused when it committed, and stays refused.
      *
      * **The local drain check is advisory, and a missed race strands entitlement.** If a peer's in-flight
      * `delegate` has not yet merged into this proposer's view, the check reads `outstanding == 0`, the retire
