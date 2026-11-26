@@ -70,8 +70,9 @@ class LocalHeddleRelativeTargetTest {
     /** Past the lifetime watermark, `acquire` and `explain` both answer `LifetimeExhausted` at the root. */
     @Test
     fun pastTheWatermarkAcquireAndExplainAnswerLifetimeExhausted() {
-        val (h, _) = loaded(LIFETIME_WATERMARK)
+        val (h, edge) = loaded(LIFETIME_WATERMARK)
         assertAll(
+            { assertEquals(LIFETIME_WATERMARK, outstandingOf(h, edge), "the rig") },
             { assertEquals(WaitExplanation.LifetimeExhausted(h.root), h.explain(a, all, setOf(a))) },
             { assertEquals(AcquireOutcome.LifetimeExhausted(h.root), h.acquire(all, setOf(a), startedAt = 0L)) },
         )
@@ -138,12 +139,14 @@ class LocalHeddleRelativeTargetTest {
     }
 
     /**
-     * A reload that moves two leases under one parent reads, for the second, the ledger the first
-     * left. Every lane waits throughout, and `a` has run ahead of `c`. The reload gives `p` and `b`
-     * new edges and keeps `a`'s and `c`'s. `a`'s lease moves first, across `p`'s new edge, and
-     * leaves its reservation outstanding on `a`'s edge; `b`'s moves second, and seats `b`'s new
-     * edge, the one unseated child of `p`, at `p`'s front: the mean of `a` and `c`, both demanding.
-     * Read as idle, `a` would leave the front at `c` alone.
+     * A regression pin of reload seating: a moved lease's sibling is seated at a front that counts
+     * an edge last observed asking. Every lane waits throughout, and `a` has run ahead of `c`. The
+     * reload gives `p` and `b` new edges and keeps `a`'s and `c`'s. `a`'s lease moves first, across
+     * `p`'s new edge; `b`'s moves second, and seats `b`'s new edge, the one unseated child of `p`,
+     * at `p`'s front: the mean of `a` and `c`, both last seen demanding. It does not pin that the
+     * second lease reads the ledger the first left: no case discriminates, because a target taken
+     * from a stale outstanding and a step reading the current one differ by at most
+     * `MAX_RESERVATION`, which neither the demandingness test nor the quantum trim can see.
      */
     @Test
     fun aReloadThatMovesTwoLeasesSeatsTheSecondAtAFrontThatCountsTheFirst() {

@@ -2097,9 +2097,11 @@ public class LocalHeddle private constructor(
          * just under 2^61. A wanted edge advertises `outstanding + UNBOUNDED_TARGET`, saturating at
          * `Long.MAX_VALUE` ([wanted], #3707), so its need, `target − outstanding`, is this constant
          * until the sum saturates, far above any reservation however much is open beneath it.
-         * [HeddlePolicy]'s subtraction is not overflow-checked, and with the target at most
-         * `Long.MAX_VALUE` it cannot wrap for any outstanding of `−3 × 2^61` or more. A healthy
-         * ledger's outstanding is never negative.
+         * [HeddlePolicy]'s subtraction is not overflow-checked, and the target is at most
+         * `Long.MAX_VALUE`, and a negative outstanding's target is exactly this constant (the
+         * `maxOf(outstanding, 0)` lift in [wanted]), so the subtraction cannot wrap for any
+         * outstanding of `−3 × 2^61` or more; a target of `Long.MAX_VALUE` against an outstanding
+         * of −1 would wrap. A healthy ledger's outstanding is never negative.
          */
         internal const val UNBOUNDED_TARGET: Long = Long.MAX_VALUE / 4
 
