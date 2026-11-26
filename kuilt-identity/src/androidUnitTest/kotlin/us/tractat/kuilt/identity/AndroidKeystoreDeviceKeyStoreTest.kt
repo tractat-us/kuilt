@@ -554,10 +554,11 @@ class AndroidKeystoreDeviceKeyStoreTest {
         val verifier = FaultingVerifier(faults = 0)
 
         val replacement = rig.launch(verifier = verifier).deviceKey().id
+        val planted = independentNameOf(named.public)
 
         assertAll(
             { assertEquals(2, verifier.calls, "the provider's verify ran: on the planted key, then on its replacement") },
-            { assertNotEquals(independentNameOf(named.public), replacement, "and the key was replaced") },
+            { assertNotEquals(planted, replacement, "and the key was replaced") },
             { assertEquals(1, rig.keystore.generated, "with one new key") },
         )
     }
