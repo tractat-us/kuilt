@@ -491,6 +491,11 @@ from one primitive — *close, drain, retire, re-generate*:
   `outstanding == 0` → RETIRED. History stays queryable forever, edge by edge
   on a replicated ledger. A single-process engine will instead fold a finished
   leaf's edge into a per-parent total (§5.5).
+- **Abandon** a PREPARED edge nothing has crossed: RETIRED directly, skipping
+  CLOSING, since a CLOSING edge is live and would give its child a second live
+  inbound edge until the retire landed (#3198). An edge carrying any counter or
+  gauge is refused. The governed control plane does not take this path: its
+  `Retire` stays gated on CLOSING in log order.
 - **Reparent** `C` from `A` to `B`: prepare `B→C`, close-drain-retire `A→C`,
   then activate `B→C` neutrally at `B`'s current virtual time. Old history
   stays under `A`; `C` starts prospectively neutral under `B`.
