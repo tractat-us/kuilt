@@ -16,10 +16,12 @@ import us.tractat.kuilt.math.timesWide
  *
  * A scheduler that runs in one process and outlives a restart needs this. Without it a restarted
  * allocator has observed nothing, so every seated child it finds asking is a waker it clamps to
- * the front, plus its edge's outstanding (the restart rule, design §7.2, #3238, #3721). That denies idle credit, but it costs every such child its lag: a child
- * that paused just before the restart comes back clamped to the front, not
- * moved by its parent's clock, so the lag a short burst left is forgiven, and a child that was owed
- * service loses what it was owed. So the allocator exports its memory through
+ * the front, plus its edge's outstanding (the restart rule, design §7.2, #3238, #3721). That
+ * denies idle credit, but it costs every such child its lag: a child that paused just before the
+ * restart comes back clamped to the front, not moved by its parent's clock, so the lag a short
+ * burst left is forgiven, and a child that was owed service loses what it was owed. Nor can it
+ * tell an idle sibling from a competing one, so a sibling may keep up to the front child's
+ * outstanding of lag it should forfeit ([FairShareAllocator]'s *Two histories*). So the allocator exports its memory through
  * [FairShareAllocator.memory] and takes it back through its constructor, and a caller that persists
  * its ledger persists this beside it.
  *
