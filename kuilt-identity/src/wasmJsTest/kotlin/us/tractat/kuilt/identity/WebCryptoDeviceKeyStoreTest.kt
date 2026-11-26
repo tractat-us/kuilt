@@ -145,29 +145,45 @@ class WebCryptoDeviceKeyStoreTest {
      * overwritten, and a transient browser fault would cost the device its name and every grant.
      */
     @Test
-    fun aVerifyFaultThrowsAndKeepsTheKey() = runTest { assertAWebCryptoFaultKeepsTheKey("verify") }
+    fun aVerifyFaultThrowsAndKeepsTheKey() = runTest {
+        assertAWebCryptoFaultKeepsTheKey("verify", passing = 0, failedAt = "verifying the self-test")
+    }
 
-    /** The same for the decode that names the stored public half, the other call a fault reached. */
+    /** The same for the decode that names the stored public half: the first `importKey` the read makes. */
     @Test
-    fun aKeyImportFaultThrowsAndKeepsTheKey() = runTest { assertAWebCryptoFaultKeepsTheKey("importKey") }
+    fun aKeyImportFaultThrowsAndKeepsTheKey() = runTest {
+        assertAWebCryptoFaultKeepsTheKey("importKey", passing = 0, failedAt = "decoding a public key")
+    }
+
+    /**
+     * The same for the second: importing the point the name gives, to verify the self-test under. The
+     * rig lets the decode's `importKey` through, and the failure's text says which call it reached.
+     */
+    @Test
+    fun aNamedKeyImportFaultThrowsAndKeepsTheKey() = runTest {
+        assertAWebCryptoFaultKeepsTheKey("importKey", passing = 1, failedAt = "importing the public key its name gives")
+    }
 
     /**
      * The control: a signing fault already threw before the verify and decode arms above were fixed, so
      * this arm is green either way and shows the rig and the assertions pass a store that keeps its key.
      */
     @Test
-    fun aSignFaultThrowsAndKeepsTheKey() = runTest { assertAWebCryptoFaultKeepsTheKey("sign") }
+    fun aSignFaultThrowsAndKeepsTheKey() = runTest {
+        assertAWebCryptoFaultKeepsTheKey("sign", passing = 0, failedAt = "signing")
+    }
 
     /**
-     * Makes `crypto.subtle.<method>` reject once, while a second store reads the key the first one made,
-     * and checks the read threw, no key was made, and the record still names the first key.
+     * Makes `crypto.subtle.<method>` reject once, after [passing] calls to it have gone through, while a
+     * second store reads the key the first one made, and checks the read threw from the call [failedAt]
+     * names, no key was made, and the record still names the first key.
      */
-    private suspend fun assertAWebCryptoFaultKeepsTheKey(method: String) {
+    private suspend fun assertAWebCryptoFaultKeepsTheKey(method: String, passing: Int, failedAt: String) {
         val database = freshDatabase()
         val original = store(database).deviceKey().id
         var made = 0
         val failure = try {
-            faultOnce(method)
+            faultOnce(method, passing)
             try {
                 WebCryptoDeviceKeyStore(database, IndexedDbGrantMedium(database)) { made++ }.deviceKey()
                 null
@@ -185,6 +201,10 @@ class WebCryptoDeviceKeyStoreTest {
         assertAll(
             { assertEquals(1, firings, "rig: the $method fault fired once") },
             { assertNotNull(failure, "a WebCrypto $method failure throws rather than replacing the key") },
+            {
+                val message = failure?.message.orEmpty()
+                assertTrue("WebCrypto failed $failedAt" in message, "rig: the fault reached the call $failedAt, not another ($message)")
+            },
             { assertEquals(0, made, "no key is made") },
             { assertEquals(original, kept, "the record still holds the original key") },
             { assertEquals(original, afterwards, "and once WebCrypto answers again it is the same device") },
@@ -339,16 +359,19 @@ private external fun afterMillis(ms: Int, done: () -> Unit)
 private external fun queryWebLock(name: String, onDone: (Int, Int) -> Unit, onError: (String) -> Unit)
 
 /**
- * Makes the next `crypto.subtle[method]` call reject with an `OperationError`, as a browser's own
- * fault would, and count it. An own property on the `SubtleCrypto` instance shadows the prototype's
- * method; the one call it answers deletes it again.
+ * Lets [passing] `crypto.subtle[method]` calls through, then makes the next one reject with an
+ * `OperationError`, as a browser's own fault would, and counts it. An own property on the
+ * `SubtleCrypto` instance shadows the prototype's method; the one call it rejects deletes it again.
  */
 @JsFun(
     """
-    (method) => {
+    (method, passing) => {
         const subtle = crypto.subtle;
+        const real = Object.getPrototypeOf(subtle)[method];
+        let left = passing;
         globalThis['kuiltFaultFirings_' + method] = 0;
-        subtle[method] = function () {
+        subtle[method] = function (...args) {
+            if (left > 0) { left -= 1; return real.apply(subtle, args); }
             delete subtle[method];
             globalThis['kuiltFaultFirings_' + method] += 1;
             return Promise.reject(new DOMException('rigged ' + method + ' fault', 'OperationError'));
@@ -356,7 +379,7 @@ private external fun queryWebLock(name: String, onDone: (Int, Int) -> Unit, onEr
     }
     """,
 )
-private external fun faultOnce(method: String)
+private external fun faultOnce(method: String, passing: Int)
 
 /** Removes [faultOnce]'s rig if it never fired. */
 @JsFun("(method) => { if (Object.prototype.hasOwnProperty.call(crypto.subtle, method)) delete crypto.subtle[method]; }")
