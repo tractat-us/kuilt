@@ -96,7 +96,7 @@ class HeddleNodeRestartCreditTest {
     }
 
     /** A new incarnation of [node] over its ledger: the same replica, its holdings, and no wake memory. */
-    private fun TestScope.restarted(node: HeddleNode): HeddleNode {
+    private suspend fun TestScope.restarted(node: HeddleNode): HeddleNode {
         val seam = InMemoryLoom().host(Pattern("heddle-e2e"))
         assertEquals(node.self, ReplicaId(seam.selfId.value), "the rig: the restart keeps the replica")
         return HeddleNode(
