@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -708,6 +709,12 @@ class ProvenRestoreConcurrencyTest {
      * after the takeover's record and before its own seat, which is the window the Proof-time check
      * closes; without it the old process is admitted to an additional seat and the superseded
      * membership is back.
+     *
+     * Left alone, the old process restores first in well under 1% of rounds (2 or 3 of 1,000 on a CI
+     * runner), so the arm that it did would red about one run in twelve with nothing wrong (#3730).
+     * Every [OLD_FIRST_EVERY]th round therefore holds the fresh id's Proof until the old exchange has
+     * sent its own, or was told. The room handles each Proof in a coroutine of its own, so the old
+     * one is still only ahead, not decided: the two still race, and the round is counted like any other.
      */
     @Test
     fun aSupersededProcessReHelloingAgainstItsTakeoverIsToldNotSeated() =
@@ -720,6 +727,9 @@ class ProvenRestoreConcurrencyTest {
                 var toldAtProof = 0
                 var reSeated = 0
                 var slowChallenged = 0
+                var oldFirstRounds = 0
+                var oldWonWhenFirst = 0
+                var oldFirstUnsent = 0
                 var wrongOutcome = 0
                 val failures = mutableListOf<String>()
                 try {
@@ -746,12 +756,23 @@ class ProvenRestoreConcurrencyTest {
                         }
                         val introsFresh = rig.hostIntrosTo(fresh)
                         val oldChallenged = AtomicBoolean(false)
+                        // Never a slow-challenge round, whose old exchange is a second late by design.
+                        val oldFirst = round % OLD_FIRST_EVERY == OLD_FIRST_EVERY / 2
+                        val oldSent = CompletableDeferred<Unit>()
                         val exchanges = listOf(
-                            rig.scope.launch { rig.prove(fresh, TEST_DEVICE_A, TEST_KEY_A) },
                             rig.scope.launch {
-                                val challenge = rig.helloOrTold(old) ?: return@launch
-                                oldChallenged.set(true)
-                                rig.inbound.send(Swatch(AdmitMessage.encode(handProof(challenge, host, TEST_DEVICE_A)), sender = old))
+                                rig.prove(fresh, TEST_DEVICE_A, TEST_KEY_A, beforeProof = {
+                                    if (oldFirst && withTimeoutOrNull(STALL_GRACE) { oldSent.await() } == null) oldFirstUnsent++
+                                })
+                            },
+                            rig.scope.launch {
+                                try {
+                                    val challenge = rig.helloOrTold(old) ?: return@launch
+                                    oldChallenged.set(true)
+                                    rig.inbound.send(Swatch(AdmitMessage.encode(handProof(challenge, host, TEST_DEVICE_A)), sender = old))
+                                } finally {
+                                    oldSent.complete(Unit)
+                                }
                             },
                         ).shuffled(jitter)
                         exchanges.forEach { it.join() }
@@ -782,6 +803,8 @@ class ProvenRestoreConcurrencyTest {
                             supersededByFresh -> newWon++
                             oldRestored -> oldWon++
                         }
+                        if (oldFirst) oldFirstRounds++
+                        if (oldFirst && oldRestored) oldWonWhenFirst++
                         if (supersededByFresh && oldChallenged.get()) toldAtProof++
                         if (rig.slowChallengeTo != null && oldChallenged.get()) slowChallenged++
                         if (supersededByFresh && (oldJoinedAgain || rig.room.isAdmitted(old))) reSeated++
@@ -804,7 +827,8 @@ class ProvenRestoreConcurrencyTest {
                     }
                     println(
                         "proven-restore rehello-race: completed=$completed oldWon=$oldWon newWon=$newWon " +
-                            "toldAtProof=$toldAtProof reSeated=$reSeated slowChallenged=$slowChallenged wrongOutcome=$wrongOutcome " +
+                            "toldAtProof=$toldAtProof reSeated=$reSeated slowChallenged=$slowChallenged " +
+                            "oldFirstRounds=$oldFirstRounds oldWonWhenFirst=$oldWonWhenFirst oldFirstUnsent=$oldFirstUnsent wrongOutcome=$wrongOutcome " +
                             "retries=${rig.retries.get()} failures=$failures",
                     )
                     assertAll(
@@ -1480,6 +1504,12 @@ class ProvenRestoreConcurrencyTest {
 
         /** Every this many re-Hello rounds, the host challenges the old id [SLOW_CHALLENGE] late. */
         const val SLOW_CHALLENGE_EVERY = 100
+
+        /**
+         * Every this many re-Hello rounds, the fresh id's Proof waits for the old exchange's: 50 of
+         * 1,000 rounds, against the 2 or 3 old-first rounds a CI runner reaches unaided (#3730).
+         */
+        const val OLD_FIRST_EVERY = 20
 
         /** Slower than a rig waiting on a clock for its challenge would wait. */
         val SLOW_CHALLENGE = 1.seconds
