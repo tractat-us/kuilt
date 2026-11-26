@@ -533,13 +533,13 @@ class AndroidKeystoreDeviceKeyStoreTest {
         val verifier = FaultingVerifier(faults = 1)
 
         val failure = failureOf { rig.launch(verifier = verifier).deviceKey() }
-        val holds = rig.keystore.holds(rig.alias)
         val afterwards = rig.launch().deviceKey().id
 
+        // Not `keystore.holds(alias)`: a replacement deletes and remakes under the same alias, so the
+        // alias is held either way. The count and the name are what tell the two apart.
         assertAll(
             { assertEquals(1, verifier.faulted, "the rig fired: the self-test's verify failed once") },
             { assertTrue(failure is IllegalStateException, "the fault throws IllegalStateException: $failure") },
-            { assertTrue(holds, "the key is not deleted") },
             { assertEquals(1, rig.keystore.generated, "no key is made") },
             { assertEquals(held, afterwards, "and the same key reads back") },
         )
