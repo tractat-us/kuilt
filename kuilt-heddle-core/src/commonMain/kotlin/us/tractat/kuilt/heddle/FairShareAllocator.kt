@@ -1305,7 +1305,7 @@ internal const val CLOCK_GRID: Long = 720_720L
 /**
  * What a caller with no leases passes as the reservations open beneath each child edge (#3238):
  * nothing, so a waker is clamped to the front itself. [FairShareAllocator.schedule] and
- * [FairShareAllocator.pickChild] pass it, since a [HeddleNode][FairShareAllocator.schedule] grants
- * entitlement rather than opening leases.
+ * [FairShareAllocator.pickChild] pass it: a peer that schedules grants entitlement down its
+ * edges and opens no leases.
  */
 internal val NOTHING_OPEN: (AttachmentId) -> Long = { 0L }
