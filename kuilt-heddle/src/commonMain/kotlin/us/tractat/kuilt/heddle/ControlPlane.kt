@@ -850,7 +850,10 @@ internal class HeddleControlPlane(
                 // Gated on the log-order lifecycle being CLOSING (the projection has no data-plane
                 // counters, so its `outstanding` is 0 — the drain condition is enforced pre-propose by
                 // GovernedHeddleNode.retire against the data-plane view, since drain is a data-plane fact).
-                val patch = projection.retire(command.edge)
+                // CLOSING is checked here, not left to the ledger: its `retire` also takes an unused
+                // PREPARED edge (#3198), and a logged Retire over one must stay refused, or a build
+                // before that change and one after it would decide this index differently.
+                val patch = if (projection.lifecycle(command.edge) == Lifecycle.CLOSING) projection.retire(command.edge) else null
                 if (patch == null) {
                     ControlOutcome.Conflict(
                         index,
