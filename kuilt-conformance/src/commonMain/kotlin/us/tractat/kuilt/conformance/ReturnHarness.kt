@@ -11,7 +11,10 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.identity.AdmissionProof
 import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.Grant
+import us.tractat.kuilt.identity.GrantScope
 import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.LeaveReason
@@ -46,6 +49,131 @@ public sealed interface ReturnFixture {
      * reason: point it at the harness's *own* blocking issue.
      */
     public data class Unsupported(val trackingUrl: String) : ReturnFixture
+}
+
+/**
+ * Whether a harness can put passes into the Proof a device sends that its room would never put there
+ * — and, when it cannot, **where that is written down** (#3710).
+ *
+ * The host must ignore a pass for another room, for another device's key, or from an issuer it does
+ * not trust. A device's room filters all three out before it sends its Proof: it presents only its
+ * host's passes for this room or for every room of that host's, and keeps only passes naming its own
+ * key. So a row driven through [ReturnDevice] alone never shows the host one, and stays green with
+ * the host's checks deleted. The planted-pass rows need the harness to forge one.
+ *
+ * **This is a forging tool in a published API**, and that is accepted for this purpose (ruled on
+ * #3710): what it reaches is the host's own checks, which nothing else can. A harness over a real
+ * fabric that has no way to rewrite a Proof declares [Unsupported] rather than building one.
+ *
+ * The same two-armed shape as [ReturnFixture] and [RoomConformanceSuite.FaultInjection], for the
+ * same reason: declining has to name the issue that would have to close for the harness to say
+ * [Supported], so a gap is declared rather than merely taken (#2306).
+ */
+public sealed interface PassPlanting {
+
+    /** The harness can plant passes: the planted-pass rows run on [rig]. */
+    public data class Supported(val rig: PlantedPassRig) : PassPlanting
+
+    /**
+     * The harness cannot rewrite a device's Proof, so the host's refusals of a pass for another room,
+     * another device or an untrusted issuer are **unproven** on it.
+     *
+     * [trackingUrl] is not optional and not defaulted, for [RoomConformanceSuite.FaultInjection.Unsupported]'s
+     * reason: point it at the harness's *own* blocking issue.
+     */
+    public data class Unsupported(val trackingUrl: String) : PassPlanting
+}
+
+/**
+ * The forging half of a [ReturnHarness] (#3710): devices whose Proof carries passes a row chose, and
+ * the passes to put there.
+ *
+ * A row asks for a fresh device, which has never held a pass, and has its one Proof carry a pass that
+ * is good in every respect but the one the row changes. Every row asserts its rig fired: [newDevice]'s
+ * planter was asked once, for a Proof the room itself put no pass in, and returned exactly one pass.
+ * A control row plants a pass with nothing wrong with it and expects the device in without its policy
+ * being asked, so a rig that drops what the planter returns reds there, not as a host refusing it.
+ */
+public interface PlantedPassRig {
+
+    /**
+     * A new device, as [ReturnHarness.newDevice] makes, except that every Proof its rooms send also
+     * carries what [planter] returns for it, after the passes its room chose to present.
+     *
+     * The harness calls [planter] once per Proof, before the Proof leaves the device, and must not
+     * call it for any other frame, for the host's room, or for any other device's.
+     */
+    public suspend fun newDevice(planter: PassPlanter): ReturnDevice
+
+    /**
+     * A pass the host's own key signs, letting [subject] back into [scope]: issued at the host's
+     * now and good on the host's clock for at least an hour, so the only thing wrong with it is
+     * what a row put there.
+     *
+     * The suite requires the host to accept any pass its key validly signed, so a host that also
+     * keeps a list of the passes it issued, and refuses one not on it, fails the control row.
+     */
+    public suspend fun hostPass(subject: DidKey, scope: GrantScope): Grant
+
+    /** As [hostPass], but signed by a key that is not the host's and that the host does not trust. */
+    public suspend fun strangerPass(subject: DidKey, scope: GrantScope): Grant
+}
+
+/** What a [PlantedPassRig] device puts into each Proof it sends, beside its room's own passes. */
+public fun interface PassPlanter {
+
+    /**
+     * The passes to append to the Proof a device is about to send.
+     *
+     * [statement] is the admission statement the device's room signed, which names the room and the
+     * host's key; [sender] is the key of the device sending it; [presented] are the passes its room
+     * put in the Proof itself, in wire form.
+     */
+    public suspend fun plant(statement: AdmissionProof, sender: DidKey, presented: List<ByteArray>): List<Grant>
+}
+
+/**
+ * Whether a harness can start a process under a peer id an **earlier** process of its device had,
+ * while a later one is running — and, when it cannot, **where that is written down** (#3710).
+ *
+ * The row it reaches: a device's process dies, a new one under a fresh id takes its held seat over,
+ * and then a process comes up under the dead one's id and key. The host must answer its Hello with a
+ * named `Reject(Superseded)` (Decided 32), and the process ends `Left(self, Superseded(by))` rather
+ * than get an additional seat of the key. [ReturnDevice.launch] with `reusePeerId` can reuse only the
+ * id of the process just killed, and [ReturnDevice.launchBeside] only a fresh one, so neither reaches
+ * it.
+ *
+ * Two arms, as [PassPlanting] has, for the same reason.
+ */
+public sealed interface ReusedIdLaunch {
+
+    /** The harness can launch under an earlier id: the superseded-id row runs on [rig]. */
+    public data class Supported(val rig: ReusedIdRig) : ReusedIdLaunch
+
+    /**
+     * The harness's fabric gives each process an id of its own choosing, so the host's refusal of a
+     * superseded id is **unproven** on it. [trackingUrl] as [PassPlanting.Unsupported]'s.
+     */
+    public data class Unsupported(val trackingUrl: String) : ReusedIdLaunch
+}
+
+/** The half of a [ReturnHarness] that makes [ReusedIdDevice]s (#3710). */
+public fun interface ReusedIdRig {
+    /** A new device, as [ReturnHarness.newDevice] makes, that can also launch under an id of the row's choosing. */
+    public suspend fun newDevice(): ReusedIdDevice
+}
+
+/** A [ReturnDevice] that can start a process under a peer id the row names (#3710). */
+public interface ReusedIdDevice : ReturnDevice {
+
+    /**
+     * Start a process on this device **beside** the one [launch] started, which keeps running, and
+     * return its factory. Rooms it makes prove this device's key, over the device's one key store,
+     * under [peerId]: the row names an id an earlier process of this device presented.
+     *
+     * Like [launchBeside], the process [launch] started stays the one every other hook acts on.
+     */
+    public suspend fun launchBesideAs(peerId: PeerId): RoomFactory
 }
 
 /**
@@ -89,6 +217,10 @@ public class ReturnHarness(
     public val hostHeartbeat: HeartbeatConfig,
     /** The config every device's room runs: how long a joiner keeps trying to come back. */
     public val joinerHeartbeat: HeartbeatConfig,
+    /** Whether the harness can put a pass into a device's Proof that its room would never present: the planted-pass rows. */
+    public val passPlanting: PassPlanting,
+    /** Whether the harness can start a process under an id an earlier process of its device had: the superseded-id row. */
+    public val reusedIdLaunch: ReusedIdLaunch,
     private val device: suspend () -> ReturnDevice,
     private val hostTab: suspend () -> RoomFactory,
 ) {
@@ -260,6 +392,33 @@ internal class VettingCount(readmitFor: Duration = 1.hours) {
 
     /** The key of every newcomer the policy was asked about so far, oldest first. */
     fun keys(): List<DidKey> = lock.withLock { asked.toList() }
+}
+
+/**
+ * The planted-pass rows' [PassPlanter] (#3710): it plants what [passes] returns, and keeps, per Proof
+ * it was asked about, what it planted and how many passes the room presented itself. That is what a
+ * row asserts its rig fired on: a planter never asked, asked twice, or asked about a Proof that
+ * already carried a pass reds as the rig's failure, not the host's.
+ */
+internal class RecordingPlanter(private val passes: suspend (statement: AdmissionProof, sender: DidKey) -> List<Grant>) : PassPlanter {
+    private val lock = reentrantLock()
+    private val planted = mutableListOf<List<Grant>>()
+    private val presented = mutableListOf<Int>()
+
+    override suspend fun plant(statement: AdmissionProof, sender: DidKey, presented: List<ByteArray>): List<Grant> {
+        val extra = passes(statement, sender)
+        lock.withLock {
+            planted += extra
+            this.presented += presented.size
+        }
+        return extra
+    }
+
+    /** The passes planted in each Proof, oldest Proof first. */
+    fun plantedPerProof(): List<List<Grant>> = lock.withLock { planted.toList() }
+
+    /** How many passes the device's room put in each of those Proofs itself. */
+    fun presentedPerProof(): List<Int> = lock.withLock { presented.toList() }
 }
 
 /**

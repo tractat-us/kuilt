@@ -3,8 +3,6 @@
 package us.tractat.kuilt.conformance
 
 import kotlinx.atomicfu.atomic
-import kotlinx.atomicfu.locks.reentrantLock
-import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.job
@@ -26,6 +24,8 @@ import us.tractat.kuilt.identity.AdmissionProof
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
+import us.tractat.kuilt.identity.GrantScope
+import us.tractat.kuilt.identity.test.fakeDeviceKey
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.RoomFactory
@@ -35,6 +35,7 @@ import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 
@@ -63,10 +64,17 @@ import kotlin.time.Instant
  * The host runs a short hold ([REFERENCE_HOST_HEARTBEAT]) and a device a long reconnect window
  * ([REFERENCE_JOINER_HEARTBEAT]), so a joiner is still trying when the host lets its seat go.
  *
- * With [planting], every device's Proof also carries the passes it plants (`PlantedPassRefusalTest`);
- * the host's own room, its tabs and the impostors are left alone.
+ * Both of [ReturnHarness]'s forging hooks are [PassPlanting.Supported] and [ReusedIdLaunch.Supported]
+ * here (#3710). A planting device's Proof also carries what its planter returns, and the host's own
+ * room, its tabs and the impostors are left alone; the host's passes are signed with the host's own
+ * fake key, on the test clock. A reused-id device's [ReusedIdDevice.launchBesideAs] starts a process
+ * like [ReturnDevice.launchBeside]'s under the id the row names. [passPlanting] and [reusedIdLaunch]
+ * let a test declare either hook a gap instead, to walk the suite's skip path.
  */
-internal fun TestScope.referenceReturnHarness(planting: PassPlanting? = null): ReturnHarness {
+internal fun TestScope.referenceReturnHarness(
+    passPlanting: (PlantedPassRig) -> PassPlanting = PassPlanting::Supported,
+    reusedIdLaunch: (ReusedIdRig) -> ReusedIdLaunch = ReusedIdLaunch::Supported,
+): ReturnHarness {
     val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) { "runTest supplies a dispatcher" }
     val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
     val source = InMemoryConnectionSource()
@@ -84,7 +92,7 @@ internal fun TestScope.referenceReturnHarness(planting: PassPlanting? = null): R
 
     // One process: its own scope, its own client loom and its own link, under one peer id, over the
     // key store of the device it runs on.
-    class Process(val peerId: PeerId, store: DeviceKeyStore, planting: PassPlanting? = null) {
+    class Process(val peerId: PeerId, store: DeviceKeyStore, planter: PassPlanter? = null) {
         val scope = CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job]))
         // Atomics, not plain vars: the rig is driven from the test body and read from the rooms'
         // own coroutines, and nothing here may lean on the test dispatcher being single-threaded.
@@ -113,7 +121,7 @@ internal fun TestScope.referenceReturnHarness(planting: PassPlanting? = null): R
         }
         val mux = MuxClientLoom(base, Rendezvous.New(Pattern("base")), scope, ::sessionNameOf)
         val factory: RoomFactory = SeamRoomFactory(
-            loom = planting?.over(mux, store) ?: mux,
+            loom = planter?.let { ProofRewriter(it).over(mux, store) } ?: mux,
             scope = scope,
             clock = clock,
             deviceKeyStore = store,
@@ -131,7 +139,7 @@ internal fun TestScope.referenceReturnHarness(planting: PassPlanting? = null): R
         }
     }
 
-    fun newDevice(): ReturnDevice {
+    fun makeDevice(planter: PassPlanter? = null): ReusedIdDevice {
         val index = devices.incrementAndGet()
         // The device's one store, for every process it ever runs: a pass one launch keeps is the next
         // launch's to present, as a platform store keeps it across launches (#3223).
@@ -140,7 +148,7 @@ internal fun TestScope.referenceReturnHarness(planting: PassPlanting? = null): R
         val besides = atomic(0)
         val current = atomic<Process?>(null)
         val priorHeals = atomic(0)
-        return object : ReturnDevice {
+        return object : ReusedIdDevice {
             override suspend fun launch(reusePeerId: Boolean): RoomFactory {
                 val previous = current.value
                 check(previous == null || !previous.scope.coroutineContext.job.isActive) {
@@ -153,7 +161,7 @@ internal fun TestScope.referenceReturnHarness(planting: PassPlanting? = null): R
                     else -> PeerId("device-$index.$launch")
                 }
                 previous?.let { priorHeals.addAndGet(it.heals()) }
-                return Process(id, store, planting).also { current.value = it }.factory
+                return Process(id, store, planter).also { current.value = it }.factory
             }
 
             override suspend fun launchBeside(): RoomFactory {
@@ -161,7 +169,13 @@ internal fun TestScope.referenceReturnHarness(planting: PassPlanting? = null): R
                 check(running.scope.coroutineContext.job.isActive) { "the process launch() started has ended; launch() again" }
                 // Its own link and peer id, on this device's key store; never `current`, so the
                 // other hooks keep acting on the first process.
-                return Process(PeerId("device-$index.beside-${besides.incrementAndGet()}"), store, planting).factory
+                return Process(PeerId("device-$index.beside-${besides.incrementAndGet()}"), store, planter).factory
+            }
+
+            override suspend fun launchBesideAs(peerId: PeerId): RoomFactory {
+                val running = checkNotNull(current.value) { "launch() a process before launching another beside it" }
+                check(running.scope.coroutineContext.job.isActive) { "the process launch() started has ended; launch() again" }
+                return Process(peerId, store, planter).factory
             }
 
             override suspend fun kill(socketCloses: Boolean) {
@@ -201,7 +215,20 @@ internal fun TestScope.referenceReturnHarness(planting: PassPlanting? = null): R
 
     // The host's device's one store: the host's own room and every host tab share it, as the tabs of
     // one browser share its IndexedDB, so a pass one tab keeps is the next tab's to present (#3222).
-    val hostStore = fakeKeyStore(0)
+    val hostStore = fakeKeyStore(HOST_KEY_INDEX)
+
+    val plantedPassRig = object : PlantedPassRig {
+        override suspend fun newDevice(planter: PassPlanter): ReturnDevice = makeDevice(planter)
+
+        override suspend fun hostPass(subject: DidKey, scope: GrantScope): Grant = passFrom(HOST_KEY_INDEX, subject, scope)
+
+        override suspend fun strangerPass(subject: DidKey, scope: GrantScope): Grant = passFrom(STRANGER_KEY_INDEX, subject, scope)
+
+        private suspend fun passFrom(issuer: Int, subject: DidKey, scope: GrantScope): Grant {
+            val now = testScheduler.currentTime
+            return Grant.issue(fakeDeviceKey(issuer), subject, scope, issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
+        }
+    }
 
     return ReturnHarness(
         hostFactory = SeamRoomFactory(
@@ -215,7 +242,9 @@ internal fun TestScope.referenceReturnHarness(planting: PassPlanting? = null): R
         joinTag = InMemoryTag(REFERENCE_SESSION),
         hostHeartbeat = REFERENCE_HOST_HEARTBEAT,
         joinerHeartbeat = REFERENCE_JOINER_HEARTBEAT,
-        device = { newDevice() },
+        passPlanting = passPlanting(plantedPassRig),
+        reusedIdLaunch = reusedIdLaunch(ReusedIdRig { makeDevice() }),
+        device = { makeDevice() },
         // The host's own key store, under a joiner's link and an id of its own.
         hostTab = { Process(PeerId("host-tab-${hostTabs.incrementAndGet()}"), hostStore).factory },
     )
@@ -230,6 +259,12 @@ private const val REFERENCE_SESSION = "return-rig"
 
 /** Keys for impostors, clear of every device the rig will make. */
 private const val IMPOSTOR_KEY_OFFSET = 1_000
+
+/** The host's key store index: the key its passes are signed with. */
+private const val HOST_KEY_INDEX = 0
+
+/** A key no device of the rig holds and the host does not trust: the stranger's passes are signed with it. */
+private const val STRANGER_KEY_INDEX = 7_001
 
 /** The host notices a silent joiner after 200 ms and holds its seat for 300 ms more. */
 internal val REFERENCE_HOST_HEARTBEAT = HeartbeatConfig(
@@ -246,30 +281,10 @@ internal val REFERENCE_JOINER_HEARTBEAT = HeartbeatConfig(
 )
 
 /**
- * Passes put into a device's Proof beside the ones its room chose to present (#3223): the hook the
- * reference rig alone has, for the refusals a real joiner cannot reach. A joiner presents only its
- * host's passes for this room or for every room of that host's, and keeps only passes naming its own
- * key, so a pass for another room, for another device, or from another host never leaves a real
- * device. This does it on the wire instead: it rewrites each Proof the device sends, keeping the
- * signed statement the room made and appending what [passes] returns for it.
- *
- * Deliberately not on [ReturnHarness] or [RoomConformanceSuite]: a published hook that puts arbitrary
- * passes into a Proof is a forging tool, which a harness over a real fabric has no way to offer.
- *
- * [passes] gets the statement the joiner signed, which names the room and the host's key, and the key
- * of the device sending it. Every Proof it rewrote is counted, and every pass it planted kept, so a
- * row can assert its pass really was presented rather than pass on a Proof that never carried it.
+ * Rewrites every Proof a device's seams send, for [PlantedPassRig.newDevice] (#3710): it keeps the
+ * signed statement and the passes the room made, and appends what [planter] returns for them.
  */
-internal class PassPlanting(private val passes: suspend (proof: AdmissionProof, sender: DidKey) -> List<Grant>) {
-    private val lock = reentrantLock()
-    private val planted = mutableListOf<List<Grant>>()
-    private val presentedByTheRoom = mutableListOf<List<ByteArray>>()
-
-    /** The passes planted in each Proof the device sent, oldest Proof first. */
-    fun plantedPerProof(): List<List<Grant>> = lock.withLock { planted.toList() }
-
-    /** The passes the device's room itself put in each of those Proofs, before any were planted. */
-    fun roomsOwnPerProof(): List<List<ByteArray>> = lock.withLock { presentedByTheRoom.toList() }
+private class ProofRewriter(private val planter: PassPlanter) {
 
     /** [loom] with every Proof its seams send rewritten, for a device whose key is in [store]. */
     fun over(loom: Loom, store: DeviceKeyStore): Loom = object : Loom by loom {
@@ -291,11 +306,7 @@ internal class PassPlanting(private val passes: suspend (proof: AdmissionProof, 
     private suspend fun rewrite(payload: ByteArray, store: DeviceKeyStore): ByteArray {
         val proof = AdmitMessage.decode(payload) as? AdmitMessage.Proof ?: return payload
         val statement = checkNotNull(AdmissionProof.decode(proof.statement)) { "the room sent a Proof whose statement does not decode" }
-        val extra = passes(statement, store.deviceKey().id)
-        lock.withLock {
-            planted += extra
-            presentedByTheRoom += proof.grants
-        }
+        val extra = planter.plant(statement, store.deviceKey().id, proof.grants)
         return AdmitMessage.encode(AdmitMessage.Proof(proof.statement, proof.grants + extra.map { it.wire }))
     }
 }

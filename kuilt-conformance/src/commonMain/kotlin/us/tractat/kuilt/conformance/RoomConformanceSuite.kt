@@ -29,6 +29,10 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
+import us.tractat.kuilt.identity.AdmissionProof
+import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.Grant
+import us.tractat.kuilt.identity.GrantScope
 import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.Direction
@@ -1273,10 +1277,10 @@ public abstract class RoomConformanceSuite {
     // newcomer. Every row asserts the seat was gone when the device came back, since a held seat is
     // restored without the policy too, and a row about passes would pass on a restore.
     //
-    // A pass for another room, for another device, or from another host is not reachable from here:
-    // a real joiner presents only its host's passes for this room or for every room of that host's,
-    // and keeps only passes naming its own key. Those refusals run beside the reference rig, which
-    // can put a pass in a Proof that no joiner would send (`PlantedPassRefusalTest`).
+    // A pass for another room, for another device, or from another host is not reachable through a
+    // device's own room: a real joiner presents only its host's passes for this room or for every
+    // room of that host's, and keeps only passes naming its own key. Those refusals are section (0c),
+    // on the harness's forging hook.
 
     /**
      * The headline relaunch (#3222): an app killed without a goodbye, and gone past the host's hold,
@@ -1476,6 +1480,214 @@ public abstract class RoomConformanceSuite {
                 )
             } finally {
                 live.leave()
+                host.leave()
+            }
+        }
+
+    // ── (0c) What no honest device sends: the harness's forging hooks (#3710) ─
+    //
+    // The host ignores a pass for another room, for another device's key, from an issuer it does not
+    // trust, or under a signature its issuer never made, and decides the device as a newcomer: its
+    // admission policy is asked once and the membership is not marked as a return. A device's room
+    // never presents any of the four, so
+    // these rows plant one through [ReturnHarness.passPlanting], into the Proof of a fresh device that
+    // has never held a pass and holds no seat. Each asserts its rig fired: the planter was asked once,
+    // for a Proof its room put no pass in, and planted exactly the pass the row describes.
+    // [aPlantedGoodPassLetsTheDeviceInUnvetted] is the control: the same path carrying a pass with
+    // nothing wrong lets the device in without the policy, so the one call in every other row is the
+    // host refusing that row's pass, not a pass that never arrived.
+    //
+    // Then a Hello under an id a newer id of the same key has taken over, with that key, which only
+    // [ReturnHarness.reusedIdLaunch] can send: the host names the successor in a `Reject` (Decided 32).
+
+    /**
+     * The control arm: a planted pass the host signed, for the device presenting it and for this
+     * room, lets a device that never held a seat in with no call to the admission policy, marked as
+     * returning with no id the host remembers.
+     */
+    @Test
+    public fun aPlantedGoodPassLetsTheDeviceInUnvetted(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val obligation = "a planted good pass lets the device in unvetted"
+            val h = returnHarnessOrDeclaredGap(obligation) ?: return@runTest
+            val rig = h.passPlanting.rigOrDeclaredGap(obligation) ?: return@runTest
+            val outcome = admitWithPlanted(h, rig) { statement, sender, _ -> listOf(rig.hostPass(sender, GrantScope.Room(statement.roomId))) }
+            val pass = outcome.plantedPass()
+            assertAll(
+                { assertEquals(outcome.hostKey, pass.issuer, "rig: the planted pass is the host's") },
+                { assertEquals(outcome.deviceKey, pass.subject, "rig: for the device presenting it") },
+                { assertEquals(GrantScope.Room(outcome.roomId), pass.scope, "rig: for this room") },
+                { assertEquals(emptyList(), outcome.vetted, "a good pass on the planted path lets the device in without asking the policy") },
+                { assertEquals(listOf(ReturningMark(previousId = null)), outcome.joins.map { it.returning }, "marked returning, with no id the host remembers") },
+            )
+        }
+
+    /** A pass the host signed for the device presenting it, but for another room, is ignored. */
+    @Test
+    public fun grantForAnotherRoomIsIgnored(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val obligation = "a pass for another room is ignored"
+            val h = returnHarnessOrDeclaredGap(obligation) ?: return@runTest
+            val rig = h.passPlanting.rigOrDeclaredGap(obligation) ?: return@runTest
+            val outcome = admitWithPlanted(h, rig) { _, sender, _ -> listOf(rig.hostPass(sender, GrantScope.Room(ANOTHER_ROOM))) }
+            val pass = outcome.plantedPass()
+            assertAll(
+                { assertEquals(outcome.hostKey, pass.issuer, "rig: the planted pass is the host's") },
+                { assertEquals(outcome.deviceKey, pass.subject, "rig: for the device presenting it") },
+                { assertEquals(GrantScope.Room(ANOTHER_ROOM), pass.scope, "rig: for another room") },
+                { assertTrue(outcome.roomId != ANOTHER_ROOM, "rig: a room that is not this one: ${outcome.roomId}") },
+                { outcome.assertVettedAsANewcomer(obligation) },
+            )
+        }
+
+    /**
+     * A pass the host signed for this room, but naming another device's key, is ignored. The other
+     * device is a member admitted first, so the key is one the host knows.
+     */
+    @Test
+    public fun grantForAnotherSubjectIsIgnored(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val obligation = "a pass for another device is ignored"
+            val h = returnHarnessOrDeclaredGap(obligation) ?: return@runTest
+            val rig = h.passPlanting.rigOrDeclaredGap(obligation) ?: return@runTest
+            val outcome = admitWithPlanted(h, rig) { statement, _, bystander -> listOf(rig.hostPass(bystander, GrantScope.Room(statement.roomId))) }
+            val pass = outcome.plantedPass()
+            assertAll(
+                { assertEquals(outcome.hostKey, pass.issuer, "rig: the planted pass is the host's") },
+                { assertEquals(GrantScope.Room(outcome.roomId), pass.scope, "rig: for this room") },
+                { assertEquals(outcome.bystanderKey, pass.subject, "rig: naming the member admitted first") },
+                { assertTrue(pass.subject != outcome.deviceKey, "rig: which is another device's key") },
+                { outcome.assertVettedAsANewcomer(obligation) },
+            )
+        }
+
+    /** A pass for the device presenting it and for this room, signed by a key that is not the host's, is ignored. */
+    @Test
+    public fun untrustedIssuerIsIgnored(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val obligation = "a pass from a host this one does not trust is ignored"
+            val h = returnHarnessOrDeclaredGap(obligation) ?: return@runTest
+            val rig = h.passPlanting.rigOrDeclaredGap(obligation) ?: return@runTest
+            val outcome = admitWithPlanted(h, rig) { statement, sender, _ -> listOf(rig.strangerPass(sender, GrantScope.Room(statement.roomId))) }
+            val pass = outcome.plantedPass()
+            assertAll(
+                { assertTrue(pass.issuer != outcome.hostKey, "rig: the planted pass is not the host's") },
+                { assertEquals(outcome.deviceKey, pass.subject, "rig: for the device presenting it") },
+                { assertEquals(GrantScope.Room(outcome.roomId), pass.scope, "rig: for this room") },
+                { outcome.assertVettedAsANewcomer(obligation) },
+            )
+        }
+
+    /**
+     * A pass naming the host as issuer, for the device presenting it and for this room, whose
+     * signature the host never made, is ignored. It is [PlantedPassRig.hostPass]'s pass with the last
+     * byte of its signature changed, so every field the host reads before the signature is good: the
+     * row reds on a host that checks a pass's fields and never its signature.
+     *
+     * The rig compares the planted pass with the honest one it came from rather than checking the
+     * signature itself, since only the harness knows the scheme its keys sign in.
+     * [aPlantedGoodPassLetsTheDeviceInUnvetted] is what shows the honest pass, unchanged, is one the
+     * host accepts.
+     */
+    @Test
+    public fun aPassTheHostDidNotSignIsIgnored(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val obligation = "a pass the host did not sign is ignored"
+            val h = returnHarnessOrDeclaredGap(obligation) ?: return@runTest
+            val rig = h.passPlanting.rigOrDeclaredGap(obligation) ?: return@runTest
+            var honest: Grant? = null
+            val outcome = admitWithPlanted(h, rig) { statement, sender, _ ->
+                val pass = rig.hostPass(sender, GrantScope.Room(statement.roomId)).also { honest = it }
+                listOf(pass.withSignatureChanged())
+            }
+            val pass = outcome.plantedPass()
+            val original = assertNotNull(honest, "rig: the planter was asked for the host's pass")
+            assertAll(
+                { assertEquals(outcome.hostKey, pass.issuer, "rig: the planted pass names the host as issuer") },
+                { assertEquals(outcome.deviceKey, pass.subject, "rig: for the device presenting it") },
+                { assertEquals(GrantScope.Room(outcome.roomId), pass.scope, "rig: for this room") },
+                { assertEquals(original.issuedAt to original.notAfter, pass.issuedAt to pass.notAfter, "rig: dated as the host's own pass") },
+                {
+                    assertEquals(
+                        original.wire.dropLast(1),
+                        pass.wire.dropLast(1),
+                        "rig: the same bytes as the host's pass, up to the signature's last byte",
+                    )
+                },
+                { assertTrue(original.wire.last() != pass.wire.last(), "rig: whose last byte differs, so the host did not sign it") },
+                { outcome.assertVettedAsANewcomer(obligation) },
+            )
+        }
+
+    /**
+     * A process comes up under the peer id of a dead process of its device, with the device's key,
+     * after a newer id took that seat over (gate finding I1, Decided 32). The host answers its Hello
+     * with a `Reject` naming the successor: the process ends `Left(self, Superseded(by))` without
+     * ever being seated or failing its admission, the successor keeps the key's one seat, and the
+     * admission policy is not asked.
+     *
+     * The successor is still seated, which is what makes the old id superseded rather than free: a
+     * successor that has left leaves the old id to be challenged as any Hello is.
+     */
+    @Test
+    public fun aProcessUnderASupersededIdEndsSuperseded(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val obligation = "a process under a superseded id ends superseded"
+            val h = returnHarnessOrDeclaredGap(obligation) ?: return@runTest
+            val rig = h.reusedIdLaunch.rigOrDeclaredGap(obligation) ?: return@runTest
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
+            val device = rig.newDevice()
+            val first = device.launch().join(h.joinTag)
+            var successor: Room? = null
+            var stale: Room? = null
+            try {
+                val old = first.selfId
+                val key = host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == old } }.single { it.id == old }.key
+                first.awaitRoster("the device sees the host") { it.isNotEmpty() }
+                val hostTape = EventTape(host, backgroundScope)
+
+                device.kill()
+                host.awaitRoster("the host holds the dead process's seat Partitioned") { roster ->
+                    roster.any { it.id == old && it.liveness is Liveness.Partitioned }
+                }
+                val second = device.launch(reusePeerId = false).join(h.joinTag).also { successor = it }
+                val fresh = second.selfId
+                host.awaitRoster("the new id took the old seat over") { roster -> roster.any { it.id == fresh } && roster.none { it.id == old } }
+                second.awaitRoster("the successor sees the host") { it.isNotEmpty() }
+                runCurrent()
+                val edgesAtTakeover = hostTape.edges().map { it.edge() }
+                val vettedAtTakeover = vetting.keys()
+
+                val arrived = device.launchBesideAs(old).join(h.joinTag).also { stale = it }
+                val staleTape = EventTape(arrived, backgroundScope)
+                val ended = arrived.awaitEvent("the process under the superseded id leaves") { it as? MembershipEvent.Left }
+                runCurrent()
+                val staleEvents = staleTape.events()
+                val seatsOfKey = host.roster.value.filter { it.key == key }
+                assertAll(
+                    { assertTrue(fresh != old, "rig: the successor presents a fresh id") },
+                    {
+                        assertEquals(
+                            listOf("Left(${old.value}, ${LeaveReason.Superseded(fresh)})", "Joined(${fresh.value})"),
+                            edgesAtTakeover,
+                            "rig: the successor took the old id's seat over",
+                        )
+                    },
+                    { assertEquals(old, arrived.selfId, "rig: the new process presents the superseded id") },
+                    { assertEquals(Liveness.Connected, host.roster.value.singleOrNull { it.id == fresh }?.liveness, "rig: the successor is still seated") },
+                    { assertEquals(MembershipEvent.Left(old, LeaveReason.Superseded(fresh)), ended, "it ends superseded, naming the successor: $staleEvents") },
+                    { assertTrue(staleEvents.none { it is MembershipEvent.AdmissionFailed }, "it ended superseded, not refused or timed out: $staleEvents") },
+                    { assertTrue(staleEvents.none { it is MembershipEvent.Joined }, "it was never seated: $staleEvents") },
+                    { assertTrue(arrived.roster.value.isEmpty(), "its room has ended") },
+                    { assertEquals(listOf(fresh), seatsOfKey.map { it.id }, "the key holds one seat, the successor's") },
+                    { assertEquals(edgesAtTakeover, hostTape.edges().map { it.edge() }, "the host admitted nothing and dropped nothing") },
+                    { assertEquals(listOf(key), vettedAtTakeover, "rig: the policy vetted the device once, when it first joined") },
+                    { assertEquals(vettedAtTakeover, vetting.keys(), "the policy is not asked about the superseded id") },
+                )
+            } finally {
+                stale?.leave()
+                successor?.leave()
                 host.leave()
             }
         }
@@ -2765,6 +2977,124 @@ public abstract class RoomConformanceSuite {
             }
         }
 
+    /** The planting rig for one row, or `null` after asserting the harness's declared gap names an issue (#3710). */
+    private fun PassPlanting.rigOrDeclaredGap(obligation: String): PlantedPassRig? =
+        when (this) {
+            is PassPlanting.Supported -> rig
+            is PassPlanting.Unsupported -> {
+                assertTrue(
+                    trackingUrl.isNotBlank(),
+                    "RoomConformanceSuite: \"$obligation\" is unproven on this harness, and an unproven " +
+                        "obligation must be tracked — PassPlanting.Unsupported was declared with a blank " +
+                        "trackingUrl. Point it at the issue that would have to close for this harness to " +
+                        "return PassPlanting.Supported, or return Supported and prove the obligation.",
+                )
+                null
+            }
+        }
+
+    /** The reused-id rig for one row, or `null` after asserting the harness's declared gap names an issue (#3710). */
+    private fun ReusedIdLaunch.rigOrDeclaredGap(obligation: String): ReusedIdRig? =
+        when (this) {
+            is ReusedIdLaunch.Supported -> rig
+            is ReusedIdLaunch.Unsupported -> {
+                assertTrue(
+                    trackingUrl.isNotBlank(),
+                    "RoomConformanceSuite: \"$obligation\" is unproven on this harness, and an unproven " +
+                        "obligation must be tracked — ReusedIdLaunch.Unsupported was declared with a blank " +
+                        "trackingUrl. Point it at the issue that would have to close for this harness to " +
+                        "return ReusedIdLaunch.Supported, or return Supported and prove the obligation.",
+                )
+                null
+            }
+        }
+
+    /** What one fresh planting device's first admission came to (#3710). */
+    private class PlantedOutcome(
+        val hostKey: DidKey,
+        val deviceKey: DidKey,
+        val bystanderKey: DidKey,
+        val roomId: String,
+        val planter: RecordingPlanter,
+        val vettedBefore: List<DidKey>,
+        val vetted: List<DidKey>,
+        val joins: List<MembershipEvent.Joined>,
+        val seat: Member?,
+    )
+
+    /**
+     * Host a room, admit a bystander device, then launch one fresh device from the planting rig
+     * whose Proof carries what [plant] returns — given the statement, the sender's key and the
+     * bystander's — and wait for it to be seated: the policy admits everyone, so every row's
+     * admission goes through.
+     */
+    private suspend fun TestScope.admitWithPlanted(
+        h: ReturnHarness,
+        rig: PlantedPassRig,
+        plant: suspend (statement: AdmissionProof, sender: DidKey, bystander: DidKey) -> List<Grant>,
+    ): PlantedOutcome {
+        val vetting = VettingCount()
+        val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
+        val bystander = h.newDevice().launch().join(h.joinTag)
+        var joiner: Room? = null
+        try {
+            val bystanderKey = host.awaitRoster("the bystander is admitted") { roster -> roster.any { it.id == bystander.selfId } }
+                .single { it.id == bystander.selfId }.key
+            val vettedBefore = vetting.keys()
+            val hostTape = EventTape(host, backgroundScope)
+            val planter = RecordingPlanter { statement, sender -> plant(statement, sender, bystanderKey) }
+            val arrived = rig.newDevice(planter).launch().join(h.joinTag).also { joiner = it }
+            val me = arrived.selfId
+            val seated = host.awaitRoster("the planting device holds a seat") { roster -> roster.any { it.id == me } }
+            arrived.awaitRoster("the planting device sees the host") { it.isNotEmpty() }
+            runCurrent() // let the events that announce the admission reach the tape
+            return PlantedOutcome(
+                hostKey = arrived.roster.value.single { it.id == host.selfId }.key,
+                deviceKey = seated.single { it.id == me }.key,
+                bystanderKey = bystanderKey,
+                roomId = checkNotNull(host.roomId.value) { "a host room knows its id" }.value,
+                planter = planter,
+                vettedBefore = vettedBefore,
+                vetted = vetting.keys().drop(vettedBefore.size),
+                joins = hostTape.events().filterIsInstance<MembershipEvent.Joined>().filter { it.member.id == me },
+                seat = host.roster.value.singleOrNull { it.id == me },
+            )
+        } finally {
+            joiner?.leave()
+            bystander.leave()
+            host.leave()
+        }
+    }
+
+    /**
+     * The one pass a row planted, after asserting the rig fired: the policy vetted the bystander
+     * alone before the planting device came, the planter was asked for exactly one Proof, that
+     * Proof's room presented no pass of its own, and exactly one was planted.
+     */
+    private fun PlantedOutcome.plantedPass(): Grant {
+        val perProof = planter.plantedPerProof()
+        assertEquals(listOf(bystanderKey), vettedBefore, "rig: the policy vetted the bystander once, before the planting device came")
+        assertEquals(1, perProof.size, "rig: the device sent one Proof, and the planter was asked for it: $perProof")
+        assertEquals(listOf(0), planter.presentedPerProof(), "rig: a fresh device's room presented no pass of its own")
+        assertEquals(1, perProof.single().size, "rig: the planter added exactly one pass: ${perProof.single()}")
+        return perProof.single().single()
+    }
+
+    /**
+     * This pass with the last byte of its signature changed: the same fields, signed by nobody. A
+     * pass's wire form ends in its signature, so the byte changed is the signature's.
+     */
+    private fun Grant.withSignatureChanged(): Grant =
+        assertNotNull(Grant.decode(wire.also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }), "rig: a pass with a changed signature still decodes")
+
+    /** The host ignored the planted pass: one call to the policy, about the device's own key, and no mark. */
+    private fun PlantedOutcome.assertVettedAsANewcomer(why: String) = assertAll(
+        { assertEquals(listOf(deviceKey), vetted, "$why: the policy is asked once, about the device's key") },
+        { assertEquals(1, joins.size, "one Joined for the device: $joins") },
+        { assertEquals(null, joins.singleOrNull()?.returning, "an ordinary admission, not marked as a return: $joins") },
+        { assertEquals(deviceKey, seat?.key, "and the device is seated under its own key") },
+    )
+
     /**
      * Fail unless this rig makes a readmission reachable: a device whose reconnect window ends before
      * the host has noticed it and let its seat go gives up first, and a readmission row would then be
@@ -3121,6 +3451,9 @@ public abstract class RoomConformanceSuite {
 
         /** A second channel, first minted after the leave, so its view cannot pre-date it. */
         const val TERMINAL_STATE_CHANNEL_AFTER = "terminal-state-after-leave"
+
+        /** The room [grantForAnotherRoomIsIgnored]'s planted pass names: never a room the host opens. */
+        const val ANOTHER_ROOM = "another-room"
 
         /** The message on the throwable the failing-teardown properties inject, so a red names itself. */
         const val INJECTED_TEARDOWN_FAILURE =
