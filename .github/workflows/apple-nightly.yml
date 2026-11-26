@@ -190,6 +190,54 @@ jobs:
             -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" \
             -Dkotlin.daemon.jvmargs="-Xmx3g"
 
+      # The iOS Keychain DeviceKeyStore's TCK against the REAL Keychain (#3310). Every other run of
+      # it, the PR build's included, goes through a fake Keychain, because the default simulator
+      # spawn has no Keychain (-25291). This one links a second test binary with
+      # keychain-access-groups and spawns it into a simulator booted here; without the entitlement
+      # a booted simulator answers -34018, and every row goes red (measured locally: 17 of 17).
+      # The task exists only under -Pidentity.keychain.tests=true, and fails itself unless the suite
+      # reported rows, none skipped. The assert step below is for the case the task cannot see: the
+      # task not running at all. After the full step and the konan save, as the probe above is.
+      - name: Boot a simulator for the real-Keychain run (iosSimulatorArm64)
+        id: keychain-sim
+        if: ${{ !cancelled() && matrix.target == 'iosSimulatorArm64' }}
+        timeout-minutes: 10
+        run: echo "udid=$(.github/scripts/boot-ios-simulator.sh kuilt-keychain)" >> "$GITHUB_OUTPUT"
+
+      - name: :kuilt-identity TCK against the real Keychain (iosSimulatorArm64)
+        if: ${{ !cancelled() && matrix.target == 'iosSimulatorArm64' }}
+        timeout-minutes: 15
+        run: >-
+          ./gradlew :kuilt-identity:iosSimulatorArm64RealKeychainTest --max-workers=2
+          -Pidentity.keychain.tests=true
+          -Pidentity.keychain.device=${{ steps.keychain-sim.outputs.udid }}
+          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+
+      - name: Assert the real-Keychain suite ran (#3310)
+        if: ${{ !cancelled() && matrix.target == 'iosSimulatorArm64' }}
+        run: |
+          set -euo pipefail
+          DIR=kuilt-identity/build/test-results/iosSimulatorArm64RealKeychainTest
+          SUITE=us.tractat.kuilt.identity.RealKeychainDeviceKeyStoreConformanceTest
+          if ! ls "$DIR"/*.xml >/dev/null 2>&1; then
+            echo "::error::$DIR has no results — the real-Keychain run did not happen."
+            exit 1
+          fi
+          ROWS=$(grep -oh "<testcase [^>]*classname=\"[^\"]*$SUITE\"" "$DIR"/*.xml | wc -l | tr -d ' ')
+          SKIPPED=$(cat "$DIR"/*.xml | sed -n 's/.*<testsuite [^>]*skipped="\([0-9]*\)".*/\1/p' | awk '{t+=$1} END {print t+0}')
+          echo "Real-Keychain run: $SUITE rows=$ROWS skipped=$SKIPPED" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$ROWS" -eq 0 ] || [ "$SKIPPED" -ne 0 ]; then
+            echo "::error::$SUITE reported $ROWS rows ($SKIPPED skipped): it did not run against the Keychain."
+            exit 1
+          fi
+
+      - name: Delete the real-Keychain simulator
+        if: ${{ always() && steps.keychain-sim.outputs.udid != '' }}
+        run: |
+          xcrun simctl shutdown "${{ steps.keychain-sim.outputs.udid }}" || true
+          xcrun simctl delete "${{ steps.keychain-sim.outputs.udid }}" || true
+
       # Per-module wall time for every test task, in the run's summary, with a warning on any task
       # over 40 min. One module's tests reached 32 min per target without a word until the job
       # timed out (#3115). `always()` so a red or timed-out run reports too; it never fails.
@@ -581,7 +629,7 @@ jobs:
 
           A \`cancelled\` job on a scheduled run almost always hit its \`timeout-minutes\`, so its tests never finished: no verdict, not a pass.
 
-          A red \`apple\` job means the Apple K/N tests failed in at least one of its two legs, \`macosArm64\` and \`iosSimulatorArm64\`; the run page says which. This is the ONLY lane that executes them (ci-required's ubuntu build skips them), so Apple-target regressions are invisible until this is green again. Each leg's reports are attached as \`test-reports-apple-<target>\`, and its run summary has a per-module duration table.
+          A red \`apple\` job means the Apple K/N tests failed in at least one of its two legs, \`macosArm64\` and \`iosSimulatorArm64\`; the run page says which. This is the ONLY lane that executes them (ci-required's ubuntu build skips them), so Apple-target regressions are invisible until this is green again. The \`iosSimulatorArm64\` leg also runs \`:kuilt-identity\`'s Keychain store TCK against the real Keychain of a booted simulator (#3310), the only run that does. Each leg's reports are attached as \`test-reports-apple-<target>\`, and its run summary has a per-module duration table.
 
           A red \`apple-extras\` job means stamp invariance on the Apple targets (#3464), the \`:spike\` compile (#1796) or the JVM bridge tests on macOS (#2487) failed. The step that failed says which. Its reports are in \`test-reports-apple-extras\`.
 
