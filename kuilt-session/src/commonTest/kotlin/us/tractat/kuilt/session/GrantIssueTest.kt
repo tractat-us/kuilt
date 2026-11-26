@@ -5,6 +5,7 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
@@ -12,6 +13,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
@@ -265,7 +267,6 @@ class GrantIssueTest {
      * A connected member is sent a fresh pass every period, a third of the pass's life, and not
      * before: none just under a period, one at a period, and one more each period to a whole life.
      */
-
     @Test
     fun refreshArrivesEachPeriodWhileConnected() = runTest {
         val host = rawHost(joiners = setOf(bob), admission = admitting(GrantTerms(term)))
@@ -293,6 +294,95 @@ class GrantIssueTest {
             { assertTrue(passes.all { it.notAfter - it.issuedAt == lifetime.inWholeMilliseconds }, "each renewal on the same terms") },
             { assertEquals<GrantVerdict>(GrantVerdict.Valid, lastVerdict) },
         )
+    }
+
+    /** A host store whose key takes [signing] of virtual time over every pass: a slow platform signer. */
+    private class SlowSigner(private val inner: DeviceKeyStore, private val signing: Duration) : DeviceKeyStore by inner {
+        var slowed = 0
+
+        override suspend fun deviceKey(): DeviceKey {
+            val key = inner.deviceKey()
+            return object : DeviceKey {
+                override val id: DidKey = key.id
+
+                @us.tractat.kuilt.identity.IdentityInternalApi
+                override suspend fun sign(message: ByteArray): ByteArray {
+                    if ("kuilt/grant" in message.decodeToString()) {
+                        slowed++
+                        delay(signing)
+                    }
+                    return key.sign(message)
+                }
+            }
+        }
+    }
+
+    /** A link that takes [sending] of virtual time over every direct `Welcome`: a slow admission burst. */
+    private class SlowWelcomes(private val inner: FakeSeam, private val sending: Duration) : Seam by inner {
+        var slowed = 0
+
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            val message = AdmitMessage.decode(payload)
+            if (message is AdmitMessage.Welcome && message.membership != null) {
+                slowed++
+                delay(sending)
+            }
+            inner.sendTo(peer, payload)
+        }
+    }
+
+    /**
+     * Each renewal is due a period after the last pass was dated, not a period after the loop woke
+     * (#3709). A pass is dated before it is signed and sent, so a host that slept a whole period
+     * after each one would add the signing to every gap, and the pass a device holds when it drops
+     * would have that much less than its term left. Here every pass takes 300 ms to sign, and the
+     * passes are still one period apart.
+     */
+    @Test
+    fun aSlowSignerDoesNotStretchThePeriod() = runTest {
+        val store = SlowSigner(fakeKeyStore(HOST_DEVICE), signing = 300.milliseconds)
+        val host = rawHost(joiners = setOf(bob), store = store, admission = admitting(GrantTerms(term)))
+        host.admit(bob, bobKey, nonce = 1)
+
+        host.advanceKeeping(setOf(bob), lifetime + period)
+
+        val issuedAts = host.passesTo(bob).map { it.issuedAt }
+        assertAll(
+            { assertTrue(store.slowed >= GrantIssuer.PERIODS_PER_PASS + 1, "rig: every pass was slow to sign: ${store.slowed}") },
+            { assertTrue(issuedAts.size >= GrantIssuer.PERIODS_PER_PASS + 1, "rig: several renewals: $issuedAts") },
+            { assertEquals(List(issuedAts.size - 1) { period.inWholeMilliseconds }, issuedAts.zipWithNext { a, b -> b - a }, "every pass one period after the last: $issuedAts") },
+        )
+    }
+
+    /**
+     * The same for the Welcome: its admission burst takes 700 ms to send, and the first renewal is
+     * still dated one period after the Welcome's pass, not one period after the burst.
+     */
+    @Test
+    fun aSlowAdmissionBurstDoesNotStretchTheFirstPeriod() = runTest {
+        val fake = FakeSeam(selfId = KEY_SEAT_HOST, initialPeers = setOf(KEY_SEAT_HOST, bob))
+        val link = SlowWelcomes(fake, sending = 700.milliseconds)
+        val room = SeamRoomFactory(
+            loom = InMemoryLoom(),
+            scope = backgroundScope,
+            clock = virtualClock(),
+            deviceKeyStore = fakeKeyStore(HOST_DEVICE),
+            heartbeatConfig = KEY_SEAT_HEARTBEAT,
+            admitTimeout = KEY_SEAT_ADMIT_TIMEOUT,
+        ).adopt(link, AdoptRole.Host(admitting(GrantTerms(term)), roomId = KEY_SEAT_ROOM), memberName = "Host")
+        testScheduler.runCurrent()
+        val host = RawHost(this, fake, room, ObservedHold(), EventLog(room, backgroundScope), hostKey)
+        host.admit(bob, bobKey, nonce = 1)
+
+        host.advanceKeeping(setOf(bob), period * 2)
+
+        val issuedAts = host.passesTo(bob).map { it.issuedAt }
+        assertAll(
+            { assertEquals(1, link.slowed, "rig: the burst's direct Welcome was slow to send") },
+            { assertTrue(issuedAts.size >= 2, "rig: the Welcome's pass and a renewal: $issuedAts") },
+            { assertEquals(period.inWholeMilliseconds, issuedAts[1] - issuedAts[0], "the first renewal one period after the Welcome's pass: $issuedAts") },
+        )
+        room.leave()
     }
 
     /** A host store whose key refuses to sign the first pass it is asked to: a platform signer failing once. */
