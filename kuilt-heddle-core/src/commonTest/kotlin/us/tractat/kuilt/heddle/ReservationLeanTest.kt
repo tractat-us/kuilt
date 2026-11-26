@@ -57,48 +57,48 @@ class ReservationLeanTest {
     }
 
     @Test
-    fun oneLevelUnderReservingLeansTheLaneUp() = pin(oneLevel(Estimate.QUARTER), "a, reserves a quarter", 0.0109, -0.0093, 0.0418)
+    fun oneLevelUnderReservingLeansTheLaneUp() = pin(oneLevel(Estimate.QUARTER), "a, reserves a quarter", 0.0115, -0.0091, 0.0426)
 
     @Test
-    fun oneLevelOverReservingLeansTheLaneDown() = pin(oneLevel(Estimate.FOUR_TIMES), "a, reserves 4×", -0.0097, -0.0312, 0.0)
+    fun oneLevelOverReservingLeansTheLaneDown() = pin(oneLevel(Estimate.FOUR_TIMES), "a, reserves 4×", -0.0115, -0.0338, 0.0)
 
     @Test
     fun oneLevelAnOverReservationOnTheLastJobOfEachBurstLeavesNoLean() =
-        pin(oneLevel(Estimate.FOUR_TIMES_ON_LAST), "a, reserves 4× on each burst's last job", -0.0004, -0.0262, 0.0190)
+        pin(oneLevel(Estimate.FOUR_TIMES_ON_LAST), "a, reserves 4× on each burst's last job", -0.0005, -0.0249, 0.0190)
 
     @Test
     fun oneLevelReservingOneAndExtendingLeansTheLaneUp() =
-        pin(oneLevel(Estimate.ONE_THEN_EXTEND), "a, reserves 1 and extends", 0.0107, 0.0, 0.0666)
+        pin(oneLevel(Estimate.ONE_THEN_EXTEND), "a, reserves 1 and extends", 0.0109, 0.0, 0.0662)
 
     @Test
     fun twoLevelsUnderReserving() = twoLevel(Estimate.QUARTER).let {
-        pin(it.lane, "a1, reserves a quarter", 0.0272, -0.0444, 0.0860)
-        pin(it.sibling, "a2 beside it", -0.0095, -0.0826, 0.0352)
+        pin(it.lane, "a1, reserves a quarter", 0.0273, -0.0444, 0.0875)
+        pin(it.sibling, "a2 beside it", -0.0093, -0.0805, 0.0340)
     }
 
     @Test
     fun twoLevelsOverReserving() = twoLevel(Estimate.FOUR_TIMES).let {
-        pin(it.lane, "a1, reserves 4×", 0.0088, -0.0228, 0.0565)
-        pin(it.sibling, "a2 beside it", -0.0053, -0.0432, 0.0406)
+        pin(it.lane, "a1, reserves 4×", 0.0068, -0.0240, 0.0534)
+        pin(it.sibling, "a2 beside it", -0.0056, -0.0436, 0.0388)
     }
 
     @Test
     fun twoLevelsAnOverReservationOnTheLastJobOfEachBurstMovesTheSibling() = twoLevel(Estimate.FOUR_TIMES_ON_LAST).let {
-        pin(it.lane, "a1, reserves 4× on each burst's last job", 0.0449, -0.0176, 0.1210)
-        pin(it.sibling, "a2 beside it", -0.0306, -0.0836, 0.0420)
+        pin(it.lane, "a1, reserves 4× on each burst's last job", 0.0447, -0.0174, 0.1200)
+        pin(it.sibling, "a2 beside it", -0.0310, -0.0844, 0.0404)
     }
 
     @Test
     fun twoLevelsReservingOneAndExtending() = twoLevel(Estimate.ONE_THEN_EXTEND).let {
-        pin(it.lane, "a1, reserves 1 and extends", 0.0070, -0.0392, 0.0935)
-        pin(it.sibling, "a2 beside it", -0.0031, -0.0435, 0.0385)
+        pin(it.lane, "a1, reserves 1 and extends", 0.0070, -0.0392, 0.0914)
+        pin(it.sibling, "a2 beside it", -0.0032, -0.0425, 0.0364)
     }
 
     /**
      * The positive control: the refund landing in a sibling's gap is an effect these ensembles can
      * see. The arm whose refund lands as its queue empties must cost the honest sibling more, on
      * average, than either arm that never refunds, by at least [CLEARANCE]. Measured, it clears
-     * reserving a quarter by 0.021 and reserving 1 and extending by 0.028.
+     * reserving a quarter by 0.022 and reserving 1 and extending by 0.028.
      */
     @Test
     fun aRefundInTheGapCostsTheSiblingMoreThanNeverRefunding() {
