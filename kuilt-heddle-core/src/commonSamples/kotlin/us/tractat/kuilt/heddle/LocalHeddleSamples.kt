@@ -1077,8 +1077,8 @@ internal fun sampleMinimalEditor() {
     // List what the save changes against the tree the editor loaded. A new tree is refused, not
     // saved; the changes that lose history are the warning, and here the rename drains light.
     val changes = startedFrom.changesTo(candidate)
-    check(changes.none { it.history == TopologyChange.SaveEffect.NEW_TREE })
-    val warnings = changes.filter { it.history == TopologyChange.SaveEffect.LOST }
+    check(changes.none { it.saveEffect == TopologyChange.SaveEffect.NEW_TREE })
+    val warnings = changes.filter { it.saveEffect == TopologyChange.SaveEffect.LOST }
     check(warnings.single().names == listOf("pool", "light"))
 
     // Preview what the save would do to the running engine, checked against the same tree.

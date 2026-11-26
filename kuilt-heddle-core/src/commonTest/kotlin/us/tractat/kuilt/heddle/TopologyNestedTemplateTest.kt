@@ -234,7 +234,7 @@ class TopologyNestedTemplateTest {
     fun aNestedTemplatesWeightIsHistoryAndItsArrivalIsNot() {
         fun with(template: ChildTemplate?) = Topology("root", listOf(Group("ci", Weight.ONE, listOf(Lane("manual")), template = template)))
         fun history(before: ChildTemplate, after: ChildTemplate) =
-            assertIs<TopologyChange.TemplateChanged>(with(before).changesTo(with(after)).single()).history
+            assertIs<TopologyChange.TemplateChanged>(with(before).changesTo(with(after)).single()).saveEffect
         assertAll(
             { assertEquals(TopologyChange.SaveEffect.LOST, history(repos, repos.copy(template = authors.copy(weight = Weight.of(5)))), "an author weight restarts every author") },
             { assertEquals(TopologyChange.SaveEffect.LOST, history(repos, repos.copy(template = null)), "dropping it closes every author") },

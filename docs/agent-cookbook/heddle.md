@@ -511,8 +511,8 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
     // List what the save changes against the tree the editor loaded. A new tree is refused, not
     // saved; the changes that lose history are the warning, and here the rename drains light.
     val changes = startedFrom.changesTo(candidate)
-    check(changes.none { it.history == TopologyChange.SaveEffect.NEW_TREE })
-    val warnings = changes.filter { it.history == TopologyChange.SaveEffect.LOST }
+    check(changes.none { it.saveEffect == TopologyChange.SaveEffect.NEW_TREE })
+    val warnings = changes.filter { it.saveEffect == TopologyChange.SaveEffect.LOST }
     check(warnings.single().names == listOf("pool", "light"))
 
     // Preview what the save would do to the running engine, checked against the same tree.
@@ -823,14 +823,14 @@ root, which `apply` throws on. So a page warns on every `LOST` and refuses the s
         group("tenants") { template(Weight.of(2), maxConcurrent = 4) }
     }
     val changes = running.changesTo(edited)
-    check(changes.none { it.history == TopologyChange.SaveEffect.NEW_TREE })
+    check(changes.none { it.saveEffect == TopologyChange.SaveEffect.NEW_TREE })
     // Of four changes, only the removal of batch costs anyone their history.
-    val warnings = changes.filter { it.history == TopologyChange.SaveEffect.LOST }
+    val warnings = changes.filter { it.saveEffect == TopologyChange.SaveEffect.LOST }
     check(changes.size == 4 && warnings.map { it.names } == listOf(listOf("pool", "acme", "batch")))
 
     // A renamed root is a new tree, which apply throws on, so the save is refused, not warned about.
     val renamed = draft("farm") { lane("batch") }
-    check(running.changesTo(renamed).first().history == TopologyChange.SaveEffect.NEW_TREE)
+    check(running.changesTo(renamed).first().saveEffect == TopologyChange.SaveEffect.NEW_TREE)
 ```
 
 To compare two documents, check each with `Topology.from` first: a change is defined only

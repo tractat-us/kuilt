@@ -185,11 +185,11 @@ class TopologyDocumentEditsPropertyTest {
         val kinds = changes.map { it.kind }
         val template = changes.singleOrNull()?.takeIf { it.kind.startsWith("template") }
         return when (this) {
-            TopologyEdit.History.KEPT -> kinds.isEmpty() || kinds == listOf("ceiling") || template?.history == TopologyChange.SaveEffect.KEPT
+            TopologyEdit.History.KEPT -> kinds.isEmpty() || kinds == listOf("ceiling") || template?.saveEffect == TopologyChange.SaveEffect.KEPT
             // A template edit that loses history either restarts the attached children's shares,
             // keeping every level, or drains the children of a level it takes away.
             TopologyEdit.History.SHARE_RESTARTS -> kinds == listOf("weight") ||
-                (template is TopologyChange.TemplateChanged && template.history == TopologyChange.SaveEffect.LOST && template.after.levels >= template.before.levels)
+                (template is TopologyChange.TemplateChanged && template.saveEffect == TopologyChange.SaveEffect.LOST && template.after.levels >= template.before.levels)
             TopologyEdit.History.STARTS_EMPTY -> kinds == listOf("added")
             TopologyEdit.History.DRAINS -> kinds == listOf("removed") || kinds == listOf("template removed") ||
                 (template is TopologyChange.TemplateChanged && template.after.levels < template.before.levels)
