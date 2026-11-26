@@ -218,7 +218,7 @@ class WebCryptoDeviceKeyStoreTest {
      * The witness is the browser's own lock manager. The first store to reach the gate is about to make
      * the key, and holds there until `navigator.locks.query()` shows the other store's request waiting
      * on the database's lock. With the Web Lock it is: one held, one pending. Without it nothing holds
-     * or waits on that name at all, so the rig reds whenever the other store gets there — a lagging
+     * or waits on that name at all, so the rig reds however late the other store arrives — a lagging
      * store cannot let the missing lock pass by reading the first store's key after it is written.
      */
     @Test
@@ -301,7 +301,7 @@ private class WebLockState(val held: Int, val pending: Int) {
 /**
  * The Web Lock [name] as `navigator.locks.query()` reports it, once that shows a request waiting on it.
  * It answers at once when nothing holds the lock, since then nothing can be waiting on it, and with
- * the last snapshot after [WAITER_CEILING_MS] of real time. Real time, not the test's virtual clock:
+ * the last snapshot after at least [WAITER_CEILING_MS] of real time. Real time, not the test's virtual clock:
  * the other request is held up by the browser, which virtual time does not advance.
  */
 private suspend fun awaitAWaiter(name: String): WebLockState {
