@@ -842,8 +842,9 @@ its raw position at its last wake, that grows by every stretch it sits out. So a
 busy parent's positions climb past the ceiling and stay there, and that is the
 whole consequence: the pick reads the **effective** position, raw plus offset, in
 128 bits, and orders it exactly. A newborn is seated at the front, a clamped waker
-at the front less its sleeper credit, and a returner where its parent's net-service
-clock puts it (§7.2), each exactly and on its own grid, wherever that is. No seat,
+at the front less its sleeper credit, and in a `LocalHeddle` past it by what its open
+leases reserve, and a returner where its parent's net-service clock puts it (§7.2),
+each exactly and on its own grid, wherever that is. No seat,
 clamp or return is held at a floor, since nothing is ever put below zero but a
 child its own `cancel` walked back, which the public reads hold at its floor.
 
@@ -978,7 +979,7 @@ that may have run a long way (the position limit, below).
 |---|---|---|---|
 | The parent origin (`ParentRecord`, `raiseOrigin`, `originTicks`) | Keeps the effective position a pick narrows inside `Long` | Nothing narrows, so it protects nothing | Deleted, from the ledger and from the wire. The two public reads of it stay, deprecated: `EntitlementLedger.origin` answers zero, and `PolicyEdge.origin` is read as before by the pure policy and never set by an engine |
 | The rebase (`raiseOriginBeneath`, `raiseBeforePick`, `preSeatRaise`, `chargeRebase`, `originStep`, `wholeSteps`, the three "raise changed no pick" checks, `Rebase`, `RebasingPick`) | Raises the origin before a child reaches its ceiling | A translation of every child alike, which changes no pick | Deleted. `rebaseEnabled` and `rebases`, behind `@HeddleInternalApi`, stay as deprecated members that do nothing and read zero. `gridStepOf` stays, for the budget and the format 1 reader |
-| The window rule and the floor (`positionFloor`, `windowBound`, the floor arms of `landing`, `shiftOf` and `clampWakers`) | Keeps a child a rebase left below zero inside `[−C, C)` | Only a rebase puts a child below zero | Deleted. A seat lands at the front, a clamp at the front less the sleeper credit, a returner where its clock puts it |
+| The window rule and the floor (`positionFloor`, `windowBound`, the floor arms of `landing`, `shiftOf` and `clampWakers`) | Keeps a child a rebase left below zero inside `[−C, C)` | Only a rebase puts a child below zero | Deleted. A seat lands at the front, a clamp at the front less the sleeper credit and plus, in a `LocalHeddle`, the waker's open reservations (#3238), a returner where its clock puts it |
 | The ceiling (`positionCeiling`, `rebaseThreshold`, `POSITION_HEADROOM`, `inWindow`, `readVirtual`, `peakPositionFraction`) | The largest position a `Long` pick orders | Unreachable | No engine reads it. It stays for two readers: the weight budget, whose constants it is, and the deprecated `Rational` reads, which report it past it |
 | P1′'s lease clause of the weight budget (denominators at most 30,719) | One full lease from just under `R` stays below `C` | No `R` and no `C` | Kept exactly, as the set of weights an apply accepts. What keeps a pick inside 128 bits is the position limit below, not a clause on the weights |
 | The multi-scheduler margin (#3458, denominator × schedulers under about 30,000) | `k` peers granting one child at once stay under `C − R` | No `C` | Gone. `k` concurrent grants only add to the edge's issuance |
@@ -989,7 +990,8 @@ that may have run a long way (the position limit, below).
 - **The grid** of 16 ticks to a unit, and the two roundings, both up (§7.2).
 - **The seat rules.** A newborn is seated at the front of the demanding children
   it joins, or level with the furthest-ahead child when none is demanding. A
-  child seen idle and never seen to stop is clamped to that front. Neither rule
+  child seen idle and never seen to stop is clamped to that front, and in a
+  `LocalHeddle` past it by what its open leases reserve (#3238). Neither rule
   read the origin: it cancelled out of both.
 - **The net-service clock for a returner (#3376, #3416).** It reads issuance and
   returns, never a position, and a shift is a distance, so an origin never
@@ -1798,13 +1800,16 @@ to 5 land together, never 3 alone (#3495 review).
   instead (below, #3376):
 
   ```text
-  virtualOffset = max(0, parentVirtualTime − v_raw(e) − sleeperCredit / w(e))
+  virtualOffset = max(0, parentVirtualTime + reserved(e) / w(e) − v_raw(e) − sleeperCredit / w(e))
   effectiveVirtualService(e) = v_raw(e) + virtualOffset
   ```
 
-  On the waker's grid that is `max(0, ⌈V · w · G⌉ − p − sleeperCredit · G)`
+  On the waker's grid that is `max(0, ⌈V · w · G⌉ + R · G − p − sleeperCredit · G)`
   ticks, the same up-rounding the seat takes. Sleeper credit is service units,
-  so it scales onto the grid by `G` like any other service. The stored offset is
+  so it scales onto the grid by `G` like any other service. `reserved(e)`, or
+  `R`, is what the waker's open leases reserve, which its position already
+  counts (#3238). A `LocalHeddle` passes it; `HeddleNode` counts no open
+  reservation, so for it `R` is zero. The stored offset is
   kept on the grid, so it never carries a front's denominator into the next
   one. The clamp and the stored offset are 128-bit
   (#3353): a waker idle for long sits far below its siblings, and the clamp
@@ -1819,7 +1824,8 @@ to 5 land together, never 3 alone (#3495 review).
 - **The restart rule: a seated child this peer has never observed, and finds
   demanding, is a waker** (#3472). It is clamped as above, to the front of the
   children that are not joining, or level with the furthest-ahead child when
-  all of them are. A first sighting says nothing about how long the child
+  all of them are, and in a `LocalHeddle` past that by what its open leases
+  reserve. A first sighting says nothing about how long the child
   idled, and keeping its raw position would let a child that idled under
   another peer's scheduling, or before a restart, keep the whole gap as credit
   and take every slot it is eligible for until it caught up. Clamping costs it
@@ -1838,7 +1844,8 @@ to 5 land together, never 3 alone (#3495 review).
   no call has observed yet, and a restore from a snapshot whose memory was
   dropped. The second is a restart, and costs what a restart costs: every
   seated child the engine finds demanding is clamped, and since all of them
-  are joining, each comes back level with the furthest-ahead one. A clamped
+  are joining, each comes back level with the furthest-ahead one, past it by
+  what its own open leases reserve. A clamped
   waker lands where the memory had it, but a child that was owed service loses
   it, and a returner is clamped rather than moved by its parent's clock
   (`LocalHeddlePersistenceTest`). So the snapshot still keeps the memory.
@@ -2001,7 +2008,8 @@ while it was away.
   back as credit: restarted without its memory, a lane with a lease reserving 8
   and costing 1 took 14 of the next 20 picks where the memory gave it 10. A
   reload that moves an open lease onto a new edge meets the same clamp and
-  read the same 14. `HeddleNode` opens no leases, so it clamps to the front.
+  read the same 14. `HeddleNode` counts no open reservation, so it clamps to
+  the front.
 
 `FairShareAllocator` runs the clock in its seat-and-wake step, `settleJoiners`,
 which every pick, every `LocalHeddle.admit` with a waiting set and the first
@@ -2643,7 +2651,8 @@ Carried over from the source intact; each is a named property test (§13).
    by how far its parent's net-service clock ran while it was away, and gains
    nothing for the time it was idle. A child seen idle but never seen to stop
    is clamped to the front, and so is a seated child first seen asking, the
-   restart rule: an allocator with no memory of a child, a restarted one say,
+   restart rule (a `LocalHeddle` clamps it past the front by what its open
+   leases reserve, #3238): an allocator with no memory of a child, a restarted one say,
    gives it no credit for a gap it did not watch, at the cost of its lag, once
    per allocator. Default sleeper credit is zero, and applies only to a
    clamped waker (§7.2, #3376, #3472).

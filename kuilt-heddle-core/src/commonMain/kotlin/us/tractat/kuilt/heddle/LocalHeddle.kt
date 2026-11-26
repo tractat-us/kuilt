@@ -473,8 +473,8 @@ public sealed interface LeaseOutcome {
  * report exactly. Past it they report the ceiling, the penalty side. Nothing brings a busy
  * parent's positions back down (#3472), so a long-running one passes its ceiling, and only those
  * reads saturate: every pick, seat and wake clamp orders the wide position exactly. A newborn is
- * seated at the front, a clamped waker at the front less its sleeper credit, and a returner where
- * its parent's net-service clock puts it. The ceiling is measured net of returns, so returned
+ * seated at the front, a clamped waker at the front plus what its open leases reserve, less its
+ * sleeper credit (#3238), and a returner where its parent's net-service clock puts it. The ceiling is measured net of returns, so returned
  * service never reaches it (#3360). A weight set so fine that one full lease could carry a child
  * past its ceiling is refused at [apply] (#3353).
  *

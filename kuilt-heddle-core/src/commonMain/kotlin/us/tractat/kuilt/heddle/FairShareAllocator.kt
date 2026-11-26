@@ -395,6 +395,11 @@ public class FairShareAllocator(
      * The wake memory advances whether or not a child is picked: a pick that finds nothing still
      * observed who was waiting. The returned ledger is a new value; [ledger] is not changed.
      *
+     * It clamps a waker to the front with no open reservation counted, since it knows of none. A
+     * `LocalHeddle` clamps one past the front by what its open leases reserve (#3238), so a caller
+     * that composes this with delegations of its own still in flight gets the plainer clamp: a
+     * waker holding one is forgiven that work, and its refund comes back as credit.
+     *
      * @param waiting each child edge's appetite for the seat and wake step: [Demand.NONE] for a
      *   child that wants no service at all.
      * @param eligible each child edge's appetite for this pick: [Demand.NONE] for a child that
