@@ -48,7 +48,7 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * A host issues every member it seats a pass back in, on the direct `Welcome`, and renews it every
- * half lifetime while the member stays connected (identity Task 2.5, #3221).
+ * quarter of its lifetime while the member stays connected (identity Task 2.5, #3221; #3709).
  *
  * The pass is what lets a device that drops come back without being vetted (2.6 reads it), so what
  * matters here is the pass the device ends up holding: whose it is, for where, until when, and that
@@ -62,6 +62,14 @@ class GrantIssueTest {
     private val bobKey: DeviceKey = fakeDeviceKey(1)
     private val carolKey: DeviceKey = fakeDeviceKey(2)
     private val hostKey: DidKey = fakeDidKey(HOST_DEVICE)
+
+    /**
+     * The renewal period the renewal tests run on, and the term that gives it: the term is derived
+     * from [GrantIssuer.RENEWALS_PER_TERM], so the timings below hold whatever the constant is, and a
+     * host whose schedule drifted from it reds. A second is long against a partition's detection.
+     */
+    private val period: Duration = 1.seconds
+    private val term: Duration = period * GrantIssuer.RENEWALS_PER_TERM
 
     /** The host's own trust: what 2.6 will check a presented pass with. */
     private suspend fun trust(revocations: RevocationList = RevocationList.inMemory()) =
@@ -212,10 +220,10 @@ class GrantIssueTest {
     @Test
     fun anHourIsRenewedEveryQuarterHour() {
         val hour = GrantTerms(1.hours)
-        val period = assertNotNull(GrantIssuer.refreshPeriodMillis(hour)).milliseconds
+        val every = assertNotNull(GrantIssuer.refreshPeriodMillis(hour)).milliseconds
         assertAll(
-            { assertEquals(15.minutes, period, "every quarter of the hour") },
-            { assertEquals(45.minutes, hour.readmitFor - period, "the floor: three quarters of the hour") },
+            { assertEquals(15.minutes, every, "every quarter of the hour") },
+            { assertEquals(45.minutes, hour.readmitFor - every, "the floor: three quarters of the hour") },
             { assertEquals(1L, GrantIssuer.refreshPeriodMillis(GrantTerms(1.milliseconds)), "a 1 ms term is renewed every 1 ms, not every 0") },
             { assertEquals(1L, GrantIssuer.refreshPeriodMillis(GrantTerms(3.milliseconds)), "and so is any term shorter than its renewal count") },
             { assertEquals(null, GrantIssuer.refreshPeriodMillis(GrantTerms(Duration.INFINITE)), "a term that never ends is never renewed") },
@@ -223,28 +231,34 @@ class GrantIssueTest {
     }
 
     /**
-     * A connected member is sent a fresh pass every half of its lifetime, and not before: none at
-     * just under half, one at half, a second at a full lifetime.
+     * A connected member is sent a fresh pass every period, a quarter of its lifetime, and not before:
+     * none just under a period, one at a period, and one more each period to a full lifetime.
      */
     @Test
-    fun refreshArrivesAtHalfLifeWhileConnected() = runTest {
-        val host = rawHost(joiners = setOf(bob), admission = admitting(GrantTerms(2.seconds)))
+    fun refreshArrivesEachPeriodWhileConnected() = runTest {
+        val host = rawHost(joiners = setOf(bob), admission = admitting(GrantTerms(term)))
         val admittedAt = now()
         host.admit(bob, bobKey, nonce = 1)
 
-        host.advanceKeeping(setOf(bob), 900.milliseconds)
-        val beforeHalf = host.renewalsTo(bob)
+        host.advanceKeeping(setOf(bob), period - 100.milliseconds)
+        val beforePeriod = host.renewalsTo(bob)
         host.advanceKeeping(setOf(bob), 100.milliseconds)
-        val atHalf = host.renewalsTo(bob)
-        host.advanceKeeping(setOf(bob), 1.seconds)
+        val atPeriod = host.renewalsTo(bob)
+        host.advanceKeeping(setOf(bob), term - period)
 
         val passes = host.passesTo(bob)
         val lastVerdict = trust().verify(passes.last(), bobKey.id, KEY_SEAT_ROOM.value, now())
         assertAll(
-            { assertEquals(0, beforeHalf, "nothing before half the lifetime") },
-            { assertEquals(1, atHalf, "a renewal at half the lifetime") },
-            { assertEquals(listOf(admittedAt, admittedAt + 1_000, admittedAt + 2_000), passes.map { it.issuedAt }, "Welcome, then one renewal per half lifetime") },
-            { assertTrue(passes.all { it.notAfter - it.issuedAt == 2_000L }, "each renewal on the same terms") },
+            { assertEquals(0, beforePeriod, "nothing before a period") },
+            { assertEquals(1, atPeriod, "a renewal at a period") },
+            {
+                assertEquals(
+                    (0..GrantIssuer.RENEWALS_PER_TERM).map { admittedAt + it * period.inWholeMilliseconds },
+                    passes.map { it.issuedAt },
+                    "Welcome, then one renewal per period",
+                )
+            },
+            { assertTrue(passes.all { it.notAfter - it.issuedAt == term.inWholeMilliseconds }, "each renewal on the same terms") },
             { assertEquals<GrantVerdict>(GrantVerdict.Valid, lastVerdict) },
         )
     }
@@ -278,11 +292,11 @@ class GrantIssueTest {
     @Test
     fun aPassThatFailsToSignAtSeatingIsRenewedAPeriodLater() = runTest {
         val store = FailsFirstPass(fakeKeyStore(HOST_DEVICE))
-        val host = rawHost(joiners = setOf(bob), store = store, admission = admitting(GrantTerms(2.seconds)))
+        val host = rawHost(joiners = setOf(bob), store = store, admission = admitting(GrantTerms(term)))
         host.admit(bob, bobKey, nonce = 1)
         val direct = host.sentTo(bob).filterIsInstance<AdmitMessage.Welcome>().single { it.membership != null }
 
-        host.advanceKeeping(setOf(bob), 1.seconds)
+        host.advanceKeeping(setOf(bob), period)
 
         val passes = host.passesTo(bob)
         val verdict = passes.singleOrNull()?.let { trust().verify(it, bobKey.id, KEY_SEAT_ROOM.value, now()) }
@@ -301,13 +315,13 @@ class GrantIssueTest {
      */
     @Test
     fun noRefreshWhilePartitioned() = runTest {
-        val host = longHoldHost(admitting(GrantTerms(2.seconds)))
+        val host = longHoldHost(admitting(GrantTerms(term)))
         host.admit(bob, bobKey, nonce = 1)
-        host.advanceKeeping(setOf(bob), 1_100.milliseconds)
+        host.advanceKeeping(setOf(bob), period + 100.milliseconds)
         val whileConnected = host.renewalsTo(bob)
 
         host.partition(bob, alive = emptySet())
-        host.advanceKeeping(emptySet(), 5.seconds)
+        host.advanceKeeping(emptySet(), term)
         val whileAway = host.renewalsTo(bob)
         val heldAfterAway = host.passesTo(bob).last()
         val stillHeld = host.member(bob)?.liveness
@@ -334,7 +348,7 @@ class GrantIssueTest {
     @Test
     fun noExpiryGrantIsNeverRefreshed() = runTest {
         val friend = GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer)
-        val stranger = GrantTerms(2.seconds)
+        val stranger = GrantTerms(term)
         val admission = HostAdmission(
             AdmissionPolicy { request -> AdmissionDecision.Admit(if (request.key == bobKey.id) friend else stranger) },
             RevocationList.inMemory(),
@@ -342,7 +356,7 @@ class GrantIssueTest {
         val host = rawHost(joiners = setOf(bob, carol), admission = admission)
         host.admit(bob, bobKey, nonce = 1)
         host.admit(carol, carolKey, nonce = 2)
-        host.advanceKeeping(setOf(bob, carol), 3.seconds)
+        host.advanceKeeping(setOf(bob, carol), period * 3)
 
         val room = host.room as SeamRoom
         val bobsPass = host.passesTo(bob).single()
@@ -352,7 +366,7 @@ class GrantIssueTest {
             { assertFalse(room.renewsPassForTest(bob), "no renewal loop for a pass that never expires") },
             { assertEquals(0, host.renewalsTo(bob)) },
             { assertTrue(room.renewsPassForTest(carol), "control: Carol's finite pass is renewed") },
-            { assertEquals(3, host.renewalsTo(carol), "control: Carol was renewed each half lifetime") },
+            { assertEquals(3, host.renewalsTo(carol), "control: Carol was renewed each period") },
         )
     }
 
@@ -364,14 +378,14 @@ class GrantIssueTest {
     @Test
     fun revokedPresentMemberStopsReceivingRefreshes() = runTest {
         val revocations = RevocationList.inMemory()
-        val host = rawHost(joiners = setOf(bob, carol), admission = admitting(GrantTerms(2.seconds), revocations))
+        val host = rawHost(joiners = setOf(bob, carol), admission = admitting(GrantTerms(term), revocations))
         host.admit(bob, bobKey, nonce = 1)
         host.admit(carol, carolKey, nonce = 2)
-        host.advanceKeeping(setOf(bob, carol), 1_100.milliseconds)
+        host.advanceKeeping(setOf(bob, carol), period + 100.milliseconds)
         val beforeRevocation = host.renewalsTo(bob)
 
         revocations.revoke(bobKey.id, notBefore = now())
-        host.advanceKeeping(setOf(bob, carol), 3.seconds)
+        host.advanceKeeping(setOf(bob, carol), period * 3)
 
         val room = host.room as SeamRoom
         val lastVerdict = trust(revocations).verify(host.passesTo(bob).last(), bobKey.id, KEY_SEAT_ROOM.value, now())
@@ -396,7 +410,7 @@ class GrantIssueTest {
     fun aTakeoverDoesNotLaunderARevocation() = runTest {
         val revocations = RevocationList.inMemory()
         val asked = mutableListOf<DidKey>()
-        val admission = HostAdmission(AdmissionPolicy { request -> asked += request.key; AdmissionDecision.Admit(GrantTerms(2.seconds)) }, revocations)
+        val admission = HostAdmission(AdmissionPolicy { request -> asked += request.key; AdmissionDecision.Admit(GrantTerms(term)) }, revocations)
         val host = rawHost(joiners = setOf(bob, bobTab, carol), admission = admission)
         val admittedAt = now()
         host.admit(bob, bobKey, nonce = 1)
@@ -411,7 +425,7 @@ class GrantIssueTest {
         val renewalsAtRevocation = host.renewalsTo(bobTab)
         val carolsAtRevocation = host.renewalsTo(carol)
 
-        host.advanceKeeping(setOf(bobTab, carol), 3.seconds)
+        host.advanceKeeping(setOf(bobTab, carol), period * 3)
         val renewsAfter = (host.room as SeamRoom).renewsPassForTest(bobTab)
         val vettedBeforeHello = asked.toList()
         host.admit(bobTab, bobKey, nonce = 4)

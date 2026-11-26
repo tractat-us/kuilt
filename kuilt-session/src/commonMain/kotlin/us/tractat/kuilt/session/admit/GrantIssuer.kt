@@ -12,9 +12,10 @@ import kotlin.time.Duration.Companion.milliseconds
  * #3221).
  *
  * The room calls these outside its lock, since signing suspends: [issue] on every direct `Welcome`,
- * and again every [refreshPeriodMillis] while the member stays connected, as long as [mayIssue]
- * holds. The terms come from the member's membership: the policy's at admission, or those the pass
- * a device returned on carried ([termsOf], #3222). A restore or a takeover keeps them.
+ * and again every [refreshPeriodMillis] (a quarter of the term, [RENEWALS_PER_TERM]) while the member
+ * stays connected, as long as [mayIssue] holds. The terms come from the member's membership: the
+ * policy's at admission, or those the pass a device returned on carried ([termsOf], #3222). A restore
+ * or a takeover keeps them.
  *
  * Stateless: the terms live on the membership and the schedule in the room's renewal jobs, so what a
  * host remembers of a member that left is the room's too (`DepartedMembers`).
@@ -56,16 +57,17 @@ internal object GrantIssuer {
     }
 
     /**
-     * How long after one pass on [terms] the next is due, in milliseconds: half of
-     * [GrantTerms.readmitFor], so a member that drops just before a renewal still holds a pass for half
-     * a term after its last contact. Never under 1 ms: a 1 ms term halves to 0 in whole milliseconds,
-     * which would spin the renewal loop at one instant, signing without end and freezing a test's
-     * virtual clock. Null for a term that never ends, whose pass is never renewed.
+     * How long after one pass on [terms] the next is due, in milliseconds: [GrantTerms.readmitFor] over
+     * [RENEWALS_PER_TERM], a quarter of it, so a member that drops just before a renewal still holds a
+     * pass for three quarters of a term after its last contact. Never under 1 ms: a term shorter than
+     * [RENEWALS_PER_TERM] ms divides to 0 in whole milliseconds, which would spin the renewal loop at
+     * one instant, signing without end and freezing a test's virtual clock. Null for a term that never
+     * ends, whose pass is never renewed.
      *
      * Read from the terms, not from a pass, so renewals run whether or not the first pass was signed.
      */
     fun refreshPeriodMillis(terms: GrantTerms): Long? =
-        if (terms.readmitFor.isInfinite()) null else maxOf(1L, terms.readmitFor.inWholeMilliseconds / 2)
+        if (terms.readmitFor.isInfinite()) null else maxOf(1L, terms.readmitFor.inWholeMilliseconds / RENEWALS_PER_TERM)
 
     /**
      * Whether a membership admitted at [admittedAtMs] may be issued a pass, given its device's
