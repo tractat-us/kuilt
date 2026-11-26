@@ -1588,6 +1588,7 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
     final fun reconcileCapacity(kotlin/Long) // us.tractat.kuilt.heddle/LocalHeddle.reconcileCapacity|reconcileCapacity(kotlin.Long){}[0]
     final fun reconcileLeases(kotlin.collections/Set<us.tractat.kuilt.heddle/LeaseId>, kotlin/Long): us.tractat.kuilt.heddle/LeaseReconciliation // us.tractat.kuilt.heddle/LocalHeddle.reconcileLeases|reconcileLeases(kotlin.collections.Set<us.tractat.kuilt.heddle.LeaseId>;kotlin.Long){}[0]
     final fun shareLine(kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>): us.tractat.kuilt.heddle/ShareLine // us.tractat.kuilt.heddle/LocalHeddle.shareLine|shareLine(kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>){}[0]
+    final fun shrink(us.tractat.kuilt.heddle/LeaseId, kotlin/Long): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/LocalHeddle.shrink|shrink(us.tractat.kuilt.heddle.LeaseId;kotlin.Long){}[0]
     final fun snapshot(): us.tractat.kuilt.heddle/LocalHeddleState // us.tractat.kuilt.heddle/LocalHeddle.snapshot|snapshot(){}[0]
 
     final class Boot { // us.tractat.kuilt.heddle/LocalHeddle.Boot|null[0]

@@ -226,7 +226,7 @@ public data class LeaseReconciliation(
 }
 
 /**
- * What [LocalHeddle.extend], [LocalHeddle.complete] or [LocalHeddle.cancel] did.
+ * What [LocalHeddle.extend], [LocalHeddle.shrink], [LocalHeddle.complete] or [LocalHeddle.cancel] did.
  *
  * @sample us.tractat.kuilt.heddle.sampleRefusals
  */
@@ -249,7 +249,7 @@ public sealed interface LeaseOutcome {
      * and no cost at all. That work's cost arrives at its [LocalHeddle.complete], so a caller summing
      * [unrecorded] over both calls counts it twice. Sum it over completions only.
      *
-     * All three are `0` for a cancel, and for an extend that landed.
+     * All three are `0` for a cancel, a shrink, and an extend that landed.
      */
     public data class Done(public val charged: Long, public val overrun: Long, public val unrecorded: Long) : LeaseOutcome
 
@@ -284,6 +284,8 @@ public sealed interface LeaseOutcome {
  * it really cost and hands back what it did not use. Cost is time, by convention, in whatever unit
  * the caller counts in. A lease that runs long is [extend]ed, or charged its overrun at the end;
  * a charge is never refused. Work another scheduler already started is [admit]ted, with no pick.
+ * A job shorter than the slot's reservation is [shrink]ed straight after the pick, as if the lease
+ * had been opened at its size.
  * Every call that charges, [admit], [extend] and [complete], takes the waiting set, and the wake
  * memory observes it as a pick would have before the charge lands (#3471).
  *
@@ -678,7 +680,7 @@ public class LocalHeddle private constructor(
 
     /**
      * How far this engine has come: moved by every call that can change it, [acquire], [admit],
-     * [extend], [complete], [cancel], [reconcileCapacity], [apply], [attach] and [detach], whatever
+     * [extend], [shrink], [complete], [cancel], [reconcileCapacity], [apply], [attach] and [detach], whatever
      * the call returns, since a refused [acquire] may still move the wake memory. Never moved by a
      * read ([topology], [snapshot], [persist], [previewPicks], [previewApply], [explain],
      * [entitlement], [reconcileLeases]), nor by a call that throws, which changes nothing, nor by a
@@ -1108,6 +1110,51 @@ public class LocalHeddle private constructor(
         ledger = releaseUp(ledger, current.path, current.lease.reserved)
         open.remove(lease)
         LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L)
+    }
+
+    /**
+     * Hand back [amount] of what [lease] reserves, up the path it was opened on, as [complete] hands
+     * back an unused remainder. The lease stays open, reserving [amount] less. It charges nothing and
+     * observes nothing, so it takes no waiting set, and it is never refused, as [complete] is not:
+     * a draining path takes the refund as it takes [cancel]'s.
+     *
+     * Its use is straight after a pick, when the work the slot went to is shorter than the
+     * reservation the slot was acquired at. There, before any other call, it leaves every position
+     * and the wake memory as if the lease had been opened at the smaller size: the grant and the
+     * refund fall in the same step of the parent's clock. Later, it is a refund like any other, and
+     * moves the lane's position back as [complete]'s remainder would.
+     *
+     * Returns [LeaseOutcome.Done] with nothing charged, or [LeaseOutcome.Unknown] or
+     * [LeaseOutcome.Stale] when no lease is open under that id.
+     *
+     * @throws IllegalArgumentException when [amount] is not in `1..`[Lease.reserved]: a lease cannot
+     *   hand back more than it reserves, and a lease admitted past the lifetime limit, which reserves
+     *   nothing, has nothing to hand back.
+     * @sample us.tractat.kuilt.heddle.sampleShrinkAfterPick
+     */
+    public fun shrink(lease: LeaseId, amount: Long): LeaseOutcome = atomically {
+        require(amount >= 1L) { "shrink amount must be positive, was $amount" }
+        val current = open[lease] ?: return@atomically missing(lease)
+        shrinkOpen(current, amount, current.path)
+    }
+
+    /**
+     * The test seam for [shrink]'s positive control: a shrink that hands [amount] back across the
+     * leaf's own edge only, leaving every edge above it as it was. Never correct; a test checks that
+     * the shrink oracle tells it apart from [shrink].
+     */
+    internal fun shrinkAtTheLeafOnlyForTest(lease: LeaseId, amount: Long): LeaseOutcome = atomically {
+        val current = checkNotNull(open[lease]) { "no open lease $lease" }
+        shrinkOpen(current, amount, listOf(current.path.last()))
+    }
+
+    /** [shrink] of [current], handing [amount] back up [refundedOn], which is its path in every caller but the test seam's. */
+    private fun shrinkOpen(current: OpenLease, amount: Long, refundedOn: List<AttachmentId>): LeaseOutcome {
+        val reserved = current.lease.reserved
+        require(amount <= reserved) { "shrink amount must be at most what the lease reserves, $reserved, was $amount" }
+        ledger = releaseUp(ledger, refundedOn, amount)
+        open[current.lease.id] = current.copy(lease = current.lease.copy(reserved = reserved - amount))
+        return LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L)
     }
 
     /**

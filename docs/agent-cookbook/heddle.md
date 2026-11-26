@@ -1251,6 +1251,33 @@ the wake memory as `acquire(waiting, eligible = {leaf})` would have, wherever th
 lease. `extend` and `complete` count the lease's own leaf as waiting, since the charge is its own running work's, even on its last job. `complete` observes only when it charges an overrun. The only refusal is `NoLiveLineage(leaf)`, for a name that is not leasable or has no
 live path from the root.
 
+## Handing back a reservation early
+
+**Intent:** a slot is acquired at the longest job any group might send it, and the group the pick
+chose has a shorter one. Holding the difference until `complete` reserves slack nobody can use, and
+its refund there can move a sibling.
+**Primitive:** `LocalHeddle.shrink(lease, amount)`. It hands `amount` of what the lease reserves
+back up the path it was opened on, as `complete` hands back an unused remainder, and the lease stays
+open at the smaller size. It charges nothing, observes nothing and is never refused.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleShrinkAfterPick -->
+```kotlin
+    val queued = setOf(heavy, light)
+    val picked = heddle.acquire(waiting = queued, eligible = queued, startedAt = 0L)
+    check(picked is AcquireOutcome.Acquired && picked.lease.reserved == 8L)
+
+    // The winner's next job takes 2 units: hand back the other 6 before anything else happens.
+    check(heddle.shrink(picked.lease.id, amount = 6L) == LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L))
+    check(heddle.snapshot().leases.single().reserved == 2L)
+```
+
+**Shrink straight after the pick.** Before any other call, a shrink leaves every position and the
+wake memory as if the lease had been opened at the smaller size: the grant and the refund fall in
+the same step of the parent's clock. Later it is a refund like any other, and it moves the lane
+back as `complete`'s remainder would. `amount` must be in `1..lease.reserved`; outside that it
+throws `IllegalArgumentException`. A shrunk lease reserves less wherever the engine counts open
+leases, so the wake clamp (#3238) and a restored snapshot both read the smaller size.
+
 ## Surviving a restart
 
 **Intent:** the scheduler's program restarts, or its executors crash, and the books must carry on

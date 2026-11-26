@@ -494,6 +494,38 @@ internal fun sampleAdmitExternal() {
 }
 
 /**
+ * A slot is acquired at the longest job any group might send it, and the group it went to has a
+ * short one. Shrinking straight after the pick hands the difference back, so the lease reserves only
+ * what the job will run, as if it had been opened at that size.
+ */
+@Suppress("unused")
+internal fun sampleShrinkAfterPick() {
+    val tree = twoLanes()
+    val heavy = tree.groupId("heavy")
+    val light = tree.groupId("light")
+    val (heddle, booted) = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 8L), epoch = 0L)
+    check(booted.refusals.isEmpty())
+    heddle.reconcileCapacity(totalSlots = 4L)
+
+    val queued = setOf(heavy, light)
+    val picked = heddle.acquire(waiting = queued, eligible = queued, startedAt = 0L)
+    check(picked is AcquireOutcome.Acquired && picked.lease.reserved == 8L)
+
+    // The winner's next job takes 2 units: hand back the other 6 before anything else happens.
+    check(heddle.shrink(picked.lease.id, amount = 6L) == LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L))
+    check(heddle.snapshot().leases.single().reserved == 2L)
+
+    // It completes at its size with nothing left to hand back; a shrink past what it reserves throws.
+    val tooFar = try {
+        heddle.shrink(picked.lease.id, amount = 3L)
+    } catch (expected: IllegalArgumentException) {
+        expected
+    }
+    check(tooFar is IllegalArgumentException)
+    check(heddle.complete(picked.lease.id, actualCost = 2L, waiting = queued) == LeaseOutcome.Done(charged = 2L, overrun = 0L, unrecorded = 0L))
+}
+
+/**
  * Every refusal is a value, and a refused call changes nothing. A paused lane leaves nothing
  * eligible; an extend on a path a reload is closing is refused while its complete still settles; a
  * settled id is unknown, and after a restart stale; and a weight too fine for one full lease is

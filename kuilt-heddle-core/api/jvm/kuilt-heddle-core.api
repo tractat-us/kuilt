@@ -869,6 +869,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public final fun reconcileCapacity (J)V
 	public final fun reconcileLeases (Ljava/util/Set;J)Lus/tractat/kuilt/heddle/LeaseReconciliation;
 	public final fun shareLine (Ljava/util/Set;)Lus/tractat/kuilt/heddle/ShareLine;
+	public final fun shrink (Lus/tractat/kuilt/heddle/LeaseId;J)Lus/tractat/kuilt/heddle/LeaseOutcome;
 	public final fun snapshot ()Lus/tractat/kuilt/heddle/LocalHeddleState;
 }
 

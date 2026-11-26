@@ -51,6 +51,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [Who goes next, and why not me](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#who-goes-next-and-why-not-me)
 - [Has anything changed since the last pass](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#has-anything-changed-since-the-last-pass)
 - [Charging work started elsewhere](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#charging-work-started-elsewhere)
+- [Handing back a reservation early](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#handing-back-a-reservation-early)
 - [Surviving a restart](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#surviving-a-restart)
 - [Refusals and limits](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#refusals-and-limits)
 - [Fair share across peers](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#fair-share-across-peers)
