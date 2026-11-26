@@ -34,5 +34,5 @@ print(best["identifier"], phones[0])
 echo "boot-ios-simulator: creating $name ($devtype on $runtime)" >&2
 udid=$(xcrun simctl create "$name" "$devtype" "$runtime")
 xcrun simctl boot "$udid"
-xcrun simctl bootstatus "$udid" -b >&2
+xcrun simctl bootstatus "$udid" -b >/dev/null
 echo "$udid"

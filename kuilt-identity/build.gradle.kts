@@ -240,8 +240,10 @@ if (runRealKeychainTests) {
         doFirst { results.deleteRecursively() }
         doLast {
             val text = results.listFiles { file -> file.extension == "xml" }.orEmpty().joinToString("") { it.readText() }
+            // KGP prefixes the classname with the test run's task name
+            // (`iosSimulatorArm64RealKeychainTest.us.tractat…`), so match the suite as its suffix.
             val rows = Regex(
-                """<testcase\b[^>]*\bclassname="${Regex.escape(suite)}"[^>]*?(?:/>|>.*?</testcase>)""",
+                """<testcase\b[^>]*\bclassname="(?:[^"]*\.)?${Regex.escape(suite)}"[^>]*?(?:/>|>.*?</testcase>)""",
                 RegexOption.DOT_MATCHES_ALL,
             ).findAll(text).map { it.value }.toList()
             val skipped = rows.count { "<skipped" in it }
