@@ -45,9 +45,9 @@ class HeddleNodeReconcileOwnPropertyTest {
                 { assertEquals(SEEDS * PEERS, tally.repaired, "every peer repaired once in every trial") },
                 { assertTrue(tally.repairedWhilePartitioned >= SEEDS / 4, "repairs made while partitioned: ${tally.repairedWhilePartitioned}") },
                 { assertTrue(tally.notYetSeen >= SEEDS / 8, "repairs that had not seen the retire yet: ${tally.notYetSeen}") },
-                { assertTrue(tally.lateWhileCut >= 1, "late work completed while cut off: ${tally.lateWhileCut}") },
-                { assertTrue(tally.lateBeforeRepair >= 1, "late work completed after the heal, before its repair: ${tally.lateBeforeRepair}") },
-                { assertTrue(tally.lateAfterRepair >= 1, "late work completed after its repair: ${tally.lateAfterRepair}") },
+                { assertTrue(tally.lateWhileCut >= 3, "late work completed while cut off: ${tally.lateWhileCut}") },
+                { assertTrue(tally.lateBeforeRepair >= 3, "late work completed after the heal, before its repair: ${tally.lateBeforeRepair}") },
+                { assertTrue(tally.lateAfterRepair >= 3, "late work completed after its repair: ${tally.lateAfterRepair}") },
             )
         }
 
@@ -228,7 +228,7 @@ class HeddleNodeReconcileOwnPropertyTest {
     }
 
     private companion object {
-        const val SEEDS = 24
+        const val SEEDS = 96
         const val PEERS = 3
         const val QUANTUM = 10L
         const val LATE_WHILE_CUT = 0
