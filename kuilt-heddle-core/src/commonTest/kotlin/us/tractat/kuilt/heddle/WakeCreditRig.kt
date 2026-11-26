@@ -9,7 +9,8 @@ import kotlin.test.assertEquals
  * Integer time, [WakeConfig.slots] slots, no random draw. One leaf, [B], is always backlogged with
  * jobs of cost 1. Every other lane is closed-loop: a burst of jobs queues, and `think` units after
  * the burst's last job **starts** the next burst queues, so with `think` shorter than a job the
- * lane is observed idle with its lease still open and then wakes while that lease runs. Every slot
+ * lane is observed idle with its lease still open and then wakes while that lease runs. At a `think`
+ * of [NEVER_IDLES] the next burst queues at once, so the lane is never seen idle. Every slot
  * is acquired with reservation 1, since a slot's reservation is chosen before the pick; when a lane
  * is picked, its lease is extended to the arm's reservation before any other call, so every later
  * pick sees the ledger a caller that reserved it at acquire would have left.
@@ -39,7 +40,19 @@ internal object WakeCreditRig {
         NOISE,
     }
 
-    class LaneSpec(val leaf: GroupId, val arm: Arm, val think: Long, val burst: Int, val costs: List<Long>)
+    /**
+     * One bursty lane. [think] is how long after a burst's last job starts the next burst queues;
+     * at [NEVER_IDLES] the next burst queues the moment the last job is picked, so the lane is
+     * waiting at every call and the engine never sees it idle.
+     */
+    class LaneSpec(val leaf: GroupId, val arm: Arm, val think: Long, val burst: Int, val costs: List<Long>) {
+        init {
+            require(think >= 0L) { "think must be non-negative, was $think" }
+        }
+    }
+
+    /** A [LaneSpec.think] at which the lane never idles. */
+    const val NEVER_IDLES: Long = 0L
 
     class WakeConfig(
         val ledger: EntitlementLedger,
@@ -121,7 +134,10 @@ internal object WakeCreditRig {
                 val lane = lanes[laneIndex]
                 val job = lane.queue.removeFirst()
                 val emptiesQueue = lane.queue.isEmpty()
-                if (emptiesQueue) lane.nextArrival = t + lane.spec.think
+                if (emptiesQueue) {
+                    if (lane.spec.think == NEVER_IDLES) repeat(lane.spec.burst) { lane.queue.addLast(Job(lane.jobs++)) }
+                    else lane.nextArrival = t + lane.spec.think
+                }
                 val actual = lane.cost(job.index)
                 val r = when (lane.spec.arm) {
                     Arm.HONEST, Arm.CANCEL_LAST -> actual
