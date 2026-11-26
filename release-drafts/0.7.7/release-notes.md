@@ -1,8 +1,8 @@
 <!--
 DRAFT — GitHub release body for v0.7.7. Paste everything below the closing `-->` into the
 release, above GitHub's generated "What's Changed" list. Refreshed 2026-11-26 against
-`origin/main` at `31ea84acd4`. No `ASSUMES` comments remain. At the tag, check
-`git log --oneline 31ea84acd4..<tag>` for anything that merged after.
+`origin/main` at `5607981d62`. No `ASSUMES` comments remain. At the tag, check
+`git log --oneline 5607981d62..<tag>` for anything that merged after.
 -->
 
 ## Highlights
@@ -99,7 +99,7 @@ per-run nonce, and a mint whose key is already taken is refused and logged. Six 
 leave `@HeddleInternalApi` and become stable: `EntitlementLedger.liveInboundEdges`, `mintedRoots`,
 `hasForgotten` and `activationFitsTheBudget`, `weightFitsTheBudget`, and
 `FairShareAllocator.peakPositionFraction`. The docs now say `cancel` is for work that never ran;
-work that held its slot settles with `complete(lease, elapsed)`. A slot acquired at the longest job no longer holds a short job's slack until it completes: `LocalHeddle.shrink(lease, amount)` hands part of a lease's reservation back (#3729), and `FairSharePool` and `previewPicks` now shrink a lease to the winner's head at the grant when the head is below the slot's reservation (#3733). A competing edge's demand target now sits above what the edge already holds, so an edge holding a lot no longer reads as idle (#3728). `LocalHeddle`'s KDoc now states what a wrong cost estimate costs a group, with sizing
+work that held its slot settles with `complete(lease, elapsed)`. A slot acquired at the longest job no longer holds a short job's slack until it completes: `LocalHeddle.shrink(lease, amount)` hands part of a lease's reservation back (#3729), and `FairSharePool` and `previewPicks` now shrink a lease to the winner's head at the grant when the head is below the slot's reservation (#3733). A competing edge's demand target now sits above what the edge already holds, so an edge holding a lot no longer reads as idle (#3728). A waker past the front is now clamped by what its edge has outstanding, so `pickChild` and `schedule` keep counting a caller's own delegations still in flight as that waker's service, and `HeddleNode` clamps a waker after a restart as `LocalHeddle` already did (#3734). `LocalHeddle`'s KDoc now states what a wrong cost estimate costs a group, with sizing
 guidance on `LocalPolicy.defaultReservation` (#3652).
 
 **Replication (`:kuilt-quilter`).** Anti-entropy ships much less when peers are idle or slightly
@@ -159,6 +159,11 @@ only once the roster is full, and a queued vacate counts only while the voter is
   each launch its own store reds `returnInsideGrantNoVetting`, `expiredGrantIsVetted` and
   `revokedSubjectIsVetted`, on the policy being asked (#3708). `DeviceKeyStoreConformanceSuite`
   gains two rows on how a store keeps passes.
+  `ReturnHarness` takes two more required parameters, `passPlanting` and `reusedIdLaunch`, each
+  `Supported(rig)` or `Unsupported(trackingUrl)`. A harness over a real fabric that cannot forge a
+  pass or relaunch under a superseded id declares `Unsupported`. They gate six new suite rows: a
+  planted pass for another room, for another device, from an untrusted issuer, or not signed by the
+  host is ignored, and a process under a superseded id ends `Superseded` (#3710).
 - **`:kuilt-heddle-core`.** `FairShareAllocator.rebaseEnabled` and `rebases`, deprecated no-ops,
   are removed, and `FairShareAllocator.peakPositionFraction` drops its unused `demand` parameter
   (#3723).
