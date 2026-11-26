@@ -212,7 +212,7 @@ class TopologyChildTemplateTest {
      * The window #3198 closed. A reweight whose prepare alone landed leaves the child ACTIVE beside a
      * PREPARED replacement. A detach used to close the prepared edge before retiring it, and every
      * prefix in between held two live inbound edges. Now the prepared edge is retired straight from
-     * PREPARED, so no prefix of the list, applied one step at a time, holds two. Each prefix still
+     * PREPARED, ahead of the close, so no prefix of the list, applied one step at a time, holds two. Each prefix still
      * re-detaches to exactly the rest.
      */
     @Test
@@ -227,7 +227,7 @@ class TopologyChildTemplateTest {
         assertAll(
             { assertEquals(Lifecycle.PREPARED, half.lifecycle(p), "the rig left the replacement prepared") },
             { assertEquals(Lifecycle.ACTIVE, half.lifecycle(a), "beside the active edge") },
-            { assertEquals(listOf(Close(a, runtime("x")), Retire(a, runtime("x")), Retire(p, runtime("x"))), detach) },
+            { assertEquals(listOf(Retire(p, runtime("x")), Close(a, runtime("x")), Retire(a, runtime("x"))), detach) },
             { assertEquals(detach, removal, "a template going away takes the same steps") },
             *(0..detach.size).map { cut ->
                 { assertEquals(emptyList(), dualLive(applyClean(detach.take(cut), half)), "cut $cut") }

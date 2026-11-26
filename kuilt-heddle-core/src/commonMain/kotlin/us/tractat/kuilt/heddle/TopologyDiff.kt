@@ -20,7 +20,7 @@ package us.tractat.kuilt.heddle
  *    against: a replaced edge retires before its successor activates, so a prefix between the two
  *    leaves the child with no live inbound edge, and an internal group's holdings read negative
  *    until its [Reconcile], which comes last. No step of the list gives a child a second live
- *    inbound edge: an abandoned prepared edge is retired without a close (#3198). A refused child
+ *    inbound edge: an abandoned prepared edge is retired without a close, ahead of its child's (#3198). A refused child
  *    does not break the unit: it is left out as above, and the rest of the list still applies. Re-entrance is what makes a prefix recoverable, since asking again lists
  *    exactly the steps that did not land.
  *  - **The steps are valid only against the ledger they were computed from.** Work charged
@@ -111,18 +111,20 @@ public sealed interface TopologyStep {
  * ([unwantedPrepared]), and a new edge is prepared instead. An
  * attached child nothing wants is the exception, as above: its prepared edge is retired, so the
  * child cannot come back with the template. It is retired straight from PREPARED, never closed,
- * so the child never has two live inbound edges at any prefix of the list.
+ * and ahead of the child's close, so no prefix of the list gives the child two live inbound edges
+ * or leaves it closed beside a prepared edge that reads as attached.
  *
  * **A change of weight is a new edge, and its history resets:** the group restarts at its
  * parent's front. A rename or a move is a delete plus an add, so the new child starts with no
  * history and the old edges keep theirs.
  *
  * The list is in a fixed order, the same on every target: prepares from the top down, then the
- * activations of brand-new children, then closes from the top down, retires from the bottom up,
+ * activations of brand-new children, then closes from the top down, each attached child's close
+ * preceded by the retires of its abandoned prepared edges, then retires from the bottom up,
  * the activations of replacement edges from the top down, and last the [TopologyStep.Reconcile]s
  * of internal groups whose old edges carried work. Within a phase, steps sort by depth, then child
  * id, then edge id, except that a child's steps that cannot be refused come first: the retire of
- * an attached child's abandoned prepared edge, and a retire with nothing outstanding. A
+ * an abandoned prepared edge among the closes, and a retire with nothing outstanding. A
  * replacement edge activates only after its predecessor retires, so a child never has two inbound
  * edges carrying work.
  *
@@ -321,9 +323,12 @@ public fun Topology.detach(group: List<String>, name: String, ledger: Entitlemen
  * drained. Attaching the group again brings none of its children back.
  *
  * A prepared edge a child has — a re-attach or a reweight still waiting for a drain — is retired
- * too, straight from PREPARED, and its retire is never refused, since nothing has crossed it.
- * Otherwise it would record that the child is wanted, and a later reload would bring the child
- * back. No close comes first, so no prefix of the list gives the child two live inbound edges.
+ * too, straight from PREPARED, and first: `[Retire p, Close a, Retire a]`. Otherwise it would
+ * record that the child is wanted, and a reload would bring the child back. It is never closed, so
+ * no prefix gives the child two live inbound edges, and it runs before the child's close, so no
+ * prefix leaves a closed child that still reads as attached. Nothing has crossed it, and it runs
+ * top-down with the closes, before anything below the child is stopped, so it is not what waits
+ * on a drain beneath: the child's live retire is, with work outstanding, and its close stands.
  *
  * @throws IllegalArgumentException if [path] is a [GroupPath.Declared], if no template reaches it,
  *   or if [ledger] belongs to another root.
@@ -413,10 +418,11 @@ private fun MutableList<Planned>.planRemoval(edges: List<OwnedEdge>, abandonPrep
     for (edge in edges) {
         if (abandonPrepared && edge.lifecycle == Lifecycle.PREPARED) {
             // Retired straight from PREPARED, never closed: a CLOSING edge is live, so a close would
-            // give the child two live inbound edges until the retire landed (#3198). The retire, with
-            // nothing crossed, sorts ahead of a refusable one, so a refusal of the live edge's retire
-            // cannot leave it standing beside a draining edge.
-            add(Planned(Phase.RETIRE, TopologyStep.Retire(edge.id, edge.record.child), first = true))
+            // give the child two live inbound edges until the retire landed (#3198). It runs among
+            // the closes, ahead of the child's own, so no prefix leaves it beside a closed edge, where
+            // it would read as a re-attach waiting for a drain. Top-down, it runs before anything
+            // below the child is stopped, so it is never the retire that waits on a group below.
+            add(Planned(Phase.CLOSE, TopologyStep.Retire(edge.id, edge.record.child), first = true))
         } else {
             retireIfLive(edge)
         }
@@ -425,8 +431,9 @@ private fun MutableList<Planned>.planRemoval(edges: List<OwnedEdge>, abandonPrep
 
 /**
  * Whether a child of a group with a template is attached: it has an active edge, or a prepared one — an attach or a
- * reweight waiting for its predecessor to drain. A detach closes both, so a detached child has
- * neither, and a diff does not bring it back.
+ * reweight waiting for its predecessor to drain. A detach retires the prepared edges before it
+ * closes the active one, so at no prefix of it does a stopped child have either, and a diff does
+ * not bring it back.
  */
 private fun List<OwnedEdge>.attached(): Boolean =
     any { it.lifecycle == Lifecycle.ACTIVE || it.lifecycle == Lifecycle.PREPARED }
@@ -572,8 +579,8 @@ private enum class Phase { PREPARE, FRESH_ACTIVATE, CLOSE, RETIRE, REPLACEMENT_A
 
 /**
  * A step and where it sorts. [first] puts it ahead of the same child's other steps in its phase: a
- * retire of a prepared edge an attached child is abandoning, and a retire that cannot be refused
- * because nothing is outstanding on it. Neither changes as a prefix of the list applies,
+ * retire, among the closes, of a prepared edge an attached child is abandoning, and a retire that
+ * cannot be refused because nothing is outstanding on it. Neither changes as a prefix of the list applies,
  * so re-entrance holds.
  */
 private class Planned(val phase: Phase, val step: TopologyStep, val first: Boolean = false) {
@@ -604,7 +611,8 @@ private fun MutableList<Planned>.retireIfLive(edge: OwnedEdge) {
 /**
  * Phase first; retires bottom-up and everything else top-down; then child id, then [Planned.first],
  * then edge id. A declared child has at most one close and one retire, so [Planned.first] orders
- * only an attached child's abandoned prepared edge against its live one.
+ * an attached child's abandoned prepared edges ahead of its close, and a retire with nothing
+ * outstanding ahead of one that waits.
  */
 private val STEP_ORDER: Comparator<Planned> =
     compareBy<Planned> { it.phase }
