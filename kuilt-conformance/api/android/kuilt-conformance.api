@@ -653,6 +653,7 @@ public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public fun <init> ()V
 	public final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat ()V
 	public final fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat ()V
+	public final fun aPassTheHostDidNotSignIsIgnored ()V
 	public final fun aPlantedGoodPassLetsTheDeviceInUnvetted ()V
 	public final fun aProcessUnderASupersededIdEndsSuperseded ()V
 	public final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage ()V
