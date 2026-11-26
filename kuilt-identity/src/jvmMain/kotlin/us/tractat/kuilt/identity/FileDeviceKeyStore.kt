@@ -76,6 +76,8 @@ public class FileDeviceKeyStore internal constructor(
     directory: Path,
     /** Called each time this store is about to make a key, and at no other time: the TCK's gate. */
     private val beforeKeyIsMade: suspend () -> Unit,
+    /** The self-test's verify: the provider's, or a test's that fails where the provider will not. */
+    private val selfTestVerifier: SelfTestVerifier = SelfTestVerifier.Provider,
 ) : DeviceKeyStore {
     /** A store over [directory]. */
     public constructor(directory: Path) : this(directory, {})
@@ -124,7 +126,7 @@ public class FileDeviceKeyStore internal constructor(
             return make()
         }
         val read = try {
-            SoftwareDeviceKey.readBack(stored)
+            SoftwareDeviceKey.readBack(stored, selfTestVerifier)
         } finally {
             stored.fill(0)
         }

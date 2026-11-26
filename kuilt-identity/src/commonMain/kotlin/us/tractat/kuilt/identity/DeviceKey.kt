@@ -133,10 +133,11 @@ internal class SoftwareDeviceKey private constructor(
          *   fails while signing, or mints a cancellation while decoding: none of which says anything
          *   about [jwk], so none may be read as a reason to replace it.
          */
-        suspend fun readBack(jwk: ByteArray): StoredKey = readBack(jwk, ::selfTestSignature)
-
-        /** [readBack] with the self-test's signing step injected, so a test can make the provider fail there. */
-        suspend fun readBack(jwk: ByteArray, sign: suspend (ECDSA.PrivateKey, ByteArray) -> ByteArray): StoredKey {
+        suspend fun readBack(
+            jwk: ByteArray,
+            verifier: SelfTestVerifier = SelfTestVerifier.Provider,
+            sign: suspend (ECDSA.PrivateKey, ByteArray) -> ByteArray = ::selfTestSignature,
+        ): StoredKey {
             val ecdsa = algorithms().ecdsa
             var failing = "its x, y and d are not a P-256 key"
             // Only reading the bytes can condemn them: the JSON, the coordinates, the scalar's range and

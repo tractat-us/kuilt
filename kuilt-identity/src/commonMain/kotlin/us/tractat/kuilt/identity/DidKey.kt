@@ -153,6 +153,56 @@ internal suspend fun decodeOnCurve(point: ByteArray): ECDSA.PublicKey? {
     }
 }
 
+/**
+ * The one provider call a stored key's self-test cannot do without: verifying [signature] over
+ * [message] under [key]. Its answer is the provider's; a throw is the provider failing. A seam only so
+ * a test can make the provider fail where no real one can be made to.
+ */
+internal fun interface SelfTestVerifier {
+    suspend fun verifies(key: ECDSA.PublicKey, message: ByteArray, signature: ByteArray): Boolean
+
+    companion object {
+        /** The platform provider's own verify. */
+        val Provider: SelfTestVerifier = SelfTestVerifier { key, message, signature ->
+            key.signatureVerifier(SHA256, ECDSA.SignatureFormat.RAW).tryVerifySignature(message, signature)
+        }
+    }
+}
+
+/**
+ * Whether [signature] is this key's signature over [message], for a store checking a key it holds:
+ * the same on-curve check and decompression as [DidKey.verify], but `false` only for a signature that
+ * cannot be this key's or that the provider, having run, refused.
+ *
+ * [DidKey.verify] answers `false` when the provider fails to decode the name's point or to verify,
+ * and a store that read that `false` as a damaged key would replace a sound one on a passing fault
+ * (#3596). So here both of those throw: a store's self-test is the one caller for whom "the provider
+ * did not answer" and "the key is wrong" lead to different places. The browser store keeps its own
+ * WebCrypto bridge with the same rule.
+ *
+ * @throws IllegalStateException when the provider cannot run here at all, or fails while decoding the
+ *   name's point or verifying: none of which says anything about the key.
+ */
+internal suspend fun DidKey.selfTestVerifies(
+    message: ByteArray,
+    signature: ByteArray,
+    verifier: SelfTestVerifier,
+): Boolean {
+    if (signature.size != SIGNATURE_SIZE) return false
+    val point = decompress(compressedPoint()) ?: return false
+    val ecdsa = algorithms().ecdsa
+    val key = providerCall(::publicDecodingFailed) {
+        ecdsa.publicKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PublicKey.Format.RAW, point)
+    }
+    return providerCall(::verifyingFailed) { verifier.verifies(key, message, signature) }
+}
+
+private fun publicDecodingFailed(failureClass: String) =
+    IllegalStateException("kuilt-identity: the platform provider failed while decoding a key's public point ($failureClass)")
+
+private fun verifyingFailed(failureClass: String) =
+    IllegalStateException("kuilt-identity: the platform provider failed to verify a self-test signature ($failureClass)")
+
 /** `did:key:` plus the multibase prefix for base58btc. */
 private const val PREFIX = "did:key:z"
 

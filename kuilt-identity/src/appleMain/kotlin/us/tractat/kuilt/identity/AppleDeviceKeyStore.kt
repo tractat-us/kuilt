@@ -58,6 +58,7 @@ internal class AppleDeviceKeyStore(
     private val grantStore: DurableStore,
     mediumId: String,
     private val beforeKeyIsMade: suspend () -> Unit,
+    private val selfTestVerifier: SelfTestVerifier = SelfTestVerifier.Provider,
 ) : DeviceKeyStore {
     private val inProcess: Mutex = mutexFor(mediumId)
 
@@ -87,7 +88,7 @@ internal class AppleDeviceKeyStore(
     private suspend fun readOrMake(): DeviceKey {
         val stored = medium.read() ?: return make(medium::write)
         val read = try {
-            SoftwareDeviceKey.readBack(stored)
+            SoftwareDeviceKey.readBack(stored, selfTestVerifier)
         } finally {
             stored.fill(0)
         }

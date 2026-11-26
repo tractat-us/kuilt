@@ -84,6 +84,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AndroidKeys
  * @param backend the Keystore itself; a seam only so the store can be tested off a device.
  * @param sdkInt the Android version, which decides how much a Keystore failure can say ([judge]).
  * @param now the time in epoch milliseconds, read when a failure of unknown cause starts or continues.
+ * @param selfTestVerifier the self-test's verify, which runs in the software provider, not the
+ *   Keystore: the provider's own, or a test's that fails where the provider will not.
  * @param beforeKeyIsMade called each time this store is about to make a key, and at no other time:
  *   the conformance suite's gate.
  */
@@ -93,6 +95,7 @@ internal class AndroidKeystoreDeviceKeyStore(
     private val backend: KeystoreBackend,
     private val sdkInt: Int,
     private val now: () -> Long,
+    private val selfTestVerifier: SelfTestVerifier = SelfTestVerifier.Provider,
     private val beforeKeyIsMade: suspend () -> Unit,
 ) : DeviceKeyStore {
     private val directory: File = directory.absoluteFile
@@ -139,7 +142,7 @@ internal class AndroidKeystoreDeviceKeyStore(
             return afterFailure(KeystoreFailure.Thrown("loading the key", e))
         } ?: return noKey()
         val publicKey = backend.getCertificatePublicKey(alias) ?: return afterFailure(KeystoreFailure.NoCertificate)
-        return when (val read = readBack(publicKey, signer)) {
+        return when (val read = readBack(publicKey, signer, selfTestVerifier)) {
             is KeystoreRead.Usable -> {
                 forgetFailingSince()
                 markKeyMade() // Heals a launch that crashed between making the key and marking it.
@@ -202,7 +205,7 @@ internal class AndroidKeystoreDeviceKeyStore(
         backend.generate(alias)
         val signer = backend.getKey(alias)
         val publicKey = backend.getCertificatePublicKey(alias)
-        val read = if (signer != null && publicKey != null) readBack(publicKey, signer) else null
+        val read = if (signer != null && publicKey != null) readBack(publicKey, signer, selfTestVerifier) else null
         if (read is KeystoreRead.Usable) {
             // After the key is made and read back, never before: a crash before this line leaves a key with
             // no marker, which the next launch reads and marks, rather than a marker with no key, which on
@@ -292,7 +295,7 @@ internal class AndroidKeystoreDeviceKeyStore(
  * signature that does not verify. A signature that fails to *happen* is [KeystoreRead.Failed], for
  * [judge] to weigh. A DER signature that does not parse is the Keystore misbehaving and throws.
  */
-internal suspend fun readBack(publicKey: PublicKey, signer: KeystoreSigner): KeystoreRead {
+internal suspend fun readBack(publicKey: PublicKey, signer: KeystoreSigner, verifier: SelfTestVerifier): KeystoreRead {
     val name = nameOf(publicKey)
         ?: return KeystoreRead.Refused("its certificate's public half is not a P-256 point (${publicKey.algorithm})")
     val der = try {
