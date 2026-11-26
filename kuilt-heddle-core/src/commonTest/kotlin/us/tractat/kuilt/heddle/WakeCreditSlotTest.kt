@@ -161,7 +161,7 @@ class WakeCreditSlotTest {
         const val PIN_TOLERANCE = 0.003
         const val NO_GAP_ORACLE_TOLERANCE = 0.001
 
-        /** 15,996 of the 32,000 slot-time units: the horizon's edge, not a lean. */
+        /** 15,996 of the 32,000 slot-time units, 4 short of a half. */
         const val NO_GAP_HONEST_SHARE = 0.499875
 
         /** 18,274 of the 32,000 slot-time units, a gain of 0.0712 against the oracle's 0.0714. */
