@@ -15,9 +15,8 @@ import kotlin.test.assertIs
 import kotlin.time.Instant
 
 /**
- * A `HeddleNode` restart forgives a waker the grants it still holds (#3721). This pins today's
- * numbers, measured before any fix: the evidence ruling 2 of #3721 asked for. It is the twin of
- * `WakeClampOpenLeaseTest` in `:kuilt-heddle-core`, shaped like #3238's table.
+ * A `HeddleNode` restart does not forgive a waker the grants it still holds (#3721). It is the
+ * twin of `WakeClampOpenLeaseTest` in `:kuilt-heddle-core`, shaped like #3238's table.
  *
  * The rig: `root → p → {a, b}` at equal weight, quantum 8. A pick tops `p` up from the root by
  * exactly one grant's worth and lets `p` grant it, so each `schedule(p)` is one pick, and the
@@ -30,16 +29,17 @@ import kotlin.time.Instant
  * **Kept** is the node that saw it all, so `a` returns moved by its parent's clock and no clamp
  * runs. **Dropped** is a new incarnation over the same ledger: the same replica and its holdings,
  * and no wake memory, since a `HeddleNode` keeps none across a restart. It meets `a` demanding for
- * the first time and clamps it to the front, which forgives the units `a` holds, since a
- * position counts what was issued down an edge, spent or not.
+ * the first time and clamps it to the front plus what its edge has outstanding, the units `a`
+ * holds, so they stay counted as its service, as a position counts what was issued down an edge,
+ * spent or not.
  *
  * Nothing a `HeddleNode` does hands a grant back: `complete` keeps the unused part at the leaf, so
  * "unspent" is the nearest row to #3238's cancel. How `a` settles therefore moves no position, and
  * the three held-8 rows read alike.
  *
- * **The forgiven credit is in the three held-8 cells**: dropped 10 against kept 6, four extra picks
- * of 20 for `a`. Held 1 reads 10 and 10. A fix that clamps a waker past the front by what it holds
- * turns those three dropped cells to 6, and this test red.
+ * Measured before the clamp counted the outstanding, the three held-8 dropped cells read 10, four
+ * extra picks of 20 for `a`: the credit a clamp to the front alone forgave. Counting it past the
+ * front brings them to 6, level with the kept column. Held 1 reads 10 and 10 either way.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class HeddleNodeRestartCreditTest {
@@ -162,14 +162,14 @@ class HeddleNodeRestartCreditTest {
         cells.entries.joinToString("\n") { (row, c) -> "  ${row.label}: kept ${c.kept}, dropped ${c.dropped}" }
 
     @Test
-    fun aRestartedNodeForgivesTheGrantsAWakerHolds() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+    fun aRestartedNodeKeepsCountingTheGrantsAWakerHolds() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val cells = rows.associateWith { measure(it) }
         assertAll(
             { assertEquals(rows.map { it.held }, cells.values.map { it.heldAtRestart }, "the rig: a holds its grants across the restart") },
             { assertEquals(true, cells.values.all { it.droppedWasEmpty }, "the rig: the restarted node has no wake memory") },
             { assertEquals(true, cells.values.all { it.keptSawA }, "the rig: the kept node has some") },
             { assertEquals(listOf(10, 6, 6, 6), cells.values.map { it.kept }, "the kept column\n${table(cells)}") },
-            { assertEquals(listOf(10, 10, 10, 10), cells.values.map { it.dropped }, "the dropped column: the held-8 cells are the forgiven credit\n${table(cells)}") },
+            { assertEquals(listOf(10, 6, 6, 6), cells.values.map { it.dropped }, "the dropped column: level with the kept one, nothing forgiven\n${table(cells)}") },
         )
     }
 

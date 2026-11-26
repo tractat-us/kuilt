@@ -225,11 +225,10 @@ class ShareLineLagTest {
             val competing = ledger.reachable(waiting, h.root, Leasable.ByTopology(h.persist().lastApplied))
             val view = LocalHeddle.waitingOver(ledger, competing)
             val parents = parentsOf(ledger, competing)
-            val reserved = reservedOf(h)
             for (parent in parents) {
-                val placed = positionsOf(h.allocator.place(parent, ledger, view, reserved))
-                val afterOthers = h.allocator.fork().also { f -> parents.filter { it != parent }.shuffled(rng).forEach { f.settle(it, ledger, view, reserved) } }
-                val settled = afterOthers.settle(parent, ledger, view, reserved)
+                val placed = positionsOf(h.allocator.place(parent, ledger, view))
+                val afterOthers = h.allocator.fork().also { f -> parents.filter { it != parent }.shuffled(rng).forEach { f.settle(it, ledger, view) } }
+                val settled = afterOthers.settle(parent, ledger, view)
                 assertEquals(positionsOf(settled, parent, afterOthers), placed, parent.value)
                 compared++
                 if (placed != positionsOf(ledger, parent, h.allocator)) movedByItsStep++
@@ -426,7 +425,7 @@ class ShareLineLagTest {
         val huge = 1L shl 61
         val booked = h.snapshot().ledger
         val ledger = booked.piece(checkNotNull(booked.delegate(LocalHeddle.SELF, aEdge, huge)) { "the delegation down a" }.delta)
-        val engine = LocalHeddle.scratch(h.root, policy, 0L, ledger, h.allocator.fork(), Leasable.ByTopology(tree), Capacity.NONE, emptyMap(), emptyMap())
+        val engine = LocalHeddle.scratch(h.root, policy, 0L, ledger, h.allocator.fork(), Leasable.ByTopology(tree), Capacity.NONE, emptyMap())
         repeat(2) { check(engine.acquire(all, eligible = setOf(b), startedAt = 0L) is AcquireOutcome.Acquired) }
         check(engine.acquire(all, eligible = setOf(c), startedAt = 0L) is AcquireOutcome.Acquired)
         val outstanding = engine.snapshot().ledger.activeChildren(h.root).single { it.attachment == aEdge }.outstanding

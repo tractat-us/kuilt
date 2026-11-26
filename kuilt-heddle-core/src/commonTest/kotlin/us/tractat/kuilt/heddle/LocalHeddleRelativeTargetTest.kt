@@ -246,7 +246,7 @@ class LocalHeddleRelativeTargetTest {
 
     /** A throwaway engine over [h]'s ledger with a fork of its wake memory and no capacity: one side of a differential. */
     private fun trial(h: LocalHeddle): LocalHeddle =
-        LocalHeddle.scratch(h.root, policy, 0L, h.snapshot().ledger, h.allocator.fork(), Leasable.ByTopology(tree), Capacity.NONE, emptyMap(), emptyMap())
+        LocalHeddle.scratch(h.root, policy, 0L, h.snapshot().ledger, h.allocator.fork(), Leasable.ByTopology(tree), Capacity.NONE, emptyMap())
 
     /** [demands] with every wanted edge's target put back to the constant `UNBOUNDED_TARGET`, as before #3707. */
     private fun constantOf(demands: LocalHeddle.Demands): LocalHeddle.Demands {
