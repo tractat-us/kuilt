@@ -518,6 +518,50 @@ class AndroidKeystoreDeviceKeyStoreTest {
         )
     }
 
+    // ── The self-test's verify ──────────────────────────────────────────────
+
+    /**
+     * The self-test verifies in the software provider, not the Keystore, and a provider that fails there
+     * says nothing about the key (#3596). The call throws, the key is not deleted, no key is made, and
+     * the next launch reads the same key. Before the fix the fault read as a signature that does not
+     * verify, which deletes the key at once on every version.
+     */
+    @Test
+    fun aVerifyFaultKeepsTheKey() = runTest {
+        val rig = Rig(sdk = 33)
+        val held = rig.launch().deviceKey().id
+        val verifier = FaultingVerifier(faults = 1)
+
+        val failure = failureOf { rig.launch(verifier = verifier).deviceKey() }
+        val holds = rig.keystore.holds(rig.alias)
+        val afterwards = rig.launch().deviceKey().id
+
+        assertAll(
+            { assertEquals(1, verifier.faulted, "the rig fired: the self-test's verify failed once") },
+            { assertTrue(failure is IllegalStateException, "the fault throws IllegalStateException: $failure") },
+            { assertTrue(holds, "the key is not deleted") },
+            { assertEquals(1, rig.keystore.generated, "no key is made") },
+            { assertEquals(held, afterwards, "and the same key reads back") },
+        )
+    }
+
+    /** And a key that does not sign for its certificate's name, verified through the same seam, is still replaced. */
+    @Test
+    fun aVerifyThatRunsAndRefusesStillReplacesTheKey() = runTest {
+        val rig = Rig(sdk = 33)
+        val named = FakeKeystore.newPair()
+        rig.keystore.plant(rig.alias, named.public, FakeKeystore.newPair().private)
+        val verifier = FaultingVerifier(faults = 0)
+
+        val replacement = rig.launch(verifier = verifier).deviceKey().id
+
+        assertAll(
+            { assertEquals(2, verifier.calls, "the provider's verify ran: on the planted key, then on its replacement") },
+            { assertNotEquals(independentNameOf(named.public), replacement, "and the key was replaced") },
+            { assertEquals(1, rig.keystore.generated, "with one new key") },
+        )
+    }
+
     // ── Other entries ────────────────────────────────────────────────────────
 
     /** A certificate with no key is what `getKey` answers `null` for: no key, so one is made at once. */
@@ -657,8 +701,9 @@ class AndroidKeystoreDeviceKeyStoreTest {
             clearFaultAfterJudging: Boolean = false,
             clearOutageBeforeMaking: Boolean = false,
             clearSignFaultAfterJudging: Boolean = false,
+            verifier: SelfTestVerifier = SelfTestVerifier.Provider,
         ): DeviceKeyStore =
-            AndroidKeystoreDeviceKeyStore(alias, directory, keystore, sdk, { clock }) {
+            AndroidKeystoreDeviceKeyStore(alias, directory, keystore, sdk, { clock }, verifier) {
                 if (clearFaultAfterJudging) keystore.loadFault = null
                 if (clearOutageBeforeMaking) keystore.legacyOutage = false
                 if (clearSignFaultAfterJudging) keystore.signFault = null

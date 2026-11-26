@@ -18,6 +18,7 @@ import platform.Security.kSecAttrSynchronizable
 import platform.Security.kSecClass
 import platform.Security.kSecClassGenericPassword
 import platform.Security.kSecValueData
+import us.tractat.kuilt.store.NSFileManagerDurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
@@ -231,6 +232,41 @@ class KeychainDeviceKeyStoreTest {
             }
         }
         assertEquals(bad, refused)
+    }
+
+    /**
+     * A provider that fails while verifying the self-test is not a damaged key (#3596): the call
+     * throws and the Keychain item keeps its bytes, where a refusal would have updated it with a new
+     * key and lost the old one for good. CryptoKit cannot be made to fail here, so the fault comes in
+     * through the self-test's verify seam.
+     */
+    @Test
+    fun aVerifyFaultKeepsTheItem() = runTest {
+        val keychain = FakeKeychain()
+        val appId = freshAppId()
+        val support = freshDirectory("kuilt-keychain")
+        val service = KEYCHAIN_SERVICE_PREFIX + appId
+        val held = keychainDeviceKeyStore(appId, support, keychain) {}.deviceKey().id
+        val before = keychain.held(service, KEYCHAIN_ACCOUNT)
+        val verifier = FaultingVerifier(faults = 1)
+        val store = AppleDeviceKeyStore(
+            medium = KeychainKeyMedium(service, keychain),
+            grantStore = NSFileManagerDurableStore(identityDirectory(support, appId)),
+            mediumId = "keychain:$service",
+            beforeKeyIsMade = {},
+            selfTestVerifier = verifier,
+        )
+
+        val failure = failureOf { store.deviceKey() }
+        val after = keychain.held(service, KEYCHAIN_ACCOUNT)
+        val afterwards = store.deviceKey().id
+
+        assertAll(
+            { assertEquals(1, verifier.faulted, "the rig fired: the self-test's verify failed once") },
+            { assertTrue(failure is IllegalStateException, "the fault throws IllegalStateException: $failure") },
+            { assertEquals(true, after?.contentEquals(before ?: ByteArray(0)), "the item keeps its bytes") },
+            { assertEquals(held, afterwards, "and the same key reads back") },
+        )
     }
 
     /** What [block] threw, or `null` if it returned. This test's own cancellation is never a verdict. */
