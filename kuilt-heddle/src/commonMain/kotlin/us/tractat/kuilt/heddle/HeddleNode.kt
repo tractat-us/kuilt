@@ -274,6 +274,51 @@ public class HeddleNode internal constructor(
     /** Retire a drained [edge] ([EntitlementLedger.retire]); returns whether it applied. */
     public fun retire(edge: AttachmentId): Boolean = applyIfPresent { it.retire(edge) }
 
+    public fun reconcileOwn(child: GroupId): ReconcileOwnOutcome = lock.withLock {
+        // A buffered charge may land on the live edge now; flush before the finals are read.
+        flushBufferedCharges()
+        var outcome: ReconcileOwnOutcome = ReconcileOwnOutcome.NothingToRepair
+        ledgerQuilter.mutateOrSkip { s ->
+            val live = s.liveInboundEdges(child).singleOrNull()
+            val parent = live?.let { s.record(it)?.parent }
+            val strand = s.retiredInboundEdges(child).filter { parent != null && s.record(it)?.parent == parent }.sorted()
+            when {
+                s.retiredInboundEdges(child).isEmpty() -> {
+                    outcome = ReconcileOwnOutcome.NoRetiredEdge
+                    null
+                }
+                live == null || parent == null -> {
+                    outcome = ReconcileOwnOutcome.NoLiveEdge
+                    null
+                }
+                strand.isEmpty() -> {
+                    outcome = ReconcileOwnOutcome.NoRetiredEdge
+                    null
+                }
+                else -> {
+                    // Mark, then read, in one locked section: a completion after this re-homes off the strand.
+                    quiescedEdges += strand
+                    val finals = strand.associateWith { edge -> mapOf(self to s.baseFinalsOn(edge, self)) }
+                    when (val move = s.relocationPatch(live, finals)) {
+                        is Relocation.Moved -> {
+                            outcome = ReconcileOwnOutcome.Repaired(onto = live, from = strand)
+                            Patch(move.patch)
+                        }
+                        Relocation.Nothing -> {
+                            outcome = ReconcileOwnOutcome.NothingToRepair
+                            null
+                        }
+                        is Relocation.Refused -> {
+                            outcome = ReconcileOwnOutcome.Refused(move.reason)
+                            null
+                        }
+                    }
+                }
+            }
+        }
+        outcome
+    }
+
     /**
      * The sink the H5 [HeddleControlPlane] uses to **publish an already-approved** control patch
      * into this node's replicated ledger, so data-plane consumers converge over the seam. The

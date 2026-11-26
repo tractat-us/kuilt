@@ -139,3 +139,12 @@ internal fun AllocationOutcome.toScheduleOutcome(): ScheduleOutcome = when (this
     is AllocationOutcome.LifetimeExhausted -> ScheduleOutcome.LifetimeExhausted(parent)
     is AllocationOutcome.WeightBudget -> ScheduleOutcome.WeightBudget(parent)
 }
+
+/** What [HeddleNode.reconcileOwn] did. */
+public sealed interface ReconcileOwnOutcome {
+    public data class Repaired(public val onto: AttachmentId, public val from: List<AttachmentId>) : ReconcileOwnOutcome
+    public data object NothingToRepair : ReconcileOwnOutcome
+    public data object NoRetiredEdge : ReconcileOwnOutcome
+    public data object NoLiveEdge : ReconcileOwnOutcome
+    public data class Refused(public val reason: String) : ReconcileOwnOutcome
+}
