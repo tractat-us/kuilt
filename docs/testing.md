@@ -46,9 +46,14 @@ class InMemoryLoomConformanceTest : SeamConformanceSuite() {
 
 `RoomConformanceSuite` follows the same shape for membership-aware `Room`
 implementations, binding a `RoomFactory` through `newHarness` instead of
-`newLoomPair`. Its required `newResumeHarness` hook observes the host verdict and
-joiner send attempts so the resume properties can check exact reply codes and
-prove that a left joiner answers locally.
+`newLoomPair`. Its required `newReturnHarness` hook binds the return rows: a
+`ReturnHarness` whose devices can drop, heal, die and relaunch, so each row
+checks that a device comes back by itself. A harness that cannot reach its
+links returns `ReturnFixture.Unsupported` with the issue that tracks the gap.
+Inside the harness, two hooks reach what no honest device sends:
+`PassPlanting` puts a forged pass into a device's Proof, and `ReusedIdLaunch`
+starts a process under an id a newer one took over. A harness over a real
+fabric declares either one `Unsupported` rather than build a forging path.
 
 ## The cluster harness
 
