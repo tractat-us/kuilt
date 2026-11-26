@@ -2566,10 +2566,21 @@ gives. The gate moves **in the apply loop**, in the same locked step as the entr
 not in the proposing caller's continuation: a call that timed out or was cancelled
 after its entry applied never resumes, so a gate it moved would stay wrong for good.
 A run's own acts are recognised by membership in the set of keys this instance
-issued, with a per-run nonce on the two gate acts, never by the key's
-`self#incarnation#` text — `incarnation` is caller-supplied and nothing detects a
-reused one. Relocation design §6.5 (residual 3) and §13 (item 2) carry the argument;
-`HeddleControlPlane`'s KDoc carries the mechanism.
+issued, never by the key's `self#incarnation#` text: `incarnation` is
+caller-supplied, and a caller can reuse one. Relocation design §6.5 (residual 3) and
+§13 (item 2) carry the argument; `HeddleControlPlane`'s KDoc carries the mechanism.
+
+**A reused incarnation costs at most one mint** (#3057). Every act's key but a
+mint's carries a per-run nonce, so an act of this run never shares a key with an
+earlier run's entry, and a reused `incarnation` cannot make it vanish. A mint keeps
+`self#incarnation#seq`, because its `MintId` derives from the key and lands in the
+ledger, which must come out the same from two identical runs. So under a reused
+value a mint can draw an earlier run's key. When its key is already applied, or the
+entry that first applies it carries a different command, the mint is refused with a
+`ControlConflict.Refused` naming the key, and logged as an error. The one case
+neither sees is an *identical* mint, issued at the same sequence number before replay
+reaches the earlier entry: that entry resolves it, and it mints once. That errs
+toward too little supply, never too much.
 
 **The control log is read in full or not at all** (#1738). The log is the truth
 about supply, topology and the roster, so a peer that cannot read one of its entries
