@@ -4,6 +4,8 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.runTest
 import org.slf4j.LoggerFactory
 import us.tractat.kuilt.test.assertAll
@@ -154,6 +156,62 @@ class FileDeviceKeyStoreTest {
             { assertTrue(first.exists() && first.readBytes().contentEquals(firstDamage), "the first refused key, kept as it was") },
             { assertTrue(second.exists() && second.readBytes().contentEquals(secondDamage), "the second, beside it") },
             { assertEquals("rw-------", permissionsOf(first), "and still owner-only") },
+        )
+    }
+
+    /**
+     * A provider that fails while verifying the self-test is not a damaged key (#3596): the call
+     * throws, the key file is left exactly as it was, nothing is moved aside, and the next call on the
+     * same store reads the same key back. Before the fix the fault read as `false`, so the file went to
+     * `refused-1` and a new key took its place.
+     */
+    @Test
+    fun aVerifyFaultKeepsTheKeyFile() = runTest {
+        val directory = createTempDirectory("kuilt-device-key")
+        val keyFile = directory.resolve(FileDeviceKeyStore.KEY_FILE)
+        val original = FileDeviceKeyStore(directory).deviceKey().id
+        val before = keyFile.readBytes()
+        val verifier = FaultingVerifier(faults = 1)
+        val store = FileDeviceKeyStore(directory, beforeKeyIsMade = {}, selfTestVerifier = verifier)
+
+        val thrown = try {
+            "returned ${store.deviceKey()}"
+        } catch (e: IllegalStateException) {
+            currentCoroutineContext().ensureActive()
+            "threw ${e::class.simpleName}"
+        }
+        val unchanged = keyFile.readBytes().contentEquals(before)
+        val asideFiles = Files.list(directory).use { files -> files.filter { ".refused-" in it.fileName.toString() }.count() }
+        val afterwards = store.deviceKey().id
+
+        assertAll(
+            { assertEquals(1, verifier.faulted, "the rig fired: the self-test's verify failed once") },
+            { assertEquals("threw IllegalStateException", thrown, "the fault throws") },
+            { assertTrue(unchanged, "the key file is untouched") },
+            { assertEquals(0L, asideFiles, "nothing is moved aside") },
+            { assertEquals(original, afterwards, "and the same key reads back") },
+        )
+    }
+
+    /**
+     * And a key whose halves do not belong together is still damage when its verify runs through the
+     * same seam and the provider answers `false`: moved aside and replaced, as ever.
+     */
+    @Test
+    fun aVerifyThatRunsAndRefusesStillReplacesTheKey() = runTest {
+        val directory = createTempDirectory("kuilt-device-key")
+        val keyFile = directory.resolve(FileDeviceKeyStore.KEY_FILE)
+        val named = SoftwareDeviceKey.generate()
+        val spliced = withPrivatePart(named.encodeJwk().decodeToString(), of = SoftwareDeviceKey.generate().encodeJwk().decodeToString())
+        keyFile.writeBytes(spliced.encodeToByteArray())
+        val verifier = FaultingVerifier(faults = 0)
+
+        val replacement = FileDeviceKeyStore(directory, beforeKeyIsMade = {}, selfTestVerifier = verifier).deviceKey().id
+
+        assertAll(
+            { assertEquals(1, verifier.calls, "the provider's verify ran on the stored key") },
+            { assertNotEquals(named.id, replacement, "and the key was replaced") },
+            { assertTrue(directory.resolve("${FileDeviceKeyStore.KEY_FILE}.refused-1").exists(), "with the old file kept aside") },
         )
     }
 
