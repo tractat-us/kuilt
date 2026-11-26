@@ -331,7 +331,7 @@ internal sealed interface KeystoreRead {
 /**
  * The `did:key` [publicKey] names: its `x`, behind the lead byte its `y`'s parity picks. `null` when
  * it is not an EC key on P-256 (by field size and group order), or is the point at infinity. Whether
- * `x` is on the curve is [DidKey.verify]'s question.
+ * `x` is on the curve is [selfTestVerifies]' question.
  */
 internal fun nameOf(publicKey: PublicKey): DidKey? {
     val ec = publicKey as? ECPublicKey ?: return null

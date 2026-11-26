@@ -172,7 +172,7 @@ internal class SoftwareDeviceKey private constructor(
         /**
          * The name the JWK's own `x` and `y` give: `x`, behind the lead byte `y`'s parity picks, after
          * checking that `d` is a P-256 scalar (`0 < d < n`). Whether `x` is on the curve is
-         * [DidKey.verify]'s question. The scalar is checked here so that every bad `d` is refused as
+         * [selfTestVerifies]' question. The scalar is checked here so that every bad `d` is refused as
          * damage, whatever a provider would do with it when asked to sign.
          */
         private fun nameInJwk(jwk: ByteArray): DidKey {
