@@ -2839,6 +2839,7 @@ internal class SeamRoom(
     private suspend fun sendAdmissionBurst(burst: AdmissionBurst, answers: ByteArray, returnKind: ReturnKind?) {
         val member = burst.member
         val welcome = rosterWelcome(member, burst.returning)
+        val attemptedAt = clock().toEpochMilliseconds()
         val issued = issueGrant(member.id, member.key, burst.membership)
         val direct = AdmitMessage.encode(
             welcome.copy(
@@ -2881,7 +2882,11 @@ internal class SeamRoom(
             ),
         )
         runCatchingCancellable { seam.sendTo(member.id, hostIntro) }
-        if (issued !is PassIssue.Withheld) startGrantRenewals(member.id, member.key, burst.membership)
+        // Due a period after this pass was dated, not after the burst: a slow burst would otherwise
+        // come off the floor the pass promises (#3709).
+        if (issued !is PassIssue.Withheld) {
+            startGrantRenewals(member.id, member.key, burst.membership, anchorMs = (issued as? PassIssue.Issued)?.grant?.issuedAt ?: attemptedAt)
+        }
     }
 
     /** What [issueGrant] made of one membership's pass. */
@@ -2926,19 +2931,21 @@ internal class SeamRoom(
     }
 
     /**
-     * **Host only.** Renew [peerId]'s pass every half of its [membership]'s term from now on (#3221),
-     * replacing any renewals an earlier Welcome to it started. Nothing for a term that never ends
+     * **Host only.** Renew [peerId]'s pass every half of its [membership]'s term, a third of the pass's
+     * life, from now on (#3221; [GrantIssuer.PERIODS_PER_PASS], #3709), replacing any renewals an
+     * earlier Welcome to it started. Nothing for a term that never ends
      * ([GrantIssuer.refreshPeriodMillis]), and nothing when [membership] is no longer the one [peerId]
-     * holds: it left, or a newer admission holds the id, while the burst was sent.
+     * holds: it left, or a newer admission holds the id, while the burst was sent. The first renewal is
+     * due a period after [anchorMs], when the Welcome's pass was dated (or its signing tried).
      */
-    private fun startGrantRenewals(peerId: PeerId, subject: DidKey, membership: Membership) {
+    private fun startGrantRenewals(peerId: PeerId, subject: DidKey, membership: Membership, anchorMs: Long) {
         val terms = membership.terms
         val periodMs = GrantIssuer.refreshPeriodMillis(terms) ?: return
         val membershipId = membership.id
         lock.withLock {
             if (closed || memberships[peerId]?.id != membershipId) return
             grantRenewals.remove(peerId)?.cancel()
-            grantRenewals[peerId] = scope.launch { renewGrants(peerId, subject, membershipId, periodMs) }
+            grantRenewals[peerId] = scope.launch { renewGrants(peerId, subject, membershipId, periodMs, anchorMs) }
         }
     }
 
@@ -2946,30 +2953,42 @@ internal class SeamRoom(
      * **Host only.** One membership's renewal loop: every [periodMs], a fresh pass on its direct lane as
      * an [AdmitMessage.GrantRenewal], while the member is [Liveness.Connected] (#3221).
      *
+     * Each renewal is due [periodMs] after the last pass was **dated** ([anchorMs] at first), on the
+     * room's clock, not [periodMs] after the loop last woke. The pass is dated before it is signed and
+     * sent, so a loop that slept a whole period after waking would add the signing, the sending and a
+     * slow admission burst to every gap, and each millisecond of that would come off the floor
+     * (#3709). The wait is clamped to `0..periodMs`, so a clock stepped back never stalls a renewal
+     * for longer than a period.
+     *
      * A renewal that falls due while the host holds the member as partitioned waits for the member's
      * next contact and goes then, so the member gets nothing while it is away. The pass it holds runs
-     * out at most a whole term after its last contact and, provided the last renewal reached it, at
-     * least half a term after: a renewal is sent once, so one lost on the way leaves the member on the
-     * pass before it, as does a failure to sign (#3709). It stops for good when the membership ends —
-     * [detachMember] cancels it — and when the device is revoked after this membership's admission
-     * (Decided 14, R2(i)): a revoked present member keeps its seat (Decided 12) but its pass runs out.
+     * out at most one and a half terms after its last contact and, provided the last renewal reached
+     * it, at least a whole term after: a renewal is sent once, so one lost on the way leaves the
+     * member on the pass before it, as does a failure to sign (tracked by #3711). It stops for good when
+     * the membership ends — [detachMember] cancels it — and when the device is revoked after this
+     * membership's admission (Decided 14, R2(i)): a revoked present member keeps its seat (Decided 12)
+     * but its pass runs out.
      * A failure to sign skips one renewal and tries again a period later.
      */
-    private suspend fun renewGrants(peerId: PeerId, subject: DidKey, membershipId: String, periodMs: Long) {
+    private suspend fun renewGrants(peerId: PeerId, subject: DidKey, membershipId: String, periodMs: Long, anchorMs: Long) {
+        var datedAt = anchorMs
         while (true) {
-            delay(periodMs)
+            delay((datedAt + periodMs - clock().toEpochMilliseconds()).coerceIn(0L, periodMs))
             // Until the member is connected again, or gone; a gone member's loop is cancelled anyway.
             _roster.first { roster -> roster.none { it.id == peerId && it.liveness != Liveness.Connected } }
             val membership = lock.withLock { memberships[peerId]?.takeIf { it.id == membershipId } } ?: return
+            val attemptedAt = clock().toEpochMilliseconds()
             when (val issued = issueGrant(peerId, subject, membership)) {
-                is PassIssue.Issued ->
+                is PassIssue.Issued -> {
+                    datedAt = issued.grant.issuedAt
                     runCatchingCancellable { seam.sendTo(peerId, AdmitMessage.encode(AdmitMessage.GrantRenewal(issued.grant.wire))) }
                         .onFailure { logger.debug { "room.grant.renewal-unsent peer=${peerId.value}: $it" } }
+                }
                 PassIssue.Withheld -> {
                     logger.info { "room.grant.renewals-stopped peer=${peerId.value}" }
                     return
                 }
-                PassIssue.Failed -> Unit
+                PassIssue.Failed -> datedAt = attemptedAt
             }
         }
     }

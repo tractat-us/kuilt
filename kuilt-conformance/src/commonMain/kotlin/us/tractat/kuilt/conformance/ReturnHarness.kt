@@ -232,7 +232,7 @@ internal class EventTape(room: Room, scope: CoroutineScope) {
 
 /**
  * The host's admission policy for a return row (#3220): it admits everyone, as
- * [AdmissionPolicy.open] does with a pass good for [readmitFor], and records the key of every newcomer
+ * [AdmissionPolicy.open] does on a term of [readmitFor], and records the key of every newcomer
  * it is asked about, oldest first.
  *
  * The friction bar is also a count of vetting. A restore — the same seat back, under the same id or a

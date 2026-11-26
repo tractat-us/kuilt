@@ -132,35 +132,43 @@ class AdmissionPolicyTest {
         )
     }
 
+    /**
+     * A pass on a finite term lasts one and a half times it (#3709), rounded up to the millisecond, so
+     * the pass held when a device drops, issued up to half a term earlier, still has the term left.
+     */
     @Test
-    fun finiteTermEndsReadmitForAfterIssue() {
+    fun finiteTermEndsOneAndAHalfTermsAfterIssue() {
         assertAll(
-            { assertEquals(1_700_003_600_000L, GrantTerms(1.hours).notAfter(1_700_000_000_000L)) },
-            { assertEquals(1L, GrantTerms(1.milliseconds).notAfter(0)) },
-            // A part millisecond is dropped, never rounded up: the grant runs no longer than asked.
-            { assertEquals(1L, GrantTerms(1_500.microseconds).notAfter(0)) },
+            { assertEquals(1_700_005_400_000L, GrantTerms(1.hours).notAfter(1_700_000_000_000L)) },
+            // 1.5 ms is rounded up, never down: the pass is not short of the term's floor.
+            { assertEquals(2L, GrantTerms(1.milliseconds).notAfter(0)) },
+            { assertEquals(3L, GrantTerms(2.milliseconds).notAfter(0)) },
+            // A part millisecond of the term is dropped first: 1.5 ms is a 1 ms term.
+            { assertEquals(2L, GrantTerms(1_500.microseconds).notAfter(0)) },
             // Before the epoch: a sum below zero is a plain sum, not an overflow.
-            { assertEquals(-1L, GrantTerms(1.milliseconds).notAfter(-2)) },
-            { assertEquals(Long.MIN_VALUE + 1.hours.inWholeMilliseconds, GrantTerms(1.hours).notAfter(Long.MIN_VALUE)) },
+            { assertEquals(0L, GrantTerms(1.milliseconds).notAfter(-2)) },
+            { assertEquals(Long.MIN_VALUE + 90.minutes.inWholeMilliseconds, GrantTerms(1.hours).notAfter(Long.MIN_VALUE)) },
         )
     }
 
     @Test
     fun finiteTermPastTheEndOfTimeSaturatesToNoExpiry() {
-        val hourMs = 1.hours.inWholeMilliseconds
+        val lifeMs = 90.minutes.inWholeMilliseconds
         val hour = GrantTerms(1.hours)
         val longestFinite = (Long.MAX_VALUE / 2 - 1).milliseconds
+        val longestLife = GrantTerms(longestFinite).notAfter(0)
         assertAll(
             { assertEquals(true, longestFinite.isFinite()) },
+            { assertEquals(longestFinite.inWholeMilliseconds / 2 * 3, longestLife, "rig: the longest term's pass fits in a Long from 0") },
             // One short of the end: the plain sum, so the saturation below is not the only answer.
-            { assertEquals(Grant.NO_EXPIRY - 1, hour.notAfter(Grant.NO_EXPIRY - 1 - hourMs)) },
+            { assertEquals(Grant.NO_EXPIRY - 1, hour.notAfter(Grant.NO_EXPIRY - 1 - lifeMs)) },
             // Lands exactly on the end.
-            { assertEquals(Grant.NO_EXPIRY, hour.notAfter(Grant.NO_EXPIRY - hourMs)) },
+            { assertEquals(Grant.NO_EXPIRY, hour.notAfter(Grant.NO_EXPIRY - lifeMs)) },
             // Would overflow a Long: saturates instead of wrapping to a time long past.
             { assertEquals(Grant.NO_EXPIRY, hour.notAfter(Long.MAX_VALUE - 10)) },
             // The longest finite Duration, from a start where it fits and from one where it overflows.
-            { assertEquals(Long.MAX_VALUE - 1, GrantTerms(longestFinite).notAfter(Long.MAX_VALUE / 2 + 1)) },
-            { assertEquals(Grant.NO_EXPIRY, GrantTerms(longestFinite).notAfter(Long.MAX_VALUE / 2 + 10)) },
+            { assertEquals(Long.MAX_VALUE - 1, GrantTerms(longestFinite).notAfter(Long.MAX_VALUE - 1 - longestLife)) },
+            { assertEquals(Grant.NO_EXPIRY, GrantTerms(longestFinite).notAfter(Long.MAX_VALUE - longestLife + 10)) },
         )
     }
 
@@ -175,7 +183,7 @@ class AdmissionPolicyTest {
         val brief = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt, shortest.notAfter(issuedAt))
         val lasting = Grant.issue(host, phone.id, GrantScope.AnyRoomOfIssuer, issuedAt, forever.notAfter(issuedAt))
         assertAll(
-            { assertEquals(issuedAt + 1, brief.notAfter) },
+            { assertEquals(issuedAt + 2, brief.notAfter) },
             { assertEquals(Grant.NO_EXPIRY, lasting.notAfter) },
         )
     }

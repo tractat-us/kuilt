@@ -20,7 +20,10 @@ coming back is recognised by the key it proves, never by a name or a token it wa
   whether its link healed by itself or the app was closed and opened again. The app makes no call
   for a healed link, and only its ordinary `join` after a restart.
 - **Back after the seat was let go, but inside its pass:** the host gave it a pass when it was let
-  in, and renewed the pass while it stayed connected. On that pass it is let back in as a new
+  in, and renewed the pass while it stayed connected. A device away up to the pass's term after its
+  last contact always gets back in on it, and up to one and a half times the term, depending on when
+  it dropped (an hour by default: 60 to 90 minutes), provided the last renewal reached it. On that
+  pass it is let back in as a new
   membership without the host's `AdmissionPolicy` being asked, and everyone in the room hears a
   `MembershipEvent.Joined` carrying a `ReturningMark`, so they know it is the same device.
 - **Back after the pass ran out, or after its host revoked it:** the policy decides it like any

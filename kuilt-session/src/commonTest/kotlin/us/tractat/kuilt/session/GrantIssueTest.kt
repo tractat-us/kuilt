@@ -5,6 +5,7 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
@@ -12,6 +13,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
@@ -27,6 +29,7 @@ import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.admit.AdmissionDecision
 import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.GrantIssuer
 import us.tractat.kuilt.session.admit.GrantReach
 import us.tractat.kuilt.session.admit.GrantTerms
 import us.tractat.kuilt.session.admit.HostAdmission
@@ -42,11 +45,12 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 /**
  * A host issues every member it seats a pass back in, on the direct `Welcome`, and renews it every
- * half lifetime while the member stays connected (identity Task 2.5, #3221).
+ * third of the pass's life while the member stays connected (identity Task 2.5, #3221; #3709).
  *
  * The pass is what lets a device that drops come back without being vetted (2.6 reads it), so what
  * matters here is the pass the device ends up holding: whose it is, for where, until when, and that
@@ -60,6 +64,16 @@ class GrantIssueTest {
     private val bobKey: DeviceKey = fakeDeviceKey(1)
     private val carolKey: DeviceKey = fakeDeviceKey(2)
     private val hostKey: DidKey = fakeDidKey(HOST_DEVICE)
+
+    /**
+     * The renewal period the renewal tests run on, the term that gives it, and the life of a pass on
+     * that term, all derived from [GrantIssuer.PERIODS_PER_PASS], so the timings below hold whatever
+     * the constant is, and a host whose schedule drifted from it reds. A second is long against a
+     * partition's detection.
+     */
+    private val period: Duration = 1.seconds
+    private val term: Duration = period * (GrantIssuer.PERIODS_PER_PASS - 1)
+    private val lifetime: Duration = period * GrantIssuer.PERIODS_PER_PASS
 
     /** The host's own trust: what 2.6 will check a presented pass with. */
     private suspend fun trust(revocations: RevocationList = RevocationList.inMemory()) =
@@ -116,7 +130,7 @@ class GrantIssueTest {
             { assertEquals(bobKey.id, pass.subject, "for Bob's key") },
             { assertEquals<GrantScope>(GrantScope.Room(KEY_SEAT_ROOM.value), pass.scope, "for this room") },
             { assertEquals(admittedAt, pass.issuedAt) },
-            { assertEquals(admittedAt + 1.hours.inWholeMilliseconds, pass.notAfter) },
+            { assertEquals(admittedAt + 90.minutes.inWholeMilliseconds, pass.notAfter, "an hour's term is a 90-minute pass (#3709)") },
             { assertEquals<GrantVerdict>(GrantVerdict.Valid, validNow) },
             { assertEquals<GrantVerdict>(GrantVerdict.Expired, atItsEnd) },
             {
@@ -202,30 +216,173 @@ class GrantIssueTest {
     // ── Renewal ──────────────────────────────────────────────────────────────
 
     /**
-     * A connected member is sent a fresh pass every half of its lifetime, and not before: none at
-     * just under half, one at half, a second at a full lifetime.
+     * The schedule the ruling on #3709 set: [AdmissionPolicy.open]'s hour is a 90-minute pass renewed
+     * every 30 minutes, so the pass a device holds at its last contact has at least the hour left. The
+     * shortest term keeps that floor too: its period stays at 1 ms rather than 0, and its pass is
+     * rounded up to 2 ms. A term that never ends is never renewed.
      */
     @Test
-    fun refreshArrivesAtHalfLifeWhileConnected() = runTest {
-        val host = rawHost(joiners = setOf(bob), admission = admitting(GrantTerms(2.seconds)))
+    fun anHourIsANinetyMinutePassRenewedEveryHalfHour() {
+        fun lifeOf(terms: GrantTerms): Long = terms.notAfter(0)
+        val hour = GrantTerms(1.hours)
+        val every = assertNotNull(GrantIssuer.refreshPeriodMillis(hour))
+        val shortest = GrantTerms(1.milliseconds)
+        val shortestEvery = assertNotNull(GrantIssuer.refreshPeriodMillis(shortest))
+        assertAll(
+            { assertEquals(30.minutes, every.milliseconds, "renewed every half hour") },
+            { assertEquals(90.minutes, lifeOf(hour).milliseconds, "a pass lives 90 minutes") },
+            { assertEquals(1.hours, (lifeOf(hour) - every).milliseconds, "the floor: the hour itself") },
+            { assertEquals(1L, shortestEvery, "a 1 ms term is renewed every 1 ms, not every 0") },
+            { assertEquals(2L, lifeOf(shortest), "its pass is rounded up, not down") },
+            { assertEquals(1L, lifeOf(shortest) - shortestEvery, "so its floor is its term too") },
+            { assertEquals(null, GrantIssuer.refreshPeriodMillis(GrantTerms(Duration.INFINITE)), "a term that never ends is never renewed") },
+        )
+    }
+
+    /**
+     * A pass's term reads back from it exactly (#3709): a pass lives longer than its term, so the
+     * read inverts the factor, and a device that returns on its pass is issued the next on the term it
+     * was first given rather than on the longer life. Every term from 1 ms to 3 s, a seeded spread up
+     * to the longest finite `Duration`, and the edges, through the arithmetic; then through real passes
+     * of both reaches.
+     */
+    @Test
+    fun aPassReadsBackTheTermsItWasIssuedOn() = runTest {
+        val longestFinite = Long.MAX_VALUE / 2 - 1
+        val random = kotlin.random.Random(3709)
+        val terms = (1L..3_000L) + List(2_000) { random.nextLong(1, longestFinite) } + listOf(longestFinite - 1, longestFinite)
+        val drifted = terms.filter { GrantIssuer.readmitForMillis(GrantIssuer.lifetimeMillis(it)) != it }
+        val issuedAt = 1_700_000_000_000L
+        val samples = listOf(GrantTerms(1.milliseconds), GrantTerms(7.milliseconds, GrantReach.AnyRoomOfIssuer), GrantTerms(1.hours), GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
+        val readBack = samples.map { GrantIssuer.termsOf(GrantIssuer.issue(fakeDeviceKey(HOST_DEVICE), bobKey.id, it, KEY_SEAT_ROOM.value, issuedAt)) }
+        assertAll(
+            { assertEquals(3_000L + 2_000 + 2, terms.size.toLong(), "rig: every term was drawn") },
+            { assertTrue(terms.all { GrantIssuer.lifetimeMillis(it) > it }, "rig: every pass outlives its term, so the read has something to invert") },
+            { assertEquals(emptyList(), drifted.take(5), "no term drifts on the round trip") },
+            { assertEquals(samples, readBack, "a real pass reads back its terms") },
+        )
+    }
+
+    /**
+     * A connected member is sent a fresh pass every period, a third of the pass's life, and not
+     * before: none just under a period, one at a period, and one more each period to a whole life.
+     */
+    @Test
+    fun refreshArrivesEachPeriodWhileConnected() = runTest {
+        val host = rawHost(joiners = setOf(bob), admission = admitting(GrantTerms(term)))
         val admittedAt = now()
         host.admit(bob, bobKey, nonce = 1)
 
-        host.advanceKeeping(setOf(bob), 900.milliseconds)
-        val beforeHalf = host.renewalsTo(bob)
+        host.advanceKeeping(setOf(bob), period - 100.milliseconds)
+        val beforePeriod = host.renewalsTo(bob)
         host.advanceKeeping(setOf(bob), 100.milliseconds)
-        val atHalf = host.renewalsTo(bob)
-        host.advanceKeeping(setOf(bob), 1.seconds)
+        val atPeriod = host.renewalsTo(bob)
+        host.advanceKeeping(setOf(bob), lifetime - period)
 
         val passes = host.passesTo(bob)
         val lastVerdict = trust().verify(passes.last(), bobKey.id, KEY_SEAT_ROOM.value, now())
         assertAll(
-            { assertEquals(0, beforeHalf, "nothing before half the lifetime") },
-            { assertEquals(1, atHalf, "a renewal at half the lifetime") },
-            { assertEquals(listOf(admittedAt, admittedAt + 1_000, admittedAt + 2_000), passes.map { it.issuedAt }, "Welcome, then one renewal per half lifetime") },
-            { assertTrue(passes.all { it.notAfter - it.issuedAt == 2_000L }, "each renewal on the same terms") },
+            { assertEquals(0, beforePeriod, "nothing before a period") },
+            { assertEquals(1, atPeriod, "a renewal at a period") },
+            {
+                assertEquals(
+                    (0..GrantIssuer.PERIODS_PER_PASS).map { admittedAt + it * period.inWholeMilliseconds },
+                    passes.map { it.issuedAt },
+                    "Welcome, then one renewal per period",
+                )
+            },
+            { assertTrue(passes.all { it.notAfter - it.issuedAt == lifetime.inWholeMilliseconds }, "each renewal on the same terms") },
             { assertEquals<GrantVerdict>(GrantVerdict.Valid, lastVerdict) },
         )
+    }
+
+    /** A host store whose key takes [signing] of virtual time over every pass: a slow platform signer. */
+    private class SlowSigner(private val inner: DeviceKeyStore, private val signing: Duration) : DeviceKeyStore by inner {
+        var slowed = 0
+
+        override suspend fun deviceKey(): DeviceKey {
+            val key = inner.deviceKey()
+            return object : DeviceKey {
+                override val id: DidKey = key.id
+
+                @us.tractat.kuilt.identity.IdentityInternalApi
+                override suspend fun sign(message: ByteArray): ByteArray {
+                    if ("kuilt/grant" in message.decodeToString()) {
+                        slowed++
+                        delay(signing)
+                    }
+                    return key.sign(message)
+                }
+            }
+        }
+    }
+
+    /** A link that takes [sending] of virtual time over every direct `Welcome`: a slow admission burst. */
+    private class SlowWelcomes(private val inner: FakeSeam, private val sending: Duration) : Seam by inner {
+        var slowed = 0
+
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            val message = AdmitMessage.decode(payload)
+            if (message is AdmitMessage.Welcome && message.membership != null) {
+                slowed++
+                delay(sending)
+            }
+            inner.sendTo(peer, payload)
+        }
+    }
+
+    /**
+     * Each renewal is due a period after the last pass was dated, not a period after the loop woke
+     * (#3709). A pass is dated before it is signed and sent, so a host that slept a whole period
+     * after each one would add the signing to every gap, and the pass a device holds when it drops
+     * would have that much less than its term left. Here every pass takes 300 ms to sign, and the
+     * passes are still one period apart.
+     */
+    @Test
+    fun aSlowSignerDoesNotStretchThePeriod() = runTest {
+        val store = SlowSigner(fakeKeyStore(HOST_DEVICE), signing = 300.milliseconds)
+        val host = rawHost(joiners = setOf(bob), store = store, admission = admitting(GrantTerms(term)))
+        host.admit(bob, bobKey, nonce = 1)
+
+        host.advanceKeeping(setOf(bob), lifetime + period)
+
+        val issuedAts = host.passesTo(bob).map { it.issuedAt }
+        assertAll(
+            { assertTrue(store.slowed >= GrantIssuer.PERIODS_PER_PASS + 1, "rig: every pass was slow to sign: ${store.slowed}") },
+            { assertTrue(issuedAts.size >= GrantIssuer.PERIODS_PER_PASS + 1, "rig: several renewals: $issuedAts") },
+            { assertEquals(List(issuedAts.size - 1) { period.inWholeMilliseconds }, issuedAts.zipWithNext { a, b -> b - a }, "every pass one period after the last: $issuedAts") },
+        )
+    }
+
+    /**
+     * The same for the Welcome: its admission burst takes 700 ms to send, and the first renewal is
+     * still dated one period after the Welcome's pass, not one period after the burst.
+     */
+    @Test
+    fun aSlowAdmissionBurstDoesNotStretchTheFirstPeriod() = runTest {
+        val fake = FakeSeam(selfId = KEY_SEAT_HOST, initialPeers = setOf(KEY_SEAT_HOST, bob))
+        val link = SlowWelcomes(fake, sending = 700.milliseconds)
+        val room = SeamRoomFactory(
+            loom = InMemoryLoom(),
+            scope = backgroundScope,
+            clock = virtualClock(),
+            deviceKeyStore = fakeKeyStore(HOST_DEVICE),
+            heartbeatConfig = KEY_SEAT_HEARTBEAT,
+            admitTimeout = KEY_SEAT_ADMIT_TIMEOUT,
+        ).adopt(link, AdoptRole.Host(admitting(GrantTerms(term)), roomId = KEY_SEAT_ROOM), memberName = "Host")
+        testScheduler.runCurrent()
+        val host = RawHost(this, fake, room, ObservedHold(), EventLog(room, backgroundScope), hostKey)
+        host.admit(bob, bobKey, nonce = 1)
+
+        host.advanceKeeping(setOf(bob), period * 2)
+
+        val issuedAts = host.passesTo(bob).map { it.issuedAt }
+        assertAll(
+            { assertEquals(1, link.slowed, "rig: the burst's direct Welcome was slow to send") },
+            { assertTrue(issuedAts.size >= 2, "rig: the Welcome's pass and a renewal: $issuedAts") },
+            { assertEquals(period.inWholeMilliseconds, issuedAts[1] - issuedAts[0], "the first renewal one period after the Welcome's pass: $issuedAts") },
+        )
+        room.leave()
     }
 
     /** A host store whose key refuses to sign the first pass it is asked to: a platform signer failing once. */
@@ -257,11 +414,11 @@ class GrantIssueTest {
     @Test
     fun aPassThatFailsToSignAtSeatingIsRenewedAPeriodLater() = runTest {
         val store = FailsFirstPass(fakeKeyStore(HOST_DEVICE))
-        val host = rawHost(joiners = setOf(bob), store = store, admission = admitting(GrantTerms(2.seconds)))
+        val host = rawHost(joiners = setOf(bob), store = store, admission = admitting(GrantTerms(term)))
         host.admit(bob, bobKey, nonce = 1)
         val direct = host.sentTo(bob).filterIsInstance<AdmitMessage.Welcome>().single { it.membership != null }
 
-        host.advanceKeeping(setOf(bob), 1.seconds)
+        host.advanceKeeping(setOf(bob), period)
 
         val passes = host.passesTo(bob)
         val verdict = passes.singleOrNull()?.let { trust().verify(it, bobKey.id, KEY_SEAT_ROOM.value, now()) }
@@ -280,13 +437,13 @@ class GrantIssueTest {
      */
     @Test
     fun noRefreshWhilePartitioned() = runTest {
-        val host = longHoldHost(admitting(GrantTerms(2.seconds)))
+        val host = longHoldHost(admitting(GrantTerms(term)))
         host.admit(bob, bobKey, nonce = 1)
-        host.advanceKeeping(setOf(bob), 1_100.milliseconds)
+        host.advanceKeeping(setOf(bob), period + 100.milliseconds)
         val whileConnected = host.renewalsTo(bob)
 
         host.partition(bob, alive = emptySet())
-        host.advanceKeeping(emptySet(), 5.seconds)
+        host.advanceKeeping(emptySet(), lifetime)
         val whileAway = host.renewalsTo(bob)
         val heldAfterAway = host.passesTo(bob).last()
         val stillHeld = host.member(bob)?.liveness
@@ -313,7 +470,7 @@ class GrantIssueTest {
     @Test
     fun noExpiryGrantIsNeverRefreshed() = runTest {
         val friend = GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer)
-        val stranger = GrantTerms(2.seconds)
+        val stranger = GrantTerms(term)
         val admission = HostAdmission(
             AdmissionPolicy { request -> AdmissionDecision.Admit(if (request.key == bobKey.id) friend else stranger) },
             RevocationList.inMemory(),
@@ -321,7 +478,7 @@ class GrantIssueTest {
         val host = rawHost(joiners = setOf(bob, carol), admission = admission)
         host.admit(bob, bobKey, nonce = 1)
         host.admit(carol, carolKey, nonce = 2)
-        host.advanceKeeping(setOf(bob, carol), 3.seconds)
+        host.advanceKeeping(setOf(bob, carol), period * 3)
 
         val room = host.room as SeamRoom
         val bobsPass = host.passesTo(bob).single()
@@ -331,7 +488,7 @@ class GrantIssueTest {
             { assertFalse(room.renewsPassForTest(bob), "no renewal loop for a pass that never expires") },
             { assertEquals(0, host.renewalsTo(bob)) },
             { assertTrue(room.renewsPassForTest(carol), "control: Carol's finite pass is renewed") },
-            { assertEquals(3, host.renewalsTo(carol), "control: Carol was renewed each half lifetime") },
+            { assertEquals(3, host.renewalsTo(carol), "control: Carol was renewed each period") },
         )
     }
 
@@ -343,14 +500,14 @@ class GrantIssueTest {
     @Test
     fun revokedPresentMemberStopsReceivingRefreshes() = runTest {
         val revocations = RevocationList.inMemory()
-        val host = rawHost(joiners = setOf(bob, carol), admission = admitting(GrantTerms(2.seconds), revocations))
+        val host = rawHost(joiners = setOf(bob, carol), admission = admitting(GrantTerms(term), revocations))
         host.admit(bob, bobKey, nonce = 1)
         host.admit(carol, carolKey, nonce = 2)
-        host.advanceKeeping(setOf(bob, carol), 1_100.milliseconds)
+        host.advanceKeeping(setOf(bob, carol), period + 100.milliseconds)
         val beforeRevocation = host.renewalsTo(bob)
 
         revocations.revoke(bobKey.id, notBefore = now())
-        host.advanceKeeping(setOf(bob, carol), 3.seconds)
+        host.advanceKeeping(setOf(bob, carol), period * 3)
 
         val room = host.room as SeamRoom
         val lastVerdict = trust(revocations).verify(host.passesTo(bob).last(), bobKey.id, KEY_SEAT_ROOM.value, now())
@@ -375,7 +532,7 @@ class GrantIssueTest {
     fun aTakeoverDoesNotLaunderARevocation() = runTest {
         val revocations = RevocationList.inMemory()
         val asked = mutableListOf<DidKey>()
-        val admission = HostAdmission(AdmissionPolicy { request -> asked += request.key; AdmissionDecision.Admit(GrantTerms(2.seconds)) }, revocations)
+        val admission = HostAdmission(AdmissionPolicy { request -> asked += request.key; AdmissionDecision.Admit(GrantTerms(term)) }, revocations)
         val host = rawHost(joiners = setOf(bob, bobTab, carol), admission = admission)
         val admittedAt = now()
         host.admit(bob, bobKey, nonce = 1)
@@ -390,7 +547,7 @@ class GrantIssueTest {
         val renewalsAtRevocation = host.renewalsTo(bobTab)
         val carolsAtRevocation = host.renewalsTo(carol)
 
-        host.advanceKeeping(setOf(bobTab, carol), 3.seconds)
+        host.advanceKeeping(setOf(bobTab, carol), period * 3)
         val renewsAfter = (host.room as SeamRoom).renewsPassForTest(bobTab)
         val vettedBeforeHello = asked.toList()
         host.admit(bobTab, bobKey, nonce = 4)

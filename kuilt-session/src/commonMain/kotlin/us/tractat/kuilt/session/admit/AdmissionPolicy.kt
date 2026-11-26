@@ -49,12 +49,12 @@ public fun interface AdmissionPolicy {
 
     public companion object {
         /**
-         * Admits everyone, each with a pass back into this room that is good for [readmitFor] after
-         * it is issued, and renewed every half of that while the device stays connected: [GrantTerms]
-         * of [readmitFor] and [GrantReach.ThisRoom]. So a device that drops off can come back on it for
-         * at most [readmitFor] after its last contact and, provided the last renewal reached it, at
-         * least half of that: a renewal that fails to sign is skipped, and one lost on the way is not
-         * sent again (#3709).
+         * Admits everyone, each with a pass back into this room on [GrantTerms] of [readmitFor] and
+         * [GrantReach.ThisRoom]: a device away up to [readmitFor] after its last contact always gets
+         * back in on its pass, and up to one and a half times it, depending on when it dropped. With
+         * the default hour that is 60 to 90 minutes: the pass lasts 90 minutes and is renewed every 30
+         * while the device stays connected. That floor holds provided the last renewal reached the
+         * device: one that fails to sign or is lost on the way is not sent again (tracked by #3711).
          *
          * [readmitFor] is checked here, so a bad value throws when the host is configured rather than
          * on some joiner's admission.
@@ -179,17 +179,19 @@ public enum class GrantReach {
  * What a host promises a newcomer it admits: how long the device may come back without being asked
  * again ([readmitFor]), and where ([reach]).
  *
- * A pass is good for [readmitFor] after it is issued, and the room issues a fresh one every half of
- * [readmitFor] while the member stays connected. So a device that drops off can come back on its pass
- * for at most [readmitFor] after its last contact and, provided the last renewal reached it, at least
- * half of that, however long ago it first joined. A renewal that fails to sign is skipped, and one lost
- * on the way is not sent again; whether the window should be wider is #3709. [Duration.INFINITE] means
- * the pass never runs out.
+ * [readmitFor] is a floor: a device away up to [readmitFor] after its last contact always gets back in
+ * on its pass, and up to one and a half times it, depending on when it dropped, however long ago it
+ * first joined. The pass itself lasts one and a half times [readmitFor] ([notAfter]), and the room
+ * issues a fresh one every half of [readmitFor] while the member stays connected, so the pass a device
+ * holds when it drops has at least [readmitFor] left. That floor holds provided the last renewal
+ * reached the device: one that fails to sign or is lost on the way is not sent again (tracked by
+ * #3711). [Duration.INFINITE] means the pass never runs out.
  *
  * A grant is dated in whole epoch milliseconds and must end after it starts, so [readmitFor] is at
  * least one millisecond; a part millisecond beyond that is dropped.
  *
- * @property readmitFor How long after it was issued the pass is good. At least 1 ms, or infinite.
+ * @property readmitFor How long after its last contact a device is sure to get back in on its pass.
+ *   At least 1 ms, or infinite.
  * @property reach Where the pass is good. This room only, by default.
  * @throws IllegalArgumentException when [readmitFor] is under one millisecond, zero or negative.
  */
@@ -205,7 +207,9 @@ public data class GrantTerms(
 
     /**
      * The [Grant.notAfter] these terms stamp on a pass issued at [issuedAt], in epoch milliseconds:
-     * [issuedAt] plus [readmitFor], or [Grant.NO_EXPIRY] when [readmitFor] is infinite.
+     * [issuedAt] plus the pass's life, one and a half times [readmitFor] rounded up to the millisecond,
+     * or [Grant.NO_EXPIRY] when [readmitFor] is infinite. The half is what keeps [readmitFor] a floor
+     * when the pass held at a device's last contact was issued a renewal period earlier.
      *
      * Saturating: a finite term that would run past the end of a `Long` stamps [Grant.NO_EXPIRY],
      * which means the pass never expires. That is intended — such a pass would outlast any clock
@@ -213,7 +217,7 @@ public data class GrantTerms(
      */
     public fun notAfter(issuedAt: Long): Long {
         if (readmitFor.isInfinite()) return Grant.NO_EXPIRY
-        val end = issuedAt + readmitFor.inWholeMilliseconds
+        val end = issuedAt + GrantIssuer.lifetimeMillis(readmitFor.inWholeMilliseconds)
         // The term is positive, so the sum wrapped exactly when it came out smaller.
         return if (end < issuedAt) Grant.NO_EXPIRY else end
     }

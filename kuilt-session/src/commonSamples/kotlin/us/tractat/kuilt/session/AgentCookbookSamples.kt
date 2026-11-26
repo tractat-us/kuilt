@@ -362,9 +362,9 @@ public suspend fun flushThenLeaveSample(
 
 /**
  * Decide who gets into a room you host, and for how long each may come back without being asked
- * again. A friend's pass is good in any room you host and never runs out; a stranger's is good in
- * this room for an hour after it is issued, renewed every half hour while the stranger stays
- * connected; a device the app has blocked gets the app's own refusal
+ * again. A friend's pass is good in any room you host and never runs out; a stranger's lets it back
+ * into this room up to an hour after its last contact, or up to 90 minutes depending on when it
+ * dropped; a device the app has blocked gets the app's own refusal
  * code, until the app unblocks it.
  *
  * Revoking and blocking are separate. Revoking a key voids the passes it already holds, so it has to
