@@ -407,11 +407,12 @@ The slice-2 spec-conformance review found no code bug in 2.1–2.6. Its rulings:
 
 ## Amendment O — the readmit window, and the harness hooks (Iain, 2026-11-25)
 
-- **#3709 is ruled: the host renews a pass every `readmitFor / 4`** (option 2). A pass held at last contact then has between three quarters of `readmitFor` and all of it left, provided the last renewal reached the device: 45 to 60 minutes under `AdmissionPolicy.open()`. Iain: "the difference between 45 and 60 minutes isn't going to be upsetting or noticeable for folks, and we can tune it."
-  - The divisor is one named internal constant, not a public setting: a pass does not carry its renewal period, so a per-room knob could not follow a device that returns on its pass.
-  - The docs state the floor plainly. Longer passes (option 3) are not taken.
-  - Not a wire change, so no `ProtocolVersion` bump.
-  - A renewal lost on a dying link is still never resent, which lowers the floor. That is #3711 (needs-design).
+- **#3709 is ruled: options 2 and 3 together.** A pass lives `1.5 × readmitFor` and the host renews it every `readmitFor / 2`, a third of the pass's life: a 90-minute pass renewed every 30 minutes under `AdmissionPolicy.open()`. Iain: "make the lease longer, and also request more often as a proportion of the overall lease time."
+  - `readmitFor` becomes the promised floor. A pass held at last contact has between `readmitFor` and `1.5 × readmitFor` left, provided the last renewal reached the device.
+  - The proportion is one internal constant we can tune, not a public setting: a pass does not carry its renewal period, so a per-room knob could not follow a device that returns on its pass.
+  - Carry-forward inverts the factor: a returning pass's term is two thirds of its lifetime, with an exact round trip, or the term would compound on every return.
+  - The bytes on the wire are unchanged, so no `ProtocolVersion` bump.
+- **#3711 is ruled: a renewal that fails to sign or send is retried**, with a backoff that tightens as the end of the device's last pass approaches. Iain: "It's reasonable to re-send renewals with some reasonable backoff (especially when close to the end of the lease!)" A separate PR, on top of #3709's.
 - **`ReturnHarness` gets public hooks to plant a pass and to launch under a superseded id** (#3710, a future improvement). This reverses Amendment N's "waits until a non-reference harness needs it": the three foreign-pass refusal rows, their control arm and the Decided 32 row move into `RoomConformanceSuite` behind an optional two-armed fixture. Until #3710 lands they stay where Amendment N put them.
 
 ## Global Constraints
