@@ -128,8 +128,8 @@ class WakeCreditSlotTest {
      * where settling every job at its cost holds `1/2`. The cancels gain `a` `4/7 − 1/2 = 1/14`.
      *
      * The same rig settling those jobs with `complete(lease, elapsed)` gains nothing: that is the
-     * honest arm, and its share is pinned at a half. The rig is deterministic, so both measured
-     * shares are pinned as well as the oracle.
+     * honest arm, and its share is a half. The rig is deterministic and draws nothing at random, so
+     * both measured shares are pinned exactly beside the oracle and the half.
      */
     @Test
     fun aCancelledJobThatRanIsAFreeRideOfExactlyItsCost() {
@@ -139,9 +139,10 @@ class WakeCreditSlotTest {
         assertAll(
             { assertEquals(0 to 0, cancel.wakes to cancel.wakesWithOpenLease, "the cancelling lane was never seen idle") },
             { assertEquals(0 to 0, honest.wakes to honest.wakesWithOpenLease, "the honest lane was never seen idle") },
-            within("honest share", honest.share(A), 0.5, NO_GAP_PIN_TOLERANCE),
+            within("honest share against a half", honest.share(A), 0.5, NO_GAP_ORACLE_TOLERANCE),
             within("cancel gain against the oracle", cancel.share(A) - honest.share(A), oracle, NO_GAP_ORACLE_TOLERANCE),
-            within("cancel gain as measured", cancel.share(A) - honest.share(A), NO_GAP_MEASURED_GAIN, NO_GAP_PIN_TOLERANCE),
+            within("honest share as measured", honest.share(A), NO_GAP_HONEST_SHARE, EXACT),
+            within("cancel share as measured", cancel.share(A), NO_GAP_CANCEL_SHARE, EXACT),
         )
     }
 
@@ -154,8 +155,13 @@ class WakeCreditSlotTest {
         const val STRADDLE_TOLERANCE = 0.005
         const val NOISE_TOLERANCE = 0.015
         const val PIN_TOLERANCE = 0.003
-        const val NO_GAP_MEASURED_GAIN = 0.0
         const val NO_GAP_ORACLE_TOLERANCE = 0.001
-        const val NO_GAP_PIN_TOLERANCE = 0.0001
+
+        /** 15,996 of the 32,000 slot-time units: the horizon's edge, not a lean. */
+        const val NO_GAP_HONEST_SHARE = 0.499875
+
+        /** 18,274 of the 32,000 slot-time units, a gain of 0.0712 against the oracle's 0.0714. */
+        const val NO_GAP_CANCEL_SHARE = 0.5710625
+        const val EXACT = 1e-9
     }
 }
