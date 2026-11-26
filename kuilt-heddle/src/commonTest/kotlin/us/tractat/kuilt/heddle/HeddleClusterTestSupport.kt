@@ -151,10 +151,17 @@ internal class MixedWeightRun(
  * leaf. The sum balances through a negative holding, so a conflict [EntitlementLedger.validate]
  * reports breaks it too.
  */
-internal fun EntitlementLedger.conservationShortfall(root: GroupId, replicas: Collection<ReplicaId>): String? {
+internal fun EntitlementLedger.conservationShortfall(root: GroupId, replicas: Collection<ReplicaId>): String? =
+    conservationShortfallOver(listOf(root) + activeChildren(root).mapNotNull { record(it.attachment)?.child }, replicas)
+
+/**
+ * [conservationShortfall] over every group in [groups], at any depth: what every unit minted is
+ * held at one of them by one of [replicas], or spent at a leaf, fails to balance by, or `null`.
+ * [groups] must name every group that can hold entitlement, or the sum comes up short.
+ */
+internal fun EntitlementLedger.conservationShortfallOver(groups: Collection<GroupId>, replicas: Collection<ReplicaId>): String? {
     val conflicts = validate()
     if (conflicts.isNotEmpty()) return "the ledger reports $conflicts"
-    val groups = listOf(root) + activeChildren(root).mapNotNull { record(it.attachment)?.child }
     var held = 0L
     for (g in groups) for (r in replicas) held = checkNotNull(held.plusOrNull(holdings(g, r))) { "held overflows" }
     val accounted = checkNotNull(held.plusOrNull(leafSpentTotal())) { "held + spent overflows" }
@@ -200,7 +207,8 @@ internal class StaticCluster(val peers: List<StaticPeer>, private val scheduler:
 /**
  * [peers] static nodes under [root], peer `i` minted `mint[i]` at the root and every peer
  * bootstrapped with [topology]. [wrap] wraps each peer's seam before the gate, to put a fabric
- * fault (duplication, loss) under it.
+ * fault (duplication, loss) under it. The nodes run on [nodeScope]; cancel it to tear them down
+ * before the test ends, as a test that boots many clusters must.
  */
 internal suspend fun TestScope.staticCluster(
     root: GroupId,
@@ -209,6 +217,7 @@ internal suspend fun TestScope.staticCluster(
     topology: List<AttachmentRecord>,
     wrap: (Seam) -> Seam = { it },
     quantum: Long = 10L,
+    nodeScope: CoroutineScope = backgroundScope,
 ): StaticCluster {
     val loom = InMemoryLoom()
     val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
@@ -219,7 +228,7 @@ internal suspend fun TestScope.staticCluster(
     val nodes = seams.mapIndexed { i, seam ->
         val gate = GatedSeam(wrap(seam))
         val self = ReplicaId(seam.selfId.value)
-        val node = backgroundScope.heddleStatic(
+        val node = nodeScope.heddleStatic(
             seam = gate,
             self = self,
             root = root,
