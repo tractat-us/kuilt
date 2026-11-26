@@ -245,6 +245,34 @@ class HeddleNodeReconcileOwnTest {
             )
         }
 
+    /**
+     * A refused move marks nothing: a reservation still open across the old edge charges that edge
+     * as it was captured, rather than re-homing across parents onto a live edge whose credit never
+     * moved. Peer 0 moves `acme` under `other` while peer 1, cut off, holds a reservation across
+     * the old edge.
+     */
+    @Test
+    fun aRefusedMoveMarksNothing() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val late = lateReservationAcrossTheRetire(into = UNDER_OTHER)
+            val peer1 = late.h.peers[1].node
+            val refused = peer1.reconcileOwn(ACME)
+            val before = peer1.ledger.value
+            peer1.complete(late.id, LATE_COST)
+            val after = peer1.ledger.value
+            assertAll(
+                { assertEquals(ReconcileOwnOutcome.CrossParent(OTHER, mapOf(OLD to ROOT)), refused) },
+                {
+                    assertEquals(
+                        before.storedSlot(CounterFamily.ROLLUP_SPENT, OLD, peer1.self) + LATE_COST,
+                        after.storedSlot(CounterFamily.ROLLUP_SPENT, OLD, peer1.self),
+                        "the charge lands on the edge it was captured across",
+                    )
+                },
+                { assertEquals(before.edge(UNDER_OTHER.id), after.edge(UNDER_OTHER.id), "and nothing reaches the other parent's edge") },
+            )
+        }
+
     /** Two live inbound edges leave no one edge to move onto; the answer names them and nothing moves. */
     @Test
     fun twoLiveInboundEdgesAreNamed() =
@@ -266,7 +294,7 @@ class HeddleNodeReconcileOwnTest {
     /** A two-peer cluster where peer 1, cut off, reserved across the old edge before peer 0 reweighted it; healed. */
     private class LateReservation(val h: StaticCluster, val scope: CoroutineScope, val id: ReservationId)
 
-    private suspend fun TestScope.lateReservationAcrossTheRetire(): LateReservation {
+    private suspend fun TestScope.lateReservationAcrossTheRetire(into: AttachmentRecord = NEW_RECORD): LateReservation {
         val scope = childScope()
         val h = staticCluster(ROOT, peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = TOPOLOGY, nodeScope = scope)
         spend(h.peers[0].node, 5L)
@@ -274,8 +302,8 @@ class HeddleNodeReconcileOwnTest {
         h.partition(1)
         val late = assertIs<ReserveOutcome.Reserved>(grantAndReserve(h.peers[1].node, LATE_COST), "rig: a reservation across the old edge")
         val reweighter = h.peers[0].node
-        check(reweighter.prepare(NEW_RECORD) && reweighter.close(OLD) && reweighter.retire(OLD) && reweighter.activate(NEW)) {
-            "rig: peer 0 reweights acme without seeing peer 1's grant"
+        check(reweighter.prepare(into) && reweighter.close(OLD) && reweighter.retire(OLD) && reweighter.activate(into.id)) {
+            "rig: peer 0 moves acme onto ${into.id} without seeing peer 1's grant"
         }
         h.pump()
         h.heal(1)
