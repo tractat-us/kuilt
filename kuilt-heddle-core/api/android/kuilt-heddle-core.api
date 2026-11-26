@@ -1508,9 +1508,9 @@ public final class us/tractat/kuilt/heddle/Topology$Node$Companion {
 }
 
 public abstract interface class us/tractat/kuilt/heddle/TopologyChange {
-	public fun getHistory ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public abstract fun getNames ()Ljava/util/List;
 	public abstract fun getPath ()Ljava/util/List;
+	public fun getSaveEffect ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 }
 
 public final class us/tractat/kuilt/heddle/TopologyChange$Added : us/tractat/kuilt/heddle/TopologyChange {
@@ -1521,10 +1521,10 @@ public final class us/tractat/kuilt/heddle/TopologyChange$Added : us/tractat/kui
 	public final fun copy (Ljava/util/List;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$Node;)Lus/tractat/kuilt/heddle/TopologyChange$Added;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyChange$Added;Ljava/util/List;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$Node;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyChange$Added;
 	public fun equals (Ljava/lang/Object;)Z
-	public fun getHistory ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun getNames ()Ljava/util/List;
 	public final fun getNode ()Lus/tractat/kuilt/heddle/Topology$Node;
 	public fun getPath ()Ljava/util/List;
+	public fun getSaveEffect ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -1540,15 +1540,15 @@ public final class us/tractat/kuilt/heddle/TopologyChange$CeilingChanged : us/tr
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAfter ()Ljava/lang/Long;
 	public final fun getBefore ()Ljava/lang/Long;
-	public fun getHistory ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun getNames ()Ljava/util/List;
 	public fun getPath ()Ljava/util/List;
+	public fun getSaveEffect ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
 
 public final class us/tractat/kuilt/heddle/TopologyChange$DefaultImpls {
-	public static fun getHistory (Lus/tractat/kuilt/heddle/TopologyChange;)Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
+	public static fun getSaveEffect (Lus/tractat/kuilt/heddle/TopologyChange;)Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 }
 
 public final class us/tractat/kuilt/heddle/TopologyChange$GroupBecameLane : us/tractat/kuilt/heddle/TopologyChange {
@@ -1558,9 +1558,9 @@ public final class us/tractat/kuilt/heddle/TopologyChange$GroupBecameLane : us/t
 	public final fun copy (Ljava/util/List;Ljava/util/List;)Lus/tractat/kuilt/heddle/TopologyChange$GroupBecameLane;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyChange$GroupBecameLane;Ljava/util/List;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyChange$GroupBecameLane;
 	public fun equals (Ljava/lang/Object;)Z
-	public fun getHistory ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun getNames ()Ljava/util/List;
 	public fun getPath ()Ljava/util/List;
+	public fun getSaveEffect ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -1572,9 +1572,9 @@ public final class us/tractat/kuilt/heddle/TopologyChange$LaneBecameGroup : us/t
 	public final fun copy (Ljava/util/List;Ljava/util/List;)Lus/tractat/kuilt/heddle/TopologyChange$LaneBecameGroup;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyChange$LaneBecameGroup;Ljava/util/List;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyChange$LaneBecameGroup;
 	public fun equals (Ljava/lang/Object;)Z
-	public fun getHistory ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun getNames ()Ljava/util/List;
 	public fun getPath ()Ljava/util/List;
+	public fun getSaveEffect ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -1587,10 +1587,10 @@ public final class us/tractat/kuilt/heddle/TopologyChange$Removed : us/tractat/k
 	public final fun copy (Ljava/util/List;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$Node;)Lus/tractat/kuilt/heddle/TopologyChange$Removed;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyChange$Removed;Ljava/util/List;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$Node;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyChange$Removed;
 	public fun equals (Ljava/lang/Object;)Z
-	public fun getHistory ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun getNames ()Ljava/util/List;
 	public final fun getNode ()Lus/tractat/kuilt/heddle/Topology$Node;
 	public fun getPath ()Ljava/util/List;
+	public fun getSaveEffect ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -1604,9 +1604,9 @@ public final class us/tractat/kuilt/heddle/TopologyChange$RootRenamed : us/tract
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAfter ()Ljava/lang/String;
 	public final fun getBefore ()Ljava/lang/String;
-	public fun getHistory ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun getNames ()Ljava/util/List;
 	public fun getPath ()Ljava/util/List;
+	public fun getSaveEffect ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -1628,9 +1628,9 @@ public final class us/tractat/kuilt/heddle/TopologyChange$TemplateAdded : us/tra
 	public final fun copy (Ljava/util/List;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;)Lus/tractat/kuilt/heddle/TopologyChange$TemplateAdded;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyChange$TemplateAdded;Ljava/util/List;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyChange$TemplateAdded;
 	public fun equals (Ljava/lang/Object;)Z
-	public fun getHistory ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun getNames ()Ljava/util/List;
 	public fun getPath ()Ljava/util/List;
+	public fun getSaveEffect ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public final fun getTemplate ()Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -1647,9 +1647,9 @@ public final class us/tractat/kuilt/heddle/TopologyChange$TemplateChanged : us/t
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAfter ()Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
 	public final fun getBefore ()Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
-	public fun getHistory ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun getNames ()Ljava/util/List;
 	public fun getPath ()Ljava/util/List;
+	public fun getSaveEffect ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -1662,9 +1662,9 @@ public final class us/tractat/kuilt/heddle/TopologyChange$TemplateRemoved : us/t
 	public final fun copy (Ljava/util/List;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;)Lus/tractat/kuilt/heddle/TopologyChange$TemplateRemoved;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyChange$TemplateRemoved;Ljava/util/List;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyChange$TemplateRemoved;
 	public fun equals (Ljava/lang/Object;)Z
-	public fun getHistory ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun getNames ()Ljava/util/List;
 	public fun getPath ()Ljava/util/List;
+	public fun getSaveEffect ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public final fun getTemplate ()Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -1681,9 +1681,9 @@ public final class us/tractat/kuilt/heddle/TopologyChange$WeightChanged : us/tra
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAfter ()Lus/tractat/kuilt/heddle/Weight;
 	public final fun getBefore ()Lus/tractat/kuilt/heddle/Weight;
-	public fun getHistory ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun getNames ()Ljava/util/List;
 	public fun getPath ()Ljava/util/List;
+	public fun getSaveEffect ()Lus/tractat/kuilt/heddle/TopologyChange$SaveEffect;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
