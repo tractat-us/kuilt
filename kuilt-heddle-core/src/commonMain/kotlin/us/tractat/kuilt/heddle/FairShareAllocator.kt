@@ -50,9 +50,27 @@ public interface LedgerCell {
  * means this peer has seen the child not competing, so the next round in which it competes is a
  * wake. An id that is *absent* has never been observed, and a seated one found competing is a wake
  * too, the restart rule (design §7.2, #3472): a first sighting says nothing about how long the
- * child idled, so this peer gives it no credit for a gap it did not watch, at the cost of its lag,
- * once. That is every child of a restarted `HeddleNode`, and a child another peer seated and ran.
- * Seating a genuinely new generation is the seat bump's job ([schedule]), not the clamp's.
+ * child idled, so this peer clamps it to the front, at the cost of its lag, once. That is every
+ * child of a restarted `HeddleNode`, and a child another peer seated and ran. Seating a genuinely
+ * new generation is the seat bump's job ([schedule]), not the clamp's.
+ *
+ * ## Two histories a first sighting cannot tell apart
+ *
+ * A clamped waker lands past the front by what its edge still has outstanding (#3721), so the
+ * grants it holds stay counted as its service. What a first sighting cannot know is what the
+ * child's siblings were doing when those grants were made. Take a child at `L + 8` holding 8, the
+ * front, and a sibling at `L` holding nothing, both first seen asking. That ledger arises two ways:
+ *
+ * - The sibling was competing when the 8 was granted. An allocator that watched leaves a gap of 8.
+ * - The sibling was idle when it was granted. An allocator that watched leaves a gap of 0.
+ *
+ * This one watched neither, and lands them 8 apart: the front child past itself by its 8, the
+ * sibling at the front. That is right for the first history. In the second, the idle sibling
+ * keeps up to the front child's outstanding of lag it should have forfeited. Clamping the front
+ * child by less would credit the holder its unspent grants instead, the #3238 defect, and is ruled
+ * out (#3721). So a clamp still never lowers a position, and forgives a waker only history, but it
+ * can leave a sibling lag that kept memory would have taken: at most the outstanding of the child
+ * it is clamped beside.
  *
  * That memory is a value too: [memory] exports it as an [AllocatorMemory] and the secondary
  * constructor takes one back, so a single-process caller can persist it beside its ledger, and can
@@ -300,8 +318,10 @@ public class FairShareAllocator(
      * Whether [edge] wakes: demanding now, and last observed not demanding. Or, never observed at
      * all, seated and demanding: the restart rule (design §7.2, #3472). This allocator did not
      * watch the gap before it first saw the child, so it gives it no credit for it, wherever the
-     * child stands. Clamping it costs it at most its lag, once, the penalty side: clamping costs
-     * turns, never credit (§10.6).
+     * child stands. Clamping it costs it its lag, once, and past the front by what it holds, so a
+     * child that is itself the front pays its own outstanding again: the penalty side (§10.6). What
+     * that leaves its siblings is the class KDoc's *Two histories*: a sibling can keep lag it
+     * should have forfeited, up to that outstanding.
      */
     private fun isWaker(edge: PolicyEdge): Boolean {
         if (!HeddlePolicy.isDemanding(edge)) return false
@@ -826,7 +846,9 @@ public class FairShareAllocator(
      * - **Otherwise**, the UNIFIED rule: the furthest-ahead child at the parent, counting idle
      *   children, the joiners themselves, and each newborn at its own origin. There is no competing
      *   set to come level with, so everyone joining starts level with whoever has had the most.
-     *   This can cost a joiner a turn; it can never give one.
+     *   This can cost a joiner a turn, and never moves one back. But [clampWakers] lands the
+     *   furthest-ahead child past itself by what it holds, so a sibling clamped to it keeps up to
+     *   that much lag, which it may have owed (the class KDoc's *Two histories*).
      *
      * It replaces three older rules: the maximum over the idle non-joiners alone, a `null` front
      * when only joiners were left, and raising a front to the newborns' origins whenever newborns
@@ -1134,8 +1156,11 @@ public class FairShareAllocator(
      * gave it 10, and a `HeddleNode`'s `a` holding 8 unspent took 10 where the memory gave it 6.
      * Counting it past the front keeps the work in flight as the waker's own service, so a refund
      * lowers it from there, as it would have without the clamp. The clamp still forgives only idle
-     * history, and still never gives a turn: the target is never below the front, since a negative
-     * outstanding, which [EdgeSummary] allows transiently, counts as zero.
+     * history, and never lowers a position: the target is never below the front, since a negative
+     * outstanding, which [EdgeSummary] allows transiently, counts as zero. It does not promise a
+     * sibling no turn: a sibling clamped beside a waker that holds grants keeps up to that waker's
+     * outstanding of lag, which a scheduler that watched might have taken (the class KDoc's *Two
+     * histories*, and `FairShareAllocatorTest`'s holdings-intact first observation).
      *
      * In a `LocalHeddle` every delegation is one lease's reservation, so the outstanding is exactly
      * what the open leases beneath the edge reserve (`OpenReservationOutstandingPropertyTest`).
