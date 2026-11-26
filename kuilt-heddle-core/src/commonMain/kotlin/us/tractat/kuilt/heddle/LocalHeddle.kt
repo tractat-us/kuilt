@@ -977,6 +977,10 @@ public class LocalHeddle private constructor(
      * extended inline first (minted at the root if the root is short) and reported as the overrun;
      * below it, the unused remainder is handed back up the path. Never refused.
      *
+     * **Work that held its slot settles here**, whether it finished, failed or was abandoned
+     * part-way: [actualCost] is what it cost, by convention the time it held the slot, and the charge
+     * is always the cost the caller reported. [cancel] is only for work that never ran.
+     *
      * [waiting] is every leaf with work queued once this lease's work is done, as for [acquire]. An
      * overrun is a charge, so where there is one [waiting] is observed at every group the overrun
      * crosses before it lands, as [extend] observes it (#3471). The overrun is the running work's own
@@ -1088,6 +1092,14 @@ public class LocalHeddle private constructor(
 
     /**
      * Close [lease] without charging it: everything reserved goes back up the path.
+     *
+     * **`cancel` is for work that never ran:** a job withdrawn before it started, or a slot handed
+     * back unused. Work that held its slot settles with [complete] at what it cost, by convention
+     * the time it held the slot, however it ended. A cancel of work that ran charges nothing, so the
+     * slot time it held is a free ride the lease's siblings pay for. A lane that never idles and
+     * cancels one job in four, beside a sibling of equal weight, holds 4/7 of the slots where a half
+     * is its share. How much the lease reserved does not change the ride, since all of it goes back
+     * (design §7.4).
      *
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */

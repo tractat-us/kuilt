@@ -261,6 +261,11 @@ public class FairSharePool(
     /**
      * Close [lease] without charging it, as [LocalHeddle.cancel] does. A lease the pool counts frees
      * its slot. A lease the engine does not hold changes nothing.
+     *
+     * It is for work that never ran, such as a slot [acquire] granted that the caller no longer
+     * needs. Work that held the slot, however it ended, settles with [complete] at the time it held
+     * it, as [withSlot] does for a block that throws or is cancelled part-way: a cancel of work that
+     * ran charges nothing, and the lane's siblings pay for the slot time it took.
      */
     public fun cancel(lease: LeaseId): LeaseOutcome = mutate {
         engine.cancel(lease).also { if (it is LeaseOutcome.Done) open.remove(lease) }

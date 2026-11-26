@@ -71,8 +71,10 @@ states the same steps for the replicated version.
 `LocalHeddle.complete` settles a lease against its estimate. When the build took
 less, the remainder goes back up the path as `returned`, and `ev` falls. When it
 took more, the shortfall is handed down first, raising `ev`, and reported as the
-overrun. Then the real cost is charged. `cancel` returns everything. So once a
-build is settled, its team's `ev` reflects exactly the time it used.
+overrun. Then the real cost is charged. `cancel` returns everything, which is
+right for a build that never ran. So once a build is settled, its team's `ev`
+reflects exactly the time it used, as long as a build that ran settles with
+`complete` and never with `cancel`.
 
 ## A team coming back from quiet
 
@@ -200,26 +202,36 @@ the one web's overrun owed it, and then the three-to-one pattern resumes.
   long jobs, large penalises them. This is the bound
   [#3239](https://github.com/tractat-us/kuilt/issues/3239) accepted, and a
   benchmark measures it.
-- **A cancel, and a sibling's refund across a quiet spell.** A lane that goes
+- **A sibling's refund across a quiet spell.** A lane that goes
   quiet with one of its own leases open comes back by the clock, which does not
   read the lane's own `ev`. So when that lease completes under its estimate, the
   refund lowers the lane's `ev` as it would with no quiet spell. On the slot
   probe, over- or under-reserving the job that empties the queue now moves share
-  by nothing measurable. What is left is smaller. A `cancel` charges nothing,
-  with or without a quiet spell, and cancelling that job gains the lane 0.015 to 0.044 of
-  share. And a *sibling's* open lease counts in the clock at the weight of
-  everyone competing, while its refund lands at the weight of whoever is still
-  competing. A lane away across that refund comes back owed a little more than
-  it is. That one is new with the clock: the clamp it replaced brought the lane
-  back level, which got this case exactly right, and the regression was
-  accepted for the bursts the clock fixes. The cancel is tracked by
-  [#3238](https://github.com/tractat-us/kuilt/issues/3238). The refund is part
+by nothing measurable. What is left is smaller. A *sibling's* open lease
+  counts in the clock at the weight of everyone competing, while its refund
+  lands at the weight of whoever is still competing. A lane away across that
+  refund comes back owed a little more than it is. That one is new with the
+  clock: the clamp it replaced brought the lane back level, which got this case
+  exactly right, and the regression was accepted for the bursts the clock
+  fixes. The refund is part
   of the bound [#3239](https://github.com/tractat-us/kuilt/issues/3239)
   accepted: over 54 setups with two lanes under one group, a lane that reserved
   four times the cost of the job that empties its queue cost its honest sibling
   about 0.03 of share on average. The networked
   `HeddleNode` does not take either path: its `complete` keeps an unused
   reservation at the leaf instead of returning it up the path.
+- **Nothing for a job cancelled after it ran.** A `cancel` charges nothing, so
+  it is for work that never ran. Work that held its slot settles with
+  `complete` at the time it took, however it ended. Cancelled after it ran, a
+  job's slot time is free, and its siblings pay for it. Take a lane that never
+  goes quiet and cancels one job in four, beside a sibling of equal weight. It
+  is charged for three jobs of every four, and fair share levels the charges,
+  so it holds 4/7 of the slot time: 0.071 more than its half. The slot probe
+  measures 0.0712. With quiet spells the same cancel gains 0.015 to 0.044, and
+  charging the cancel its reservation takes that to zero, so none of it comes
+  from the quiet spell. How much the lease reserved does not change it. This is
+  the ruling on [#3238](https://github.com/tractat-us/kuilt/issues/3238), not a
+  gap left open.
 - **A ceiling that only the reports meet.** Each child's progress is a count of
   sixteenths of a unit. It is stored exactly, in 128 bits, and a pick compares
   it in 128 bits too, so no fork ever stops picking because a child went far.

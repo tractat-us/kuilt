@@ -303,7 +303,9 @@ check(heddle.complete(byHand.lease.id, actualCost = 4L, waiting = both) == Lease
   charge is corrected at `complete` either way.
 - **`extend`** sets aside more time for a build still running. It is optional:
   `complete` charges an overrun anyway.
-- **`cancel`** closes a lease and charges nothing.
+- **`cancel`** closes a lease for a build that never ran, and charges nothing.
+  A build that ran settles with `complete` at the time it took, even one that
+  failed or was stopped halfway.
 - **`admit`** charges work that started without a pick, such as a build someone
   ran by hand. It is never refused for lack of supply, because the work is already
   running. Pass `waiting` too, and the scheduler sees the queue as a pick would
@@ -560,9 +562,8 @@ was really charged. Three limits come with that promise, stated plainly.
   So a lane that always guesses low looks cheaper while its builds run, and wins
   turns it should not. A lane that always guesses high loses turns the same way.
   The charge is corrected at `complete`, but a pick already made stays made.
-- **A cancel, and a sibling's refund.** A `cancel` charges nothing, so a team
-  that cancels the build ending each of its bursts gains a little share. And say
-  web has a build running that reserved more than it will use when mobile goes quiet. If that
+- **A sibling's refund.** Say web has a build running that reserved more than
+  it will use when mobile goes quiet. If that
   build finishes early while mobile is away, its unused minutes come back to web
   after mobile's place was measured, and mobile returns owed a little more than
   it is. That one came with the clock, and was accepted as the price of fixing
@@ -581,12 +582,18 @@ The last two shrink as estimates get closer to the truth, so:
   meets it. A build that runs past its estimate hands nothing back, so it adds
   nothing either.
 
-Both are known gaps, and so is the cancel. The cancel is tracked by
-[#3238](https://github.com/tractat-us/kuilt/issues/3238). The estimate effect
-and the sibling's refund are the bound
-[#3239](https://github.com/tractat-us/kuilt/issues/3239) accepted and pinned.
+Both are known gaps, and they are the bound
+[#3239](https://github.com/tractat-us/kuilt/issues/3239) accepted, measured by a
+benchmark. The cancel is not a gap: `cancel` is for work that never ran, and
+work that held its slot settles with `complete`.
 [What it does not promise](heddle-local-turns.md#what-it-does-not-promise) gives
 the arithmetic and the measured sizes.
+
+The promise also asks one thing of you: **cancel only a build that never ran.**
+A `cancel` charges nothing, so a build that ran and was then cancelled is free
+time, and the other teams pay for it. A team that is always busy and cancels
+one build in four takes 4/7 of the agents where its share is half. Settle a
+build that ran with `complete` and the time it took, even when it failed.
 
 One more thing before you wire it in: the engine is not thread-safe, so call it
 from one place at a time. [How the next turn is chosen](heddle-local-turns.md)
