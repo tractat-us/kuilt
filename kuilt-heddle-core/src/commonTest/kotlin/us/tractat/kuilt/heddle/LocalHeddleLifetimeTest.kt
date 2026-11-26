@@ -563,7 +563,7 @@ class LocalHeddleLifetimeTest {
             { assertIs<RestoreResult.Restored>(restored, "a snapshot taken while it waits restores") },
             { assertIs<LeaseOutcome.Done>(done) },
             { assertEquals(emptyList(), landed.refusals, "and lands once it settles") },
-            { assertEquals(Lifecycle.RETIRED, h.state().ledger.lifecycle(edge)) },
+            { assertEquals(null, h.state().ledger.lineageOf(a), "a is gone") },
             { assertEquals(emptyList(), h.state().ledger.validate()) },
         )
     }

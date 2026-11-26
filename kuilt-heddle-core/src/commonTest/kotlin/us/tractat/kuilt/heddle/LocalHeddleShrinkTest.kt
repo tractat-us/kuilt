@@ -18,7 +18,9 @@ import kotlin.test.assertTrue
  * which observes the waiting set as that pick did (#3320) and delegates only `h`.
  *
  * A small, fixed set of seeds, each walking a `List` the test built, so each seed walks the same
- * trajectory on every target and the whole class runs in well under a second.
+ * trajectory on every target. The runs are exact fingerprints, so they run on every target. They
+ * are most of the class's time, a fraction of a second on the JVM and several seconds on
+ * Kotlin/Native, so the oracle computes them once and only the leaf-only control computes them again.
  */
 class LocalHeddleShrinkTest {
 
@@ -182,6 +184,10 @@ class LocalHeddleShrinkTest {
         return Run(divergence = null, shrinks, clamped, seated, snapshots)
     }
 
+    /**
+     * The oracle over every seed, and every snapshot taken after one of its shrinks decodes. One
+     * test rather than two, since the runs are the class's whole cost: computed once, not twice.
+     */
     @Test
     fun aShrinkStraightAfterAPickLeavesWhatAnAdmitAtTheSmallerSizeLeaves() {
         val runs = SEEDS.map { twins(it, LocalHeddle::shrink) }
@@ -192,14 +198,6 @@ class LocalHeddleShrinkTest {
             { assertTrue(runs.all { it.shrinks >= 5 }, "shrinks per seed: ${runs.map { it.shrinks }}") },
             { assertTrue(runs.sumOf { it.clamped } > 0, "shrinks whose pick clamped a waker: ${runs.map { it.clamped }}") },
             { assertTrue(runs.sumOf { it.seated } > 0, "shrinks whose pick seated a newborn: ${runs.map { it.seated }}") },
-        )
-    }
-
-    @Test
-    fun everySnapshotTakenAfterAShrinkDecodes() {
-        val runs = SEEDS.map { twins(it, LocalHeddle::shrink) }
-        assertAll(
-            { assertTrue(runs.sumOf { it.shrinks } > 0, "the rig: shrinks landed") },
             { assertEquals(runs.map { it.shrinks }, runs.map { it.snapshots }, "snapshots that decoded, against shrinks taken") },
         )
     }
@@ -302,7 +300,7 @@ class LocalHeddleShrinkTest {
             { assertEquals(listOf(open), draining.blockingLeases, "naming the lease") },
             { assertIs<LeaseOutcome.Done>(done) },
             { assertEquals(emptyList(), landed.refusals, "and lands once it settles") },
-            { assertEquals(Lifecycle.RETIRED, h.snapshot().ledger.lifecycle(edge)) },
+            { assertEquals(null, h.snapshot().ledger.lineageOf(a), "a is gone") },
             { assertTrue(decodes(h), "the snapshot after it decodes") },
         )
     }
