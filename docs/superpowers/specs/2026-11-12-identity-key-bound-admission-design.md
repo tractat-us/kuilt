@@ -212,6 +212,8 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     - Decided 18 stands. A bystander can take a *partitioned* member's id on a fabric with
       self-chosen peer ids, and *What this protects against* now says so. Seat-decision rule 3 is
       unchanged. Closing the gap needs channel binding, which is tracked separately.
+      *Proposed correction (Decided 33):* channel binding does not close this gap; only a change to
+      rule 3, or ids a peer cannot choose, does.
     - Gate finding I1: the Hello gate (and the Proof-time check, for a Hello challenged before the takeover) answers a Hello under a superseded id and its superseded key
       with a `Reject` naming it (`answers` = its nonce) under a new terminal code, instead of
       `Farewell(supersededBy)`. The joiner already honours a named `Reject` before admission. It
@@ -219,6 +221,90 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
       wire, so it lands before v0.7.7.
     - The public `MemberIdentity.dedupKey` is deleted. Nothing in kuilt or its known consumers
       reads it, and naming a device is `Member.key`'s job.
+
+33. **Proposed, awaiting Iain (#3696): channel binding does not stop a partitioned id being taken.
+    The partitioned-id gap is a property of Decided 18, and the binding is deferred.**
+    - **Why a binding cannot close it.** A channel binding ties a proof to the link it travelled
+      over, so a proof made on one link cannot be replayed on another. The bystander in Decided 32 does
+      not replay anything. It opens its own link and signs its own proof under its own key, so it
+      binds its own link honestly. What tells it apart from the victim is the key alone. Decided 18
+      deliberately lets a new key take a partitioned id, so that a device whose key store was cleared
+      keeps its durable peer id. From the host's side, that device and a bystander look the same. A
+      binding leaves rule 3 exactly as it is.
+    - **What would close it, all three Iain's call:**
+      - **A. Keep Decided 18 and the stated gap (recommended for closing the epic).** The gap is
+        pinned by a test that reds when anyone closes it (slice 33.1). An app names a device by
+        `Member.key`, which the cookbook already teaches.
+      - **B. Refuse a different key, retryably, while the id's seat is held** (#3662 option 2).
+        That was declined on 2026-11-25 because a cleared-store device then waits out the hold. That
+        reason still holds.
+      - **C. The id's previous key wins it back.** When Decided 18 releases a seat, the new seat
+        records the key it took the id from. A later Proof under that key, against the connected
+        taker, supersedes the taker instead of being refused `KeyConflict`. The victim always gets
+        back in, and a bystander can squat only while the victim is partitioned. #3662 set this
+        aside for "its own race against a legitimate cleared-store device". That race needs the
+        cleared key to come back, which a this-device-only store cannot do, short of restoring a
+        JVM key file from backup. So the reason is weaker than it looked. The cost is telling the
+        taker why it was ended, which is a wire change: a v10 step, and a breaking one after v0.7.7.
+    - **Which fabrics could supply a binding.** It would close only the *active relay* row of the
+      threat section, and only where the joiner can read a value the host computes too. Read from
+      the API surface, not probed:
+
+      | Fabric | Binding | Cost |
+      |---|---|---|
+      | WebSocket over TLS, when the room host terminates TLS | `tls-server-end-point` (SHA-256 of the host's certificate, RFC 5929) from the joiner's trust manager. A TLS exporter is out of reach: no Ktor client engine kuilt uses hands one to the caller, and no browser does | JVM, Android and Darwin clients only, after #3157 / PR #3162. A browser client and a host relayed through someone else's server get none |
+      | `kuilt-nw` | A TLS-1.2 PSK exporter (`sec_protocol_metadata_create_secret`) exists, and is **worthless** here: every member holds the room key the PSK comes from, and the suite has no ephemeral exchange. A member acting as relay can pass both handshakes through, so both legs export the same secret | none worth building |
+      | Nearby | `ConnectionInfo`'s raw authentication token, the same on both ends of the UKEY2 exchange | cheap, Android only |
+      | WebRTC (wasmJs) | SHA-256 of both DTLS fingerprints, sorted, read from the local and remote SDP | cheap |
+      | Multipeer, TCP, in-memory | none: no API, plaintext, no channel | none |
+
+    - **A fabric with no binding stays unbound, and the threat section says so per fabric.** A
+      refusal would lock out every Multipeer, TCP and browser-WebSocket member. If a binding is
+      built, the host must learn *whether* a link can be bound from the fabric, never from the proof.
+      A proof that may carry an empty field is a downgrade any relay can choose.
+    - **If built, field 6 of `kuilt/admit-proof` carries a one-byte kind followed by the value,**
+      which each side derives on its own from its own end of the link. Today's `decode` refuses a
+      non-empty field, so this is a `ProtocolVersion` step whenever it lands. Nothing done before
+      v0.7.7 makes it cheaper: a host that checks bindings must refuse an empty field on a fabric
+      that can supply one, so every older joiner is refused anyway.
+    - Channel binding moves to § Deferred, with a reopen trigger. `kuilt-identity/module.md` on `main`
+      still quotes the pre-Decided-32 text ("cannot … lock out another member", and `kuilt-nw`'s PSK
+      as a remedy). Slice 33.2 corrects it.
+
+34. **Proposed, awaiting Iain (#3727): the host lets a device back in on the last pass it issued,
+    delivered or not. No ack, no new field, and `ProtocolVersion` stays 9.**
+    - **The loss is narrower than #3727 says.** `Seam` delivers in send order. On a link that loses
+      no frame and then delivers a later one, a renewal is lost only when nothing sent after it
+      arrives. So the device's last contact comes before that renewal was sent, and the pass before
+      it has more than `readmitFor` left at that contact. The pass issued at `t`, with the next
+      renewal due at `t + readmitFor / 2`, ends at `t + 1.5 × readmitFor`, so more than `readmitFor`
+      is left at any contact before `t + readmitFor / 2`. The floor dips only where a frame can be
+      lost while later ones still arrive, so the device stays in touch on an older pass. The `Seam`
+      contract does not rule that out, and a bonded seam that loses a ply with frames in flight is
+      the in-tree candidate (not measured). In that case the floor can fall to `readmitFor / 2`.
+    - **An ack cannot fix the case that matters.** It tells the host a renewal was lost, but over a
+      link that has died the host can send nothing until the device comes back. By then the remedy
+      is the same as with no ack: honour what the host knows it issued. The same objection applies to
+      inferring delivery from a later frame, and there is no periodic joiner-to-host admit frame to
+      carry an issued-at. Putting one in heartbeats would tie `:kuilt-liveness` to the session.
+    - **The rule.** The departed-member record (*Membership and the wire*) keeps the last pass the host
+      *signed* for that membership, the `Grant` itself, not only its `notAfter`. With several tabs it
+      keeps whichever pass runs out later. A Proof whose key holds no seat counts as holding a valid
+      grant when the key presents one, *or* when the record's pass for that proven key passes
+      `GrantTrust.verify(recorded, provenKey, roomId, now)`: the same checks in the same order,
+      revocation and expiry included. When both are valid, the more generous one wins, as today.
+      The device must still prove its key, so the record is no use to anyone else. It never
+      lengthens a pass: it honours a pass the host had already signed.
+    - **The residue, stated.** The record lives in the host's memory. After a host restart, or once
+      256 later departures have pushed it out, the device's own pass is all there is. So a renewal
+      lost while later frames still arrive can lower the floor only across a host restart. #3717's
+      retries stay: they cover a renewal that fails to sign, and a device that will next meet a
+      restarted host.
+    - **Timing: after v0.7.7 (recommended).** Nothing changes on the wire, so an old host and a new
+      joiner, or the reverse, interoperate, and the change can ship in any patch. With three days to
+      the tag, a seat-decision change that needs a review is not worth the hurry. An ack would be a
+      v10 step, which after v0.7.7 refuses every v0.7.7 peer. That is the other reason it is
+      rejected.
 
 ## Goals
 
