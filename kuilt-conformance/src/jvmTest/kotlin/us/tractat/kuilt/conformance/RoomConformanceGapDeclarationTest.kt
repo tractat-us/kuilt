@@ -11,7 +11,7 @@ import kotlin.test.assertFailsWith
 import kotlin.time.Instant
 
 /**
- * Runs [RoomConformanceSuite]'s five fault-injection-gated obligations, and its fourteen return rows, against a harness that
+ * Runs [RoomConformanceSuite]'s five fault-injection-gated obligations, and its nineteen return rows, against a harness that
  * declares [RoomConformanceSuite.FaultInjection.Unsupported] — **the first time in this suite's
  * life that its skip path has been executed at all** (#2306).
  *
@@ -27,7 +27,7 @@ import kotlin.time.Instant
  *  - a **blank** tracking URL fails every gated obligation — this is the one runtime hole the sealed
  *    fixture leaves, since `Unsupported("")` is the only way left to write a declaration that
  *    declares nothing;
- *  - a **real** tracking URL lets all nineteen skip cleanly, which is the survivability check above.
+ *  - a **real** tracking URL lets all twenty-four skip cleanly, which is the survivability check above.
  *
  * ## Why `jvmTest` and not `commonTest`
  *
@@ -137,17 +137,22 @@ class RoomConformanceGapDeclarationTest {
             { assertFailsWith<AssertionError> { suite.returnInsideGrantNoVetting() } },
             { assertFailsWith<AssertionError> { suite.expiredGrantIsVetted() } },
             { assertFailsWith<AssertionError> { suite.revokedSubjectIsVetted() } },
+            { assertFailsWith<AssertionError> { suite.aPlantedGoodPassLetsTheDeviceInUnvetted() } },
+            { assertFailsWith<AssertionError> { suite.grantForAnotherRoomIsIgnored() } },
+            { assertFailsWith<AssertionError> { suite.grantForAnotherSubjectIsIgnored() } },
+            { assertFailsWith<AssertionError> { suite.untrustedIssuerIsIgnored() } },
+            { assertFailsWith<AssertionError> { suite.aProcessUnderASupersededIdEndsSuperseded() } },
         )
     }
 
     // ── A declared gap skips cleanly — the survivability half ──
 
     /**
-     * All nineteen gated obligations skip without throwing, without hanging and without leaking a
+     * All twenty-four gated obligations skip without throwing, without hanging and without leaking a
      * coroutine, so a harness that genuinely cannot partition its links can still subclass this
-     * suite. Deliberately **one** test over all nineteen rather than nineteen: what is under assertion is
+     * suite. Deliberately **one** test over all twenty-four rather than twenty-four: what is under assertion is
      * that the declared-gap path is survivable as a whole, and a per-obligation split would report
-     * nineteen identical greens for one property.
+     * twenty-four identical greens for one property.
      *
      * Note what this cannot do: it cannot tell a harness that *truly* cannot fault-inject from one
      * that could and declared otherwise. Nothing at this layer can — the declaration is a claim
@@ -176,6 +181,56 @@ class RoomConformanceGapDeclarationTest {
         suite.returnInsideGrantNoVetting()
         suite.expiredGrantIsVetted()
         suite.revokedSubjectIsVetted()
+        suite.aPlantedGoodPassLetsTheDeviceInUnvetted()
+        suite.grantForAnotherRoomIsIgnored()
+        suite.grantForAnotherSubjectIsIgnored()
+        suite.untrustedIssuerIsIgnored()
+        suite.aProcessUnderASupersededIdEndsSuperseded()
+    }
+
+    // ── The forging hooks inside a supported return rig (#3710) ──
+
+    /**
+     * A suite whose return rig is the reference, so [ReturnFixture.Supported], but whose two forging
+     * hooks are declared gaps with [trackingUrl]: the shape of a harness over a real fabric that can
+     * drop and heal its links but cannot rewrite a Proof or choose a process's peer id.
+     */
+    private fun forgingUnsupported(trackingUrl: String): RoomConformanceSuite =
+        object : RoomConformanceSuite() {
+            override fun newReturnHarness(scope: TestScope): ReturnFixture = ReturnFixture.Supported(
+                scope.referenceReturnHarness(
+                    passPlanting = { PassPlanting.Unsupported(trackingUrl) },
+                    reusedIdLaunch = { ReusedIdLaunch.Unsupported(trackingUrl) },
+                ),
+            )
+        }
+
+    /** A blank declaration of either forging hook fails each row it gates, as a blank [ReturnFixture] does. */
+    @Test
+    fun blankTrackingUrlFailsEveryForgingRow() {
+        val suite = forgingUnsupported("")
+        assertAll(
+            { assertFailsWith<AssertionError> { suite.aPlantedGoodPassLetsTheDeviceInUnvetted() } },
+            { assertFailsWith<AssertionError> { suite.grantForAnotherRoomIsIgnored() } },
+            { assertFailsWith<AssertionError> { suite.grantForAnotherSubjectIsIgnored() } },
+            { assertFailsWith<AssertionError> { suite.untrustedIssuerIsIgnored() } },
+            { assertFailsWith<AssertionError> { suite.aProcessUnderASupersededIdEndsSuperseded() } },
+        )
+    }
+
+    /**
+     * A tracked declaration of both hooks skips the five rows they gate without throwing, hanging or
+     * leaking a coroutine, inside a return rig that is otherwise supported: the rows gate on the hook
+     * before they build a room.
+     */
+    @Test
+    fun aDeclaredForgingGapSkipsItsRowsCleanly() {
+        val suite = forgingUnsupported(tracked)
+        suite.aPlantedGoodPassLetsTheDeviceInUnvetted()
+        suite.grantForAnotherRoomIsIgnored()
+        suite.grantForAnotherSubjectIsIgnored()
+        suite.untrustedIssuerIsIgnored()
+        suite.aProcessUnderASupersededIdEndsSuperseded()
     }
 
     // ── The ungated obligations are unaffected by the declaration ──
