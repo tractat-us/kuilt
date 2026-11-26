@@ -401,9 +401,8 @@ class HeddleAcceptanceTest {
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val run = restartRun(callsBefore = RESTART_CALLS_BEFORE, callsAfter = RESTART_CALLS_AFTER, runnerSpendsAll = false)
-        // The runner's weight is 1 and the idle child's 60 (the rig's lanes).
-        val clampedGap = (run.lightLevel - Rational.of(run.lightIssuedAtBoot)) -
-            (run.idleLevel - Rational.of(run.idleIssuedAtBoot, 60L))
+        val clampedGap = (run.lightLevel - run.lightWeight.levelOf(run.lightIssuedAtBoot)) -
+            (run.idleLevel - run.idleWeight.levelOf(run.idleIssuedAtBoot))
         assertAll(
             *run.ranAndConserved(),
             { assertTrue(run.lightOutstandingBefore > LEVEL_SLACK, "the rig: the runner crashed holding more than the level slack: ${run.lightOutstandingBefore}") },
@@ -429,6 +428,9 @@ class HeddleAcceptanceTest {
         /** What the boot call issued the idle child, and the runner. */
         val idleIssuedAtBoot: Long,
         val lightIssuedAtBoot: Long,
+        /** The two lanes' configured weights, which turn what the boot call issued into a level. */
+        val idleWeight: Weight,
+        val lightWeight: Weight,
         val idleLevel: Rational,
         val lightLevel: Rational,
         val boundAtBoot: BoundMetrics,
@@ -487,7 +489,7 @@ class HeddleAcceptanceTest {
         cluster.pump()
         val settledBefore = cluster.peers[0].node.ledger.value
         val idleIssuedBefore = first.ledger.value.edge(idle.id)?.issued ?: 0L
-        val lightOutstandingBefore = first.ledger.value.edge(light.id)?.outstanding ?: 0L
+        val lightOutstandingBefore = checkNotNull(first.ledger.value.edge(light.id)) { "the runner has an edge on the first scheduler" }.outstanding
 
         cluster.restart(1)
         val restarted = cluster.peers[1]
@@ -537,6 +539,8 @@ class HeddleAcceptanceTest {
             atBoot = atBoot,
             idleIssuedAtBoot = issuedAtBoot[0],
             lightIssuedAtBoot = issuedAtBoot[1],
+            idleWeight = idle.weight,
+            lightWeight = light.weight,
             idleLevel = idleLevel,
             lightLevel = lightLevel,
             boundAtBoot = boundAtBoot,
@@ -545,6 +549,9 @@ class HeddleAcceptanceTest {
             shortfall = merged.conservationShortfall(root, cluster.everyReplica),
         )
     }
+
+    /** What [issued] units move a child of this weight by: units over weight. */
+    private fun Weight.levelOf(issued: Long): Rational = Rational.of(issued * denominator, numerator)
 
     /** Whether this ledger holds [light]'s whole run from [settled]. */
     private fun EntitlementLedger.caughtUpWith(settled: EntitlementLedger, light: AttachmentRecord): Boolean =
