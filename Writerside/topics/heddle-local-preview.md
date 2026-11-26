@@ -73,8 +73,9 @@ proof that asking moved nothing.
 
 Each pick here does what a typical loop does. It leases an agent at the
 default estimate, then stretches it with `extend` to the winner's own
-estimate. So the default decides who wins each pick, and the twelve minutes
-count against web from then on.
+estimate. A shorter estimate is trimmed with `shrink` instead. So the default
+decides who wins each pick, and the twelve minutes count against web from
+then on.
 
 ## On a screen with no engine
 
