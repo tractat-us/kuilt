@@ -31,7 +31,7 @@ class AndroidKeystoreBackendDeviceTest {
 
     @AfterTest
     fun deleteTheKey() {
-        AndroidKeystoreBackend.delete(alias)
+        KeystoreFaults.deleteTolerantly(alias)
     }
 
     /**

@@ -36,7 +36,7 @@ class KeystoreFaultDeviceTest {
     @AfterTest
     fun cleanUp() {
         if (DeviceShell.hasRoot) KeystoreFaults.startKeystore()
-        AndroidKeystoreBackend.delete(alias)
+        KeystoreFaults.deleteTolerantly(alias)
         directory.deleteRecursively()
     }
 
@@ -67,8 +67,13 @@ class KeystoreFaultDeviceTest {
     /**
      * The Keystore daemon stopped. On Android 12 and later `getKey` throws; on Android 11 and earlier it
      * answers "no key" ([KeystoreBackend]'s claim, read from AOSP), and only the store's marker tells that
-     * from a first launch. Either way the store throws, makes no key, and has the same key once the
-     * daemon is back.
+     * from a first launch. Either way the store throws, makes no key, and the key is still held.
+     *
+     * Once the daemon is back, Android 12 and later reconnect and the same key reads in this process.
+     * Android 11 does not: measured on an emulator, this process's Keystore binder stays dead
+     * (`DeadObjectException` on every call, so `getKey` keeps answering no key) until the app restarts.
+     * There the row checks the key is still on disk instead, and the rows after it in this process can
+     * reach no Keystore at all, which is why every cleanup here tolerates a failed delete.
      */
     @Test
     fun aStoppedKeystoreIsRefusedNotReplaced() = runTest {
@@ -79,19 +84,26 @@ class KeystoreFaultDeviceTest {
         var made = 0
         val during = outcomeOf { store { made++ }.deviceKey().id }
         KeystoreFaults.startKeystore()
-        val after = store().deviceKey().id
-        record("stopped keystore", "getKey=${getKey.describe()} getCertificate=${getCertificate.describe()} store=$during")
+        val after = outcomeOf { store().deviceKey().id }
+        val onDisk = KeystoreFaults.keyBlobExists(alias)
+        record(
+            "stopped keystore",
+            "getKey=${getKey.describe()} getCertificate=${getCertificate.describe()} store=${during.describe()} " +
+                "after=${after.describe()} blobOnDisk=$onDisk",
+        )
+        val reconnects = Build.VERSION.SDK_INT > AndroidKeystoreDeviceKeyStore.LAST_API_WHERE_GET_KEY_HIDES_FAILURE
         assertAll(
             {
-                if (Build.VERSION.SDK_INT <= AndroidKeystoreDeviceKeyStore.LAST_API_WHERE_GET_KEY_HIDES_FAILURE) {
-                    assertEquals(Outcome.Returned(null), getKey, "on Android 11 and earlier getKey answers no key")
-                } else {
+                if (reconnects) {
                     assertIs<Outcome.Threw>(getKey, "on Android 12 and later getKey throws")
+                } else {
+                    assertEquals(Outcome.Returned(null), getKey, "on Android 11 and earlier getKey answers no key")
                 }
             },
             { assertIs<Outcome.Threw>(during, "the store throws while the Keystore is down") },
             { assertEquals(0, made, "and makes no key") },
-            { assertEquals(original, after, "and has the same key once it is back") },
+            { assertTrue(onDisk, "the key is still held") },
+            { if (reconnects) assertEquals(Outcome.Returned(original), after, "and reads again once the Keystore is back") },
         )
     }
 

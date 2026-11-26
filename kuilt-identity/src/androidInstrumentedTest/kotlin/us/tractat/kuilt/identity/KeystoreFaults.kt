@@ -6,7 +6,9 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assume.assumeTrue
+import android.util.Log
 import java.security.KeyPairGenerator
+import java.security.KeyStoreException
 import java.security.spec.ECGenParameterSpec
 import java.util.concurrent.atomic.AtomicReference
 
@@ -51,6 +53,33 @@ internal object KeystoreFaults {
         }
         check(out.contains(if (keystore2) "\n1" else "file=${DeviceShell.uid}_USRPKEY_")) { "rig: the key blob under $alias was not found to corrupt: $out" }
         return out
+    }
+
+    /** Whether the Keystore still holds a key blob under [alias], read off its storage as root. */
+    fun keyBlobExists(alias: String): Boolean {
+        val out = if (keystore2) {
+            DeviceShell.asRoot(
+                """
+                sqlite3 /data/misc/keystore/persistent.sqlite "SELECT count(*) FROM blobentry b JOIN keyentry k ON b.keyentryid=k.id WHERE k.alias='$alias' AND k.namespace=${DeviceShell.uid} AND b.subcomponent_type=0;"
+                """.trimIndent(),
+            )
+        } else {
+            DeviceShell.asRoot("ls /data/misc/keystore/user_0/ | grep '^${DeviceShell.uid}_USRPKEY_' | grep -c '${alias.takeLast(SUFFIX)}'")
+        }
+        return (out.trim().lines().lastOrNull()?.toIntOrNull() ?: 0) > 0
+    }
+
+    /**
+     * Deletes [alias] in a test's cleanup, logging rather than throwing when the Keystore cannot: after a
+     * stopped daemon on Android 11 this process reaches no Keystore at all, and a throwing cleanup would
+     * fail every row after it for the rig's sake rather than its own.
+     */
+    fun deleteTolerantly(alias: String) {
+        try {
+            AndroidKeystoreBackend.delete(alias)
+        } catch (e: KeyStoreException) {
+            Log.w("kuilt-identity-device", "cleanup: could not delete $alias: ${e.describeChain()}")
+        }
     }
 
     /** Stops the Keystore daemon, and waits until init reports it stopped. */

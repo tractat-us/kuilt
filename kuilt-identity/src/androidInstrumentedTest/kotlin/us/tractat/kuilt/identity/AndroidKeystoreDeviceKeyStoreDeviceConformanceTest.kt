@@ -51,7 +51,7 @@ class AndroidKeystoreDeviceKeyStoreDeviceConformanceTest : DeviceKeyStoreConform
     @AfterTest
     fun cleanUp() {
         if (DeviceShell.hasRoot) KeystoreFaults.startKeystore()
-        aliases.forEach(AndroidKeystoreBackend::delete)
+        aliases.forEach(KeystoreFaults::deleteTolerantly)
         directories.forEach { it.deleteRecursively() }
     }
 
