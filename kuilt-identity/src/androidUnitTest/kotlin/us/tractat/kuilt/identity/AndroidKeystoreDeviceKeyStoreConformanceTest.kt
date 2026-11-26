@@ -38,7 +38,8 @@ import java.util.UUID
  * because a JVM unit test has no `AndroidKeyStore` provider and Robolectric does not shadow one. The
  * Keystore exceptions are the framework's own classes, built as AOSP builds them ([AospKeystore]). It
  * does **not** run the real Keystore: [AndroidKeystoreBackend], the key it generates, and which exception
- * a real Keystore throws for each fault are covered by no automated test in this repo.
+ * a real Keystore throws for each fault are covered only by `androidInstrumentedTest`, which needs a
+ * device or an emulator and runs in no PR build (`:kuilt-identity:connectedDebugAndroidTest`).
  *
  * Each damage hook leaves the fake Keystore as that failure leaves the real one, per AOSP's source:
  *

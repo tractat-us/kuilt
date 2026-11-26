@@ -16,20 +16,26 @@ import java.security.spec.ECGenParameterSpec
  * has no `AndroidKeyStore` provider, so this is the seam a fake stands in at.
  *
  * Each member answers exactly as its JCA call does, including where that call hides a failure. The
- * store's correctness rests on knowing which those are (read from AOSP, not measured on a device):
+ * store's correctness rests on knowing which those are. They were read from AOSP and then measured on
+ * emulators running Android 11, 14 and 16, by `androidInstrumentedTest` (#3226); emulators keep keys in
+ * software, so a phone's TEE or StrongBox may answer differently where KeyMint itself answers:
  *
  * - [getKey] is `KeyStore.getKey(alias, null)`. On Android 12 and later (keystore2) it returns `null`
- *   only when the Keystore answered `KEY_NOT_FOUND`, and throws `UnrecoverableKeyException` for every
- *   other failure, with the `android.security.KeyStoreException` as its cause — except a key the
- *   Keystore calls permanently invalidated, rethrown with no cause, and an EC key with no certificate,
- *   also no cause. **On Android 11 and earlier it returns `null` when the Keystore fails too**: it first
- *   asks a yes/no "is it there?", which answers "no" on an error. No JCA call there tells an absent key
- *   from a Keystore that did not answer.
+ *   when the Keystore answered `KEY_NOT_FOUND` (measured: also when the key's blob row alone is gone),
+ *   and throws `UnrecoverableKeyException` for the other failures it sees, with the
+ *   `android.security.KeyStoreException` as its cause — except a key the Keystore calls permanently
+ *   invalidated, rethrown with no cause, and an EC key with no certificate, also no cause. **A stopped
+ *   keystore2 is none of these**: measured on Android 14, `getKey` throws a bare `NullPointerException`
+ *   (the service lookup returned `null`), with no `KeyStoreException` anywhere in it. A key blob it
+ *   cannot decrypt is not seen here at all; it loads, and fails only when it signs. **On Android 11 and
+ *   earlier it returns `null` when the Keystore fails too**: it first asks a yes/no "is it there?",
+ *   which answers "no" on an error. Measured on Android 11: a stopped daemon answers `null`. No JCA call
+ *   there tells an absent key from a Keystore that did not answer.
  * - [getCertificatePublicKey] is `KeyStore.getCertificate(alias)?.publicKey`, which returns `null` both
  *   when there is no certificate and when the Keystore fails: keystore2 catches every
  *   `android.security.KeyStoreException` and returns `null`. So a `null` here never proves the
- *   certificate is gone. Anything else it throws — a runtime exception from a dead keystore2 binder —
- *   escapes, which the store reads as a failure and so keeps the key.
+ *   certificate is gone. Anything else it throws escapes — measured on Android 14, a stopped keystore2
+ *   throws the same `NullPointerException` here — which the store reads as a failure and so keeps the key.
  *
  * Deliberately without any member that returns a private key or its bytes: the store reaches the key
  * only as a [KeystoreSigner], so nothing it holds can export the key.

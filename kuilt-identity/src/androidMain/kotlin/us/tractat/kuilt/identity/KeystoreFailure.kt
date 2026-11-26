@@ -74,7 +74,12 @@ internal const val KEYSTORE_EXCEPTION_API: Int = 33
 private val KEY_SPECIFIC_CODES = setOf(6, 7)
 
 /**
- * Decided 29, as AOSP's Keystore reports failures (read from source, not measured on a device):
+ * Decided 29, as AOSP's Keystore reports failures: read from source, then measured on software-backed
+ * emulators (#3226). A key blob of random bytes signs into code 10, `INVALID_KEY_BLOB`, so it waits out
+ * the hour; deleting a key's metadata rows answers code 7; a stopped keystore2 throws a bare
+ * `NullPointerException`, of unknown cause. A corrupted blob-metadata row answers `SYSTEM_ERROR`
+ * ("Failed to load key blob"), which is [FailureVerdict.Keep] — damage that this rule reads as the
+ * Keystore's own trouble, so a key damaged that way is never replaced.
  *
  * - **`KeyPermanentlyInvalidatedException`, on any version:** the Keystore's verdict that the key will
  *   never sign again. [FailureVerdict.Replace].
