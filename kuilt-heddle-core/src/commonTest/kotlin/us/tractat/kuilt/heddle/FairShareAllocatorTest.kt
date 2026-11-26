@@ -162,10 +162,9 @@ class FairShareAllocatorTest {
      * another scheduler, or before a restart, keep the whole gap as credit. Losing its lag once per
      * allocator that first sees it is the bounded side (§10.6, #3472).
      *
-     * e1 spends what it was granted before A's call. A clamped waker is counted past the front by
-     * its outstanding (#3721), so an e1 still holding its 100 would be clamped 100 past itself, and
-     * e3 would take all 100 of A's units, as an unclamped e3 would: the rig could not tell the two
-     * apart.
+     * e1 spends what it was granted before A's call. The clamp counts what a waker holds, past the
+     * front (#3721), so this rig empties e1 to isolate the front: what the clamp does with e1's
+     * holdings is [aFirstObservationOfAFrontChildStillHoldingItsGrantsLeavesItsSiblingThatGap].
      *
      * The node-level twin is `HeddleNodeTest.aFirstObservationOfASeatedDemandingEdgeIsAWake`.
      */
@@ -177,8 +176,7 @@ class FairShareAllocatorTest {
         val e3 = newborn(onB, "e3")
         val filledAt60 = Demand(targetOutstanding = 60L, maximumUsefulGrant = 10L)
         FairShareAllocator(b, policy).schedule(root, onB, earmarked = 0L, demandOf(e1 to hungry, e2 to filledAt60))
-        // e1's work runs: a clamp counts what a waker still holds past the front (#3721), and the
-        // rig is about the front, so e1 holds nothing.
+        // e1's work runs: the clamp counts holdings (#3721), so this rig empties e1 to isolate the front.
         onB.apply(onB.current.spend(b, g1, 100L))
         val onA = InMemoryLedgerCell(onB.current)
         assertAll(
@@ -192,6 +190,94 @@ class FairShareAllocatorTest {
         assertAll(
             { assertEquals(50L, issued(onA, e3), "e3, first seen demanding, is clamped level with e1 and takes half") },
             { assertEquals(150L, issued(onA, e1), "and e1 takes the other half") },
+        )
+    }
+
+    /**
+     * [aFirstObservationOfASeatedDemandingChildIsAWake] with e1 still holding its 100: the clamp's
+     * known error, pinned (#3721, ruling 3). e1 is the front, and a waker lands past the front by
+     * what its edge has outstanding, so e1 is clamped 100 past itself and e3 to the front, 100
+     * behind it. e3 then takes all 100 of A's units: e1 100, e3 100.
+     *
+     * An allocator that had watched B's run, where e3 idled while e1 was granted, would not clamp
+     * e1 at all and would read 150/50. One that had watched e3 compete for those 100 would leave
+     * the gap. A first sighting cannot tell the two histories apart, and this clamp takes the first:
+     * e3 keeps exactly e1's outstanding of lag, the bound the clamp promises
+     * (`FairShareAllocator`'s *Two histories*). The other choice, clamping e1 by less, credits a
+     * holder its unspent grants, which #3238 ruled out.
+     */
+    @Test
+    fun aFirstObservationOfAFrontChildStillHoldingItsGrantsLeavesItsSiblingThatGap() {
+        val a = ReplicaId("a")
+        val b = ReplicaId("b")
+        val onB = flatLedger(mapOf(a to 100L, b to 160L))
+        val e3 = newborn(onB, "e3")
+        val filledAt60 = Demand(targetOutstanding = 60L, maximumUsefulGrant = 10L)
+        FairShareAllocator(b, policy).schedule(root, onB, earmarked = 0L, demandOf(e1 to hungry, e2 to filledAt60))
+        val onA = InMemoryLedgerCell(onB.current)
+        val held = assertNotNull(onA.current.edge(e1)).outstanding
+        assertAll(
+            { assertEquals(100L, issued(onA, e1), "A sees e1's run") },
+            { assertEquals(100L, held, "the rig: and e1 holds all of it") },
+            { assertEquals(gaugeOfUnits(0L, 0L), onA.current.gauge(e3), "and e3 seated at the origin, 100 behind") },
+        )
+
+        val allocator = FairShareAllocator(a, policy)
+        allocator.schedule(root, onA, earmarked = 0L, demandOf(e1 to hungry, e3 to hungry))
+        val offsets = allocator.memory.wakeOffsets
+        assertAll(
+            { assertEquals(100L, issued(onA, e3), "e3 takes all of A's units, where kept memory gives it 50") },
+            { assertEquals(100L, issued(onA, e1), "and e1 none, where kept memory gives it 150") },
+            { assertEquals(Int128.of(held * TICKS_PER_UNIT), offsets[e1], "e1 is clamped past itself by exactly its outstanding") },
+            {
+                assertEquals(
+                    Int128.of(100L * TICKS_PER_UNIT),
+                    offsets[e3],
+                    "and e3 to the front, so the gap it keeps is e1's outstanding, no more",
+                )
+            },
+        )
+    }
+
+    /**
+     * The clamp's floor (`max(0, outstanding)`, #3721): a waker whose edge reads a negative
+     * outstanding is clamped to the front, never below it. [EdgeSummary] allows one transiently:
+     * a spend can merge before the delegation it spent.
+     *
+     * B runs e1 to 20 and e2 to 60 and spends both, then delegates 10 more down e1 and spends them.
+     * A merges B's ledger as it stood before that delegation, and then the spend alone, so A reads
+     * e1 at 20, outstanding −10. A has never seen either child, so both are joiners and the front
+     * is e2, the furthest ahead, at 60. e1 lands there: 40 units past its raw 20. Without the floor
+     * it would land 10 below the front, at 30 past.
+     *
+     * Both demands are competing but unservable, so the round grants nothing and keeps only what it
+     * observed: the clamps, read straight from the memory.
+     */
+    @Test
+    fun aWakerWhoseEdgeReadsANegativeOutstandingIsClampedToTheFrontNotBelowIt() {
+        val b = ReplicaId("b")
+        val onB = flatLedger(mapOf(b to 100L))
+        FairShareAllocator(b, policy).schedule(root, onB, earmarked = 0L, demandOf(e1 to Demand(20L, 10L), e2 to Demand(60L, 10L)))
+        onB.apply(onB.current.spend(b, g1, 20L))
+        onB.apply(onB.current.spend(b, GroupId("g2"), 60L))
+        val beforeTheDelegation = onB.current
+        onB.apply(onB.current.delegate(b, e1, 10L))
+        val theSpend = assertNotNull(onB.current.spend(b, g1, 10L), "B spends the 10 it delegated")
+        val onA = InMemoryLedgerCell(beforeTheDelegation)
+        onA.merge(theSpend.delta)
+        assertAll(
+            { assertEquals(20L, issued(onA, e1), "the rig: A has not seen the delegation") },
+            { assertEquals(-10L, assertNotNull(onA.current.edge(e1)).outstanding, "the rig: but has seen its spend, so e1 reads −10") },
+            { assertEquals(60L, issued(onA, e2), "the rig: e2, the front, at 60") },
+            { assertEquals(0L, assertNotNull(onA.current.edge(e2)).outstanding, "the rig: holding nothing, so it is not moved past itself") },
+        )
+
+        val allocator = FairShareAllocator(ReplicaId("a"), policy)
+        val outcome = allocator.schedule(root, onA, earmarked = 0L, demandOf(e1 to competingUnservable, e2 to competingUnservable))
+        assertAll(
+            { assertEquals(AllocationOutcome.NothingToDelegate, outcome, "the rig: the round grants nothing") },
+            { assertEquals(Int128.of(40L * TICKS_PER_UNIT), allocator.memory.wakeOffsets[e1], "e1 is clamped to the front, 40 past its raw 20, not 30") },
+            { assertNull(allocator.memory.wakeOffsets[e2], "and e2, the front, holding nothing, stays where it is") },
         )
     }
 
