@@ -279,6 +279,59 @@ class LocalHeddleShrinkTest {
         )
     }
 
+    /** `root → {a, b}` with 4 slots, and a lease on `a` reserving [WHOLE], more than the slots: the rig of [aShrinkOnADrainingPathLands]. */
+    private fun aLeaseOnA(): Pair<LocalHeddle, Lease> {
+        val h = LocalHeddle.bootWhole(pair, policy, epoch = 0L).also { it.reconcileCapacity(totalSlots = 4L) }
+        return h to h.lease(setOf(a), reservation = WHOLE)
+    }
+
+    private val withoutA = Topology("root", listOf(Topology.Lane("b")))
+
+    /** The removal of `a` waits on [lease], whatever it reserves, and lands once it settles. */
+    private fun assertTheRemovalWaitsOn(h: LocalHeddle, lease: Lease, waiting: ApplyResult) {
+        val draining = assertIs<StepRefusal.Draining>(waiting.refusals.single(), "a's removal waits: ${waiting.refusals}")
+        val edge = assertNotNull(h.capturedPath(lease.id)).single()
+        val open = h.snapshot().leases.single()
+        val done = h.complete(lease.id, 0L, waiting = emptySet())
+        val landed = h.apply(withoutA, generation = 1L)
+        assertAll(
+            { assertEquals(lease.copy(reserved = 0L), open, "the rig: the lease is open and reserves nothing") },
+            { assertEquals(a, draining.child) },
+            { assertEquals(edge, draining.edge, "on the lease's own edge") },
+            { assertEquals(0L, draining.outstanding, "which carries nothing: the lease itself is the wait") },
+            { assertEquals(listOf(open), draining.blockingLeases, "naming the lease") },
+            { assertIs<LeaseOutcome.Done>(done) },
+            { assertEquals(emptyList(), landed.refusals, "and lands once it settles") },
+            { assertEquals(Lifecycle.RETIRED, h.snapshot().ledger.lifecycle(edge)) },
+            { assertTrue(decodes(h), "the snapshot after it decodes") },
+        )
+    }
+
+    /** A whole shrink, then the removal of the lease's lane: the removal waits on the lease, which reserves nothing. */
+    @Test
+    fun aWholeShrinkThenARemovalWaitsOnTheLease() {
+        val (h, lease) = aLeaseOnA()
+        assertEquals(LeaseOutcome.Done(0L, 0L, 0L), h.shrink(lease.id, WHOLE))
+        val waiting = h.apply(withoutA, generation = 1L)
+        assertTrue(decodes(h), "a snapshot taken while it waits decodes")
+        assertTheRemovalWaitsOn(h, lease, waiting)
+    }
+
+    /**
+     * A removal waiting on the lease's 6 units, then a whole shrink, then the same topology again:
+     * the shrink takes the edge's outstanding to 0, and the removal still waits on the open lease.
+     * [aShrinkOnADrainingPathLands] shrinks 4 of 6, where the edge still carries units.
+     */
+    @Test
+    fun aWholeShrinkOnADrainingPathKeepsTheRemovalWaiting() {
+        val (h, lease) = aLeaseOnA()
+        val first = assertIs<StepRefusal.Draining>(h.apply(withoutA, generation = 1L).refusals.single())
+        assertEquals(LeaseOutcome.Done(0L, 0L, 0L), h.shrink(lease.id, WHOLE))
+        val again = h.apply(withoutA, generation = 1L)
+        assertEquals(WHOLE, first.outstanding, "the rig: before the shrink the removal waited on the lease's units")
+        assertTheRemovalWaitsOn(h, lease, again)
+    }
+
     // ---- The wake clamp reads the lease's current reservation (#3238, #3716) ----
 
     private val pair = Topology("root", listOf(Topology.Lane("a"), Topology.Lane("b")))
@@ -375,5 +428,6 @@ class LocalHeddleShrinkTest {
         const val PICKS = 20
         const val SHRUNK_TO = 2L
         const val SUPPLY = 100_000L
+        const val WHOLE = 6L
     }
 }
