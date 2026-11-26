@@ -36,8 +36,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AppleDevice
  * suite pins it on both platforms (`unreadableGrantsAreRefusedNotRewritten`), over a grants record
  * the process may not open.
  *
- * A signing fault during the self-test is the provider failing, not the key: [SoftwareDeviceKey.readBack]
- * throws [IllegalStateException] for it, and so does this store, keeping the key.
+ * A signing or verifying fault during the self-test is the provider failing, not the key:
+ * [SoftwareDeviceKey.readBack] throws [IllegalStateException] for it, and so does this store, keeping
+ * the key, with nothing written to the medium.
  *
  * ## Several stores over one medium
  *
@@ -52,12 +53,15 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AppleDevice
  * @param mediumId names the medium for the in-process mutex: two stores with one id take turns.
  * @param beforeKeyIsMade called each time this store is about to make a key, and at no other time:
  *   the conformance suite's gate.
+ * @param selfTestVerifier the self-test's verify: the provider's, or a test's that fails where
+ *   CryptoKit will not.
  */
 internal class AppleDeviceKeyStore(
     private val medium: KeyMedium,
     private val grantStore: DurableStore,
     mediumId: String,
     private val beforeKeyIsMade: suspend () -> Unit,
+    private val selfTestVerifier: SelfTestVerifier,
 ) : DeviceKeyStore {
     private val inProcess: Mutex = mutexFor(mediumId)
 
@@ -87,7 +91,7 @@ internal class AppleDeviceKeyStore(
     private suspend fun readOrMake(): DeviceKey {
         val stored = medium.read() ?: return make(medium::write)
         val read = try {
-            SoftwareDeviceKey.readBack(stored)
+            SoftwareDeviceKey.readBack(stored, selfTestVerifier)
         } finally {
             stored.fill(0)
         }

@@ -53,7 +53,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AndroidKeys
  *   (not found, permanently invalidated, corrupted) or an `UnrecoverableKeyException` with no Keystore
  *   cause.
  * - **Thrown, key kept:** on Android 13 and later, a failure the Keystore calls transient, a system
- *   error or a wait for the user, however long it lasts.
+ *   error or a wait for the user, however long it lasts. And on every version, the software provider
+ *   failing while it verifies the self-test, which is not the Keystore at all.
  * - **Thrown, key kept for an hour:** a failure of unknown cause — every other failure, which below
  *   Android 13 is all of them. The store keeps one timestamp beside the grants, the start of the current
  *   run of failures; any successful read clears it. A failure of unknown cause once that run is an hour
@@ -84,6 +85,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AndroidKeys
  * @param backend the Keystore itself; a seam only so the store can be tested off a device.
  * @param sdkInt the Android version, which decides how much a Keystore failure can say ([judge]).
  * @param now the time in epoch milliseconds, read when a failure of unknown cause starts or continues.
+ * @param selfTestVerifier the self-test's verify, which runs in the software provider, not the
+ *   Keystore: the provider's own, or a test's that fails where the provider will not.
  * @param beforeKeyIsMade called each time this store is about to make a key, and at no other time:
  *   the conformance suite's gate.
  */
@@ -93,6 +96,7 @@ internal class AndroidKeystoreDeviceKeyStore(
     private val backend: KeystoreBackend,
     private val sdkInt: Int,
     private val now: () -> Long,
+    private val selfTestVerifier: SelfTestVerifier = SelfTestVerifier.Provider,
     private val beforeKeyIsMade: suspend () -> Unit,
 ) : DeviceKeyStore {
     private val directory: File = directory.absoluteFile
@@ -139,7 +143,7 @@ internal class AndroidKeystoreDeviceKeyStore(
             return afterFailure(KeystoreFailure.Thrown("loading the key", e))
         } ?: return noKey()
         val publicKey = backend.getCertificatePublicKey(alias) ?: return afterFailure(KeystoreFailure.NoCertificate)
-        return when (val read = readBack(publicKey, signer)) {
+        return when (val read = readBack(publicKey, signer, selfTestVerifier)) {
             is KeystoreRead.Usable -> {
                 forgetFailingSince()
                 markKeyMade() // Heals a launch that crashed between making the key and marking it.
@@ -202,7 +206,7 @@ internal class AndroidKeystoreDeviceKeyStore(
         backend.generate(alias)
         val signer = backend.getKey(alias)
         val publicKey = backend.getCertificatePublicKey(alias)
-        val read = if (signer != null && publicKey != null) readBack(publicKey, signer) else null
+        val read = if (signer != null && publicKey != null) readBack(publicKey, signer, selfTestVerifier) else null
         if (read is KeystoreRead.Usable) {
             // After the key is made and read back, never before: a crash before this line leaves a key with
             // no marker, which the next launch reads and marks, rather than a marker with no key, which on
@@ -286,13 +290,16 @@ internal class AndroidKeystoreDeviceKeyStore(
 /**
  * The key [signer] holds, checked against the name [publicKey] gives — the half the Keystore stored,
  * never one derived from the private key: sign [SELF_TEST], convert DER to raw `r ‖ s`, and verify under
- * the name through [DidKey.verify], so through the on-curve check every other device applies to it.
+ * the name through [selfTestVerifies], so through the on-curve check every other device applies to it.
  *
  * [KeystoreRead.Refused] is a verdict on what the Keystore holds: a public half that is not P-256, or a
- * signature that does not verify. A signature that fails to *happen* is [KeystoreRead.Failed], for
- * [judge] to weigh. A DER signature that does not parse is the Keystore misbehaving and throws.
+ * signature the provider, having run, says does not verify. A signature that fails to *happen* is
+ * [KeystoreRead.Failed], for [judge] to weigh. A DER signature that does not parse is the Keystore
+ * misbehaving and throws. A verify that fails to happen throws too: it runs in the software provider,
+ * not the Keystore, so it says nothing about the key and is not [judge]'s to weigh. [DidKey.verify]
+ * would answer `false` for it, and the key would be deleted at once (#3596).
  */
-internal suspend fun readBack(publicKey: PublicKey, signer: KeystoreSigner): KeystoreRead {
+internal suspend fun readBack(publicKey: PublicKey, signer: KeystoreSigner, verifier: SelfTestVerifier): KeystoreRead {
     val name = nameOf(publicKey)
         ?: return KeystoreRead.Refused("its certificate's public half is not a P-256 point (${publicKey.algorithm})")
     val der = try {
@@ -302,7 +309,7 @@ internal suspend fun readBack(publicKey: PublicKey, signer: KeystoreSigner): Key
         return KeystoreRead.Failed(KeystoreFailure.Thrown("signing its self-test", e))
     }
     val signature = derSignatureToRaw(der) ?: throw notDer()
-    if (!name.verify(SELF_TEST, signature)) {
+    if (!name.selfTestVerifies(SELF_TEST, signature, verifier)) {
         return KeystoreRead.Refused("its private key does not sign for the name its certificate gives, ${name.value}")
     }
     return KeystoreRead.Usable(KeystoreDeviceKey(name, signer))
@@ -324,7 +331,7 @@ internal sealed interface KeystoreRead {
 /**
  * The `did:key` [publicKey] names: its `x`, behind the lead byte its `y`'s parity picks. `null` when
  * it is not an EC key on P-256 (by field size and group order), or is the point at infinity. Whether
- * `x` is on the curve is [DidKey.verify]'s question.
+ * `x` is on the curve is [selfTestVerifies]' question.
  */
 internal fun nameOf(publicKey: PublicKey): DidKey? {
     val ec = publicKey as? ECPublicKey ?: return null

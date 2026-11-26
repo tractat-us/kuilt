@@ -68,7 +68,7 @@ class AndroidKeystoreDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSu
         val directory = Files.createTempDirectory("kuilt-keystore-grants").toFile()
         return DeviceKeyStoreFixture.Durable(
             reopen = { beforeKeyIsMade ->
-                AndroidKeystoreDeviceKeyStore(alias, directory, keystore, SDK, { NOW }, beforeKeyIsMade)
+                AndroidKeystoreDeviceKeyStore(alias, directory, keystore, SDK, { NOW }, beforeKeyIsMade = beforeKeyIsMade)
             },
             corruptKey = { keystore.damage(alias) { AospKeystore.signFailure(AospKeystore.VALUE_CORRUPTED) } },
             plantMismatchedKey = {

@@ -1,5 +1,7 @@
 package us.tractat.kuilt.identity
 
+import dev.whyoleg.cryptography.algorithms.ECDSA
+import dev.whyoleg.cryptography.algorithms.SHA256
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.runTest
@@ -89,7 +91,7 @@ class StoredKeyAndGrantsTest {
         val faults = listOf<Throwable>(RuntimeException("signer unavailable"), CancellationException("minted by the provider"))
         val outcomes = faults.map { fault ->
             try {
-                "returned ${SoftwareDeviceKey.readBack(jwk) { _, _ -> throw fault }}"
+                "returned ${SoftwareDeviceKey.readBack(jwk, sign = { _, _ -> throw fault })}"
             } catch (e: IllegalStateException) {
                 currentCoroutineContext().ensureActive()
                 "threw ${e::class.simpleName}"
@@ -101,6 +103,59 @@ class StoredKeyAndGrantsTest {
             *outcomes.zip(faults).map { (outcome, fault) ->
                 { assertEquals("threw IllegalStateException", outcome, "a ${fault::class.simpleName} while signing") }
             }.toTypedArray(),
+        )
+    }
+
+    /**
+     * A fault in the provider while it verifies the self-test says nothing about the stored bytes
+     * either, so it throws rather than condemning the key (#3596). `DidKey.verify` answers `false` for
+     * such a fault, which is why the self-test does not go through it: a store reads `Refused` as
+     * damage and replaces the key. A cancellation the provider mints is the same fault.
+     */
+    @Test
+    fun aProviderFaultWhileVerifyingThrowsRatherThanRefusing() = runTest {
+        val key = SoftwareDeviceKey.generate()
+        val jwk = key.encodeJwk()
+        val faults = listOf<Throwable>(RuntimeException("verifier unavailable"), CancellationException("minted by the provider"))
+        val runs = faults.map { fault ->
+            val verifier = FaultingVerifier(faults = 1) { fault }
+            val outcome = try {
+                "returned ${SoftwareDeviceKey.readBack(jwk, verifier)}"
+            } catch (e: IllegalStateException) {
+                currentCoroutineContext().ensureActive()
+                "threw ${e::class.simpleName}"
+            }
+            Triple(fault, outcome, verifier.faulted)
+        }
+        val afterwards = SoftwareDeviceKey.readBack(jwk)
+        assertAll(
+            *runs.map { (fault, _, faulted) ->
+                { assertEquals(1, faulted, "the rig fired: a ${fault::class.simpleName} reached the verify") }
+            }.toTypedArray(),
+            *runs.map { (fault, outcome, _) ->
+                { assertEquals("threw IllegalStateException", outcome, "a ${fault::class.simpleName} while verifying") }
+            }.toTypedArray(),
+            { assertEquals(key.id, assertIs<StoredKey.Usable>(afterwards, "$afterwards").key.id, "the same key reads back") },
+        )
+    }
+
+    /**
+     * The other half of the line: a verify that runs and answers `false` is still damage. The signature
+     * is the key's own with one bit of `s` flipped, so it reaches the provider on every target (a
+     * spliced JWK does not on wasmJs, where the decoder refuses it first) and the provider says no.
+     */
+    @Test
+    fun aSignatureTheProviderRefusesIsStillRefused() = runTest {
+        val jwk = SoftwareDeviceKey.generate().encodeJwk()
+        val verifier = FaultingVerifier(faults = 0)
+        val read = SoftwareDeviceKey.readBack(jwk, verifier, sign = { privateKey, message ->
+            privateKey.signatureGenerator(SHA256, ECDSA.SignatureFormat.RAW).generateSignature(message).also {
+                it[it.lastIndex] = (it.last().toInt() xor 1).toByte()
+            }
+        })
+        assertAll(
+            { assertEquals(1, verifier.calls, "the provider's verify ran") },
+            { assertIs<StoredKey.Refused>(read, "and its false is damage: $read") },
         )
     }
 

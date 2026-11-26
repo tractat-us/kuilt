@@ -46,7 +46,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.FileDeviceK
  * Anything else that stops the key file being read — no permission, a symbolic-link loop, an I/O or
  * network file-system error — throws [java.io.IOException], and nothing is written. Only an absent
  * file means "no key yet". Replacing a key the store could not even look at would turn a passing
- * fault into a new identity, silently.
+ * fault into a new identity, silently. For the same reason a cryptographic provider that fails while
+ * signing or verifying the self-test throws [IllegalStateException] and leaves the file as it is.
  *
  * ## Crash safety
  *
@@ -76,6 +77,8 @@ public class FileDeviceKeyStore internal constructor(
     directory: Path,
     /** Called each time this store is about to make a key, and at no other time: the TCK's gate. */
     private val beforeKeyIsMade: suspend () -> Unit,
+    /** The self-test's verify: the provider's, or a test's that fails where the provider will not. */
+    private val selfTestVerifier: SelfTestVerifier = SelfTestVerifier.Provider,
 ) : DeviceKeyStore {
     /** A store over [directory]. */
     public constructor(directory: Path) : this(directory, {})
@@ -124,7 +127,7 @@ public class FileDeviceKeyStore internal constructor(
             return make()
         }
         val read = try {
-            SoftwareDeviceKey.readBack(stored)
+            SoftwareDeviceKey.readBack(stored, selfTestVerifier)
         } finally {
             stored.fill(0)
         }

@@ -110,6 +110,15 @@ internal fun keychainDeviceKeyStore(
     applicationSupport: String,
     keychain: KeychainBackend,
     beforeKeyIsMade: suspend () -> Unit,
+): DeviceKeyStore = keychainDeviceKeyStore(appId, applicationSupport, keychain, SelfTestVerifier.Provider, beforeKeyIsMade)
+
+/** [keychainDeviceKeyStore] with the self-test verifying through [selfTestVerifier]: a test's way to fault it. */
+internal fun keychainDeviceKeyStore(
+    appId: String,
+    applicationSupport: String,
+    keychain: KeychainBackend,
+    selfTestVerifier: SelfTestVerifier,
+    beforeKeyIsMade: suspend () -> Unit,
 ): DeviceKeyStore {
     requireAppId(appId)
     val service = KEYCHAIN_SERVICE_PREFIX + appId
@@ -120,6 +129,7 @@ internal fun keychainDeviceKeyStore(
         grantStore = NSFileManagerDurableStore(grantsDirectory),
         mediumId = "keychain:$service",
         beforeKeyIsMade = beforeKeyIsMade,
+        selfTestVerifier = selfTestVerifier,
     )
 }
 

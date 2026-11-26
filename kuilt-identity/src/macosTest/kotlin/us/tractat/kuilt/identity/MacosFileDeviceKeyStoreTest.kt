@@ -121,6 +121,54 @@ class MacosFileDeviceKeyStoreTest {
         )
     }
 
+    /**
+     * A provider that fails while verifying the self-test is not a damaged key (#3596): the call
+     * throws, the key file keeps its bytes, nothing is renamed aside, and the next call reads the same
+     * key. The store is the one both Apple platforms share, over the file medium; CryptoKit itself
+     * cannot be made to fail here, so the fault comes in through the self-test's verify seam.
+     */
+    @Test
+    fun aVerifyFaultKeepsTheKeyFile() = runTest {
+        val directory = freshDirectory("kuilt-device-key")
+        val original = fileDeviceKeyStore(directory, {}).deviceKey().id
+        val keyFile = "$directory/${FileKeyMedium.KEY_FILE}"
+        val before = readFile(keyFile)
+        val verifier = FaultingVerifier(faults = 1)
+        val store = fileDeviceKeyStore(directory, verifier) {}
+
+        val failure = failureOf { store.deviceKey() }
+        val after = readFile(keyFile)
+        val aside = readFile("$keyFile.refused-1")
+        val afterwards = store.deviceKey().id
+
+        assertAll(
+            { assertEquals(1, verifier.faulted, "the rig fired: the self-test's verify failed once") },
+            { assertTrue(failure is IllegalStateException, "the fault throws IllegalStateException: $failure") },
+            { assertContentEquals(before, after, "the key file is untouched") },
+            { assertEquals(null, aside, "nothing is renamed aside") },
+            { assertEquals(original, afterwards, "and the same key reads back") },
+        )
+    }
+
+    /** And a key whose halves do not belong together, verified through the same seam, is still replaced. */
+    @Test
+    fun aVerifyThatRunsAndRefusesStillReplacesTheKey() = runTest {
+        val directory = freshDirectory("kuilt-device-key")
+        val (spliced, named) = mismatchedJwk()
+        val keyFile = "$directory/${FileKeyMedium.KEY_FILE}"
+        writeFile(keyFile, spliced)
+        val verifier = FaultingVerifier(faults = 0)
+
+        val replacement = fileDeviceKeyStore(directory, verifier) {}.deviceKey().id
+
+        assertAll(
+            { assertEquals(1, verifier.calls, "CryptoKit's verify ran on the stored key") },
+            { assertNotEquals(named, replacement, "and the key was replaced") },
+            { assertContentEquals(spliced, readFile("$keyFile.refused-1"), "with the old file kept aside") },
+        )
+    }
+
+
     private fun modeOf(path: String): Int = memScoped {
         val info = alloc<stat>()
         check(stat(path, info.ptr) == 0) { "precondition: $path exists" }

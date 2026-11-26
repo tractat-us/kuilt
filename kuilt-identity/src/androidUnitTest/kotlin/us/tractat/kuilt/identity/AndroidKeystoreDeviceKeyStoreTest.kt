@@ -518,6 +518,79 @@ class AndroidKeystoreDeviceKeyStoreTest {
         )
     }
 
+    // ── The self-test's verify ──────────────────────────────────────────────
+
+    /**
+     * The self-test verifies in the software provider, not the Keystore, and a provider that fails there
+     * says nothing about the key (#3596). The call throws, the key is not deleted, no key is made, and
+     * the next launch reads the same key. Before the fix the fault read as a signature that does not
+     * verify, which deletes the key at once on every version.
+     */
+    @Test
+    fun aVerifyFaultKeepsTheKey() = runTest {
+        val rig = Rig(sdk = 33)
+        val held = rig.launch().deviceKey().id
+        val verifier = FaultingVerifier(faults = 1)
+
+        val failure = failureOf { rig.launch(verifier = verifier).deviceKey() }
+        // Read before the next launch: a good read clears it.
+        val failingSince = rig.failingSince()
+        val afterwards = rig.launch().deviceKey().id
+
+        // Not `keystore.holds(alias)`: a replacement deletes and remakes under the same alias, so the
+        // alias is held either way. The count and the name are what tell the two apart.
+        assertAll(
+            { assertEquals(1, verifier.faulted, "the rig fired: the self-test's verify failed once") },
+            { assertTrue(failure is IllegalStateException, "the fault throws IllegalStateException: $failure") },
+            { assertNull(failingSince, "no run of Keystore failures is started: the fault never reaches judge") },
+            { assertEquals(1, rig.keystore.generated, "no key is made") },
+            { assertEquals(held, afterwards, "and the same key reads back") },
+        )
+    }
+
+    /**
+     * The slow path of the same mistake. Below Android 13 every Keystore failure is of unknown cause,
+     * and an hour of them replaces the key. A verify fault weighed as one would do just that, so two
+     * an hour apart must still keep the key: it is the provider failing, not the Keystore.
+     */
+    @Test
+    fun verifyFaultsAnHourApartKeepTheKeyBelowAndroid13() = runTest {
+        val rig = Rig(sdk = 30)
+        val held = rig.launch().deviceKey().id
+        val verifier = FaultingVerifier(faults = 2)
+
+        val first = failureOf { rig.launch(verifier = verifier).deviceKey() }
+        rig.clock += HOUR
+        val second = failureOf { rig.launch(verifier = verifier).deviceKey() }
+        val afterwards = rig.launch().deviceKey().id
+
+        assertAll(
+            { assertEquals(2, verifier.faulted, "the rig fired: the self-test's verify failed twice") },
+            { assertTrue(first is IllegalStateException, "the first fault throws: $first") },
+            { assertTrue(second is IllegalStateException, "and so does the second, an hour on: $second") },
+            { assertEquals(1, rig.keystore.generated, "no key is made") },
+            { assertEquals(held, afterwards, "and the same key reads back") },
+        )
+    }
+
+    /** And a key that does not sign for its certificate's name, verified through the same seam, is still replaced. */
+    @Test
+    fun aVerifyThatRunsAndRefusesStillReplacesTheKey() = runTest {
+        val rig = Rig(sdk = 33)
+        val named = FakeKeystore.newPair()
+        rig.keystore.plant(rig.alias, named.public, FakeKeystore.newPair().private)
+        val verifier = FaultingVerifier(faults = 0)
+
+        val replacement = rig.launch(verifier = verifier).deviceKey().id
+        val planted = independentNameOf(named.public)
+
+        assertAll(
+            { assertEquals(2, verifier.calls, "the provider's verify ran: on the planted key, then on its replacement") },
+            { assertNotEquals(planted, replacement, "and the key was replaced") },
+            { assertEquals(1, rig.keystore.generated, "with one new key") },
+        )
+    }
+
     // ── Other entries ────────────────────────────────────────────────────────
 
     /** A certificate with no key is what `getKey` answers `null` for: no key, so one is made at once. */
@@ -657,8 +730,9 @@ class AndroidKeystoreDeviceKeyStoreTest {
             clearFaultAfterJudging: Boolean = false,
             clearOutageBeforeMaking: Boolean = false,
             clearSignFaultAfterJudging: Boolean = false,
+            verifier: SelfTestVerifier = SelfTestVerifier.Provider,
         ): DeviceKeyStore =
-            AndroidKeystoreDeviceKeyStore(alias, directory, keystore, sdk, { clock }) {
+            AndroidKeystoreDeviceKeyStore(alias, directory, keystore, sdk, { clock }, verifier) {
                 if (clearFaultAfterJudging) keystore.loadFault = null
                 if (clearOutageBeforeMaking) keystore.legacyOutage = false
                 if (clearSignFaultAfterJudging) keystore.signFault = null

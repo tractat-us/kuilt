@@ -233,6 +233,56 @@ class KeychainDeviceKeyStoreTest {
         assertEquals(bad, refused)
     }
 
+    /**
+     * A provider that fails while verifying the self-test is not a damaged key (#3596): the call
+     * throws and the Keychain item keeps its bytes, where a refusal would have updated it with a new
+     * key and lost the old one for good. CryptoKit cannot be made to fail here, so the fault comes in
+     * through the self-test's verify seam.
+     */
+    @Test
+    fun aVerifyFaultKeepsTheItem() = runTest {
+        val keychain = FakeKeychain()
+        val appId = freshAppId()
+        val support = freshDirectory("kuilt-keychain")
+        val service = KEYCHAIN_SERVICE_PREFIX + appId
+        val held = keychainDeviceKeyStore(appId, support, keychain) {}.deviceKey().id
+        val before = keychain.held(service, KEYCHAIN_ACCOUNT)
+        val verifier = FaultingVerifier(faults = 1)
+        val store = keychainDeviceKeyStore(appId, support, keychain, verifier) {}
+
+        val failure = failureOf { store.deviceKey() }
+        val after = keychain.held(service, KEYCHAIN_ACCOUNT)
+        val afterwards = store.deviceKey().id
+
+        assertAll(
+            { assertEquals(1, verifier.faulted, "the rig fired: the self-test's verify failed once") },
+            { assertTrue(failure is IllegalStateException, "the fault throws IllegalStateException: $failure") },
+            { assertEquals(true, after?.contentEquals(before ?: ByteArray(0)), "the item keeps its bytes") },
+            { assertEquals(held, afterwards, "and the same key reads back") },
+        )
+    }
+
+    /** And an item whose halves do not belong together, verified through the same seam, is still replaced. */
+    @Test
+    fun aVerifyThatRunsAndRefusesStillReplacesTheItem() = runTest {
+        val keychain = FakeKeychain()
+        val appId = freshAppId()
+        val support = freshDirectory("kuilt-keychain")
+        val service = KEYCHAIN_SERVICE_PREFIX + appId
+        val (spliced, named) = mismatchedJwk()
+        keychain.plant(service, KEYCHAIN_ACCOUNT, spliced)
+        val verifier = FaultingVerifier(faults = 0)
+
+        val replacement = keychainDeviceKeyStore(appId, support, keychain, verifier) {}.deviceKey().id
+        val after = keychain.held(service, KEYCHAIN_ACCOUNT)
+
+        assertAll(
+            { assertEquals(1, verifier.calls, "CryptoKit's verify ran on the stored key") },
+            { assertNotEquals(named, replacement, "and the key was replaced") },
+            { assertEquals(false, after?.contentEquals(spliced), "with the item rewritten: $after") },
+        )
+    }
+
     /** What [block] threw, or `null` if it returned. This test's own cancellation is never a verdict. */
     private suspend fun failureOf(block: suspend () -> Unit): Exception? = try {
         block()
