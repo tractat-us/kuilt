@@ -242,27 +242,34 @@ class FairShareAllocatorTest {
     /**
      * The clamp's floor (`max(0, outstanding)`, #3721): a waker whose edge reads a negative
      * outstanding is clamped to the front, never below it. [EdgeSummary] allows one transiently:
-     * a spend can merge before the delegation it spent.
+     * a spend can merge before the delegation it spent. A spend carries a witness of its spender's
+     * own delegations and of one transfer's donor, so the shape needs two hops (the `witness` KDoc
+     * on [EntitlementLedger]).
      *
-     * B runs e1 to 20 and e2 to 60 and spends both, then delegates 10 more down e1 and spends them.
-     * A merges B's ledger as it stood before that delegation, and then the spend alone, so A reads
-     * e1 at 20, outstanding −10. A has never seen either child, so both are joiners and the front
-     * is e2, the furthest ahead, at 60. e1 lands there: 40 units past its raw 20. Without the floor
-     * it would land 10 below the front, at 30 past.
+     * B runs e1 to 20 and e2 to 60 and spends both. Then B delegates 10 more down e1 and hands them
+     * on at g1, to C and from C to D, and D spends them. A merges B's ledger as it stood before that
+     * delegation, and then D's spend alone, so A reads e1 at 20, outstanding −10. A has never seen
+     * either child, so both are joiners and the front is e2, the furthest ahead, at 60. e1 lands
+     * there: 40 units past its raw 20. Without the floor it would land 10 below the front, 30 past.
      *
      * Both demands are competing but unservable, so the round grants nothing and keeps only what it
      * observed: the clamps, read straight from the memory.
      */
     @Test
     fun aWakerWhoseEdgeReadsANegativeOutstandingIsClampedToTheFrontNotBelowIt() {
+        val a = ReplicaId("a")
         val b = ReplicaId("b")
-        val onB = flatLedger(mapOf(b to 100L))
+        val c = ReplicaId("c")
+        val d = ReplicaId("d")
+        val onB = flatLedger(mapOf(a to 100L, b to 100L))
         FairShareAllocator(b, policy).schedule(root, onB, earmarked = 0L, demandOf(e1 to Demand(20L, 10L), e2 to Demand(60L, 10L)))
         onB.apply(onB.current.spend(b, g1, 20L))
         onB.apply(onB.current.spend(b, GroupId("g2"), 60L))
         val beforeTheDelegation = onB.current
         onB.apply(onB.current.delegate(b, e1, 10L))
-        val theSpend = assertNotNull(onB.current.spend(b, g1, 10L), "B spends the 10 it delegated")
+        onB.apply(onB.current.transfer(g1, b, c, 10L))
+        onB.apply(onB.current.transfer(g1, c, d, 10L))
+        val theSpend = assertNotNull(onB.current.spend(d, g1, 10L), "D spends the 10 B delegated")
         val onA = InMemoryLedgerCell(beforeTheDelegation)
         onA.merge(theSpend.delta)
         assertAll(
@@ -272,7 +279,7 @@ class FairShareAllocatorTest {
             { assertEquals(0L, assertNotNull(onA.current.edge(e2)).outstanding, "the rig: holding nothing, so it is not moved past itself") },
         )
 
-        val allocator = FairShareAllocator(ReplicaId("a"), policy)
+        val allocator = FairShareAllocator(a, policy)
         val outcome = allocator.schedule(root, onA, earmarked = 0L, demandOf(e1 to competingUnservable, e2 to competingUnservable))
         assertAll(
             { assertEquals(AllocationOutcome.NothingToDelegate, outcome, "the rig: the round grants nothing") },
