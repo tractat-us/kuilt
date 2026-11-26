@@ -284,12 +284,89 @@ public final class us/tractat/kuilt/heddle/HeddleNode : us/tractat/kuilt/heddle/
 	public final fun parentVirtualTime-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
 	public final fun parentVirtualTimeWide-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/VirtualTime;
 	public final fun prepare (Lus/tractat/kuilt/heddle/AttachmentRecord;)Z
+	public final fun reconcileOwn-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome;
 	public fun reserve-jc7CSWg (Ljava/lang/String;J)Lus/tractat/kuilt/heddle/ReserveOutcome;
 	public final fun retire-dq4I9ps (Ljava/lang/String;)Z
 	public final fun schedule-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/ScheduleOutcome;
 }
 
 public final class us/tractat/kuilt/heddle/HeddleNode$Companion {
+}
+
+public abstract interface class us/tractat/kuilt/heddle/ReconcileOwnOutcome {
+}
+
+public final class us/tractat/kuilt/heddle/ReconcileOwnOutcome$CrossParent : us/tractat/kuilt/heddle/ReconcileOwnOutcome {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/Map;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/Map;
+	public final fun copy-jc7CSWg (Ljava/lang/String;Ljava/util/Map;)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$CrossParent;
+	public static synthetic fun copy-jc7CSWg$default (Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$CrossParent;Ljava/lang/String;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$CrossParent;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getForeign ()Ljava/util/Map;
+	public final fun getLiveParent-urUY4Jo ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ReconcileOwnOutcome$NoLiveEdge : us/tractat/kuilt/heddle/ReconcileOwnOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$NoLiveEdge;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ReconcileOwnOutcome$NoRetiredEdge : us/tractat/kuilt/heddle/ReconcileOwnOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$NoRetiredEdge;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ReconcileOwnOutcome$NothingToRepair : us/tractat/kuilt/heddle/ReconcileOwnOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$NothingToRepair;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ReconcileOwnOutcome$Refused : us/tractat/kuilt/heddle/ReconcileOwnOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$Refused;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$Refused;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$Refused;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ReconcileOwnOutcome$Repaired : us/tractat/kuilt/heddle/ReconcileOwnOutcome {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun copy-hWgxYSA (Ljava/lang/String;Ljava/util/List;JJ)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$Repaired;
+	public static synthetic fun copy-hWgxYSA$default (Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$Repaired;Ljava/lang/String;Ljava/util/List;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$Repaired;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredit ()J
+	public final fun getFrom ()Ljava/util/List;
+	public final fun getOnto-i0YUZAc ()Ljava/lang/String;
+	public final fun getSpent ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ReconcileOwnOutcome$TwoLiveEdges : us/tractat/kuilt/heddle/ReconcileOwnOutcome {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$TwoLiveEdges;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$TwoLiveEdges;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$TwoLiveEdges;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEdges ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class us/tractat/kuilt/heddle/ReservationId {

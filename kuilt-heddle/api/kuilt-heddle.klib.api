@@ -123,6 +123,90 @@ sealed interface us.tractat.kuilt.heddle/ControlOutcome { // us.tractat.kuilt.he
     }
 }
 
+sealed interface us.tractat.kuilt.heddle/ReconcileOwnOutcome { // us.tractat.kuilt.heddle/ReconcileOwnOutcome|null[0]
+    final class CrossParent : us.tractat.kuilt.heddle/ReconcileOwnOutcome { // us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Map<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/GroupId>) // us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent.<init>|<init>(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Map<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.GroupId>){}[0]
+
+        final val foreign // us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent.foreign|{}foreign[0]
+            final fun <get-foreign>(): kotlin.collections/Map<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent.foreign.<get-foreign>|<get-foreign>(){}[0]
+        final val liveParent // us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent.liveParent|{}liveParent[0]
+            final fun <get-liveParent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent.liveParent.<get-liveParent>|<get-liveParent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/Map<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ..., kotlin.collections/Map<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/GroupId> = ...): us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent // us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent.copy|copy(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Map<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.GroupId>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ReconcileOwnOutcome.CrossParent.toString|toString(){}[0]
+    }
+
+    final class Refused : us.tractat.kuilt.heddle/ReconcileOwnOutcome { // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Refused|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Refused.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Refused.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Refused.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Refused.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.heddle/ReconcileOwnOutcome.Refused // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Refused.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Refused.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Refused.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Refused.toString|toString(){}[0]
+    }
+
+    final class Repaired : us.tractat.kuilt.heddle/ReconcileOwnOutcome { // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/AttachmentId, kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentId>, kotlin/Long, kotlin/Long) // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId;kotlin.collections.List<us.tractat.kuilt.heddle.AttachmentId>;kotlin.Long;kotlin.Long){}[0]
+
+        final val credit // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.credit|{}credit[0]
+            final fun <get-credit>(): kotlin/Long // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.credit.<get-credit>|<get-credit>(){}[0]
+        final val from // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.from|{}from[0]
+            final fun <get-from>(): kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentId> // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.from.<get-from>|<get-from>(){}[0]
+        final val onto // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.onto|{}onto[0]
+            final fun <get-onto>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.onto.<get-onto>|<get-onto>(){}[0]
+        final val spent // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.spent|{}spent[0]
+            final fun <get-spent>(): kotlin/Long // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.spent.<get-spent>|<get-spent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentId> // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.component4|component4(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/AttachmentId = ..., kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentId> = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.copy|copy(us.tractat.kuilt.heddle.AttachmentId;kotlin.collections.List<us.tractat.kuilt.heddle.AttachmentId>;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ReconcileOwnOutcome.Repaired.toString|toString(){}[0]
+    }
+
+    final class TwoLiveEdges : us.tractat.kuilt.heddle/ReconcileOwnOutcome { // us.tractat.kuilt.heddle/ReconcileOwnOutcome.TwoLiveEdges|null[0]
+        constructor <init>(kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentId>) // us.tractat.kuilt.heddle/ReconcileOwnOutcome.TwoLiveEdges.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.heddle.AttachmentId>){}[0]
+
+        final val edges // us.tractat.kuilt.heddle/ReconcileOwnOutcome.TwoLiveEdges.edges|{}edges[0]
+            final fun <get-edges>(): kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentId> // us.tractat.kuilt.heddle/ReconcileOwnOutcome.TwoLiveEdges.edges.<get-edges>|<get-edges>(){}[0]
+
+        final fun component1(): kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentId> // us.tractat.kuilt.heddle/ReconcileOwnOutcome.TwoLiveEdges.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentId> = ...): us.tractat.kuilt.heddle/ReconcileOwnOutcome.TwoLiveEdges // us.tractat.kuilt.heddle/ReconcileOwnOutcome.TwoLiveEdges.copy|copy(kotlin.collections.List<us.tractat.kuilt.heddle.AttachmentId>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ReconcileOwnOutcome.TwoLiveEdges.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ReconcileOwnOutcome.TwoLiveEdges.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ReconcileOwnOutcome.TwoLiveEdges.toString|toString(){}[0]
+    }
+
+    final object NoLiveEdge : us.tractat.kuilt.heddle/ReconcileOwnOutcome { // us.tractat.kuilt.heddle/ReconcileOwnOutcome.NoLiveEdge|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ReconcileOwnOutcome.NoLiveEdge.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ReconcileOwnOutcome.NoLiveEdge.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ReconcileOwnOutcome.NoLiveEdge.toString|toString(){}[0]
+    }
+
+    final object NoRetiredEdge : us.tractat.kuilt.heddle/ReconcileOwnOutcome { // us.tractat.kuilt.heddle/ReconcileOwnOutcome.NoRetiredEdge|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ReconcileOwnOutcome.NoRetiredEdge.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ReconcileOwnOutcome.NoRetiredEdge.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ReconcileOwnOutcome.NoRetiredEdge.toString|toString(){}[0]
+    }
+
+    final object NothingToRepair : us.tractat.kuilt.heddle/ReconcileOwnOutcome { // us.tractat.kuilt.heddle/ReconcileOwnOutcome.NothingToRepair|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ReconcileOwnOutcome.NothingToRepair.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ReconcileOwnOutcome.NothingToRepair.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ReconcileOwnOutcome.NothingToRepair.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.heddle/ReserveOutcome { // us.tractat.kuilt.heddle/ReserveOutcome|null[0]
     final class Reserved : us.tractat.kuilt.heddle/ReserveOutcome { // us.tractat.kuilt.heddle/ReserveOutcome.Reserved|null[0]
         constructor <init>(us.tractat.kuilt.heddle/ReservationId) // us.tractat.kuilt.heddle/ReserveOutcome.Reserved.<init>|<init>(us.tractat.kuilt.heddle.ReservationId){}[0]
@@ -393,6 +477,7 @@ final class us.tractat.kuilt.heddle/HeddleNode : us.tractat.kuilt.heddle/FairSha
     final fun parentVirtualTime(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/HeddleNode.parentVirtualTime|parentVirtualTime(us.tractat.kuilt.heddle.GroupId){}[0]
     final fun parentVirtualTimeWide(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/VirtualTime? // us.tractat.kuilt.heddle/HeddleNode.parentVirtualTimeWide|parentVirtualTimeWide(us.tractat.kuilt.heddle.GroupId){}[0]
     final fun prepare(us.tractat.kuilt.heddle/AttachmentRecord): kotlin/Boolean // us.tractat.kuilt.heddle/HeddleNode.prepare|prepare(us.tractat.kuilt.heddle.AttachmentRecord){}[0]
+    final fun reconcileOwn(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/ReconcileOwnOutcome // us.tractat.kuilt.heddle/HeddleNode.reconcileOwn|reconcileOwn(us.tractat.kuilt.heddle.GroupId){}[0]
     final fun reserve(us.tractat.kuilt.heddle/GroupId, kotlin/Long): us.tractat.kuilt.heddle/ReserveOutcome // us.tractat.kuilt.heddle/HeddleNode.reserve|reserve(us.tractat.kuilt.heddle.GroupId;kotlin.Long){}[0]
     final fun retire(us.tractat.kuilt.heddle/AttachmentId): kotlin/Boolean // us.tractat.kuilt.heddle/HeddleNode.retire|retire(us.tractat.kuilt.heddle.AttachmentId){}[0]
     final fun schedule(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/ScheduleOutcome // us.tractat.kuilt.heddle/HeddleNode.schedule|schedule(us.tractat.kuilt.heddle.GroupId){}[0]

@@ -55,6 +55,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [Refusals and limits](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#refusals-and-limits)
 - [Fair share across peers](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#fair-share-across-peers)
 - [Telling an idle scheduler from a stuck one](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#telling-an-idle-scheduler-from-a-stuck-one)
+- [Repairing a reweight on a static cluster](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#repairing-a-reweight-on-a-static-cluster)
 - [Minting quota and reshaping with agreement](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#minting-quota-and-reshaping-with-agreement)
 - [Weighted lanes over warp](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#weighted-lanes-over-warp)
 - [The bare policy and allocator](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#the-bare-policy-and-allocator)

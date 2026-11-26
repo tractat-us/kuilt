@@ -1143,6 +1143,19 @@ public class EntitlementLedger private constructor(
      * removes §12.3's magnitude-freshness residual: a second move onto one live edge accumulates on
      * `this` rather than max-colliding with the first.
      *
+     * ## The two callers that are not the control plane
+     *
+     * Neither derives a patch another peer must match, which is why neither needs a log.
+     *
+     *  - **A single writer** (`LocalHeddle`'s `Reconcile` step, `reconcileLocally`) reads [finals]
+     *    and `this` off the ledger it alone writes, so they are final by construction.
+     *  - **A static peer repairing its own row** (`HeddleNode.reconcileOwn` in `:kuilt-heddle`)
+     *    passes [finals] holding **only itself**, and `this` is its own converged ledger. Every slot
+     *    the patch reads or writes is then keyed by that replica — its base slots on each fenced
+     *    edge, and its relocation slots there and on [liveEdge] — and on a static node that replica
+     *    is their only writer, having marked the edge locally unwritable. So each peer's move touches
+     *    a row no other peer's move touches, and the moves join cleanly in any order.
+     *
      * ## …and why the hand-offs are part of it (#2366 / #2377)
      *
      * `transfers` is keyed by `PathKey.of(edge)` — the **generation's** id, not the child group — so
@@ -1210,7 +1223,8 @@ public class EntitlementLedger private constructor(
      * (`heddle-design.md` §8.1). Draining a slot whose owner never promised is precisely the
      * fabricate-beyond-owner violation the fence exists to prevent.
      *
-     * [HeddleInternalApi] — the caller is `HeddleControlPlane`'s apply loop, which alone holds log-pure inputs.
+     * [HeddleInternalApi] — the governed caller is `HeddleControlPlane`'s apply loop, which alone holds
+     * log-pure inputs; the single-writer and own-row callers above hold inputs no other writer moves.
      */
     @HeddleInternalApi
     public fun relocationPatch(

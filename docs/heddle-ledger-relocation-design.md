@@ -477,6 +477,12 @@ makes ownership explicit and total:
 | base counters on a live edge | the data plane — replica `r` writes its own slots, only ever locally-derived values |
 | base counters on a **fenced** edge | the control plane (log apply) — the owners have log-recorded they are done |
 | `*Reloc.*` counters, everywhere | the control plane (log apply) exclusively — the data plane never touches them |
+| **static node** (`heddleStatic`): `r`'s base counters on a retired edge, and `r`'s `*Reloc.*` counters | replica `r` itself, through `HeddleNode.reconcileOwn` (#3649) — there is no control plane, and `r` marks the edge locally unwritable before it reads its own finals |
+
+The static row keeps the discipline rather than relaxing it. A static peer's repair reads and
+writes only slots keyed by itself, so each `(edge, counter, replica)` slot still has one writer;
+what changes is only *who* that writer is. It is not the governed design run without a log: no
+peer derives another's row, so no peer needs a log-pure view of it.
 
 With the two §4 rules (republish-observed always; fabricate-beyond-owner only on a
 fenced slot), no slot ever has two independent writers, so the max-join erasure of

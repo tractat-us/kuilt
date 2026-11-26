@@ -1566,6 +1566,49 @@ internal fun HeddleNode.sampleScheduleOutcomes(root: GroupId): String =
 climbed: the highest child position as a fraction of its ceiling. A long-running parent passes
 one; the ledger's virtual-time reads saturate there, and the picks do not change.
 
+## Repairing a reweight on a static cluster
+
+**Intent:** you changed the weight of a group that has children of its own, on peers booted with
+`heddleStatic`, after work had already run under it. The group's holdings now read negative and
+`validate()` reports `PersistentNegativeHoldings`, because that work was charged through the old
+edge and the new one starts empty.
+**Primitive:** `HeddleNode.reconcileOwn(child)` (`:kuilt-heddle`), called by **every** peer for
+itself once the new edge is active. Each peer moves only its own share of the old edge onto the
+new one, so the peers never have to agree on anyone else's numbers, and their repairs join cleanly
+in any order, partitioned or not. The ledger validates clean once every peer that spent through
+the old edge has called it.
+
+<!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleReconcileOwn -->
+```kotlin
+internal fun HeddleNode.sampleReconcileOwn(child: GroupId): String =
+    when (val outcome = reconcileOwn(child)) {
+        // Moved: this peer's share of the old edges now rides the live edge.
+        is ReconcileOwnOutcome.Repaired -> "moved ${outcome.credit} credit and ${outcome.spent} spent onto ${outcome.onto.value}"
+        // This peer's row is already drained. Calling again is harmless.
+        ReconcileOwnOutcome.NothingToRepair -> "nothing of mine to move"
+        // The retire, or the new edge's activation, has not reached this peer yet. Call again later.
+        ReconcileOwnOutcome.NoRetiredEdge -> "no retired edge yet"
+        ReconcileOwnOutcome.NoLiveEdge -> "no live edge yet"
+        // The rest write nothing and do not clear by themselves: the tree needs an operator.
+        is ReconcileOwnOutcome.TwoLiveEdges -> "close all but one of ${outcome.edges.map { it.value }}"
+        is ReconcileOwnOutcome.CrossParent -> "retired edges hang off ${outcome.foreign.values.map { it.value }}, not ${outcome.liveParent.value}"
+        is ReconcileOwnOutcome.Refused -> "refused: ${outcome.reason}"
+    }
+```
+
+- **A reservation still open across the old edge is safe.** Once the move is made, the call marks
+  the old edge, so completing such a reservation afterwards charges the new edge instead. A
+  refused call marks nothing. A restart forgets the mark, and the reservation with it.
+- **Repair after a restart only once the peer has caught up.** A static peer gets its own earlier
+  writes back from the others. If it repairs before they arrive, it moves too little, and a late
+  write it made on the old edge stays stranded there for good.
+- **A move across parents is refused.** Moving a group under another parent strands it the same
+  way. Nothing conserves across two parents, so if any retired edge hangs off another parent,
+  nothing moves and `CrossParent` names both parents.
+- **Two live edges into one group** answer `TwoLiveEdges`: close all but one, then call again.
+- **A governed node has no such call.** There, `GovernedHeddleNode.reconcile` re-homes the strand
+  through the log, as the next section describes.
+
 ## Minting quota and reshaping with agreement
 
 **Intent:** mint new entitlement or re-parent a group *while the system runs*, and need

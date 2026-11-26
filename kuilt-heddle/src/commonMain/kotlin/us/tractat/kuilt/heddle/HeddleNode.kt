@@ -194,11 +194,13 @@ public class HeddleNode internal constructor(
     private val lostPeers = HashSet<ReplicaId>()
 
     /**
-     * Edges this peer has been told, through the committed control log, that it must never author a
-     * slot on again — the §6.2 step-2 barrier mark ([quiesceLocally]). **Local, in-memory, and
-     * deliberately not replicated:** it is a promise this incarnation made, and a restart replays the
-     * log to restore it before the boot gate lets any mutator run
-     * (`GovernedHeddleNode.isWritable`, relocation design §6.5 residual 3).
+     * Edges this peer must never author a slot on again. On a governed node the committed control
+     * log says so — the §6.2 step-2 barrier mark ([quiesceLocally]). On a static node this peer
+     * marks them itself, once [reconcileOwn] has drained its own rows there. **Local, in-memory, and
+     * deliberately not replicated:** it is a promise this incarnation made. A governed restart
+     * replays the log to restore it before the boot gate lets any mutator run
+     * (`GovernedHeddleNode.isWritable`, relocation design §6.5 residual 3). A static restart loses it,
+     * together with every reservation that could have needed it.
      *
      * Written and read only under [lock], which is what makes the mark atomic with respect to
      * [complete] — the whole defeat of the barrier-vs-completion race.
@@ -286,6 +288,102 @@ public class HeddleNode internal constructor(
      * and [GovernedHeddleNode.retire][GovernedHeddleNode.retire] stays CLOSING-only in log order.
      */
     public fun retire(edge: AttachmentId): Boolean = applyIfPresent { it.retire(edge) }
+
+    /**
+     * Re-home **this peer's own** share of what [child]'s retired inbound edges carried onto its live
+     * inbound edge, so a reweight of an internal group does not leave [child]'s holdings negative
+     * (#3649). Each peer calls it for itself, as it calls [schedule]. Once every peer that spent
+     * through the old edge has, the ledger validates clean.
+     *
+     * **Why every peer can call it on its own: one writer per row.** Every counter slot of the
+     * ledger is keyed by the replica that writes it, and on a static node that replica is its only
+     * writer: there is no control plane to write the relocation families. The move reads only
+     * `self`'s base slots on the retired edges and writes only `self`-keyed slots: it drains `self`'s
+     * slots on the old edges and credits `self`'s relocation slots on the live one. Two peers' moves
+     * touch disjoint slots and join without conflict, in any order and across a partition, and no
+     * peer derives another's row from a gossip view of it. `HeddleNodeReconcileOwnPropertyTest`
+     * pins that on three peers.
+     *
+     * **Read, publish, then mark, in one locked section.** Once the move is published, or found
+     * already made, the retired edges are marked locally unwritable, the mark the governed barrier
+     * uses. A reservation captured across one and completed afterwards then charges the live edge
+     * instead of the drained one. No completion can run between the read and the mark, because both
+     * hold the node lock. A refused move marks nothing.
+     *
+     * **A restart forgets the marks, and every reservation with them,** so nothing left after it can
+     * charge a retired edge. What a restart can break is the read. A static node boots from its mint
+     * and recovers its own earlier writes by anti-entropy, so a restarted peer that calls this before
+     * they have come back reads stale finals and moves too little. The writes that arrive later sit
+     * on the drained edge and the ledger stays in conflict. This is the cross-incarnation gap of the
+     * relocation design, §6.5 residual 2, on the static path; `HeddleNodeReconcileOwnTest` pins what
+     * it leaves.
+     *
+     * Every retired edge into [child] must hang off the live edge's parent, because a move conserves
+     * only within one parent; otherwise nothing moves and the answer is
+     * [ReconcileOwnOutcome.CrossParent]. Calling it again is harmless and answers
+     * [ReconcileOwnOutcome.NothingToRepair].
+     *
+     * [GovernedHeddleNode] does not expose this: there every relocation goes through the control
+     * log, with [GovernedHeddleNode.reconcile].
+     *
+     * @sample us.tractat.kuilt.heddle.sampleReconcileOwn
+     */
+    public fun reconcileOwn(child: GroupId): ReconcileOwnOutcome = lock.withLock {
+        // Flush first: a buffered charge waiting for a live edge may still cross an edge of this
+        // strand that is not yet marked, and the finals read below must include it.
+        flushBufferedCharges()
+        var decision: OwnRelocation? = null
+        ledgerQuilter.mutateOrSkip { s -> ownRelocation(s, child).also { decision = it }.patch }
+        val made = checkNotNull(decision) { "mutateOrSkip ran no transform" }
+        // Under the lock still, so no completion runs between the read above and this mark.
+        if (made.outcome is ReconcileOwnOutcome.Repaired || made.outcome == ReconcileOwnOutcome.NothingToRepair) {
+            quiescedEdges += made.strand
+        }
+        made.outcome
+    }
+
+    /** What [ownRelocation] decided: the answer, the patch to publish if any, and the strand it read. */
+    private class OwnRelocation(
+        val outcome: ReconcileOwnOutcome,
+        val patch: Patch<EntitlementLedger>? = null,
+        val strand: List<AttachmentId> = emptyList(),
+    )
+
+    /** [reconcileOwn]'s decision on [s], a pure read: it marks nothing and writes nothing. */
+    private fun ownRelocation(s: EntitlementLedger, child: GroupId): OwnRelocation {
+        val retired = s.retiredInboundEdges(child).sorted()
+        if (retired.isEmpty()) return OwnRelocation(ReconcileOwnOutcome.NoRetiredEdge)
+        val liveEdges = s.liveInboundEdges(child)
+        val live = when (liveEdges.size) {
+            0 -> return OwnRelocation(ReconcileOwnOutcome.NoLiveEdge)
+            1 -> liveEdges.single()
+            else -> return OwnRelocation(ReconcileOwnOutcome.TwoLiveEdges(liveEdges))
+        }
+        // `liveInboundEdges` keeps only an edge whose record names the child, so the record is there.
+        val liveParent = checkNotNull(s.record(live)) { "live edge $live has no record" }.parent
+        // So does `retiredInboundEdges`. Any retired edge from another parent refuses the whole move,
+        // as the governed reconcile does, so `NothingToRepair` never hides a strand left standing.
+        val foreign = retired
+            .associateWith { e -> checkNotNull(s.record(e)) { "retired edge $e has no record" }.parent }
+            .filterValues { it != liveParent }
+        if (foreign.isNotEmpty()) return OwnRelocation(ReconcileOwnOutcome.CrossParent(liveParent, foreign))
+        val finals = retired.associateWith { edge -> mapOf(self to s.baseFinalsOn(edge, self)) }
+        return when (val move = s.relocationPatch(live, finals)) {
+            is Relocation.Moved -> {
+                val moved = move.patch
+                fun delta(family: CounterFamily): Long = moved.storedSlot(family, live, self) - s.storedSlot(family, live, self)
+                val repaired = ReconcileOwnOutcome.Repaired(
+                    onto = live,
+                    from = retired,
+                    credit = delta(CounterFamily.ISSUED_RELOC_IN),
+                    spent = delta(CounterFamily.LEAF_RELOC_IN) + delta(CounterFamily.ROLLUP_RELOC_IN),
+                )
+                OwnRelocation(repaired, Patch(moved), retired)
+            }
+            Relocation.Nothing -> OwnRelocation(ReconcileOwnOutcome.NothingToRepair, strand = retired)
+            is Relocation.Refused -> OwnRelocation(ReconcileOwnOutcome.Refused(move.reason))
+        }
+    }
 
     /**
      * The sink the H5 [HeddleControlPlane] uses to **publish an already-approved** control patch
@@ -534,8 +632,8 @@ public class HeddleNode internal constructor(
      *
      * **The one exception to "charge the captured path": a quiesced edge** (issue #1693;
      * `heddle-design.md` §10 invariant 4 as weakened by §4.4). If the captured path names an edge
-     * this peer has applied a `Quiesce` for, the charge re-homes to that edge's child's **live**
-     * inbound generation. That is not a rewrite of history — a quiesced edge is drained by
+     * this peer has quiesced — by applying a `Quiesce`, or by draining its own rows there with
+     * [reconcileOwn] — the charge re-homes to that edge's child's **live** inbound generation. That is not a rewrite of history — a quiesced edge is drained by
      * construction, so re-homing the completion is the same conserving move the recovery performs,
      * taken at charge time. Charging the dead edge instead is exactly the straggler that would leave
      * a permanently unclearable per-edge-safety violation on it. If no live inbound exists yet, the
@@ -594,8 +692,9 @@ public class HeddleNode internal constructor(
 
     /**
      * Retry every buffered charge, keeping the ones that still have nowhere to re-home to. Always
-     * called under [lock], from [complete], [quiesceLocally], and the control sink's publish — the
-     * three moments at which a live inbound generation can newly exist for a buffered charge.
+     * called under [lock], from [complete], [quiesceLocally], [reconcileOwn] and the control sink's
+     * publish: the moments at which a live inbound generation can newly exist for a buffered charge,
+     * or a strand's finals are about to be read.
      */
     private fun flushBufferedCharges() {
         if (bufferedCharges.isEmpty()) return

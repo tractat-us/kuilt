@@ -139,3 +139,63 @@ internal fun AllocationOutcome.toScheduleOutcome(): ScheduleOutcome = when (this
     is AllocationOutcome.LifetimeExhausted -> ScheduleOutcome.LifetimeExhausted(parent)
     is AllocationOutcome.WeightBudget -> ScheduleOutcome.WeightBudget(parent)
 }
+
+/**
+ * What [HeddleNode.reconcileOwn] did: it moved this peer's own share of a retired edge's accounts,
+ * found none of its own left to move, could not move yet, or must not move at all.
+ *
+ * [NoRetiredEdge] and [NoLiveEdge] clear by themselves as the reweight's steps reach this peer, so
+ * call again later. [TwoLiveEdges], [CrossParent] and [Refused] do not: nothing was written, and
+ * the strand stays as it is until an operator changes the tree.
+ */
+public sealed interface ReconcileOwnOutcome {
+
+    /**
+     * This peer's share moved from the retired edges [from] onto the live edge [onto]. [credit] is
+     * what the old edges carried for this peer, issued less returned. [spent] is the service already
+     * charged through them, which moves with it.
+     */
+    public data class Repaired(
+        public val onto: AttachmentId,
+        public val from: List<AttachmentId>,
+        public val credit: Long,
+        public val spent: Long,
+    ) : ReconcileOwnOutcome
+
+    /**
+     * This peer's rows on the retired edges are already drained: it repaired before, or it never
+     * wrote there. Other peers' rows may still be stranded, and each of them repairs its own.
+     */
+    public data object NothingToRepair : ReconcileOwnOutcome
+
+    /** This peer sees no retired edge into the child: the retire has not reached it yet, or there is none. */
+    public data object NoRetiredEdge : ReconcileOwnOutcome
+
+    /** The child has a retired inbound edge and no live one yet: the new edge is not active on this peer's view. */
+    public data object NoLiveEdge : ReconcileOwnOutcome
+
+    /**
+     * The child has two or more live inbound [edges], so there is no one edge to move onto. The
+     * ledger quarantines such a child (`LedgerConflict.DualActiveInbound`), and it does not clear by
+     * itself: an operator closes and drains all but one of the edges, and then this peer calls again.
+     */
+    public data class TwoLiveEdges(public val edges: List<AttachmentId>) : ReconcileOwnOutcome
+
+    /**
+     * Some retired edges into the child hang off another parent than its live edge's [liveParent]:
+     * [foreign] names each such edge with its parent. A move conserves only within one parent, so
+     * nothing moved, the same-parent edges included. It does not clear by itself.
+     */
+    public data class CrossParent(
+        public val liveParent: GroupId,
+        public val foreign: Map<AttachmentId, GroupId>,
+    ) : ReconcileOwnOutcome
+
+    /**
+     * The ledger refused the move, and [reason] says why: this peer's own rows cannot cover what was
+     * charged through them, as when it spent credit another peer handed it, or they are inconsistent,
+     * as a restart that moved from stale finals can leave them. Nothing was written and the strand
+     * stays.
+     */
+    public data class Refused(public val reason: String) : ReconcileOwnOutcome
+}
