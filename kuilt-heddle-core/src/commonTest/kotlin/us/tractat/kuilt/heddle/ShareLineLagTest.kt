@@ -160,16 +160,16 @@ class ShareLineLagTest {
         }
     }
 
-    /**
-     * Taking a line leaves the engine's wake memory as it found it, though the step it takes at
-     * each parent moves the memory it runs on: counted on a fork, so the rig is not vacuous.
-     */
     /** What [h]'s open leases reserve on each edge, as its wake step reads it (#3238). */
     private fun reservedOf(h: LocalHeddle): (AttachmentId) -> Long {
         val sums = h.reservedBeneath()
         return { edge -> sums[edge] ?: 0L }
     }
 
+    /**
+     * Taking a line leaves the engine's wake memory as it found it, though the step it takes at
+     * each parent moves the memory it runs on: counted on a fork, so the rig is not vacuous.
+     */
     @Test
     fun askingMovesNoMemory() {
         var stepsThatMove = 0

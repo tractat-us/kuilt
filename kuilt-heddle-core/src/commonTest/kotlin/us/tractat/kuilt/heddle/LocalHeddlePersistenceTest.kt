@@ -374,9 +374,10 @@ class LocalHeddlePersistenceTest {
      * restarted scheduler. The call that first observes `b` is the overrunning complete of `b`'s
      * own lease, which counts `b` waiting. It finds `b` seated and demanding, and the forgetful
      * engine has never observed it, so by the restart rule (design §7.2) it is a waker, clamped past
-     * the front by the one unit its open lease reserves (#3238). That front holds `a`'s completed
-     * job, which the memory's clamp ran before, so the offset is one unit above the memory's and
-     * `b` stands one unit further back: the penalty side. It takes no more picks than it would have.
+     * the front by the one unit its open lease reserves (#3238). That unit is in `b`'s position
+     * too, so it nets out. The front holds `a`'s completed job, which the memory's clamp ran
+     * before, so the offset is one unit above the memory's and `b` stands one unit further back:
+     * the penalty side. It takes no more picks than it would have.
      * Before the rule the forgetful engine kept `b` at its raw position and handed it back its idle
      * credit. Forgetting is not free, though: every seated child found demanding is clamped, and
      * since all of them are joining, each comes back level with the furthest-ahead one, so a child
@@ -424,7 +425,7 @@ class LocalHeddlePersistenceTest {
                 assertEquals(
                     offset + Int128.of(TICKS_PER_UNIT),
                     wakeOffsetOf(firstSight, b),
-                    "and re-clamped it past a front holding a's job by the unit b's open lease reserves",
+"and re-clamped it one unit above the memory's offset, for a's job in the front (b's lease is counted past the front and in its position alike, so it nets out)",
                 )
             },
             { assertTrue(bPicks(forgot) <= bPicks(expected), "so it hands b back no idle credit: ${bPicks(forgot)} against ${bPicks(expected)}") },

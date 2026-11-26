@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.math.abs
 import kotlin.test.Test
@@ -74,14 +75,20 @@ class WakeClampOpenLeaseTest {
         return LocalHeddle.restore(snapshot, policy, epoch = s.epoch + 1)
     }
 
+    /** `a`'s picks of the 20, and the wake offset on the edge holding its lease once the first pick has woken it, the lease still open. */
+    private class Run(val picks: Int, val wakeOffset: Int128)
+
     /** The first pick wakes `a` with its lease open; the lease settles as [row] says; 19 more picks with both asking. */
-    private fun aPicksAfter(h: LocalHeddle, open: Lease, row: Row): Int {
+    private fun aPicksAfter(h: LocalHeddle, open: Lease, row: Row): Run {
         var picks = 0
+        var wakeOffset = Int128.ZERO
         repeat(PICKS) {
             val lease = h.lease(both, startedAt = 100L + it)
             if (lease.leaf == a) picks++
             h.complete(lease.id, 1L, waiting = both)
             if (it == 0) {
+                val edge = assertNotNull(h.capturedPath(open.id), "${row.label}: the lease is still open at the wake").last()
+                wakeOffset = h.persist().allocatorMemory.wakeOffsets[edge] ?: Int128.ZERO
                 val settled = when (row.settle) {
                     Settle.COMPLETE -> h.complete(open.id, row.cost, waiting = both)
                     Settle.CANCEL -> h.cancel(open.id)
@@ -89,16 +96,16 @@ class WakeClampOpenLeaseTest {
                 assertIs<LeaseOutcome.Done>(settled, "${row.label}: the open lease settles")
             }
         }
-        return picks
+        return Run(picks, wakeOffset)
     }
 
-    private class Cell(val kept: Int, val dropped: Int, val reloaded: Int, val leftWithLeaseOpen: Boolean, val leaseMoved: Boolean)
+    private class Cell(val kept: Int, val dropped: Run, val reloaded: Run, val leftWithLeaseOpen: Boolean, val leaseMoved: Boolean)
 
     private fun measure(row: Row): Cell {
         val (h, open) = aWentIdleWithItsLeaseOpen(row.reserved)
         val edge = assertNotNull(h.snapshot().ledger.lineageOf(a)).single()
         val left = edge in h.persist().allocatorMemory.departures && h.snapshot().leases.any { it.id == open.id }
-        val kept = aPicksAfter(restored(h, keepMemory = true), open, row)
+        val kept = aPicksAfter(restored(h, keepMemory = true), open, row).picks
         val dropped = aPicksAfter(restored(h, keepMemory = false), open, row)
         val reload = restored(h, keepMemory = true)
         assertTrue(reload.apply(doubled, generation = 1L).refusals.isEmpty(), "${row.label}: the reload lands whole")
@@ -107,11 +114,24 @@ class WakeClampOpenLeaseTest {
     }
 
     private fun table(cells: Map<Row, Cell>): String =
-        cells.entries.joinToString("\n") { (row, c) -> "  ${row.label}: kept ${c.kept}, dropped ${c.dropped}, reloaded ${c.reloaded}" }
+        cells.entries.joinToString("\n") { (row, c) -> "  ${row.label}: kept ${c.kept}, dropped ${c.dropped.picks} (offset ${c.dropped.wakeOffset}), reloaded ${c.reloaded.picks} (offset ${c.reloaded.wakeOffset})" }
 
     private fun withinAPick(cells: Map<Row, Cell>, column: String, of: (Cell) -> Int): Array<() -> Unit> =
         cells.map { (row, cell) ->
             { assertTrue(abs(cell.kept - of(cell)) <= 1, "${row.label}: $column must match kept within a pick\n${table(cells)}") }
+        }.toTypedArray()
+
+    /**
+     * The rig, standing: the wake left `a`'s lease edge an offset of at least the lease's own
+     * reservation, in ticks. `a` wakes ahead of the front its siblings set, so only the open lease
+     * counted past that front puts the offset there; clamped at the front alone it reads less.
+     */
+    private fun clampedPastItsLease(cells: Map<Row, Cell>, column: String, of: (Cell) -> Run): Array<() -> Unit> =
+        cells.map { (row, cell) ->
+            {
+                val floor = Int128.of(row.reserved * TICKS_PER_UNIT)
+                assertTrue(of(cell).wakeOffset >= floor, "the rig, ${row.label}: the $column engine clamped a past the front by its open lease, ${of(cell).wakeOffset} < $floor\n${table(cells)}")
+            }
         }.toTypedArray()
 
     /** A restart without the wake memory clamps `a` with its lease open, and gives it back nothing. */
@@ -121,8 +141,9 @@ class WakeClampOpenLeaseTest {
         assertAll(
             { assertTrue(cells.values.all { it.leftWithLeaseOpen }, "the rig: the engine saw a stop asking with its lease open") },
             { assertEquals(listOf(10, 10, 10, 6), cells.values.map { it.kept }, "the kept column, as the memory reads it\n${table(cells)}") },
-            { assertEquals(listOf(10, 10, 10, 6), cells.values.map { it.dropped }, "the dropped column, the same\n${table(cells)}") },
-            *withinAPick(cells, "dropped") { it.dropped },
+            { assertEquals(listOf(10, 10, 10, 6), cells.values.map { it.dropped.picks }, "the dropped column, the same\n${table(cells)}") },
+            *withinAPick(cells, "dropped") { it.dropped.picks },
+            *clampedPastItsLease(cells, "dropped") { it.dropped },
         )
     }
 
@@ -136,8 +157,9 @@ class WakeClampOpenLeaseTest {
         val cells = rows.associateWith(::measure)
         assertAll(
             { assertTrue(cells.values.all { it.leaseMoved }, "the rig: the reload moved the open lease onto a new edge") },
-            { assertEquals(listOf(10, 10, 10, 6), cells.values.map { it.reloaded }, "the reloaded column\n${table(cells)}") },
-            *withinAPick(cells, "reloaded") { it.reloaded },
+            { assertEquals(listOf(10, 10, 10, 6), cells.values.map { it.reloaded.picks }, "the reloaded column\n${table(cells)}") },
+            *withinAPick(cells, "reloaded") { it.reloaded.picks },
+            *clampedPastItsLease(cells, "reloaded") { it.reloaded },
         )
     }
 
