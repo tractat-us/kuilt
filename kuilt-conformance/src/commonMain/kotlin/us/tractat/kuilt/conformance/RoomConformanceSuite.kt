@@ -1486,9 +1486,10 @@ public abstract class RoomConformanceSuite {
 
     // ── (0c) What no honest device sends: the harness's forging hooks (#3710) ─
     //
-    // The host ignores a pass for another room, for another device's key, or from an issuer it does
-    // not trust, and decides the device as a newcomer: its admission policy is asked once and the
-    // membership is not marked as a return. A device's room never presents any of the three, so
+    // The host ignores a pass for another room, for another device's key, from an issuer it does not
+    // trust, or under a signature its issuer never made, and decides the device as a newcomer: its
+    // admission policy is asked once and the membership is not marked as a return. A device's room
+    // never presents any of the four, so
     // these rows plant one through [ReturnHarness.passPlanting], into the Proof of a fresh device that
     // has never held a pass and holds no seat. Each asserts its rig fired: the planter was asked once,
     // for a Proof its room put no pass in, and planted exactly the pass the row describes.
@@ -1573,6 +1574,47 @@ public abstract class RoomConformanceSuite {
                 { assertTrue(pass.issuer != outcome.hostKey, "rig: the planted pass is not the host's") },
                 { assertEquals(outcome.deviceKey, pass.subject, "rig: for the device presenting it") },
                 { assertEquals(GrantScope.Room(outcome.roomId), pass.scope, "rig: for this room") },
+                { outcome.assertVettedAsANewcomer(obligation) },
+            )
+        }
+
+    /**
+     * A pass naming the host as issuer, for the device presenting it and for this room, whose
+     * signature the host never made, is ignored. It is [PlantedPassRig.hostPass]'s pass with the last
+     * byte of its signature changed, so every field the host reads before the signature is good: the
+     * row reds on a host that checks a pass's fields and never its signature.
+     *
+     * The rig compares the planted pass with the honest one it came from rather than checking the
+     * signature itself, since only the harness knows the scheme its keys sign in.
+     * [aPlantedGoodPassLetsTheDeviceInUnvetted] is what shows the honest pass, unchanged, is one the
+     * host accepts.
+     */
+    @Test
+    public fun aPassTheHostDidNotSignIsIgnored(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val obligation = "a pass the host did not sign is ignored"
+            val h = returnHarnessOrDeclaredGap(obligation) ?: return@runTest
+            val rig = h.passPlanting.rigOrDeclaredGap(obligation) ?: return@runTest
+            var honest: Grant? = null
+            val outcome = admitWithPlanted(h, rig) { statement, sender, _ ->
+                val pass = rig.hostPass(sender, GrantScope.Room(statement.roomId)).also { honest = it }
+                listOf(pass.withSignatureChanged())
+            }
+            val pass = outcome.plantedPass()
+            val original = assertNotNull(honest, "rig: the planter was asked for the host's pass")
+            assertAll(
+                { assertEquals(outcome.hostKey, pass.issuer, "rig: the planted pass names the host as issuer") },
+                { assertEquals(outcome.deviceKey, pass.subject, "rig: for the device presenting it") },
+                { assertEquals(GrantScope.Room(outcome.roomId), pass.scope, "rig: for this room") },
+                { assertEquals(original.issuedAt to original.notAfter, pass.issuedAt to pass.notAfter, "rig: dated as the host's own pass") },
+                {
+                    assertEquals(
+                        original.wire.dropLast(1),
+                        pass.wire.dropLast(1),
+                        "rig: the same bytes as the host's pass, up to the signature's last byte",
+                    )
+                },
+                { assertTrue(original.wire.last() != pass.wire.last(), "rig: whose last byte differs, so the host did not sign it") },
                 { outcome.assertVettedAsANewcomer(obligation) },
             )
         }
@@ -3037,6 +3079,13 @@ public abstract class RoomConformanceSuite {
         assertEquals(1, perProof.single().size, "rig: the planter added exactly one pass: ${perProof.single()}")
         return perProof.single().single()
     }
+
+    /**
+     * This pass with the last byte of its signature changed: the same fields, signed by nobody. A
+     * pass's wire form ends in its signature, so the byte changed is the signature's.
+     */
+    private fun Grant.withSignatureChanged(): Grant =
+        assertNotNull(Grant.decode(wire.also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }), "rig: a pass with a changed signature still decodes")
 
     /** The host ignored the planted pass: one call to the policy, about the device's own key, and no mark. */
     private fun PlantedOutcome.assertVettedAsANewcomer(why: String) = assertAll(

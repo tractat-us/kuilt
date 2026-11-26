@@ -27,7 +27,7 @@ import kotlin.time.Instant
  *  - a **blank** tracking URL fails every gated obligation — this is the one runtime hole the sealed
  *    fixture leaves, since `Unsupported("")` is the only way left to write a declaration that
  *    declares nothing;
- *  - a **real** tracking URL lets all twenty-four skip cleanly, which is the survivability check above.
+ *  - a **real** tracking URL lets all twenty-five skip cleanly, which is the survivability check above.
  *
  * ## Why `jvmTest` and not `commonTest`
  *
@@ -141,6 +141,7 @@ class RoomConformanceGapDeclarationTest {
             { assertFailsWith<AssertionError> { suite.grantForAnotherRoomIsIgnored() } },
             { assertFailsWith<AssertionError> { suite.grantForAnotherSubjectIsIgnored() } },
             { assertFailsWith<AssertionError> { suite.untrustedIssuerIsIgnored() } },
+            { assertFailsWith<AssertionError> { suite.aPassTheHostDidNotSignIsIgnored() } },
             { assertFailsWith<AssertionError> { suite.aProcessUnderASupersededIdEndsSuperseded() } },
         )
     }
@@ -148,11 +149,11 @@ class RoomConformanceGapDeclarationTest {
     // ── A declared gap skips cleanly — the survivability half ──
 
     /**
-     * All twenty-four gated obligations skip without throwing, without hanging and without leaking a
+     * All twenty-five gated obligations skip without throwing, without hanging and without leaking a
      * coroutine, so a harness that genuinely cannot partition its links can still subclass this
-     * suite. Deliberately **one** test over all twenty-four rather than twenty-four: what is under assertion is
+     * suite. Deliberately **one** test over all twenty-five rather than twenty-five: what is under assertion is
      * that the declared-gap path is survivable as a whole, and a per-obligation split would report
-     * twenty-four identical greens for one property.
+     * twenty-five identical greens for one property.
      *
      * Note what this cannot do: it cannot tell a harness that *truly* cannot fault-inject from one
      * that could and declared otherwise. Nothing at this layer can — the declaration is a claim
@@ -185,6 +186,7 @@ class RoomConformanceGapDeclarationTest {
         suite.grantForAnotherRoomIsIgnored()
         suite.grantForAnotherSubjectIsIgnored()
         suite.untrustedIssuerIsIgnored()
+        suite.aPassTheHostDidNotSignIsIgnored()
         suite.aProcessUnderASupersededIdEndsSuperseded()
     }
 
@@ -214,12 +216,13 @@ class RoomConformanceGapDeclarationTest {
             { assertFailsWith<AssertionError> { suite.grantForAnotherRoomIsIgnored() } },
             { assertFailsWith<AssertionError> { suite.grantForAnotherSubjectIsIgnored() } },
             { assertFailsWith<AssertionError> { suite.untrustedIssuerIsIgnored() } },
+            { assertFailsWith<AssertionError> { suite.aPassTheHostDidNotSignIsIgnored() } },
             { assertFailsWith<AssertionError> { suite.aProcessUnderASupersededIdEndsSuperseded() } },
         )
     }
 
     /**
-     * A tracked declaration of both hooks skips the five rows they gate without throwing, hanging or
+     * A tracked declaration of both hooks skips the six rows they gate without throwing, hanging or
      * leaking a coroutine, inside a return rig that is otherwise supported: the rows gate on the hook
      * before they build a room.
      */
@@ -230,6 +233,7 @@ class RoomConformanceGapDeclarationTest {
         suite.grantForAnotherRoomIsIgnored()
         suite.grantForAnotherSubjectIsIgnored()
         suite.untrustedIssuerIsIgnored()
+        suite.aPassTheHostDidNotSignIsIgnored()
         suite.aProcessUnderASupersededIdEndsSuperseded()
     }
 

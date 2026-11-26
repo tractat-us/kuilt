@@ -109,6 +109,9 @@ public interface PlantedPassRig {
      * A pass the host's own key signs, letting [subject] back into [scope]: issued at the host's
      * now and good on the host's clock for at least an hour, so the only thing wrong with it is
      * what a row put there.
+     *
+     * The suite requires the host to accept any pass its key validly signed, so a host that also
+     * keeps a list of the passes it issued, and refuses one not on it, fails the control row.
      */
     public suspend fun hostPass(subject: DidKey, scope: GrantScope): Grant
 
