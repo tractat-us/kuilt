@@ -358,21 +358,56 @@ class HeddleAcceptanceTest {
      * idle child: the rig asserts that, and that the idle child read far behind the runner before
      * the boot call, which is what makes "level" mean something. The runs are short enough that
      * every position stays inside the window the public reads hold it in.
+     *
+     * The runner spends all it holds before the crash. The clamp counts holdings (#3721), so this
+     * rig empties the runner to isolate the front: what the clamp does with the runner's holdings
+     * is [aRestartedSchedulerWhoseRunnerCrashedHoldingItsGrantsLeavesTheIdleChildThatGap].
      */
     @Test
     fun aRestartedSchedulerWithALongIdleChildDemandingAtBootComesBackLevel() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
-        val run = restartRun(callsBefore = RESTART_CALLS_BEFORE, callsAfter = RESTART_CALLS_AFTER)
+        val run = restartRun(callsBefore = RESTART_CALLS_BEFORE, callsAfter = RESTART_CALLS_AFTER, runnerSpendsAll = true)
         assertAll(
-            *run.levelAndConserved(),
+            *run.ranAndConserved(),
+            { assertEquals(0L, run.lightOutstandingBefore, "the rig: and the runner spent all it held before it") },
+            { assertLevel(run.idleLevel, run.lightLevel, "the long-idle child came back level with the runner, not behind it") },
             {
                 assertTrue(
                     run.idleAtRestart >= Rational.ZERO,
                     "the rig: the idle child never stood below zero, so only the restart rule moves it: ${run.idleAtRestart}",
                 )
             },
+        )
+    }
+
+    /**
+     * [aRestartedSchedulerWithALongIdleChildDemandingAtBootComesBackLevel] as a real crash leaves
+     * it: the runner keeps the unused part of every grant it held, 140,737,488,322,559 units on
+     * this seed, and v1 reclaims none of it (§8.1). The restarted scheduler clamps the runner, the
+     * front, past itself by that outstanding, and the idle child to the front, so the idle child
+     * comes back that far behind the runner and is owed it: the clamp's known error (#3721,
+     * ruling 3, `FairShareAllocator`'s *Two histories*), since the idle child idled through the
+     * whole run and kept memory would have taken its lag.
+     *
+     * The arm asserts the gap exactly. The boot call's own grants move both children, so the gap
+     * the clamp left is each one's level less what that call issued it, over its weight: the
+     * runner's outstanding at the crash, no more.
+     */
+    @Test
+    fun aRestartedSchedulerWhoseRunnerCrashedHoldingItsGrantsLeavesTheIdleChildThatGap() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val run = restartRun(callsBefore = RESTART_CALLS_BEFORE, callsAfter = RESTART_CALLS_AFTER, runnerSpendsAll = false)
+        // The runner's weight is 1 and the idle child's 60 (the rig's lanes).
+        val clampedGap = (run.lightLevel - Rational.of(run.lightIssuedAtBoot)) -
+            (run.idleLevel - Rational.of(run.idleIssuedAtBoot, 60L))
+        assertAll(
+            *run.ranAndConserved(),
+            { assertTrue(run.lightOutstandingBefore > LEVEL_SLACK, "the rig: the runner crashed holding more than the level slack: ${run.lightOutstandingBefore}") },
+            { assertEquals(Rational.of(run.lightOutstandingBefore), clampedGap, "the idle child came back behind the runner by exactly the runner's outstanding") },
         )
     }
 
@@ -383,12 +418,17 @@ class HeddleAcceptanceTest {
         val callsBefore: Int,
         val callsAfter: Int,
         val idleIssuedBefore: Long,
+        /** What the runner still held when it crashed, which the clamp counts past the front. */
+        val lightOutstandingBefore: Long,
         val freshReplica: Boolean,
         /** The idle child's effective virtual service on the restarted scheduler, before its first call. */
         val idleAtRestart: Rational,
         /** The runner's, read the same way. */
         val lightAtRestart: Rational,
         val atBoot: ScheduleOutcome,
+        /** What the boot call issued the idle child, and the runner. */
+        val idleIssuedAtBoot: Long,
+        val lightIssuedAtBoot: Long,
         val idleLevel: Rational,
         val lightLevel: Rational,
         val boundAtBoot: BoundMetrics,
@@ -396,8 +436,8 @@ class HeddleAcceptanceTest {
         val converged: () -> Unit,
         val shortfall: String?,
     ) {
-        /** The rig ran, and the idle child came back level. */
-        fun levelAndConserved(): Array<() -> Unit> = arrayOf(
+        /** The rig ran, and every unit is accounted for. */
+        fun ranAndConserved(): Array<() -> Unit> = arrayOf(
             { assertEquals(plannedBefore, callsBefore, "the run before the restart made every call") },
             { assertEquals(plannedAfter + 1, callsAfter, "and the run after it made every call") },
             { assertEquals(0L, idleIssuedBefore, "the rig: the heavy child idled through the whole run before the crash") },
@@ -409,7 +449,6 @@ class HeddleAcceptanceTest {
                 )
             },
             { assertIs<ScheduleOutcome.Delegated>(atBoot, "the boot call, with the long-idle child demanding, delegates") },
-            { assertLevel(idleLevel, lightLevel, "the long-idle child came back level with the runner, not behind it") },
             { assertTrue(boundAtBoot.isConsistent, "the §8.2 pieces are ordered after the boot call: $boundAtBoot") },
             { assertTrue(boundAfter.isConsistent, "and after the run: $boundAfter") },
             converged,
@@ -423,7 +462,7 @@ class HeddleAcceptanceTest {
      * and makes its boot call with every lane waiting, the long-idle one included; then a run of
      * random calls, and gossip to settle.
      */
-    private suspend fun TestScope.restartRun(callsBefore: Int, callsAfter: Int): RestartRun {
+    private suspend fun TestScope.restartRun(callsBefore: Int, callsAfter: Int, runnerSpendsAll: Boolean): RestartRun {
         val started = TimeSource.Monotonic.markNow()
         val cluster = bootedCluster(mint = mapOf(1 to SUPPLY), lanes = spreadLanes)
         val idle = spreadLanes.single { it.weight == Weight.of(60L) }
@@ -436,9 +475,19 @@ class HeddleAcceptanceTest {
         }
         // Its demand goes with it: the restarted process advertises its own.
         for (lane in spreadLanes) first.advertise(lane.id, Demand.NONE)
+        // And, on the level arm, its work runs out: the clamp counts holdings (#3721), so that arm
+        // empties the runner to isolate the front.
+        if (runnerSpendsAll) {
+            for (lane in spreadLanes) {
+                val held = first.ledger.value.holdings(lane.child, first.self)
+                if (held == 0L) continue
+                first.execution.complete(assertIs<ReserveOutcome.Reserved>(first.execution.reserve(lane.child, held)).id, held)
+            }
+        }
         cluster.pump()
         val settledBefore = cluster.peers[0].node.ledger.value
         val idleIssuedBefore = first.ledger.value.edge(idle.id)?.issued ?: 0L
+        val lightOutstandingBefore = first.ledger.value.edge(light.id)?.outstanding ?: 0L
 
         cluster.restart(1)
         val restarted = cluster.peers[1]
@@ -457,7 +506,9 @@ class HeddleAcceptanceTest {
         val second = restarted.node.asSchedulingPeer()
         // The first call after the boot: every lane waits, the long-idle one included.
         after.advertise(second, spreadLanes)
+        val issuedBeforeBoot = listOf(idle, light).map { restarted.node.ledger.value.edge(it.id)?.issued ?: 0L }
         val atBoot = after.schedule(second)
+        val issuedAtBoot = listOf(idle, light).mapIndexed { i, lane -> (restarted.node.ledger.value.edge(lane.id)?.issued ?: 0L) - issuedBeforeBoot[i] }
         after.chargeBelowReservation(second)
         val boundAtBoot = second.boundMetrics(root)
         val idleLevel = restarted.node.effectiveVirtualService(idle, spreadLanes)
@@ -470,7 +521,7 @@ class HeddleAcceptanceTest {
         cluster.pump(800)
         val merged = cluster.peers[0].node.ledger.value
         println(
-            "[${started.elapsedNow()}] restart: ${before.grants} grants before, ${after.grants} after, " +
+            "[${started.elapsedNow()}] restart: ${before.grants} grants before, the runner holding $lightOutstandingBefore, ${after.grants} after, " +
                 "idle at $idleAtRestart against $lightAtRestart, then $idleLevel against $lightLevel",
         )
         return RestartRun(
@@ -479,10 +530,13 @@ class HeddleAcceptanceTest {
             callsBefore = before.calls,
             callsAfter = after.calls,
             idleIssuedBefore = idleIssuedBefore,
+            lightOutstandingBefore = lightOutstandingBefore,
             freshReplica = restarted.replica != first.self,
             idleAtRestart = idleAtRestart,
             lightAtRestart = lightAtRestart,
             atBoot = atBoot,
+            idleIssuedAtBoot = issuedAtBoot[0],
+            lightIssuedAtBoot = issuedAtBoot[1],
             idleLevel = idleLevel,
             lightLevel = lightLevel,
             boundAtBoot = boundAtBoot,

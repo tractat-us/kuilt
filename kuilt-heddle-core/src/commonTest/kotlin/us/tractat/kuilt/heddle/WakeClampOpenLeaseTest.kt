@@ -187,6 +187,52 @@ class WakeClampOpenLeaseTest {
         )
     }
 
+    /** The engine once `a`, still asking, has leased a job reserving [reserved] while `b` asked nothing; and that lease. */
+    private fun aRanOnWhileBIdled(reserved: Long): Pair<LocalHeddle, Lease> {
+        val h = LocalHeddle.bootWhole(pair, policy, epoch = 0L)
+        h.reconcileCapacity(totalSlots = 8L)
+        repeat(WARM_UP) {
+            val lease = h.lease(both, startedAt = it.toLong())
+            h.complete(lease.id, 1L, waiting = both)
+        }
+        val out = h.acquire(waiting = setOf(a), eligible = setOf(a), startedAt = WARM_UP.toLong(), reservation = reserved)
+        return h to assertIs<AcquireOutcome.Acquired>(out, "a's running job, b idle").lease
+    }
+
+    /**
+     * The other history of the same ledger (#3721, ruling 3): `a` is the front, its running job's
+     * lease reserving 8, and `b` idled while it was granted, so `b`'s lag is one it should forfeit.
+     * Kept, the engine saw `b` leave and moves it by its parent's clock, level with `a`: 10 of 20.
+     * Dropped, the restarted engine meets both for the first time, clamps `a` 8 past itself and `b`
+     * to the front, and `b` keeps the 8 as lag: `a` takes 6. The lease completes at its full 8
+     * after the first pick, so nothing it hands back moves `a`.
+     *
+     * No clamp gets this row and [aRestartedWakerIsClampedPastTheFrontByItsOpenLease]'s both right,
+     * since the restarted engine cannot tell them apart; this one pins what the clamp gives up, and
+     * that it is bounded: the share line reads `b` behind `a` by at most the lease's reservation more
+     * than the kept engine does.
+     */
+    @Test
+    fun aRunningFrontsOpenLeaseLeavesAnIdleSiblingAtMostThatLag() {
+        val row = Row("running front reserved 8 cost 8, b idle", reserved = 8L, settle = Settle.COMPLETE, cost = 8L)
+        val (h, open) = aRanOnWhileBIdled(row.reserved)
+        val bEdge = assertNotNull(h.snapshot().ledger.lineageOf(b)).single()
+        val bLeft = bEdge in h.persist().allocatorMemory.departures
+        val keptGap = aAheadOfB(restored(h, keepMemory = true))
+        val droppedGap = aAheadOfB(restored(h, keepMemory = false))
+        val kept = aPicksAfter(restored(h, keepMemory = true), open, row).picks
+        val dropped = aPicksAfter(restored(h, keepMemory = false), open, row).picks
+        assertAll(
+            { assertTrue(bLeft, "the rig: the engine saw b stop asking") },
+            { assertEquals(Rational.ZERO, keptGap, "kept: the share line reads b level with a") },
+            { assertEquals(Rational.of(row.reserved, 1L), droppedGap, "dropped: it reads b behind a by the lease's reservation") },
+            { assertTrue(droppedGap - keptGap <= Rational.of(row.reserved, 1L), "the lag b keeps, ${droppedGap - keptGap}, is at most a's open reservation") },
+            { assertEquals(10, kept, "kept: 10 of 20") },
+            { assertEquals(6, dropped, "dropped: b spends its 8 of lag first, and a takes 6") },
+            { assertTrue(kept != dropped, "the two histories read apart: kept $kept, dropped $dropped") },
+        )
+    }
+
     private companion object {
         const val WARM_UP = 20
         const val ALONE = 4

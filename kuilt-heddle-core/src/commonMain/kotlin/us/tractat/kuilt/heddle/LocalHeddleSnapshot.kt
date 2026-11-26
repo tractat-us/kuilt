@@ -170,7 +170,6 @@ public class LocalHeddleSnapshot internal constructor(
             leasable = leasable,
             // The view keeps no leases, only how many are open beneath each capped group.
             openBeneath = ledger.openBeneath(open.asSequence().map { it.path }, leasable),
-            reservedBeneath = reservedOnPaths(open.asSequence().map { it.path to it.lease.reserved }, emptyMap()),
         )
     }
 

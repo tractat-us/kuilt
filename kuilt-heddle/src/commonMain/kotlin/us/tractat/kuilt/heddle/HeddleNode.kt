@@ -482,10 +482,11 @@ public class HeddleNode internal constructor(
      * than [LocalHeddle.MAX_RESERVATION], the lease that limit is sized for (#3353).
      *
      * A long-idle child that comes back demanding to a node that never saw it idle, after a restart,
-     * is clamped as a waker, the restart rule (design §7.2). No position refuses a pick: a pick
-     * orders the full 128-bit position, however many schedulers granted it at once. A refused call writes nothing and leaves the
-     * wake clamps as they were, and a call with nothing to grant writes nothing either
-     * ([FairShareAllocator.schedule]).
+     * is clamped as a waker, the restart rule (design §7.2): to the front, past it by what its edge
+     * still has outstanding, so the grants it holds unspent stay counted as its service (#3721). No
+     * position refuses a pick: a pick orders the full 128-bit position, however many schedulers
+     * granted it at once. A refused call writes nothing and leaves the wake clamps as they were, and
+     * a call with nothing to grant writes nothing either ([FairShareAllocator.schedule]).
      *
      * @return [ScheduleOutcome.Delegated] with the count of grants applied this call,
      *   [ScheduleOutcome.NothingToDelegate] when none was,
