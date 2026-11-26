@@ -84,7 +84,8 @@ public class ShareLine internal constructor(
      * out beneath that parent. A child coming back to compete does not always read `0`. One the
      * engine saw stop asking keeps the lag it left with. One clamped as it wakes, or a newborn, lands
      * at the front on its own grid: `0`, or less than a sixteenth of a unit below it, one tick of
-     * that grid. A [LocalPolicy.sleeperCredit] `c` leaves a clamped one above zero instead, by up to
+     * that grid. A clamped one with leases open lands past the front by what they reserve, so it
+     * reads that much below `0` (#3238). A [LocalPolicy.sleeperCredit] `c` leaves a clamped one above zero instead, by up to
      * `c × (1 − w / Σw)`, since it counts in the front it lands behind. So "just served reads
      * negative" holds from a level start, not in general.
      *
