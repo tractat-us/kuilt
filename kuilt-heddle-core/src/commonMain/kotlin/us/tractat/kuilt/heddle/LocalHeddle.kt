@@ -1638,11 +1638,17 @@ public class LocalHeddle private constructor(
         for (lease in moving) local = releaseUp(local, lease.path, lease.lease.reserved)
 
         val movingIds = moving.mapTo(HashSet()) { it.lease.id }
+        // The open leases that stay across [edge]: a retire there waits on each, whatever it
+        // reserves. One that reserves nothing, shrunk whole or admitted past the lifetime limit,
+        // leaves no units outstanding, and the ledger would retire the edge beneath it (#3648).
+        fun staying(edge: AttachmentId): List<Lease> =
+            open.values.filter { it.lease.id !in movingIds && edge in it.path }.map { it.lease }.sortedBy { it.id }
         fun refusal(step: TopologyStep, reason: String): StepRefusal {
-            val outstanding = if (step is TopologyStep.Retire) local.outstanding(step.edge) else 0L
-            if (outstanding == 0L) return StepRefusal.Refused(step.child, step, reason)
-            val blocking = open.values.filter { it.lease.id !in movingIds && step.edgeOf() in it.path }.map { it.lease }.sortedBy { it.id }
-            return StepRefusal.Draining(step.child, step.edgeOf(), outstanding, blocking)
+            if (step !is TopologyStep.Retire) return StepRefusal.Refused(step.child, step, reason)
+            val outstanding = local.outstanding(step.edge)
+            val blocking = staying(step.edge)
+            if (outstanding == 0L && blocking.isEmpty()) return StepRefusal.Refused(step.child, step, reason)
+            return StepRefusal.Draining(step.child, step.edge, outstanding, blocking)
         }
         val applied = ArrayList<TopologyStep>()
         val draining = ArrayList<StepRefusal>()
@@ -1655,7 +1661,8 @@ public class LocalHeddle private constructor(
             // Retires run bottom-up, so a group's retire waits on every group below it whose change did
             // not land: one stopped in this attempt, or one left out of it.
             val below = (stopped.asSequence() + leftOut.asSequence()).filter { it.value.startsWith(child.value + "/") }.minOrNull()
-            val stepped = if (step is TopologyStep.Retire && below != null) null else local.applyStep(step)
+            val held = step is TopologyStep.Retire && staying(step.edge).isNotEmpty()
+            val stepped = if (step is TopologyStep.Retire && (below != null || held)) null else local.applyStep(step)
             // An activation whose weight would put its parent's weight products out of Long, or make
             // the set too fine for one full lease: the ledger would take it, and every pick at that
             // parent would then throw, or one under-charged lease could carry a child past its ceiling (#3313, #3353).
@@ -1673,6 +1680,7 @@ public class LocalHeddle private constructor(
             }
             val reason = when {
                 below != null -> "${below.value}, below it, did not retire"
+                held -> "an open lease crosses it"
                 overBudget -> "its weight would put its siblings' weight arithmetic out of Long, or let one full lease carry a child past its ceiling"
                 pastLimit -> "seated level with the furthest-ahead of its siblings, it would carry its parent past the position limit"
                 else -> "the ledger refused it"
@@ -1749,7 +1757,7 @@ public class LocalHeddle private constructor(
      * they settle; otherwise [child] is [StepRefusal.Refused] at its first step. A wait this call
      * found is in [waits]; one an earlier call left, such as a removal still draining when an
      * [attach] lands beneath the group put back over it, is read off [local]: the cause's inbound
-     * edge CLOSING with units still outstanding on it (#3508).
+     * edge CLOSING with units still outstanding on it, or an open lease across it (#3508, #3648).
      */
     private fun cutOff(child: GroupId, local: EntitlementLedger, steps: List<TopologyStep>, waits: Map<GroupId, StepRefusal.Draining>): StepRefusal {
         val names = child.value.split('/')
@@ -1767,15 +1775,16 @@ public class LocalHeddle private constructor(
     }
 
     /**
-     * [group]'s wait, when its inbound edge here is CLOSING with units still outstanding on it: that
-     * edge, those units, and this engine's open leases whose path crosses it, in id order. `null`
-     * for any other edge, or none.
+     * [group]'s wait, when its inbound edge here is CLOSING with units still outstanding on it, or
+     * with one of this engine's open leases across it, which may reserve nothing (#3648): that edge,
+     * those units, and those leases, in id order. `null` for any other edge, or none.
      */
     private fun EntitlementLedger.drainingInto(group: GroupId): StepRefusal.Draining? {
         val edge = lineageOf(group)?.lastOrNull() ?: return null
+        if (lifecycle(edge) != Lifecycle.CLOSING) return null
         val outstanding = outstanding(edge)
-        if (lifecycle(edge) != Lifecycle.CLOSING || outstanding == 0L) return null
         val blocking = open.values.filter { edge in it.path }.map { it.lease }.sortedBy { it.id }
+        if (outstanding == 0L && blocking.isEmpty()) return null
         return StepRefusal.Draining(group, edge, outstanding, blocking)
     }
 
