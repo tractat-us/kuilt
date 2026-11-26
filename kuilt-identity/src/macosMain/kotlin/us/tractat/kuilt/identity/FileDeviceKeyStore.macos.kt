@@ -54,12 +54,21 @@ internal fun macosDeviceKeyStore(
 }
 
 /** A store keeping its key file and grants in [directory]. [beforeKeyIsMade] is the conformance suite's gate. */
-internal fun fileDeviceKeyStore(directory: String, beforeKeyIsMade: suspend () -> Unit): DeviceKeyStore {
+internal fun fileDeviceKeyStore(directory: String, beforeKeyIsMade: suspend () -> Unit): DeviceKeyStore =
+    fileDeviceKeyStore(directory, SelfTestVerifier.Provider, beforeKeyIsMade)
+
+/** [fileDeviceKeyStore] with the self-test verifying through [selfTestVerifier]: a test's way to fault it. */
+internal fun fileDeviceKeyStore(
+    directory: String,
+    selfTestVerifier: SelfTestVerifier,
+    beforeKeyIsMade: suspend () -> Unit,
+): DeviceKeyStore {
     val medium = FileKeyMedium(directory)
     return AppleDeviceKeyStore(
         medium = medium,
         grantStore = NSFileManagerDurableStore(medium.directory),
         mediumId = "file:${medium.directory}",
         beforeKeyIsMade = beforeKeyIsMade,
+        selfTestVerifier = selfTestVerifier,
     )
 }

@@ -53,13 +53,15 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AppleDevice
  * @param mediumId names the medium for the in-process mutex: two stores with one id take turns.
  * @param beforeKeyIsMade called each time this store is about to make a key, and at no other time:
  *   the conformance suite's gate.
+ * @param selfTestVerifier the self-test's verify: the provider's, or a test's that fails where
+ *   CryptoKit will not.
  */
 internal class AppleDeviceKeyStore(
     private val medium: KeyMedium,
     private val grantStore: DurableStore,
     mediumId: String,
     private val beforeKeyIsMade: suspend () -> Unit,
-    private val selfTestVerifier: SelfTestVerifier = SelfTestVerifier.Provider,
+    private val selfTestVerifier: SelfTestVerifier,
 ) : DeviceKeyStore {
     private val inProcess: Mutex = mutexFor(mediumId)
 

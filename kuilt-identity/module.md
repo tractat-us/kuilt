@@ -140,9 +140,10 @@ The desktop store writes its key as a JWK carrying `x`, `y` and `d`, created wit
 through a forced temporary file and an atomic rename. It reads the key back with a self-test: sign
 with `d`, then verify under the name `x` and `y` give, through the same on-curve check every other
 device applies. A pair whose halves belong to different keys fails it and is replaced like a truncated
-file. A provider that fails while signing or verifying throws instead and keeps the file: `DidKey.verify`
-would answer `false` for that fault, so the self-test does not use it. PKCS#8 is not the format because the JDK provider writes it without the public half, and
-reading it back then needs a public half only BouncyCastle can derive; BouncyCastle is not an option,
+file. A provider that fails while signing or verifying throws instead and keeps the file:
+`DidKey.verify` would answer `false` for that fault, so the self-test does not use it. PKCS#8 is not
+the format because the JDK provider writes it without the public half, and reading it back then
+needs a public half only BouncyCastle can derive; BouncyCastle is not an option,
 since two registered JCA providers stop this module's provider from starting. The grants sit beside
 the key in a `FileChannelDurableStore`, as one strict record that is dropped whole if it cannot be
 read.

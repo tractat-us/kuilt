@@ -11,7 +11,6 @@ import platform.posix.S_IRUSR
 import platform.posix.S_IWUSR
 import platform.posix.chmod
 import platform.posix.stat
-import us.tractat.kuilt.store.NSFileManagerDurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
@@ -135,7 +134,7 @@ class MacosFileDeviceKeyStoreTest {
         val keyFile = "$directory/${FileKeyMedium.KEY_FILE}"
         val before = readFile(keyFile)
         val verifier = FaultingVerifier(faults = 1)
-        val store = verifyingWith(directory, verifier)
+        val store = fileDeviceKeyStore(directory, verifier) {}
 
         val failure = failureOf { store.deviceKey() }
         val after = readFile(keyFile)
@@ -160,7 +159,7 @@ class MacosFileDeviceKeyStoreTest {
         writeFile(keyFile, spliced)
         val verifier = FaultingVerifier(faults = 0)
 
-        val replacement = verifyingWith(directory, verifier).deviceKey().id
+        val replacement = fileDeviceKeyStore(directory, verifier) {}.deviceKey().id
 
         assertAll(
             { assertEquals(1, verifier.calls, "CryptoKit's verify ran on the stored key") },
@@ -169,17 +168,6 @@ class MacosFileDeviceKeyStoreTest {
         )
     }
 
-    /** [fileDeviceKeyStore], with the self-test verifying through [verifier]. */
-    private fun verifyingWith(directory: String, verifier: SelfTestVerifier): DeviceKeyStore {
-        val medium = FileKeyMedium(directory)
-        return AppleDeviceKeyStore(
-            medium = medium,
-            grantStore = NSFileManagerDurableStore(medium.directory),
-            mediumId = "file:${medium.directory}",
-            beforeKeyIsMade = {},
-            selfTestVerifier = verifier,
-        )
-    }
 
     private fun modeOf(path: String): Int = memScoped {
         val info = alloc<stat>()

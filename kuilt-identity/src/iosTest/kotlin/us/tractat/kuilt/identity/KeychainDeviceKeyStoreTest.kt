@@ -18,7 +18,6 @@ import platform.Security.kSecAttrSynchronizable
 import platform.Security.kSecClass
 import platform.Security.kSecClassGenericPassword
 import platform.Security.kSecValueData
-import us.tractat.kuilt.store.NSFileManagerDurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
@@ -249,13 +248,7 @@ class KeychainDeviceKeyStoreTest {
         val held = keychainDeviceKeyStore(appId, support, keychain) {}.deviceKey().id
         val before = keychain.held(service, KEYCHAIN_ACCOUNT)
         val verifier = FaultingVerifier(faults = 1)
-        val store = AppleDeviceKeyStore(
-            medium = KeychainKeyMedium(service, keychain),
-            grantStore = NSFileManagerDurableStore(identityDirectory(support, appId)),
-            mediumId = "keychain:$service",
-            beforeKeyIsMade = {},
-            selfTestVerifier = verifier,
-        )
+        val store = keychainDeviceKeyStore(appId, support, keychain, verifier) {}
 
         val failure = failureOf { store.deviceKey() }
         val after = keychain.held(service, KEYCHAIN_ACCOUNT)
@@ -266,6 +259,27 @@ class KeychainDeviceKeyStoreTest {
             { assertTrue(failure is IllegalStateException, "the fault throws IllegalStateException: $failure") },
             { assertEquals(true, after?.contentEquals(before ?: ByteArray(0)), "the item keeps its bytes") },
             { assertEquals(held, afterwards, "and the same key reads back") },
+        )
+    }
+
+    /** And an item whose halves do not belong together, verified through the same seam, is still replaced. */
+    @Test
+    fun aVerifyThatRunsAndRefusesStillReplacesTheItem() = runTest {
+        val keychain = FakeKeychain()
+        val appId = freshAppId()
+        val support = freshDirectory("kuilt-keychain")
+        val service = KEYCHAIN_SERVICE_PREFIX + appId
+        val (spliced, named) = mismatchedJwk()
+        keychain.plant(service, KEYCHAIN_ACCOUNT, spliced)
+        val verifier = FaultingVerifier(faults = 0)
+
+        val replacement = keychainDeviceKeyStore(appId, support, keychain, verifier) {}.deviceKey().id
+        val after = keychain.held(service, KEYCHAIN_ACCOUNT)
+
+        assertAll(
+            { assertEquals(1, verifier.calls, "CryptoKit's verify ran on the stored key") },
+            { assertNotEquals(named, replacement, "and the key was replaced") },
+            { assertEquals(false, after?.contentEquals(spliced), "with the item rewritten: $after") },
         )
     }
 
