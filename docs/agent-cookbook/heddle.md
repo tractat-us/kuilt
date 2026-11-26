@@ -110,7 +110,8 @@ The whole loop in one place, from the admin's file to a restart:
 
 Cost is time, in your own unit. `LocalPolicy.defaultReservation` is the estimate a lease
 reserves when you pass none; pass a per-lease `reservation` when you know better. `extend`
-reserves more for a lease that runs long, and `cancel` closes one and charges nothing.
+reserves more for a lease that runs long, and `cancel` closes one that never ran and charges
+nothing. Work that held its slot settles with `complete` at what it cost, however it ended.
 `startedAt` is stored on the lease for your own reconciling and never read by a pick.
 
 **Waiting and eligible are different sets on purpose.** `waiting` is every leaf with work
@@ -186,7 +187,7 @@ moment between the grant and the caller resuming is never charged.
 
 **The low-level form.** `acquire(leaf)` is the same wait without the block. It answers
 `SlotOutcome.Granted(lease)`, or `SlotOutcome.Refused(reason)`, and the caller then `complete`s the
-lease at its real cost, or `cancel`s it.
+lease at its real cost, or `cancel`s it if the work never started.
 
 <!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleAcquireSlot -->
 ```kotlin
@@ -1498,15 +1499,19 @@ denominators share no factor are refused below it too.
   worst rigs above are an ensemble benchmark, run on demand only
   ([#3724](https://github.com/tractat-us/kuilt/issues/3724)) with
   `./gradlew :kuilt-heddle-core:jvmTest -Pkuilt.benchmark.tests=true --tests '*ReservationLeanBenchmark*'`.
-- **A cancel is charged nothing, and a sibling's refund leaks across a gap.** A lane that cancels
-  the job ending each burst gains share (+0.015 to +0.044 on the slot probe). And a *sibling's*
-  reservation counts in the net-service clock at the weight of everyone asking, while its refund
-  lands at the weight of whoever is still asking, so a lane away across a sibling's refund comes
-  back owed more than it is: 19 / 10 on a rig whose fair split is 15 / 14. A lane's own refund
-  across its own gap is read correctly. The cancel is tracked by
-  [#3238](https://github.com/tractat-us/kuilt/issues/3238); the sibling's refund is the bound
-  [#3239](https://github.com/tractat-us/kuilt/issues/3239) accepted, above. `HeddleNode`'s `complete` keeps an
-  unused earmark at the leaf, so `HeddleNode` does not take either path.
+- **A sibling's refund leaks across a gap.** A *sibling's* reservation counts in the net-service
+  clock at the weight of everyone asking, while its refund lands at the weight of whoever is still
+  asking, so a lane away across a sibling's refund comes back owed more than it is: 19 / 10 on a
+  rig whose fair split is 15 / 14. A lane's own refund across its own gap is read correctly. It is
+  the bound [#3239](https://github.com/tractat-us/kuilt/issues/3239) accepted, above.
+  `HeddleNode`'s `complete` keeps an unused earmark at the leaf, so `HeddleNode` does not take that
+  path.
+
+**`cancel` is for work that never ran** ([#3238](https://github.com/tractat-us/kuilt/issues/3238)).
+Work that held its slot settles with `complete(lease, elapsed)`, so a charge is always the cost the
+caller reported. A cancel of work that ran charges nothing, and its siblings pay for the ride: a
+lane that never idles and cancels one job in four takes 4/7 of the slots beside an equal sibling,
+where its share is a half. How much the lease reserved does not change that.
 
 ## Fair share across peers
 
