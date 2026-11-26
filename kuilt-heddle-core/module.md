@@ -114,7 +114,7 @@ Every edge also carries a **lifecycle** — `prepared → active → closing →
 kept as a max-register that only ever climbs. Preparing an edge creates it without
 letting entitlement cross; activating it opens delegation; closing it stops *new*
 delegation while still letting entitlement drain back out; retiring it is allowed only
-once the edge has fully drained, after which nothing crosses it again and its history
+once the edge has fully drained (or straight from prepared, if nothing ever crossed it), after which nothing crosses it again and its history
 stays queryable forever. Because merging takes the higher state, closure always wins
 over a lagging peer still trying to activate — a closed edge can never be resurrected.
 Changing a child's weight or parent is not a mutation: it mints a **new** generation

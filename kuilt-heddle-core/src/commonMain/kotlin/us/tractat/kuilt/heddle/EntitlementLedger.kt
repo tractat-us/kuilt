@@ -86,7 +86,8 @@ import kotlinx.serialization.Transient
  * (`PREPARED < ACTIVE < CLOSING < RETIRED`, join = max). The transitions
  * [prepare] / [activate] / [close] / [retire] climb that chain under strict
  * generation-and-drain discipline (design §5.3): [close] admits no new delegation,
- * [retire] finalizes only a **fully drained** edge (`outstanding == 0`). An edge
+ * [retire] finalizes only a **fully drained** edge (`outstanding == 0`): a closing one, or a
+ * prepared one nothing has crossed. An edge
  * present without an explicit register entry defaults to [Lifecycle.ACTIVE] — the
  * H1b "present edge is ACTIVE" assumption, now made explicit rather than assumed.
  * Delegation is gated on [Lifecycle.ACTIVE], and two [Lifecycle.ACTIVE] inbound
