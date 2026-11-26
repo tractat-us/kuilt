@@ -10,7 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * [TopologyChange.history] against the engine: over seeded pairs of trees, the changes that say
+ * [TopologyChange.saveEffect] against the engine: over seeded pairs of trees, the changes that say
  * they lose history are exactly the ones whose groups get a new inbound edge, or none, when
  * [LocalHeddle.apply] lands the edited tree.
  *
@@ -66,7 +66,7 @@ class TopologyChangeHistoryPropertyTest {
             val heddle = LocalHeddle.bootWhole(before, POLICY, epoch = 0L)
             val attached = attachSome(heddle, before, r)
 
-            if (changes.any { it.history == TopologyChange.SaveEffect.NEW_TREE }) {
+            if (changes.any { it.saveEffect == TopologyChange.SaveEffect.NEW_TREE }) {
                 try {
                     heddle.apply(after, generation = 1L)
                     newTreesApplied++
@@ -86,7 +86,7 @@ class TopologyChangeHistoryPropertyTest {
             applied++
             val edgesAfter = edgesOf(heddle, edgesBefore.keys)
 
-            val lost = changes.filter { it.history == TopologyChange.SaveEffect.LOST }
+            val lost = changes.filter { it.saveEffect == TopologyChange.SaveEffect.LOST }
                 .flatMapTo(HashSet()) { speaksFor(it, before, after, attached) }
             for (group in existing) {
                 if (edgesBefore.getValue(group).isEmpty()) {
@@ -97,24 +97,24 @@ class TopologyChangeHistoryPropertyTest {
                 if (changed != (group in lost)) {
                     val about = changes.filter { group in speaksFor(it, before, after, attached) }
                     failures += "seed $seed: ${group.value} ${if (changed) "got a new edge" else "kept its edge"}, " +
-                        "${edgesBefore[group]} -> ${edgesAfter[group]}, from ${about.map { "$it: ${it.history}" }}"
+                        "${edgesBefore[group]} -> ${edgesAfter[group]}, from ${about.map { "$it: ${it.saveEffect}" }}"
                 }
             }
             for (change in changes) {
                 val groups = speaksFor(change, before, after, attached)
                 if (change is TopologyChange.Added) {
-                    reached.count("Added:${change.history}")
+                    reached.count("Added:${change.saveEffect}")
                     groups.filter { edgesBefore.getValue(it).isNotEmpty() || edgesAfter.getValue(it).isEmpty() }.forEach {
                         failures += "seed $seed: added ${it.value}, ${edgesBefore[it]} -> ${edgesAfter[it]}"
                     }
                     continue
                 }
                 val withEdges = groups.filter { it in existing }
-                val decisive = when (change.history) {
+                val decisive = when (change.saveEffect) {
                     TopologyChange.SaveEffect.LOST -> withEdges.isNotEmpty()
                     else -> withEdges.isNotEmpty() && withEdges.none { it in lost }
                 }
-                if (decisive) reached.count("${change::class.simpleName}:${change.history}")
+                if (decisive) reached.count("${change::class.simpleName}:${change.saveEffect}")
             }
         }
         // Each floor is about half what the generator reaches on the JVM (727, 569, 428, 206, 143,

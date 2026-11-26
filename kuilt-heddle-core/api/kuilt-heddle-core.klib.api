@@ -628,8 +628,8 @@ sealed interface us.tractat.kuilt.heddle/TopologyChange { // us.tractat.kuilt.he
         abstract fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyChange.names.<get-names>|<get-names>(){}[0]
     abstract val path // us.tractat.kuilt.heddle/TopologyChange.path|{}path[0]
         abstract fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/TopologyChange.path.<get-path>|<get-path>(){}[0]
-    open val history // us.tractat.kuilt.heddle/TopologyChange.history|{}history[0]
-        open fun <get-history>(): us.tractat.kuilt.heddle/TopologyChange.SaveEffect // us.tractat.kuilt.heddle/TopologyChange.history.<get-history>|<get-history>(){}[0]
+    open val saveEffect // us.tractat.kuilt.heddle/TopologyChange.saveEffect|{}saveEffect[0]
+        open fun <get-saveEffect>(): us.tractat.kuilt.heddle/TopologyChange.SaveEffect // us.tractat.kuilt.heddle/TopologyChange.saveEffect.<get-saveEffect>|<get-saveEffect>(){}[0]
 
     final enum class SaveEffect : kotlin/Enum<us.tractat.kuilt.heddle/TopologyChange.SaveEffect> { // us.tractat.kuilt.heddle/TopologyChange.SaveEffect|null[0]
         enum entry KEPT // us.tractat.kuilt.heddle/TopologyChange.SaveEffect.KEPT|null[0]

@@ -27,7 +27,7 @@ package us.tractat.kuilt.heddle
  *    then every old child [Removed]. [Topology.diff] refuses a change of root: it is a new tree,
  *    not an edit of the running one.
  *
- * [history] says which of these a change is, so an editor warns from it rather than sorting the
+ * [saveEffect] says which of these a change is, so an editor warns from it rather than sorting the
  * arms itself.
  *
  * @property path the child indices from the root to the node this change concerns; `[]` only for
@@ -56,7 +56,7 @@ public sealed interface TopologyChange {
      *
      * @sample us.tractat.kuilt.heddle.sampleTopologyChangeHistory
      */
-    public val history: SaveEffect
+    public val saveEffect: SaveEffect
         get() = when (this) {
             is RootRenamed -> SaveEffect.NEW_TREE
             is Removed, is WeightChanged, is TemplateRemoved -> SaveEffect.LOST
@@ -65,7 +65,7 @@ public sealed interface TopologyChange {
         }
 
     /**
-     * What a [TopologyChange] costs in fairness history; see [TopologyChange.history]. Three
+     * What a [TopologyChange] costs in fairness history; see [TopologyChange.saveEffect]. Three
      * answers, because an editor does three things: saves, warns, or refuses.
      *
      * Its sibling for one edit of a document is [TopologyEdit.History], which has six answers.

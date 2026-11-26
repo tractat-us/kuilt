@@ -39,7 +39,7 @@ public sealed interface TopologyEdit {
      *   rename back are [History.REPLACED] twice and change nothing. What a save will cost is
      *   `loaded.changesTo(candidate)` ([Topology.changesTo]), the tree the editor started from
      *   against the edited one read back with [Topology.from], each change saying through
-     *   [TopologyChange.history] whether it loses history.
+     *   [TopologyChange.saveEffect] whether it loses history.
      */
     public data class Edited(
         public val document: TopologyDocument,
@@ -90,7 +90,7 @@ public sealed interface TopologyEdit {
      * are two edits each and no change at all. The warning before saving is
      * `loaded.changesTo(candidate)` ([Topology.changesTo]), which compares the tree the editor
      * started from with the one it is about to save, and whose every change answers
-     * [TopologyChange.history]. Each value here is the shape [Topology.changesTo] gives for that
+     * [TopologyChange.saveEffect]. Each value here is the shape [Topology.changesTo] gives for that
      * edit alone, between valid trees.
      */
     public enum class History {
