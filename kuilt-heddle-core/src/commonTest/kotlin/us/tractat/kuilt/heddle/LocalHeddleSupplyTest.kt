@@ -252,32 +252,33 @@ class LocalHeddleSupplyTest {
     }
 
     /**
-     * A head below the reservation is charged the reservation, since the preview does not shrink a lease (#3321):
-     * the preview with a's heads at 1 is the preview with them at the reservation, which is the
-     * count-based preview at that reservation. The rig: a's heads above the reservation do change
-     * the order, so the heads are read.
+     * A head below the reservation holds the head (#3648): the preview with a's heads at 1 is the
+     * real loop that acquires each slot at the reservation and shrinks a's leases to 1 straight
+     * after the pick. The rig: the shrink moves the order, so the preview with a's heads at the
+     * reservation lists another one, and so does a preview with a's heads above it.
+     * [LocalHeddleShrinkAtGrantTest] holds the order to a model built without a shrink.
      */
     @Test
-    fun aHeadBelowTheReservationIsChargedTheReservation() {
+    fun aHeadBelowTheReservationHoldsTheHead() {
         val h = engineOver(threeLeaves, root, supply = 10_000L, policy = policy(reservation = 3L))
         fun queues(aHead: Long) = mapOf(a to List(6) { aHead }, b to List(6) { 3L }, c to List(6) { 3L })
         val all = setOf(a, b, c)
         val below = h.previewPicks(queues(1L), all)
         val atReservation = h.previewPicks(queues(3L), all)
         val above = h.previewPicks(queues(7L), all)
-        val byCount = h.previewPicks(mapOf(a to 6, b to 6, c to 6), all, List(18) { 3L })
-        // The real loop, for queues(1L): no head is above 3, so no lease is extended.
+        // The real loop, for queues(1L): a's leases shrink to 1; no head is above 3, so none extends.
         val left = mutableMapOf(a to 6, b to 6, c to 6)
         val real = List(18) {
-            h.lease(listOf(a, b, c).filter { left.getValue(it) > 0 }.toSet(), reservation = 3L)
-                .also { lease -> left[lease.leaf] = left.getValue(lease.leaf) - 1 }
+            val lease = h.lease(listOf(a, b, c).filter { left.getValue(it) > 0 }.toSet(), reservation = 3L)
+            left[lease.leaf] = left.getValue(lease.leaf) - 1
+            if (lease.leaf == a) check(h.shrink(lease.id, 2L) == LeaseOutcome.Done(0L, 0L, 0L))
+            lease.leaf
         }
         assertAll(
-            { assertEquals(atReservation, below) },
-            { assertEquals(byCount, below) },
-            { assertEquals(real.map { it.leaf }, below) },
-            { assertTrue(real.all { it.reserved == 3L }, "every lease the real loop opened holds 3") },
-            { assertNotEquals(below, above, "a's heads above the reservation change the order") },
+            { assertEquals(real, below) },
+            { assertEquals(listOf(1L), h.snapshot().leases.filter { it.leaf == a }.map { it.reserved }.distinct(), "every lease of a holds 1") },
+            { assertNotEquals(atReservation, below, "the rig: a's heads below the reservation change the order") },
+            { assertNotEquals(below, above, "a's heads above the reservation change it too") },
         )
     }
 
