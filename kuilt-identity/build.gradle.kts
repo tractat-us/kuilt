@@ -277,6 +277,10 @@ android {
     defaultConfig { testInstrumentationRunner = "us.tractat.kuilt.identity.IdentityDeviceTestRunner" }
 }
 
+// The device classes run nowhere a PR builds, so `check` at least compiles them: lint reads their
+// source and compiles none of it, so without this they could stop compiling and nothing would say so.
+tasks.named("check") { dependsOn("compileDebugAndroidTestKotlinAndroid") }
+
 // How many rows each device's result file must hold. AGP reports a connected run that executed
 // nothing as a success, so without this an un-run class reads as green. Adding or removing a device
 // test means changing this number in the same commit. A row an assumption skipped still counts, and
