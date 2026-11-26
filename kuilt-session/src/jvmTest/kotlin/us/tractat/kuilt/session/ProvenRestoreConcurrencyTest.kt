@@ -713,8 +713,9 @@ class ProvenRestoreConcurrencyTest {
      * Left alone, the old process restores first in well under 1% of rounds (2 or 3 of 1,000 on a CI
      * runner), so the arm that it did would red about one run in twelve with nothing wrong (#3730).
      * Every [OLD_FIRST_EVERY]th round therefore holds the fresh id's Proof until the old exchange has
-     * sent its own, or was told. The room handles each Proof in a coroutine of its own, so the old
-     * one is still only ahead, not decided: the two still race, and the round is counted like any other.
+     * sent its own, or was told. The room handles each Proof in a coroutine of its own, so this puts
+     * the old one ahead without deciding it: the two still race (the old one lost 1 of 50 such rounds
+     * in one measured run), and the round is counted like any other.
      */
     @Test
     fun aSupersededProcessReHelloingAgainstItsTakeoverIsToldNotSeated() =
@@ -1506,10 +1507,12 @@ class ProvenRestoreConcurrencyTest {
         const val SLOW_CHALLENGE_EVERY = 100
 
         /**
-         * Every this many re-Hello rounds, the fresh id's Proof waits for the old exchange's: 50 of
-         * 1,000 rounds, against the 2 or 3 old-first rounds a CI runner reaches unaided (#3730).
+         * Every this many re-Hello rounds, the fresh id's Proof waits for the old exchange's: 20 of
+         * 1,000 rounds, against the 2 or 3 old-first rounds a CI runner reaches unaided (#3730). The
+         * old process wins nearly all of them. No more than that, because each round it wins costs about
+         * a second: the next round waits up to one heartbeat interval for its restored seat to drop.
          */
-        const val OLD_FIRST_EVERY = 20
+        const val OLD_FIRST_EVERY = 50
 
         /** Slower than a rig waiting on a clock for its challenge would wait. */
         val SLOW_CHALLENGE = 1.seconds
