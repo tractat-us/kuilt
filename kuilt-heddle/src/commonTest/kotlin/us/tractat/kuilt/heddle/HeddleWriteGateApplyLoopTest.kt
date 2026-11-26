@@ -251,24 +251,31 @@ class HeddleWriteGateApplyLoopTest {
         }
 
     /**
-     * The per-run nonce stays on the two gate-moving acts. A mint's identity comes from its key and
-     * lands in the ledger, so a nonce there would make the ledger differ between identical runs.
+     * The per-run nonce stays off a mint's key and only a mint's (#3057). A mint's identity comes
+     * from its key and lands in the ledger, so a nonce there would make the ledger differ between
+     * identical runs. Every other act's key lands nowhere, so it carries the nonce and a reused
+     * incarnation cannot make it vanish.
      */
     @Test
-    fun onlyGateMovingActsCarryTheNonce() =
+    fun onlyAMintsKeyGoesWithoutTheNonce() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val raft = FakeRaftNode(initialRole = RaftRole.Leader)
             val governed = boot(raft, "keys")
             assertIs<ControlOutcome.Applied>(governed.enroll(SELF))
             assertIs<ControlOutcome.Applied>(governed.mint(SELF, 5L))
             assertIs<ControlOutcome.Applied>(governed.enroll(ReplicaId("other")))
+            assertIs<ControlOutcome.Applied>(
+                governed.prepare(AttachmentRecord(AttachmentId("root/a"), ROOT, GroupId("root/a"), Weight.ONE)),
+            )
             val keys = raft.proposals.map { assertIs<ControlEntry.Act>(ControlLogCodec.decode(it)).envelope.requestKey }
+            val nonce = keys[0].removePrefix("self#keys#0#")
 
             assertAll(
-                { assertEquals(3, keys.size, "rig: three acts proposed") },
-                { assertTrue(keys[0].startsWith("self#keys#0#"), "a self-enroll carries it, was ${keys[0]}") },
+                { assertEquals(4, keys.size, "rig: four acts proposed") },
+                { assertTrue(nonce.isNotEmpty() && nonce != keys[0], "a self-enroll carries it, was ${keys[0]}") },
                 { assertEquals("self#keys#1", keys[1], "a mint does not") },
-                { assertEquals("self#keys#2", keys[2], "nor does enrolling another replica") },
+                { assertEquals("self#keys#2#$nonce", keys[2], "enrolling another replica does, the same one") },
+                { assertEquals("self#keys#3#$nonce", keys[3], "and so does a prepare") },
             )
         }
 
