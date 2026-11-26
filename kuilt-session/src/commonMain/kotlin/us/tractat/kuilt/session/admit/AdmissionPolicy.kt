@@ -50,11 +50,12 @@ public fun interface AdmissionPolicy {
     public companion object {
         /**
          * Admits everyone, each with a pass back into this room that is good for [readmitFor] after
-         * it is issued, and renewed every half of that while the device stays connected: [GrantTerms]
-         * of [readmitFor] and [GrantReach.ThisRoom]. So a device that drops off can come back on it for
-         * at most [readmitFor] after its last contact and, provided the last renewal reached it, at
-         * least half of that: a renewal that fails to sign is skipped, and one lost on the way is not
-         * sent again (#3709).
+         * it is issued, and renewed every quarter of that while the device stays connected:
+         * [GrantTerms] of [readmitFor] and [GrantReach.ThisRoom]. So a device away up to three quarters
+         * of [readmitFor] after its last contact gets back in on it, and up to all of it, depending on
+         * when it dropped: 45 to 60 minutes with the default hour. That floor holds provided the last
+         * renewal reached the device: one that fails to sign or is lost on the way is not sent again
+         * (tracked by #3711).
          *
          * [readmitFor] is checked here, so a bad value throws when the host is configured rather than
          * on some joiner's admission.
@@ -179,12 +180,12 @@ public enum class GrantReach {
  * What a host promises a newcomer it admits: how long the device may come back without being asked
  * again ([readmitFor]), and where ([reach]).
  *
- * A pass is good for [readmitFor] after it is issued, and the room issues a fresh one every half of
- * [readmitFor] while the member stays connected. So a device that drops off can come back on its pass
- * for at most [readmitFor] after its last contact and, provided the last renewal reached it, at least
- * half of that, however long ago it first joined. A renewal that fails to sign is skipped, and one lost
- * on the way is not sent again; whether the window should be wider is #3709. [Duration.INFINITE] means
- * the pass never runs out.
+ * A pass is good for [readmitFor] after it is issued, and the room issues a fresh one every quarter of
+ * [readmitFor] while the member stays connected. So a device away up to three quarters of [readmitFor]
+ * after its last contact gets back in on its pass, and up to all of it, depending on when it dropped,
+ * however long ago it first joined. That floor holds provided the last renewal reached the device: one
+ * that fails to sign or is lost on the way is not sent again (tracked by #3711). [Duration.INFINITE]
+ * means the pass never runs out.
  *
  * A grant is dated in whole epoch milliseconds and must end after it starts, so [readmitFor] is at
  * least one millisecond; a part millisecond beyond that is dropped.

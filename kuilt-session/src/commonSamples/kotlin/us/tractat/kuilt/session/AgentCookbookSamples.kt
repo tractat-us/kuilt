@@ -363,7 +363,7 @@ public suspend fun flushThenLeaveSample(
 /**
  * Decide who gets into a room you host, and for how long each may come back without being asked
  * again. A friend's pass is good in any room you host and never runs out; a stranger's is good in
- * this room for an hour after it is issued, renewed every half hour while the stranger stays
+ * this room for an hour after it is issued, renewed every quarter hour while the stranger stays
  * connected; a device the app has blocked gets the app's own refusal
  * code, until the app unblocks it.
  *
