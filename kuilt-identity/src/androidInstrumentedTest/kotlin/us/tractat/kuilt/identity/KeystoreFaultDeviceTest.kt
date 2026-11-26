@@ -44,7 +44,12 @@ class KeystoreFaultDeviceTest {
      * A stored key blob overwritten with random bytes, as flash corruption or a botched restore leaves it.
      * Whatever the Keystore answers, the store must not judge it [FailureVerdict.Keep] — that would throw
      * on every launch and never replace the key — and within the hour of failures Decided 29 allows, the
-     * device carries on under a new key.
+     * device carries on under a new key. Where the answer is of unknown cause, the store keeps the key and
+     * throws until that hour is up, rather than replacing at once.
+     *
+     * Measured on emulators (software Keystores): Android 14 signs into `InvalidKeyException` caused by
+     * `KeyStoreException` code 10 (`INVALID_KEY_BLOB`), and Android 11 throws `UnrecoverableKeyException`
+     * from `getKey` caused by "Invalid key blob". Both are of unknown cause.
      */
     @Test
     fun aCorruptKeyBlobIsReplacedWithinTheHour() = runTest {
@@ -59,6 +64,7 @@ class KeystoreFaultDeviceTest {
         val replacement = (anHourOn as? Outcome.Returned)?.value ?: (atOnce as? Outcome.Returned)?.value
         assertAll(
             { assertTrue(verdict !is FailureVerdict.Keep, "a corrupt blob is never the Keystore's own trouble: ${failure.cause.describeChain()}") },
+            { if (verdict is FailureVerdict.Unknown) assertIs<Outcome.Threw>(atOnce, "of unknown cause, the key is kept until the hour is up") },
             { assertNotNull(replacement, "within the hour the device has a key again: at once $atOnce, an hour on $anHourOn") },
             { assertNotEquals(original, replacement, "and it is a new key") },
         )
