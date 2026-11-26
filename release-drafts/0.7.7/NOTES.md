@@ -1,7 +1,7 @@
 # 0.7.7 release drafts — notes
 
 Drafted 2026-11-20 against `origin/main` at `d951b4c1d` and the epic/3159 plan. **Refreshed
-2026-11-26 against `origin/main` at `5faee4dc92`** (69 commits past `v0.7.6`), reading each merge's
+2026-11-26 against `origin/main` at `1f9ba99290`** (70 commits past `v0.7.6`), reading each merge's
 ABI dump diff and PR body. Nothing was posted, filed or tagged. No Gradle was run.
 
 ## Refresh 2026-11-26: what changed
@@ -25,7 +25,7 @@ ABI dump diff and PR body. Nothing was posted, filed or tagged. No Gradle was ru
   `RoomConformanceSuite` return harness and its one-store rule (#3708); `MultiNodeRaftSim`'s
   `NodeStart` (#3720); pass renewal (#3701), its 1.5× life (#3712) and retries (#3717); the key
   store's provider-fault fix (#3719); and an "Also in this release" section for heddle waves 1–2
-  and the first wave 3–4 merges, the quilter anti-entropy rounds, the detector-currency fixes and
+  and the first wave 3–4 merges (#3714, #3715, #3716, #3722), the quilter anti-entropy rounds, the detector-currency fixes and
   the game/warp fixes.
 - **The 2026-11-20 finding for kuilt is fixed.** The raw-`sign` signing oracle it described is
   #3613: `DeviceKey.sign` is `@IdentityInternalApi`, and `signApp(context, message)` signs under an
@@ -123,8 +123,8 @@ OneScreen on `release-notes.md` and `NOTES.md`).
 
 1. One `./gradlew clean && ./gradlew build --rerun-tasks` on `main` (the 0.7.6 ruling's condition).
    Settle the three remaining `ASSUMES` comments (#3712, #3717, #3719) as above, and run
-   `git log --oneline 5faee4dc92..origin/main` for anything that merged after this refresh: the
-   heddle wave 3–4 items (#3238, #3239, #3648, #3707, #3057, #3170) and any identity slice past #3708
+   `git log --oneline 1f9ba99290..origin/main` for anything that merged after this refresh: the
+   heddle wave 3–4 items (the rest of #3238, #3648, #3707, #3057, #3170) and any identity slice past #3708
    each want a line. Re-check `ProtocolVersion.CURRENT` is still 9; a later wire PR bumps it.
 2. Tag `v0.7.7`; wait for the `maven-central` job, then release the PENDING deployment by hand at
    central.sonatype.com and confirm the artifacts resolve.

@@ -1,7 +1,7 @@
 <!--
 DRAFT — GitHub release body for v0.7.7. Paste everything below the closing `-->` into the
 release, above GitHub's generated "What's Changed" list. Refreshed 2026-11-26 against
-`origin/main` at `5faee4dc92`. Three `ASSUMES` comments remain, covering the three PRs still open on
+`origin/main` at `1f9ba99290`. Three `ASSUMES` comments remain, covering the three PRs still open on
 that date (#3712, #3717, #3719). At the tag, check each with `gh pr view <N> --json state`: delete the
 comment if it MERGED, or delete the comment and the text it covers if it did not.
 -->
@@ -98,7 +98,8 @@ and how far it stands from it (`lag`). Templates can nest attached children. The
 has a minimal editor, end to end. Smaller fixes: a snapshot whose books do not balance decodes as
 `Corrupt`; a waker clamped after a restart keeps what its open leases reserve; `retire` takes an
 unused prepared edge; and `HeddleNode.reconcileOwn` lets a static peer repair its own row after a
-reweight (#3652).
+reweight. `LocalHeddle`'s KDoc now states what a wrong cost estimate costs a group, with sizing
+guidance on `LocalPolicy.defaultReservation` (#3652).
 
 **Replication (`:kuilt-quilter`).** Anti-entropy ships much less when peers are idle or slightly
 behind. At most one whole state is in flight per replica and per peer link, a stale digest is told

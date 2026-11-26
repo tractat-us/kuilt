@@ -1,7 +1,7 @@
 <!--
 DRAFT comment for tractat-us/bee#149. Post after v0.7.7 is on Maven Central.
 Replace <v0.7.7 release link> with the release URL. Also carries #159's note (see notice-bee-159.md).
-Refreshed 2026-11-26 against kuilt main at 5faee4dc92; bee pins 0.7.0-dev.1926 (kuilt e979122a9),
+Refreshed 2026-11-26 against kuilt main at 1f9ba99290; bee pins 0.7.0-dev.1926 (kuilt e979122a9),
 checked the same day.
 -->
 
