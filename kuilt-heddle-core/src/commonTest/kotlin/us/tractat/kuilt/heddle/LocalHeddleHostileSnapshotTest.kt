@@ -343,7 +343,7 @@ class LocalHeddleHostileSnapshotTest {
         /** Per golden: how many numbers it holds, and how many edits reached each outcome. */
         val EXPECTED_COUNTS: Map<String, Pair<Int, Map<Outcome, Int>>> = mapOf(
             "GOLDEN_FORMAT_1" to (27 to counts(corrupt = 107, unsupported = 2, noLaterEpoch = 1, capacityRefused = 2, survived = 91)),
-            "GOLDEN_FORMAT_1_RICH" to (94 to counts(corrupt = 386, unsupported = 2, noLaterEpoch = 1, capacityRefused = 2, survived = 331)),
+            "GOLDEN_FORMAT_1_RICH" to (95 to counts(corrupt = 387, unsupported = 2, noLaterEpoch = 1, capacityRefused = 2, survived = 338)),
             "GOLDEN_FORMAT_1_ORIGIN" to (35 to counts(corrupt = 141, unsupported = 2, noLaterEpoch = 1, capacityRefused = 2, survived = 121)),
         )
 
