@@ -642,10 +642,18 @@ private class DetachedMember(private val inbox: MemberInbox?) {
  * - [lastPassNotAfter] is when the latest pass issued to it runs out, null before the first. Written
  *   under the room lock once a pass is signed; read when the membership leaves, to keep its departed
  *   record ([us.tractat.kuilt.session.admit.DepartedMembers]) exactly as long as that pass is good.
+ * - [lastSentNotAfter] is when the latest pass the device is known to hold runs out (#3711): the last
+ *   one the host sent it without the send throwing, under the room lock. A restore keeps it with the
+ *   membership, a takeover inherits it, and a return on a pass starts from the pass presented, so a
+ *   seating whose own pass failed still closes its retries in on the pass the device holds. Null when
+ *   the device is known to hold none.
  */
 private class Membership(val id: String, val admittedAtMs: Long, val terms: GrantTerms) {
     /** Guarded by the room's lock. */
     var lastPassNotAfter: Long? = null
+
+    /** Guarded by the room's lock. */
+    var lastSentNotAfter: Long? = null
 }
 
 /**
@@ -2632,6 +2640,8 @@ internal class SeamRoom(
         supersededIds.record(previous, held.key, successor = joinerPeerId)
         logger.info { "room.seat.superseded peer=${previous.value} by=${joinerPeerId.value}" }
         val admitted = admitMember(joinerPeerId, held.identity, held.key, inherited.admittedAtMs, inherited.terms)
+        // The device holds the pass it had under its old id (#3711).
+        admitted.burst.membership.lastSentNotAfter = inherited.lastSentNotAfter
         return SeatOutcome.Superseded(previous, detached, admitted.burst, decidedAtMs)
     }
 
@@ -2730,6 +2740,8 @@ internal class SeamRoom(
         val previousId = departedMembers.take(keyed.key, admittedAtMs)
         logger.info { "room.admit.returning peer=${joinerPeerId.value} previous=${previousId?.value}" }
         return admitNewMember(joinerPeerId, keyed, GrantIssuer.termsOf(pass), admittedAtMs, ReturningMark(previousId))
+            // The device holds the pass it presented (#3711).
+            .also { it.burst.membership.lastSentNotAfter = pass.notAfter }
     }
 
     /**
@@ -2849,7 +2861,7 @@ internal class SeamRoom(
                 grant = (issued as? PassIssue.Issued)?.grant?.wire,
             ),
         )
-        runCatchingCancellable { seam.sendTo(member.id, direct) }
+        val directSent = runCatchingCancellable { seam.sendTo(member.id, direct) }.isSuccess
 
         for (existing in burst.existing) {
             // Names the Hello the burst answers, as the intro does, so a joiner can drop it when it
@@ -2882,10 +2894,15 @@ internal class SeamRoom(
             ),
         )
         runCatchingCancellable { seam.sendTo(member.id, hostIntro) }
+        if (directSent && issued is PassIssue.Issued) lock.withLock { burst.membership.lastSentNotAfter = issued.grant.notAfter }
         // Due a period after this pass was dated, not after the burst: a slow burst would otherwise
-        // come off the floor the pass promises (#3709).
-        if (issued !is PassIssue.Withheld) {
-            startGrantRenewals(member.id, member.key, burst.membership, anchorMs = (issued as? PassIssue.Issued)?.grant?.issuedAt ?: attemptedAt)
+        // come off the floor the pass promises (#3709). A Welcome that went without a pass makes its
+        // first try a retry's (#3711): a first admission holds no pass, and a restore, a takeover or
+        // a return holds an older one, whose end the retries close in on ([Membership.lastSentNotAfter]).
+        when (issued) {
+            is PassIssue.Issued -> startGrantRenewals(member.id, member.key, burst.membership, anchorMs = issued.grant.issuedAt, retryFirst = false)
+            PassIssue.Failed -> startGrantRenewals(member.id, member.key, burst.membership, anchorMs = attemptedAt, retryFirst = true)
+            PassIssue.Withheld -> Unit
         }
     }
 
@@ -2900,7 +2917,7 @@ internal class SeamRoom(
          */
         data object Withheld : PassIssue
 
-        /** Owed, but signing failed on this platform: logged, and tried again at the next renewal. */
+        /** Owed, but signing failed on this platform: logged, and tried again after a retry's wait (#3711). */
         data object Failed : PassIssue
     }
 
@@ -2938,14 +2955,14 @@ internal class SeamRoom(
      * holds: it left, or a newer admission holds the id, while the burst was sent. The first renewal is
      * due a period after [anchorMs], when the Welcome's pass was dated (or its signing tried).
      */
-    private fun startGrantRenewals(peerId: PeerId, subject: DidKey, membership: Membership, anchorMs: Long) {
+    private fun startGrantRenewals(peerId: PeerId, subject: DidKey, membership: Membership, anchorMs: Long, retryFirst: Boolean) {
         val terms = membership.terms
         val periodMs = GrantIssuer.refreshPeriodMillis(terms) ?: return
         val membershipId = membership.id
         lock.withLock {
             if (closed || memberships[peerId]?.id != membershipId) return
             grantRenewals.remove(peerId)?.cancel()
-            grantRenewals[peerId] = scope.launch { renewGrants(peerId, subject, membershipId, periodMs, anchorMs) }
+            grantRenewals[peerId] = scope.launch { renewGrants(peerId, subject, membership, periodMs, anchorMs, retryFirst) }
         }
     }
 
@@ -2963,35 +2980,77 @@ internal class SeamRoom(
      * A renewal that falls due while the host holds the member as partitioned waits for the member's
      * next contact and goes then, so the member gets nothing while it is away. The pass it holds runs
      * out at most one and a half terms after its last contact and, provided the last renewal reached
-     * it, at least a whole term after: a renewal is sent once, so one lost on the way leaves the
-     * member on the pass before it, as does a failure to sign (tracked by #3711). It stops for good when
-     * the membership ends — [detachMember] cancels it — and when the device is revoked after this
+     * it, at least a whole term after. A renewal that fails to sign or to send is tried again
+     * ([GrantIssuer.retryDelayMillis], #3711): first a second later, the wait doubling up to the
+     * period, and never more than a quarter of the time left on the pass the device is known to hold
+     * ([Membership.lastSentNotAfter]), though not under a quarter second, so the tries close up as
+     * that pass nears its end. A renewal whose frame was sent but lost on the
+     * link is not known to be lost, and is not tried again. One loop per membership, so one chain of
+     * retries per member. It stops for good when the membership ends — [detachMember] cancels it,
+     * including when a partitioned seat's hold runs out — and when the device is revoked after this
      * membership's admission (Decided 14, R2(i)): a revoked present member keeps its seat (Decided 12)
      * but its pass runs out.
-     * A failure to sign skips one renewal and tries again a period later.
+     *
+     * A `CancellationException` out of `sendTo` would end the loop, since `runCatchingCancellable`
+     * rethrows it; the `Seam` contract forbids `sendTo` to mint one, so only the loop's own
+     * cancellation does. [retryFirst] makes the first try a retry's, a second after [anchorMs], for a
+     * Welcome whose pass failed to sign, and counts that failure, so the waits run 1, 2, 4 s as after
+     * any other.
      */
-    private suspend fun renewGrants(peerId: PeerId, subject: DidKey, membershipId: String, periodMs: Long, anchorMs: Long) {
+    private suspend fun renewGrants(
+        peerId: PeerId,
+        subject: DidKey,
+        membership: Membership,
+        periodMs: Long,
+        anchorMs: Long,
+        retryFirst: Boolean,
+    ) {
+        // When the last pass was dated, which the next renewal is due a period after (#3709), and how
+        // many tries have failed since the last that went (#3711). One loop per membership, so one
+        // chain of retries per member.
         var datedAt = anchorMs
+        var failures = if (retryFirst) 1 else 0
+        var waitMs = if (retryFirst) retryWait(0, membership, periodMs) else scheduledWait(datedAt, periodMs)
         while (true) {
-            delay((datedAt + periodMs - clock().toEpochMilliseconds()).coerceIn(0L, periodMs))
+            delay(waitMs)
             // Until the member is connected again, or gone; a gone member's loop is cancelled anyway.
             _roster.first { roster -> roster.none { it.id == peerId && it.liveness != Liveness.Connected } }
-            val membership = lock.withLock { memberships[peerId]?.takeIf { it.id == membershipId } } ?: return
-            val attemptedAt = clock().toEpochMilliseconds()
-            when (val issued = issueGrant(peerId, subject, membership)) {
+            if (lock.withLock { memberships[peerId]?.id != membership.id }) return
+            val sent = when (val issued = issueGrant(peerId, subject, membership)) {
                 is PassIssue.Issued -> {
                     datedAt = issued.grant.issuedAt
                     runCatchingCancellable { seam.sendTo(peerId, AdmitMessage.encode(AdmitMessage.GrantRenewal(issued.grant.wire))) }
                         .onFailure { logger.debug { "room.grant.renewal-unsent peer=${peerId.value}: $it" } }
+                        .isSuccess
+                        .also { if (it) lock.withLock { membership.lastSentNotAfter = issued.grant.notAfter } }
                 }
                 PassIssue.Withheld -> {
                     logger.info { "room.grant.renewals-stopped peer=${peerId.value}" }
                     return
                 }
-                PassIssue.Failed -> datedAt = attemptedAt
+                PassIssue.Failed -> false
+            }
+            if (sent) {
+                failures = 0
+                waitMs = scheduledWait(datedAt, periodMs)
+            } else {
+                waitMs = retryWait(failures, membership, periodMs)
+                failures++
+                logger.debug { "room.grant.renewal-retry peer=${peerId.value} in=${waitMs}ms failures=$failures" }
             }
         }
     }
+
+    /**
+     * How long until the renewal due [periodMs] after a pass dated [datedAt], on the room's clock,
+     * clamped to `0..periodMs` so a clock stepped back never stalls a renewal past a period.
+     */
+    private fun scheduledWait(datedAt: Long, periodMs: Long): Long =
+        (datedAt + periodMs - clock().toEpochMilliseconds()).coerceIn(0L, periodMs)
+
+    /** [GrantIssuer.retryDelayMillis] on this room's clock, closing in on the end of [membership]'s last pass sent. */
+    private fun retryWait(retry: Int, membership: Membership, periodMs: Long): Long =
+        GrantIssuer.retryDelayMillis(retry, clock().toEpochMilliseconds(), lock.withLock { membership.lastSentNotAfter }, periodMs)
 
     /** The first admission's Hello, broadcast: this joiner does not know its host yet. */
     private suspend fun sendHello() {
