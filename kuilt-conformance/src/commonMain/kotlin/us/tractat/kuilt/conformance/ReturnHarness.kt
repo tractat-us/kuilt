@@ -392,6 +392,33 @@ internal class VettingCount(readmitFor: Duration = 1.hours) {
 }
 
 /**
+ * The planted-pass rows' [PassPlanter] (#3710): it plants what [passes] returns, and keeps, per Proof
+ * it was asked about, what it planted and how many passes the room presented itself. That is what a
+ * row asserts its rig fired on: a planter never asked, asked twice, or asked about a Proof that
+ * already carried a pass reds as the rig's failure, not the host's.
+ */
+internal class RecordingPlanter(private val passes: suspend (statement: AdmissionProof, sender: DidKey) -> List<Grant>) : PassPlanter {
+    private val lock = reentrantLock()
+    private val planted = mutableListOf<List<Grant>>()
+    private val presented = mutableListOf<Int>()
+
+    override suspend fun plant(statement: AdmissionProof, sender: DidKey, presented: List<ByteArray>): List<Grant> {
+        val extra = passes(statement, sender)
+        lock.withLock {
+            planted += extra
+            this.presented += presented.size
+        }
+        return extra
+    }
+
+    /** The passes planted in each Proof, oldest Proof first. */
+    fun plantedPerProof(): List<List<Grant>> = lock.withLock { planted.toList() }
+
+    /** How many passes the device's room put in each of those Proofs itself. */
+    fun presentedPerProof(): List<Int> = lock.withLock { presented.toList() }
+}
+
+/**
  * Every call the rows make on a device's [RoomFactory] and on the [Room]s it returns (#3159).
  *
  * This catches only the row's own code: a call a later edit adds between a drop and a return. It is
