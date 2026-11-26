@@ -143,8 +143,7 @@ class HeddleNodeReconcileOwnTest {
             )
             val outcome = node.reconcileOwn(ACME)
             assertAll(
-                { assertIs<ReconcileOwnOutcome.Refused>(outcome) },
-                { assertTrue((outcome as ReconcileOwnOutcome.Refused).reason.contains("cover"), "names the uncovered spend: $outcome") },
+                { assertTrue((outcome as? ReconcileOwnOutcome.Refused)?.reason.orEmpty().contains("cover"), "names the uncovered spend: $outcome") },
                 { assertEquals(l, node.ledger.value, "nothing was written") },
             )
         }
@@ -161,8 +160,7 @@ class HeddleNodeReconcileOwnTest {
             val before = node.ledger.value
             val outcome = node.reconcileOwn(ACME)
             assertAll(
-                { assertIs<ReconcileOwnOutcome.Refused>(outcome) },
-                { assertTrue((outcome as ReconcileOwnOutcome.Refused).reason.contains("another parent"), "names the parents: $outcome") },
+                { assertTrue((outcome as? ReconcileOwnOutcome.Refused)?.reason.orEmpty().contains("another parent"), "names the parents: $outcome") },
                 { assertEquals(before, node.ledger.value, "nothing was written") },
             )
         }
