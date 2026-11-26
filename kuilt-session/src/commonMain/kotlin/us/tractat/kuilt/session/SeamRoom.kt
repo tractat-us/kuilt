@@ -2926,11 +2926,11 @@ internal class SeamRoom(
     }
 
     /**
-     * **Host only.** Renew [peerId]'s pass every quarter of its [membership]'s term from now on (#3221;
-     * [GrantIssuer.RENEWALS_PER_TERM], #3709), replacing any renewals an earlier Welcome to it started.
-     * Nothing for a term that never ends ([GrantIssuer.refreshPeriodMillis]), and nothing when
-     * [membership] is no longer the one [peerId] holds: it left, or a newer admission holds the id,
-     * while the burst was sent.
+     * **Host only.** Renew [peerId]'s pass every half of its [membership]'s term, a third of the pass's
+     * life, from now on (#3221; [GrantIssuer.PERIODS_PER_PASS], #3709), replacing any renewals an
+     * earlier Welcome to it started. Nothing for a term that never ends
+     * ([GrantIssuer.refreshPeriodMillis]), and nothing when [membership] is no longer the one [peerId]
+     * holds: it left, or a newer admission holds the id, while the burst was sent.
      */
     private fun startGrantRenewals(peerId: PeerId, subject: DidKey, membership: Membership) {
         val terms = membership.terms
@@ -2949,8 +2949,8 @@ internal class SeamRoom(
      *
      * A renewal that falls due while the host holds the member as partitioned waits for the member's
      * next contact and goes then, so the member gets nothing while it is away. The pass it holds runs
-     * out at most a whole term after its last contact and, provided the last renewal reached it, at
-     * least three quarters of a term after: a renewal is sent once, so one lost on the way leaves the
+     * out at most one and a half terms after its last contact and, provided the last renewal reached
+     * it, at least a whole term after: a renewal is sent once, so one lost on the way leaves the
      * member on the pass before it, as does a failure to sign (tracked by #3711). It stops for good when
      * the membership ends — [detachMember] cancels it — and when the device is revoked after this
      * membership's admission (Decided 14, R2(i)): a revoked present member keeps its seat (Decided 12)

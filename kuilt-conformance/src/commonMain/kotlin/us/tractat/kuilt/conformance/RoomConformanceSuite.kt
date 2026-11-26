@@ -58,6 +58,7 @@ import us.tractat.kuilt.session.RoomFramePrefix
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.GrantTerms
 import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.liveness.HeartbeatConfig
@@ -1381,12 +1382,15 @@ public abstract class RoomConformanceSuite {
                 awaitPassKept(second)
                 val vettedInsideTerm = vetting.keys()
 
-                // Past the term: every pass the device holds was issued while a seat of its was
-                // connected, so at or before this kill, and none is good past the kill plus the term.
+                // Past the pass: every pass the device holds was issued while a seat of its was
+                // connected, so at or before this kill, and none is good past the end a pass issued at
+                // the kill would have. A pass outlives its term (#3709), so that end, not the term, is
+                // when the last one runs out.
                 device.kill()
                 val killedAt = testScheduler.currentTime
+                val lastPassEnd = GrantTerms(term).notAfter(killedAt)
                 host.awaitRoster("the host lets the second process's seat go") { roster -> roster.none { it.id == two } }
-                advanceTimeBy(term)
+                advanceTimeBy(lastPassEnd - testScheduler.currentTime)
                 runCurrent()
                 val awayFor = (testScheduler.currentTime - killedAt).milliseconds
                 val seatsAtRelaunch = host.roster.value.filter { it.key == key }
@@ -1400,6 +1404,7 @@ public abstract class RoomConformanceSuite {
                     { assertEquals(vettedAtFirst, vettedInsideTerm, "rig: inside the term the device came back on its pass, unvetted") },
                     { assertEquals(ReturningMark(previousId = one), marks[two], "rig: and was marked returning") },
                     { assertTrue(awayFor > term, "rig: the device was away $awayFor, past its pass's $term term") },
+                    { assertTrue(testScheduler.currentTime >= lastPassEnd, "rig: and past the end of any pass it holds") },
                     { assertEquals(emptyList(), seatsAtRelaunch, "rig: the key held no seat when the third process said Hello") },
                     { assertEquals(vettedInsideTerm + key, vetting.keys(), "past the term, the policy is asked once, about the device's key") },
                     { assertTrue(three in marks && marks[three] == null, "an ordinary admission, not marked as a return: $marks") },

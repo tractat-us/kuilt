@@ -498,10 +498,10 @@ public sealed interface AdmitMessage {
      * Sent by the host to a connected member: a fresh pass back in, renewing the one its direct
      * [Welcome] carried (v8, #3221).
      *
-     * A pass is good for a fixed time after it was issued, and the host issues a new one every quarter
-     * of that time while the member stays connected, so a member that drops off holds a pass good for
-     * at most that time after its last contact and, provided the last renewal reached it, at least
-     * three quarters of it, however long ago it joined. A renewal is sent once: one lost on the way is
+     * A pass is good for a fixed time after it was issued, and the host issues a new one every third of
+     * that time while the member stays connected, so a member that drops off holds a pass good for at
+     * most that time after its last contact and, provided the last renewal reached it, at least two
+     * thirds of it, its term, however long ago it joined. A renewal is sent once: one lost on the way is
      * not sent again (tracked by #3711). A member the host holds as partitioned is sent nothing, and a
      * pass that never expires is never renewed. Nor is the pass of a member whose device the host
      * revoked after admitting it (Decided 14).
