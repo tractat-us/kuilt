@@ -142,3 +142,18 @@ tasks.withType<AbstractTestTask>().configureEach {
         filter.excludeTestsMatching("*LeaseScaleProbe.*")
     }
 }
+
+// ── The reservation-lean ensemble (#3239) is a benchmark, opt-in (#3724) ────────────────────────
+//
+// `ReservationLeanBenchmark` runs about 500 rigs to pin a statistical bound: 26 s on the JVM and
+// 10 minutes on a Kotlin/Native debug binary, too dear for every build. The exact half,
+// `ReservationLeanTest`, stays in. Same mechanism as the probe above, for the same reasons, behind
+// the repo-wide benchmark flag:
+//   ./gradlew :kuilt-heddle-core:jvmTest -Pkuilt.benchmark.tests=true --tests '*ReservationLeanBenchmark*'
+val runBenchmarks = providers.gradleProperty("kuilt.benchmark.tests").orNull == "true"
+tasks.withType<AbstractTestTask>().configureEach {
+    if (!runBenchmarks) {
+        filter.excludeTestsMatching("*ReservationLeanBenchmark")
+        filter.excludeTestsMatching("*ReservationLeanBenchmark.*")
+    }
+}

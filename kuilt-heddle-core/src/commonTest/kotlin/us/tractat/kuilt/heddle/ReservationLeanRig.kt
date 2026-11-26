@@ -56,6 +56,9 @@ internal object ReservationLeanRig {
 
         /** The slot-time units [leaf]'s leases held: the exact integer [share] divides. */
         fun slotTime(leaf: GroupId): Long = slotTime.getValue(leaf)
+
+        /** Folds [leaves]' slot times into [into], in the order given. Wraps on overflow, alike on every target. */
+        fun fingerprint(into: Long, leaves: List<GroupId>): Long = leaves.fold(into) { h, leaf -> h * 1_000_003L + slotTime(leaf) }
     }
 
     private class Running(val lease: LeaseId, val lane: Int, val start: Long, val endsAt: Long, val cost: Long, var reserved: Long)
