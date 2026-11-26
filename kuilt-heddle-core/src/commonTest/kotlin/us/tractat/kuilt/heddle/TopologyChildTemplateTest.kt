@@ -241,6 +241,32 @@ class TopologyChildTemplateTest {
         )
     }
 
+    /**
+     * Once a detach has closed the child's active edge, no prefix of it may still read the child as
+     * attached: a CLOSING edge beside a PREPARED one is a re-attach waiting for a drain, and a reload
+     * at that cut would activate the child the detach was taking away. The abandoned retire has to
+     * land before the close. Before it, the child is still attached on its old edge, which is the
+     * state the detach started from, and a reload there carries on the reweight.
+     */
+    @Test
+    fun noCutOfADetachBesideAPreparedReplacementReadsTheChildAsAttached() {
+        val ledger = attached(bootFrom(pool()), "x")
+        val half = applyClean(Topology.diff(pool(marker = 3), ledger, generation = 0).take(1), ledger)
+        val detach = pool(marker = 3).detach(tenants, "x", half)
+        val stopped = (0..detach.size).map { applyClean(detach.take(it), half) }.withIndex()
+            .filter { (_, l) -> l.liveInto(runtime("x")).none { l.lifecycle(it) == Lifecycle.ACTIVE } }
+        assertAll(
+            { assertEquals(Lifecycle.PREPARED, half.lifecycle(e("root/tenants/!x@3:1#2")), "the rig left the replacement prepared") },
+            { assertEquals(2, stopped.size, "the rig: the cuts after the close, and the whole list") },
+            *stopped.map { (cut, l) ->
+                {
+                    val reload = Topology.diff(pool(marker = 3), l, generation = 0).filter { it.child == runtime("x") }
+                    assertEquals(emptyList(), reload.filter { it is Prepare || it is Activate }, "a reload at cut $cut brings x back")
+                }
+            }.toTypedArray(),
+        )
+    }
+
     @Test
     fun attachAndDetachRefuseAnotherRoot() {
         val elsewhere = Topology("pool", listOf(Group("tenants", Weight.ONE, listOf(Lane("x")), template = ChildTemplate(Weight.ONE))))

@@ -108,6 +108,38 @@ class LocalHeddleNestedAttachTest {
     }
 
     /**
+     * A repository detached beside its own prepared reweight while alice's lease runs drains, the
+     * same as one with no prepared edge. The abandoned retire runs before anything beneath it is
+     * stopped, so it is never what waits on alice; the repository's live retire is, with work
+     * outstanding, so its close stands. Retired after alice's, it would wait on her with nothing
+     * outstanding on it, read as refused, and take the repository's close with it (#3198).
+     */
+    @Test
+    fun detachingARepositoryBesideItsPreparedReweightDrains() {
+        val h = engine().attached(alice)
+        val lease = assertIs<AcquireOutcome.Acquired>(h.acquire(setOf(aliceId), setOf(aliceId), startedAt = 0L)).lease
+        val live = checkNotNull(h.snapshot().ledger.lineageOf(kuiltId)?.last())
+        val reweight = AttachmentRecord(attachmentIdOf(kuiltId, Weight.of(3), 2L), t.groupId("ci"), kuiltId, Weight.of(3))
+        h.reshapeForTest { l -> l.piece(checkNotNull(l.prepare(reweight)).delta) }
+        val before = h.snapshot().ledger
+        val draining = h.detach(kuilt)
+        val ledger = h.snapshot().ledger
+        check(h.complete(lease.id, actualCost = 1L, waiting = emptySet()) is LeaseOutcome.Done)
+        val drained = h.detach(kuilt)
+        assertAll(
+            { assertEquals(Lifecycle.PREPARED, before.lifecycle(reweight.id), "the rig: the reweight is prepared") },
+            { assertEquals(Lifecycle.ACTIVE, before.lifecycle(live), "beside the repository's active edge") },
+            { assertEquals(setOf(aliceId, kuiltId), draining.refusals.map { it.child }.toSet(), "alice and the repository wait: ${draining.refusals}") },
+            { assertTrue(draining.refusals.all { it is StepRefusal.Draining }, "on the lease, not refused: ${draining.refusals}") },
+            { assertEquals(Lifecycle.CLOSING, ledger.lifecycle(live), "the repository's close stands") },
+            { assertEquals(Lifecycle.RETIRED, ledger.lifecycle(reweight.id), "its reweight is abandoned") },
+            { assertEquals(emptyList(), drained.refusals, "once drained, the rest lands") },
+            { assertTrue(!h.live(kuiltId) && !h.live(aliceId), "neither is left") },
+            { assertEquals(emptyList(), h.snapshot().ledger.validate()) },
+        )
+    }
+
+    /**
      * A repository detached while alice's lease ran, then drained, is attached again through a new
      * author. Its old edge retires in that unit, and so must alice's: she was closed by the detach,
      * and a closing edge left beneath a retired one is a child live beneath a dead parent.
