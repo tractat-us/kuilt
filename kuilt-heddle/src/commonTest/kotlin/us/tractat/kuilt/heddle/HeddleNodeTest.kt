@@ -973,9 +973,9 @@ class HeddleNodeTest {
      * Demand is replicated here, so B's advertisement of `e2` is live on A. `targetOutstanding = 60`
      * lets B fill it exactly, so on A it is active but not competing, and the front A reads before
      * its call is the two competing edges' mean (the rig). `e1` spends what it was granted before
-     * A's call: a clamped waker is counted past the front by its outstanding (#3721), so an `e1`
-     * still holding its 100 would be clamped 100 past itself and `e3` would take all of A's units,
-     * as an unclamped `e3` would. The core twin is
+     * A's call. The clamp counts what a waker holds, past the front (#3721), so this rig empties
+     * `e1` to isolate the front: what the clamp does with `e1`'s holdings is
+     * [aFirstObservationOfAFrontEdgeStillHoldingItsGrantsLeavesItsSiblingThatGap]. The core twin is
      * `FairShareAllocatorTest.aFirstObservationOfASeatedDemandingChildIsAWake`.
      */
     @Test
@@ -997,8 +997,7 @@ class HeddleNodeTest {
         b.advertise(e1, hungrier)
         b.advertise(e2, Demand(targetOutstanding = 60L, maximumUsefulGrant = 10L))
         b.schedule(root)
-        // e1's work runs: a clamp counts what a waker still holds past the front (#3721), and the
-        // rig is about the front, so e1 holds nothing.
+        // e1's work runs: the clamp counts holdings (#3721), so this rig empties e1 to isolate the front.
         b.complete(assertIs<ReserveOutcome.Reserved>(b.reserve(g1, 100L), "e1's leaf holds its 100").id, 100L)
         h.pump()
         assertAll(
@@ -1049,6 +1048,62 @@ class HeddleNodeTest {
                     "…and e1 takes the other half",
                 )
             },
+        )
+    }
+
+    /**
+     * [aFirstObservationOfASeatedDemandingEdgeIsAWake] with `e1` still holding its 100: the clamp's
+     * known error, pinned through a whole node (#3721, ruling 3). `e1` is the front and holds 100,
+     * so A clamps it 100 past itself, and `e3` to the front, 100 behind it. `e3` then takes all of
+     * A's 100 units: `e1` 100, `e3` 100.
+     *
+     * A node that had watched B's run, where `e3` idled while `e1` was granted, would not clamp `e1`
+     * at all and would read 150/50; one that had watched `e3` compete for those 100 would leave the
+     * gap. A first sighting cannot tell the two apart, and the clamp leaves `e3` exactly `e1`'s
+     * outstanding of lag, the bound `FairShareAllocator`'s *Two histories* states. The core twin,
+     * which reads the offsets in ticks, is
+     * `FairShareAllocatorTest.aFirstObservationOfAFrontChildStillHoldingItsGrantsLeavesItsSiblingThatGap`.
+     */
+    @Test
+    fun aFirstObservationOfAFrontEdgeStillHoldingItsGrantsLeavesItsSiblingThatGap() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 160L), topology = flatTopology())
+        h.pump()
+        val a = h.peers[0].node
+        val b = h.peers[1].node
+        val hungrier = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
+
+        // B's round exactly as in the twin, and e1 keeps the 100 it was granted.
+        val behind = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE)
+        assertTrue(b.prepare(behind) && b.activate(behind.id))
+        b.advertise(e1, hungrier)
+        b.advertise(e2, Demand(targetOutstanding = 60L, maximumUsefulGrant = 10L))
+        b.schedule(root)
+        h.pump()
+        assertAll(
+            { assertEquals(100L, a.ledger.value.edge(e1)!!.issued, "A merged e1's run") },
+            { assertEquals(100L, a.ledger.value.edge(e1)!!.outstanding, "the rig: and e1 holds all of it") },
+            { assertEquals(Gauge(folded = 0L), assertNotNull(a.ledger.value.gauge(behind.id)), "…and e3's seat at the origin") },
+        )
+
+        a.advertise(e1, hungrier)
+        a.advertise(behind.id, hungrier)
+        a.schedule(root)
+        h.pump()
+        // Each edge's effective position, read with it alone demanding: advertising moves no wake memory.
+        fun alone(edge: AttachmentId): Rational? {
+            for (other in listOf(e1, e2, behind.id)) a.advertise(other, if (other == edge) hungrier else Demand.NONE)
+            return a.parentVirtualTime(root)
+        }
+        val e1At = alone(e1)
+        val e3At = alone(behind.id)
+        assertAll(
+            { assertEquals(100L, a.ledger.value.edge(behind.id)!!.issued, "e3 takes all of A's units, where kept memory gives it 50") },
+            { assertEquals(100L, a.ledger.value.edge(e1)!!.issued, "…and e1 none, where kept memory gives it 150") },
+            { assertEquals(Rational.of(200L), e1At, "e1 was clamped past itself by its 100 outstanding: 100 raw, at 200") },
+            { assertEquals(Rational.of(200L), e3At, "…and e3, clamped to the front at 100, caught up by exactly that gap") },
         )
     }
 
