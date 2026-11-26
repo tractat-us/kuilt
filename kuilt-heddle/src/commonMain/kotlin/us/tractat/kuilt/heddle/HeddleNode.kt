@@ -565,7 +565,7 @@ public class HeddleNode internal constructor(
         val demanding = lock.withLock {
             val live = demandTracker.live()
             // Under the lock: the peak reads the allocator's wake clamps, which only the lock guards.
-            peak = allocator.peakPositionFraction(s, parent) { edge -> foldDemand(live, edge) }
+            peak = allocator.peakPositionFraction(s, parent)
             s.activeChildren(parent)
                 .mapNotNullTo(HashSet()) { c -> c.attachment.takeIf { foldDemand(live, it).targetOutstanding > 0L } }
         }

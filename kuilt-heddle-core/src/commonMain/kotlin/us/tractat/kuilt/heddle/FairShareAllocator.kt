@@ -609,17 +609,13 @@ public class FairShareAllocator(
      *
      * Nothing rebases a parent back down (#3472), so a busy parent passes `1.0` in time. Past it the
      * deprecated `Rational` virtual-time reads saturate at the ceiling; no pick is affected, since a
-     * pick orders the full 128-bit position. `0.0` when [parent] has no active children. [demand]
-     * is each child's demand as this peer sees it, the same function a pick takes.
+     * pick orders the full 128-bit position. `0.0` when [parent] has no active children.
      *
      * A diagnostic, read from this allocator's wake clamps, so it is this peer's reading and not a
      * replicated value. A caller sharing the allocator must hold whatever lock guards it.
      */
-    public fun peakPositionFraction(
-        ledger: EntitlementLedger,
-        parent: GroupId,
-        demand: (AttachmentId) -> Demand,
-    ): Double = policyEdges(ledger, parent, demand).maxOfOrNull { edge ->
+    public fun peakPositionFraction(ledger: EntitlementLedger, parent: GroupId): Double =
+        policyEdges(ledger, parent, demand = { Demand.NONE }).maxOfOrNull { edge ->
         HeddlePolicy.effectiveTicksWide(edge).toDouble() / positionCeiling(edge.record.weight).toDouble()
     } ?: 0.0
 

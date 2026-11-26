@@ -2559,7 +2559,9 @@ public class EntitlementLedger private constructor(
      * and whose lifecycle is [Lifecycle.ACTIVE] or [Lifecycle.CLOSING] (a still-draining closing edge
      * counts; it can carry entitlement). Sorted by id so every peer folds the same order.
      *
-     * This is the exact predicate [LedgerConflict.DualActiveInbound] fires on. The **H5 control plane**
+     * This is [LedgerConflict.DualActiveInbound]'s predicate over the non-divergent edges. The conflict
+     * counts every live edge in the inbound index, a divergent edge included, so such an edge counts
+     * toward it without being listed here. The **H5 control plane**
      * reads it *before* applying an `activate` proposal so the log's serialization can refuse the
      * loser of two overlapping reshapes as a structured conflict — instead of letting both apply and
      * quarantine the lineage (design §9, §5.2, §10.11).

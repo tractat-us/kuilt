@@ -99,7 +99,7 @@ internal class WindowRuleRig(lanes: List<Pair<String, Weight>>) {
                 }
                 else -> error("the rig: step $step answered $out")
             }
-            peakShare = maxOf(peakShare, engine.allocator.peakPositionFraction(engine.snapshot().ledger, engine.root) { Demand.NONE })
+            peakShare = maxOf(peakShare, engine.allocator.peakPositionFraction(engine.snapshot().ledger, engine.root))
         }
         return Result(steps, picks, refusals, firstRefusal, picksAfterRefusal, reloads, leaves, peakShare, served, heavyWaiting, heavyPicks)
     }

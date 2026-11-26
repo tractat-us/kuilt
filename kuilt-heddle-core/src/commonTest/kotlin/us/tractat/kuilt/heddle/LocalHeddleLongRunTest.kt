@@ -284,7 +284,7 @@ class LocalHeddleLongRunTest {
      * returns, plus its wake clamp.
      */
     private fun peakShare(engine: LocalHeddle): Double =
-        engine.allocator.peakPositionFraction(engine.snapshot().ledger, engine.root) { Demand.NONE }
+        engine.allocator.peakPositionFraction(engine.snapshot().ledger, engine.root)
 
     /** The highest effective position, in ticks, of any edge in [engine]: raw, net of returns, plus its wake offset. */
     private fun highestEffectiveTicks(engine: LocalHeddle): Int128 {

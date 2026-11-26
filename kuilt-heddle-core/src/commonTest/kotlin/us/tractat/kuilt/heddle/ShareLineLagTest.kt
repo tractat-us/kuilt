@@ -342,7 +342,7 @@ class ShareLineLagTest {
         val plain = snapshot.view(policy).shareLine(ids.waiting)
         val line = climbed.view(policy).shareLine(ids.waiting)
         val peak = FairShareAllocator(LocalHeddle.SELF, LocalHeddle.policyConfig(policy), climbed.allocatorMemory)
-            .peakPositionFraction(snapshot.ledger, ids.p) { Demand.NONE }
+            .peakPositionFraction(snapshot.ledger, ids.p)
         assertAll(
             { assertTrue(peak > 1.0, "the rig: p's children are past their Long ceilings: $peak") },
             { assertNotEquals(Rational.ZERO, plain.lag(ids.a), "the rig: a stands off the front") },
