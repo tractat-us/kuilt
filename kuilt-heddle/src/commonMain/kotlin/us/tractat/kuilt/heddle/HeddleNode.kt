@@ -271,7 +271,20 @@ public class HeddleNode internal constructor(
     /** Stop new delegation across [edge] ([EntitlementLedger.close]); returns whether it applied. */
     public fun close(edge: AttachmentId): Boolean = applyIfPresent { it.close(edge) }
 
-    /** Retire a drained [edge] ([EntitlementLedger.retire]); returns whether it applied. */
+    /**
+     * Retire a drained [edge] ([EntitlementLedger.retire]); returns whether it applied. A CLOSING
+     * edge with nothing outstanding retires, and so does a PREPARED one that carries no history
+     * (#3198), without a close first, so its child never has a second live inbound edge.
+     *
+     * **One proposer per edge, as for [prepare].** The check reads this peer's view only. If
+     * another peer [activate]s the edge concurrently and delegates down it before this retire
+     * reaches it, the lifecycle register's join is RETIRED with units outstanding on the edge: a
+     * [LedgerConflict.ClosureViolation], and the units stranded off the live lineage. A
+     * `close` here followed by this `retire` has the same race today, against a delegation
+     * another peer made before the close reached it. Nothing on this ungoverned path serializes
+     * the two, so one peer decides an edge's lifecycle. The governed path does serialize them,
+     * and [GovernedHeddleNode.retire][GovernedHeddleNode.retire] stays CLOSING-only in log order.
+     */
     public fun retire(edge: AttachmentId): Boolean = applyIfPresent { it.retire(edge) }
 
     /**

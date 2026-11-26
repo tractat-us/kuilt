@@ -4,6 +4,7 @@ import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -144,6 +145,53 @@ class EntitlementLedgerLifecycleTest {
         l = l.applying(l.activate(e))
         // Even fully-drained, retire requires CLOSING first (strict generation-and-drain).
         assertNull(l.retire(e))
+    }
+
+    // ── #3198: an unused PREPARED edge retires without closing ────────────────
+
+    /** `root → c` live over `a`, with `p` a prepared replacement nothing has crossed. */
+    private fun withPreparedReplacement(): EntitlementLedger {
+        var l: EntitlementLedger = EntitlementLedger.bootstrap(root, mapOf(alice to 100L), "g")
+        l = l.applying(l.prepare(record("a", root, c)))
+        l = l.applying(l.activate(edge("a")))
+        l = l.applying(l.delegate(alice, edge("a"), 10L))
+        return l.applying(l.prepare(record("p", root, c)))
+    }
+
+    @Test
+    fun anUnusedPreparedEdgeRetiresWithoutClosing() {
+        val p = edge("p")
+        val before = withPreparedReplacement()
+        val after = before.applying(before.retire(p))
+        assertAll(
+            { assertEquals(Lifecycle.PREPARED, before.lifecycle(p), "the rig: the edge is PREPARED") },
+            { assertEquals(emptyList(), before.validate(), "the rig: nothing is wrong before the retire") },
+            { assertEquals(Lifecycle.RETIRED, after.lifecycle(p)) },
+            { assertEquals(emptyList(), after.validate(), "the child keeps one live inbound edge throughout") },
+            { assertEquals(listOf(edge("a")), after.liveInboundEdges(c)) },
+            { assertEquals(10L, after.edge(edge("a"))?.outstanding, "the live edge is untouched") },
+        )
+    }
+
+    /**
+     * A PREPARED edge that carries a counter slot or a gauge is refused, as [EntitlementLedger.forget]
+     * refuses one, even where nothing is outstanding on it: the counter case nets to zero, so only the
+     * history test, not the drain gate, can refuse it.
+     */
+    @Test
+    fun aPreparedEdgeCarryingHistoryIsNotRetired() {
+        val p = edge("p")
+        val base = withPreparedReplacement()
+        val counted = base.piece(EntitlementLedger.of(issued = mapOf(p to GCounter.of(alice to 4L)), returned = mapOf(p to GCounter.of(alice to 4L))))
+        val gauged = base.piece(EntitlementLedger.of(gauges = mapOf(p to Gauge(folded = 0L))))
+        assertAll(
+            { assertEquals(Lifecycle.PREPARED, counted.lifecycle(p), "the rig: still PREPARED") },
+            { assertEquals(0L, counted.edge(p)?.outstanding, "the rig: nothing outstanding, so the drain gate passes") },
+            { assertEquals(Lifecycle.PREPARED, gauged.lifecycle(p), "the rig: still PREPARED") },
+            { assertNotNull(base.retire(p), "the rig: without the history it retires") },
+            { assertNull(counted.retire(p), "a prepared edge with counters") },
+            { assertNull(gauged.retire(p), "a prepared edge with a gauge") },
+        )
     }
 
     // ── §10.11 two active inbound generations ─────────────────────────────────

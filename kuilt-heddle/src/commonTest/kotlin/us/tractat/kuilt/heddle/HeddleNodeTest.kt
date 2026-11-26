@@ -272,6 +272,32 @@ class HeddleNodeTest {
     }
 
     /**
+     * #3198: the static node inherits the ledger's retire of an unused PREPARED edge. A replacement
+     * for g1 that nothing crossed retires without a close, so g1 keeps one live inbound edge on every
+     * peer, and the retire replicates.
+     */
+    @Test
+    fun aStaticNodeRetiresAnUnusedPreparedEdgeWithoutClosingIt() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val h = harness(peers = 2, mint = mapOf(0 to 100L), topology = flatTopology())
+        h.pump()
+        val p = AttachmentId("p")
+        val node = h.peers[0].node
+        assertTrue(node.prepare(AttachmentRecord(p, root, g1, Weight.of(2))), "rig: p prepares")
+        h.pump()
+        val before = h.peers[1].node.ledger.value
+        val retired = node.retire(p)
+        h.pump()
+        val other = h.peers[1].node.ledger.value
+        assertAll(
+            { assertEquals(Lifecycle.PREPARED, before.lifecycle(p), "rig: the other peer saw p PREPARED") },
+            { assertTrue(retired, "an unused prepared edge retires") },
+            { assertEquals(Lifecycle.RETIRED, other.lifecycle(p), "the retire replicated") },
+            { assertEquals(listOf(e1), other.liveInboundEdges(g1), "g1 keeps one live inbound edge") },
+            { assertEquals(emptyList(), other.validate()) },
+        )
+    }
+
+    /**
      * #3191: a group whose only child closes is a lane at once, and stays one through the drain and
      * after the retire, so it can be reserved and charged throughout. The reserve gate and the
      * allocator read one predicate, so at every step of the reshape exactly one of them can use

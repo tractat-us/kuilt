@@ -33,8 +33,9 @@ import kotlinx.serialization.Serializable
  *  - [CLOSING] — **no new delegation is admitted**, but spend and release still flow so
  *    the edge can drain.
  *  - [RETIRED] — reached only once the edge has fully drained
- *    ([EdgeSummary.outstanding] `== 0`); nothing crosses it ever again, and its history
- *    stays queryable forever.
+ *    ([EdgeSummary.outstanding] `== 0`): from [CLOSING], or straight from [PREPARED] when
+ *    nothing ever crossed the edge, which skips [CLOSING] so its child never has a second live
+ *    inbound edge. Nothing crosses it ever again, and its history stays queryable forever.
  */
 @Serializable
 public enum class Lifecycle {

@@ -480,7 +480,8 @@ agreement with the source.)
 ### 5.3 Reconfiguration: strict generation-and-drain
 
 All topology changes are low-frequency control-plane operations (§9) built
-from one primitive — *close, drain, retire, re-generate*:
+from one primitive — *close, drain, retire, re-generate* — plus one shortcut
+for an edge nothing has used, *abandon*:
 
 - **Create** a group under a parent: new record, new PREPARED edge, ACTIVATE.
   The edge's virtual-time seat is *not* part of the record — the scheduler's seat
@@ -491,6 +492,13 @@ from one primitive — *close, drain, retire, re-generate*:
   `outstanding == 0` → RETIRED. History stays queryable forever, edge by edge
   on a replicated ledger. A single-process engine will instead fold a finished
   leaf's edge into a per-parent total (§5.5).
+- **Abandon** a PREPARED edge nothing has crossed: RETIRED directly, skipping
+  CLOSING, since a CLOSING edge is live and would give its child a second live
+  inbound edge until the retire landed (#3198). An edge carrying any counter or
+  gauge is refused. A removal abandons a child's prepared edges before it closes
+  the live one, so a closed child never still reads as attached. The governed
+  control plane does not take this path: its `Retire` stays gated on CLOSING in
+  log order.
 - **Reparent** `C` from `A` to `B`: prepare `B→C`, close-drain-retire `A→C`,
   then activate `B→C` neutrally at `B`'s current virtual time. Old history
   stays under `A`; `C` starts prospectively neutral under `B`.
