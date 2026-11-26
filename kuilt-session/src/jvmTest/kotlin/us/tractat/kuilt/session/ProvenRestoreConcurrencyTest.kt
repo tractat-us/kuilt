@@ -729,7 +729,7 @@ class ProvenRestoreConcurrencyTest {
                 var slowChallenged = 0
                 var oldFirstRounds = 0
                 var oldWonWhenFirst = 0
-                var oldFirstUnsent = 0
+                val oldFirstUnsent = AtomicInteger(0)
                 var wrongOutcome = 0
                 val failures = mutableListOf<String>()
                 try {
@@ -762,7 +762,7 @@ class ProvenRestoreConcurrencyTest {
                         val exchanges = listOf(
                             rig.scope.launch {
                                 rig.prove(fresh, TEST_DEVICE_A, TEST_KEY_A, beforeProof = {
-                                    if (oldFirst && withTimeoutOrNull(STALL_GRACE) { oldSent.await() } == null) oldFirstUnsent++
+                                    if (oldFirst && withTimeoutOrNull(STALL_GRACE) { oldSent.await() } == null) oldFirstUnsent.incrementAndGet()
                                 })
                             },
                             rig.scope.launch {
@@ -828,7 +828,7 @@ class ProvenRestoreConcurrencyTest {
                     println(
                         "proven-restore rehello-race: completed=$completed oldWon=$oldWon newWon=$newWon " +
                             "toldAtProof=$toldAtProof reSeated=$reSeated slowChallenged=$slowChallenged " +
-                            "oldFirstRounds=$oldFirstRounds oldWonWhenFirst=$oldWonWhenFirst oldFirstUnsent=$oldFirstUnsent wrongOutcome=$wrongOutcome " +
+                            "oldFirstRounds=$oldFirstRounds oldWonWhenFirst=$oldWonWhenFirst oldFirstUnsent=${oldFirstUnsent.get()} wrongOutcome=$wrongOutcome " +
                             "retries=${rig.retries.get()} failures=$failures",
                     )
                     assertAll(
