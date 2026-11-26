@@ -39,11 +39,15 @@ class HeddleNodeReconcileOwnPropertyTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val tally = Tally()
             for (seed in 0 until SEEDS) trial(Random(seed), seed, tally)
+            println("RECONCILE-OWN-PROPERTY ${tally.trials} ${tally.repairedWhilePartitioned} ${tally.notYetSeen} ${tally.lateWhileCut} ${tally.lateBeforeRepair} ${tally.lateAfterRepair}")
             assertAll(
                 { assertEquals(SEEDS, tally.trials, "every seed ran") },
                 { assertEquals(SEEDS * PEERS, tally.repaired, "every peer repaired once in every trial") },
                 { assertTrue(tally.repairedWhilePartitioned >= SEEDS / 4, "repairs made while partitioned: ${tally.repairedWhilePartitioned}") },
                 { assertTrue(tally.notYetSeen >= SEEDS / 8, "repairs that had not seen the retire yet: ${tally.notYetSeen}") },
+                { assertTrue(tally.lateWhileCut >= 1, "late work completed while cut off: ${tally.lateWhileCut}") },
+                { assertTrue(tally.lateBeforeRepair >= 1, "late work completed after the heal, before its repair: ${tally.lateBeforeRepair}") },
+                { assertTrue(tally.lateAfterRepair >= 1, "late work completed after its repair: ${tally.lateAfterRepair}") },
             )
         }
 
@@ -89,6 +93,14 @@ class HeddleNodeReconcileOwnPropertyTest {
         val cut = r.nextInt(PEERS)
         val cutBeforeTheRetire = r.nextBoolean()
         if (cutBeforeTheRetire) h.partition(cut)
+        // Late work: the cut peer, not yet told of the retire, takes a fresh grant and reserves it,
+        // and completes it while partitioned, after the heal but before its repair, or after it.
+        val late = if (cutBeforeTheRetire && cut != reweighter && r.nextBoolean()) lateReservation(h.peers[cut].node, 1L + r.nextInt(QUANTUM.toInt())) else null
+        val lateAt = r.nextInt(3)
+        if (late != null && lateAt == LATE_WHILE_CUT) {
+            h.peers[cut].node.complete(late.id, late.cost)
+            tally.lateWhileCut++
+        }
         reweight(h, by = reweighter)
         h.pump()
         if (!cutBeforeTheRetire) h.partition(cut)
@@ -112,8 +124,18 @@ class HeddleNodeReconcileOwnPropertyTest {
         }
         h.heal(cut)
         h.pump(1_000L)
+        if (late != null && lateAt == LATE_BEFORE_REPAIR) {
+            h.peers[cut].node.complete(late.id, late.cost)
+            tally.lateBeforeRepair++
+        }
         for (i in waiting) {
             outcomes[i] = assertIs<ReconcileOwnOutcome.Repaired>(h.peers[i].node.reconcileOwn(ACME), "seed $seed: peer $i after the heal")
+        }
+        h.pump(r.nextLong(0L, 300L))
+        if (late != null && lateAt == LATE_AFTER_REPAIR) {
+            // Its repair already read its finals, so this charge must re-home off the retired edge.
+            h.peers[cut].node.complete(late.id, late.cost)
+            tally.lateAfterRepair++
         }
         h.pump(1_000L)
         val again = h.peers.map { it.node.reconcileOwn(ACME) }
@@ -122,7 +144,7 @@ class HeddleNodeReconcileOwnPropertyTest {
         val replicas = h.peers.map { it.id }
         val ledgers = h.peers.map { it.node.ledger.value }
         scope.cancel()
-        val where = "seed $seed (reweighter $reweighter, cut $cut before=$cutBeforeTheRetire, spends $spends)"
+        val where = "seed $seed (reweighter $reweighter, cut $cut before=$cutBeforeTheRetire, spends $spends, late ${late?.cost}@$lateAt)"
         assertAll(
             { assertEquals(PEERS, outcomes.size, "$where: every peer repaired") },
             { assertTrue(again.all { it == ReconcileOwnOutcome.NothingToRepair }, "$where: a second repair moves nothing: $again") },
@@ -164,6 +186,22 @@ class HeddleNodeReconcileOwnPropertyTest {
         for (p in h.peers) check(s.storedSlot(CounterFamily.ROLLUP_SPENT, OLD, p.id) > 0L) { "rig: ${p.id} spent through acme" }
     }
 
+    private class Late(val id: ReservationId, val cost: Long)
+
+    /** [node] takes a fresh grant of [amount] through `acme` and reserves it at the lane, without completing. */
+    private fun lateReservation(node: HeddleNode, amount: Long): Late {
+        val s = node.ledger.value
+        node.advertise(OLD, Demand(checkNotNull(s.edge(OLD)).outstanding + amount, amount))
+        node.advertise(LANE_EDGE, Demand(checkNotNull(s.edge(LANE_EDGE)).outstanding + amount, amount))
+        assertIs<ScheduleOutcome.Delegated>(node.schedule(ROOT), "rig: late grant to acme")
+        assertIs<ScheduleOutcome.Delegated>(node.schedule(ACME), "rig: late grant to the lane")
+        node.advertise(OLD, Demand.NONE)
+        node.advertise(LANE_EDGE, Demand.NONE)
+        val held = node.ledger.value.holdings(LANE, node.self)
+        val reserved = assertIs<ReserveOutcome.Reserved>(node.reserve(LANE, held), "rig: late reservation of $held")
+        return Late(reserved.id, held)
+    }
+
     /** The design §5.3 reweight of `acme`, on peer [by]: prepare the new edge, close and retire the old, activate the new. */
     private fun reweight(h: StaticCluster, by: Int) {
         val node = h.peers[by].node
@@ -184,12 +222,18 @@ class HeddleNodeReconcileOwnPropertyTest {
         var repaired = 0
         var repairedWhilePartitioned = 0
         var notYetSeen = 0
+        var lateWhileCut = 0
+        var lateBeforeRepair = 0
+        var lateAfterRepair = 0
     }
 
     private companion object {
         const val SEEDS = 24
         const val PEERS = 3
         const val QUANTUM = 10L
+        const val LATE_WHILE_CUT = 0
+        const val LATE_BEFORE_REPAIR = 1
+        const val LATE_AFTER_REPAIR = 2
         val ROOT = GroupId("root")
         val ACME = GroupId("acme")
         val LANE = GroupId("lane")
