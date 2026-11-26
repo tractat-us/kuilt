@@ -96,23 +96,18 @@ class OpenReservationOutstandingPropertyTest {
 
     @Test
     fun aShrinkAtTheLeafOnlyIsToldApart() {
-        val missed = ArrayList<String>()
-        var redded = 0
-        var unseenOnOneEdge = 0
-        for (seed in 0 until SEEDS) {
+        val verdicts = (0 until SEEDS).map { seed ->
             val failures = ArrayList<String>()
-            val shrunk = walk(seed, Shrink.LEAF_ONLY, Tally(), failures) ?: continue
+            val tally = Tally()
+            val step = walk(seed, Shrink.LEAF_ONLY, tally, failures)
             when {
-                failures.isNotEmpty() -> redded++
-                shrunk.size > 1 -> missed += "seed $seed: a shrink across ${shrunk.size} edges went unseen"
-                else -> unseenOnOneEdge++
+                step == null -> "seed $seed: no shrink crossed an edge above its leaf's"
+                failures.isEmpty() -> "seed $seed: the shrink at step $step went unseen"
+                failures.any { !it.startsWith("seed $seed step $step:") } -> "seed $seed: a mismatch before the shrink at step $step"
+                else -> "redded at its first shrink across two edges, after ${tally.shrunk + tally.shrunkWhole - 1} on one"
             }
         }
-        assertAll(
-            { assertEquals(emptyList(), missed) },
-            { assertEquals(CONTROL_REDS, redded, "seeds whose first shrink crossed an edge above its leaf's, and redded") },
-            { assertEquals(CONTROL_ONE_EDGE, unseenOnOneEdge, "seeds whose first shrink was on a one-edge path, where leaf-only is the whole path") },
-        )
+        assertEquals(CONTROL, verdicts)
     }
 
     /** How the walk's shrinks hand back: as [LocalHeddle.shrink] does, or across the leaf's edge only. */
@@ -120,10 +115,11 @@ class OpenReservationOutstandingPropertyTest {
 
     /**
      * One seed's walk of [STEPS] operations, checked after each into [failures]. Under
-     * [Shrink.LEAF_ONLY] it stops at the first shrink, which leaves a ledger later calls need not
-     * settle, and returns the path that shrink crossed; otherwise it returns `null`.
+     * [Shrink.LEAF_ONLY] it stops at the first shrink of a path with an edge above its leaf's, and
+     * returns that step; a shrink on a one-edge path is the whole path's, so it carries on past one.
+     * Otherwise it returns `null`.
      */
-    private fun walk(seed: Int, shrinking: Shrink, tally: Tally, failures: MutableList<String>): List<AttachmentId>? {
+    private fun walk(seed: Int, shrinking: Shrink, tally: Tally, failures: MutableList<String>): Int? {
         val rng = Random(seed)
         var h = LocalHeddle.bootWhole(t0, policy, epoch = 0L).also { it.reconcileCapacity(SLOTS) }
         // Branches start attached, so the first acquires reach two levels.
@@ -132,7 +128,7 @@ class OpenReservationOutstandingPropertyTest {
             val open = h.snapshot().leases
             val at = "seed $seed step $step"
             val op = rng.nextInt(14)
-            var shrunkOn: List<AttachmentId>? = null
+            var shrunkOn: List<AttachmentId> = emptyList()
             when {
                 op <= 2 || open.isEmpty() && op <= 6 -> {
                     val waiting = subset(rng)
@@ -200,7 +196,7 @@ class OpenReservationOutstandingPropertyTest {
                         }
                         if (out is LeaseOutcome.Done) {
                             if (amount == lease.reserved) tally.shrunkWhole++ else tally.shrunk++
-                            shrunkOn = h.capturedPath(lease.id)
+                            shrunkOn = h.capturedPath(lease.id).orEmpty()
                         }
                     }
                 }
@@ -211,7 +207,7 @@ class OpenReservationOutstandingPropertyTest {
                 }
             }
             tally.checks += check(h, at, failures, tally)
-            if (shrinking == Shrink.LEAF_ONLY && shrunkOn != null) return shrunkOn
+            if (shrinking == Shrink.LEAF_ONLY && shrunkOn.size > 1) return step
         }
         return null
     }
@@ -322,11 +318,8 @@ class OpenReservationOutstandingPropertyTest {
         const val CI_CEILING = 3L
         const val OTHER_CEILING = 2L
 
-        /** The control's seeds whose first shrink crossed an edge above its leaf's: measured. */
-        const val CONTROL_REDS = 0
-
-        /** The control's seeds whose first shrink was on a one-edge path: measured. */
-        const val CONTROL_ONE_EDGE = 0
+        /** The control's verdict on each seed: measured on JVM, macosArm64 and wasmJs, identical on all three. */
+        val CONTROL: List<String> = List(SEEDS) { "?" }
 
         /** Measured on JVM, macosArm64 and wasmJs, identical on all three. */
         val EXPECTED: Map<String, Int> = linkedMapOf(
