@@ -254,6 +254,28 @@ class OpenReservationOutstandingPropertyTest {
         const val CI_CEILING = 3L
         const val OTHER_CEILING = 2L
 
-        val EXPECTED: Map<String, Int> = linkedMapOf()
+        /** Measured on JVM, macosArm64 and wasmJs, identical on all three. */
+        val EXPECTED: Map<String, Int> = linkedMapOf(
+            "edges compared" to 8591,
+            "of which outstanding" to 3834,
+            "steps with a draining CLOSING edge" to 286,
+            "acquired" to 151,
+            "acquired with a ceiling full" to 41,
+            "acquired on a branch, three edges down" to 48,
+            "extended" to 54,
+            "completed within the reservation" to 54,
+            "completed overrunning it" to 59,
+            "cancelled" to 61,
+            "settled across a CLOSING edge" to 22,
+            "admitted" to 45,
+            "reweights that moved a lease" to 19,
+            "removals over an open lease" to 5,
+            "other reloads" to 20,
+            "attached" to 32,
+            "detached" to 24,
+            "detaches over an open lease" to 33,
+            "restored with memory" to 70,
+            "restored without memory" to 66,
+        )
     }
 }
