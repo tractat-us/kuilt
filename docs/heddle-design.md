@@ -986,7 +986,7 @@ that may have run a long way (the position limit, below).
 | Piece | What it protects today | After step A | Step B |
 |---|---|---|---|
 | The parent origin (`ParentRecord`, `raiseOrigin`, `originTicks`) | Keeps the effective position a pick narrows inside `Long` | Nothing narrows, so it protects nothing | Deleted, from the ledger and from the wire. The two public reads of it stay, deprecated: `EntitlementLedger.origin` answers zero, and `PolicyEdge.origin` is read as before by the pure policy and never set by an engine |
-| The rebase (`raiseOriginBeneath`, `raiseBeforePick`, `preSeatRaise`, `chargeRebase`, `originStep`, `wholeSteps`, the three "raise changed no pick" checks, `Rebase`, `RebasingPick`) | Raises the origin before a child reaches its ceiling | A translation of every child alike, which changes no pick | Deleted. `rebaseEnabled` and `rebases`, behind `@HeddleInternalApi`, stay as deprecated members that do nothing and read zero. `gridStepOf` stays, for the budget and the format 1 reader |
+| The rebase (`raiseOriginBeneath`, `raiseBeforePick`, `preSeatRaise`, `chargeRebase`, `originStep`, `wholeSteps`, the three "raise changed no pick" checks, `Rebase`, `RebasingPick`) | Raises the origin before a child reaches its ceiling | A translation of every child alike, which changes no pick | Deleted, with the switch and the counter that once reported it (#3170). `gridStepOf` stays, for the budget and the format 1 reader |
 | The window rule and the floor (`positionFloor`, `windowBound`, the floor arms of `landing`, `shiftOf` and `clampWakers`) | Keeps a child a rebase left below zero inside `[−C, C)` | Only a rebase puts a child below zero | Deleted. A seat lands at the front, a clamp at the front less the sleeper credit and plus, in a `LocalHeddle`, the waker's open reservations (#3238), a returner where its clock puts it |
 | The ceiling (`positionCeiling`, `rebaseThreshold`, `POSITION_HEADROOM`, `inWindow`, `readVirtual`, `peakPositionFraction`) | The largest position a `Long` pick orders | Unreachable | No engine reads it. It stays for two readers: the weight budget, whose constants it is, and the deprecated `Rational` reads, which report it past it |
 | P1′'s lease clause of the weight budget (denominators at most 30,719) | One full lease from just under `R` stays below `C` | No `R` and no `C` | Kept exactly, as the set of weights an apply accepts. What keeps a pick inside 128 bits is the position limit below, not a clause on the weights |
@@ -1413,13 +1413,13 @@ origins, which is a layout 0.7.5 already reads, so the format number and
 **Proof the slices owe.**
 
 - **The twin (slice 1, before anything is deleted).** After step A an engine
-  with `rebaseEnabled` off never raises an origin, so every position is at or
+  with the rebase switched off never raises an origin, so every position is at or
   above zero and no floor arm or below-zero arm can fire: it is the step B
   engine. It and the rebasing engine make the same picks, leaf for leaf, over
   the #3353 sweep's shapes on `WindowRuleRig`, every row of `BurstLagTest`,
   the drivers of `LocalHeddleRebasePropertyTest`, and the governed cluster of
   `HeddleAcceptanceTest`. Each row asserts its rig fired: the rebasing side's
-  `rebases` is above zero, and the twin's positions pass `2⁶³` ticks where the
+  rebase count is above zero, and the twin's positions pass `2⁶³` ticks where the
   row is long enough to. On JVM, `macosArm64` and `wasmJs`, read as a union.
 - **Where the two may differ, and nowhere else:** a row where the rebasing
   side landed a joiner at its floor (`floorLandings` above zero), or clamped a
@@ -1570,8 +1570,8 @@ origins, which is a layout 0.7.5 already reads, so the format number and
    the two first-observation tests, which pinned the old rule. §7.2, §10.6.
 3. **Nothing rebases.** Built (#3495). The raise sites, the floor arms and the
    window are gone from `FairShareAllocator` and `LocalHeddle`; the origin
-   field stays, read as zero. `rebaseEnabled` and `rebases` stay, deprecated
-   and inert. It retired `FairShareAllocatorOriginTest`,
+   field stays, read as zero. The rebase switch and its counter stayed,
+   deprecated and inert, until #3170 deleted them. It retired `FairShareAllocatorOriginTest`,
    `FairShareAllocatorWindowRuleTest` but its sleeper-credit row,
    `LocalHeddleRebaseTest` and the twin rows of `LocalHeddleRebasePropertyTest`,
    which is now `LocalHeddleLongRunTest`. `LocalHeddleWindowRuleTest` and the
@@ -1674,9 +1674,10 @@ to 5 land together, never 3 alone (#3495 review).
   deprecated, beside the wide ones (#3501).
 - Retyping the `Rational` reads, or `BehindAtLevel`'s fields, in place: 0.7.6
   breaks no public signature (@keddie, 2026-11-15, #3501).
-- Deleting `EntitlementLedger.origin`, `PolicyEdge.origin`, `rebaseEnabled` or
-  `rebases` with the origin: each is in 0.7.5's API dump. They stay,
-  deprecated, and read zero (#3501).
+- Deleting `EntitlementLedger.origin` or `PolicyEdge.origin` with the origin:
+  each is in 0.7.5's API dump. They stay, deprecated, and read zero (#3501).
+  The rebase switch and its counter, behind `@HeddleInternalApi`, were
+  deleted later (#3170): a break rides a patch release here.
 - Reading the public virtual times relative to a front taken at read time: the
   ledger's own reads hold no demand, so they have no front to take (#3472).
 - Keeping the below-zero first-sighting arm: nothing is below zero (#3472).

@@ -39,7 +39,6 @@ class LocalHeddleReloadRefusedGroupTest {
         }
     }
 
-    @OptIn(HeddleInternalApi::class)
     @Test
     fun aRefusedNewGroupLeavesOutItsLanesAndAFixedReloadActivatesThem() {
         val engine = LocalHeddle.bootWhole(pool(withHuge = false), policy, epoch = 1L).apply { reconcileCapacity(4_000L) }
@@ -65,7 +64,6 @@ class LocalHeddleReloadRefusedGroupTest {
      * `team` was running, so a refused reweight leaves its old edge ACTIVE and a new lane beneath it
      * reachable from the root: only `team` is refused, and the new lane leases.
      */
-    @OptIn(HeddleInternalApi::class)
     @Test
     fun aRefusedReweightOfAnExistingGroupKeepsItsNewLane() {
         val before = draft("pool") {
@@ -93,7 +91,6 @@ class LocalHeddleReloadRefusedGroupTest {
     }
 
     /** A refused new group two levels up takes both levels beneath it out, in one reload. */
-    @OptIn(HeddleInternalApi::class)
     @Test
     fun aRefusedNewGrandparentLeavesOutEveryLevelBeneathIt() {
         val deep = draft("pool") {
@@ -112,7 +109,6 @@ class LocalHeddleReloadRefusedGroupTest {
     }
 
     /** A templated group the reload refused takes an `attach` beneath it out too, later and in another call. */
-    @OptIn(HeddleInternalApi::class)
     @Test
     fun anAttachUnderARefusedNewGroupIsRefused() {
         val withFarm = draft("pool") {
@@ -134,7 +130,6 @@ class LocalHeddleReloadRefusedGroupTest {
     }
 
     /** The same through a boot, which leaves out the sibling set the templated group is in. */
-    @OptIn(HeddleInternalApi::class)
     @Test
     fun anAttachUnderAGroupABootLeftOutIsRefused() {
         val tree = draft("pool") {
@@ -163,7 +158,6 @@ class LocalHeddleReloadRefusedGroupTest {
      * waiting cures it, which a [StepRefusal.Refused] would deny. Once the lease completes, the same
      * reload lands whole and `t/z` leases.
      */
-    @OptIn(HeddleInternalApi::class)
     @Test
     fun aLaneUnderAGroupPutBackWhileItDrainsWaitsOnTheSameLease() {
         val withX = draft("pool") {
@@ -203,7 +197,6 @@ class LocalHeddleReloadRefusedGroupTest {
      * `attach` lands a worker under it. No refusal of this call says `t` waits, yet it does, on the
      * lease: the attach is [StepRefusal.Draining] on that lease, and lands once it completes (#3508).
      */
-    @OptIn(HeddleInternalApi::class)
     @Test
     fun anAttachUnderAGroupStillDrainingFromAnEarlierCallWaitsOnTheSameLease() {
         val withX = draft("pool") {
