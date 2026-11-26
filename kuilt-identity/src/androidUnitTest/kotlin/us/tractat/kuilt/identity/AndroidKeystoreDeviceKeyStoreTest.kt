@@ -533,6 +533,8 @@ class AndroidKeystoreDeviceKeyStoreTest {
         val verifier = FaultingVerifier(faults = 1)
 
         val failure = failureOf { rig.launch(verifier = verifier).deviceKey() }
+        // Read before the next launch: a good read clears it.
+        val failingSince = rig.failingSince()
         val afterwards = rig.launch().deviceKey().id
 
         // Not `keystore.holds(alias)`: a replacement deletes and remakes under the same alias, so the
@@ -540,6 +542,32 @@ class AndroidKeystoreDeviceKeyStoreTest {
         assertAll(
             { assertEquals(1, verifier.faulted, "the rig fired: the self-test's verify failed once") },
             { assertTrue(failure is IllegalStateException, "the fault throws IllegalStateException: $failure") },
+            { assertNull(failingSince, "no run of Keystore failures is started: the fault never reaches judge") },
+            { assertEquals(1, rig.keystore.generated, "no key is made") },
+            { assertEquals(held, afterwards, "and the same key reads back") },
+        )
+    }
+
+    /**
+     * The slow path of the same mistake. Below Android 13 every Keystore failure is of unknown cause,
+     * and an hour of them replaces the key. A verify fault weighed as one would do just that, so two
+     * an hour apart must still keep the key: it is the provider failing, not the Keystore.
+     */
+    @Test
+    fun verifyFaultsAnHourApartKeepTheKeyBelowAndroid13() = runTest {
+        val rig = Rig(sdk = 30)
+        val held = rig.launch().deviceKey().id
+        val verifier = FaultingVerifier(faults = 2)
+
+        val first = failureOf { rig.launch(verifier = verifier).deviceKey() }
+        rig.clock += HOUR
+        val second = failureOf { rig.launch(verifier = verifier).deviceKey() }
+        val afterwards = rig.launch().deviceKey().id
+
+        assertAll(
+            { assertEquals(2, verifier.faulted, "the rig fired: the self-test's verify failed twice") },
+            { assertTrue(first is IllegalStateException, "the first fault throws: $first") },
+            { assertTrue(second is IllegalStateException, "and so does the second, an hour on: $second") },
             { assertEquals(1, rig.keystore.generated, "no key is made") },
             { assertEquals(held, afterwards, "and the same key reads back") },
         )
