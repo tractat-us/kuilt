@@ -104,11 +104,34 @@ class WakeClampOpenLeaseTest {
         val table = cells.entries.joinToString("\n") { (row, cell) -> "  ${row.label}: kept ${cell.kept}, dropped ${cell.dropped}" }
         assertAll(
             { assertEquals(listOf(10, 10, 10, 6), cells.values.map { it.kept }, "the kept column, as the memory reads it:\n$table") },
+            { assertEquals(listOf(10, 10, 10, 6), cells.values.map { it.dropped }, "the dropped column, the same\n$table") },
             { assertTrue(cells.values.all { it.leftWithLeaseOpen }, "the rig: the engine saw a stop asking with its lease open") },
             *cells.map { (row, cell) ->
                 { assertTrue(kotlin.math.abs(cell.kept - cell.dropped) <= 1, "${row.label}: dropped must match kept within a pick\n$table") }
             }.toTypedArray(),
         )
+    }
+
+    /** PROBE: a reload reweighting both lanes while a's lease is open, against the lease settling first. */
+    @Test
+    fun probeReload() {
+        val doubled = Topology("root", listOf(Topology.Lane("a", Weight.of(2L)), Topology.Lane("b", Weight.of(2L))))
+        val out = rows.map { row ->
+            val (h, open) = beforeTheRestart(row.reserved)
+            val (c, controlOpen) = beforeTheRestart(row.reserved)
+            val moved = h.apply(doubled, generation = 1L)
+            val acrossPicks = picksAfter(h, open, row).count { it == a }
+            settle(c, controlOpen, row)
+            c.apply(doubled, generation = 1L)
+            val controlPicks = ArrayList<GroupId>()
+            repeat(PICKS) {
+                val lease = c.lease(both, startedAt = 100L + it)
+                controlPicks += lease.leaf
+                c.complete(lease.id, 1L, waiting = both)
+            }
+            "${row.label}: across ${acrossPicks}, settled first ${controlPicks.count { it == a }}, refusals ${moved.refusals.size}, path ${h.capturedPath(open.id)}"
+        }
+        kotlin.test.fail(out.joinToString("\n"))
     }
 
     private companion object {
