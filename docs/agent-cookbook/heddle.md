@@ -121,7 +121,7 @@ is idle: it banks no credit, and when it comes back it is as far ahead of or beh
 as it was when it left, moved by how far its parent's net-service clock ran meanwhile, give or
 take a sibling's refund in that time ([#3239](https://github.com/tractat-us/kuilt/issues/3239)),
 rather than owed the slots it could not have used. A child this engine never saw stop is clamped
-level with its siblings instead. A new leaf starts level with its siblings. Work no
+level with its siblings instead, with the leases it still has open counted as its own. A new leaf starts level with its siblings. Work no
 pick could reach counts as idle even when you list it as waiting: a leaf behind an edge a reload
 is closing, or a group that has gained a child.
 

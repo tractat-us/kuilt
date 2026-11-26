@@ -371,9 +371,13 @@ class LocalHeddlePersistenceTest {
      * as an engine that never persisted. Picks, outcomes and books all match.
      *
      * The second arm restores the same snapshot with the wake memory forgotten, which is a
-     * restarted scheduler. The call that first observes `b` finds it seated and demanding, and the
-     * forgetful engine has never observed it, so by the restart rule (design §7.2) it is a waker,
-     * clamped to the same offset the memory held, and it takes no more picks than it would have.
+     * restarted scheduler. The call that first observes `b` is the overrunning complete of `b`'s
+     * own lease, which counts `b` waiting. It finds `b` seated and demanding, and the forgetful
+     * engine has never observed it, so by the restart rule (design §7.2) it is a waker, clamped past
+     * the front by the one unit its open lease reserves (#3238). That unit is in `b`'s position
+     * too, so it nets out. The front holds `a`'s completed job, which the memory's clamp ran
+     * before, so the offset is one unit above the memory's and `b` stands one unit further back:
+     * the penalty side. It takes no more picks than it would have.
      * Before the rule the forgetful engine kept `b` at its raw position and handed it back its idle
      * credit. Forgetting is not free, though: every seated child found demanding is clamped, and
      * since all of them are joining, each comes back level with the furthest-ahead one, so a child
@@ -414,9 +418,16 @@ class LocalHeddlePersistenceTest {
             { assertEquals(20, expected.count { it is GroupId }, "the rig: 20 picks ran after the restore") },
             { assertEquals(expected, actual, "the same picks and outcomes as the engine that never persisted") },
             { assertEquals(books(reference), books(restored), "and the same books") },
-            { assertTrue(observedAt >= 0, "the rig: the forgetful engine observed b within the continuation's first calls") },
+            { assertEquals(1, observedAt, "the rig: the forgetful engine first observed b in its own lease's overrunning complete") },
+            { assertEquals(listOf(a, b), open.map { it.leaf }, "the rig: a's lease completes first, then b's, still open at that sight") },
             { assertEquals(true, firstSight.demandingObserved[edgeTo(b)], "the forgetful engine first saw b demanding") },
-            { assertEquals(offset, wakeOffsetOf(firstSight, b), "and re-clamped it to the offset the memory held") },
+            {
+                assertEquals(
+                    offset + Int128.of(TICKS_PER_UNIT),
+                    wakeOffsetOf(firstSight, b),
+"and re-clamped it one unit above the memory's offset, for a's job in the front (b's lease is counted past the front and in its position alike, so it nets out)",
+                )
+            },
             { assertTrue(bPicks(forgot) <= bPicks(expected), "so it hands b back no idle credit: ${bPicks(forgot)} against ${bPicks(expected)}") },
         )
     }
