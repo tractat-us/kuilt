@@ -71,6 +71,8 @@ class OpenReservationOutstandingPropertyTest {
     private val leaves: List<GroupId> =
         listOf(t0.groupId("ci", "manual"), other, t0.groupId("spare")) + attachable.filter { it.size == 2 }.map(::idOf)
 
+    private val branches: List<GroupId> = leaves.drop(3)
+
     private fun subset(rng: Random): List<GroupId> = leaves.filter { rng.nextInt(3) != 0 }
 
     @Test
@@ -95,6 +97,7 @@ class OpenReservationOutstandingPropertyTest {
                         if (out is AcquireOutcome.Acquired) {
                             tally.acquired++
                             if (atCeiling) tally.acquiredBesideACeiling++
+                            if (out.lease.leaf in branches) tally.acquiredThreeDown++
                         }
                     }
                     op == 3 -> {
@@ -204,6 +207,7 @@ class OpenReservationOutstandingPropertyTest {
         var stepsWithADrainingEdge = 0
         var acquired = 0
         var acquiredBesideACeiling = 0
+        var acquiredThreeDown = 0
         var extended = 0
         var completed = 0
         var overran = 0
@@ -225,6 +229,7 @@ class OpenReservationOutstandingPropertyTest {
             "steps with a draining CLOSING edge" to stepsWithADrainingEdge,
             "acquired" to acquired,
             "acquired with a ceiling full" to acquiredBesideACeiling,
+            "acquired on a branch, three edges down" to acquiredThreeDown,
             "extended" to extended,
             "completed within the reservation" to completed,
             "completed overrunning it" to overran,
