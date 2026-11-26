@@ -571,8 +571,9 @@ was really charged. Three limits come with that promise, stated plainly.
 
 The last two shrink as estimates get closer to the truth, so:
 
-- **Set `defaultReservation` near a typical build**, not the worst case. A small
-  default favours lanes whose builds run long; a large one penalises them.
+- **Set `defaultReservation` at or a little below a typical build**, not the
+  worst case. A small default favours lanes whose builds run long; a large
+  one penalises them.
 - **Pass a `reservation` when you know better**, such as the lane's last build
   time, as the Mac agent above does.
 - **Know where the quiet-spell effect lives.** It needs a lane that goes quiet
@@ -582,8 +583,8 @@ The last two shrink as estimates get closer to the truth, so:
 
 Both are known gaps, and so is the cancel. The cancel is tracked by
 [#3238](https://github.com/tractat-us/kuilt/issues/3238). The estimate effect
-and the sibling's refund are tracked by
-[#3239](https://github.com/tractat-us/kuilt/issues/3239).
+and the sibling's refund are the bound
+[#3239](https://github.com/tractat-us/kuilt/issues/3239) accepted and pinned.
 [What it does not promise](heddle-local-turns.md#what-it-does-not-promise) gives
 the arithmetic and the measured sizes.
 

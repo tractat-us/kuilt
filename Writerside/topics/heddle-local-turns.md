@@ -190,14 +190,16 @@ the one web's overrun owed it, and then the three-to-one pattern resumes.
 - **An estimate steers order.** A lease counts at its estimate until it settles,
   so a lane whose estimates run low looks cheaper while its builds run, and can
   win picks it should not. One whose estimates run high loses picks the same way.
-  `complete` corrects the charge, not the picks already made. The effect turns
-  into share when each job waits on the one before. On a probe with two lanes at
-  equal weight, 8 slots and one lane always busy, the other lane gained 0.081 of
-  share by reserving a quarter of its real cost. Reserving four times its cost,
-  it lost 0.097 to 0.111, against the 0.03 bar for concurrent leases below. Most
+  `complete` corrects the charge, not the picks already made, so a lane is
+  always charged what its builds really cost. The effect turns into share when
+  each job waits on the one before. Over 48 probe setups with two lanes at equal
+  weight, 8 slots and one lane always busy, the other lane gained about 0.01 of
+  share on average by reserving a quarter of its real cost, and 0.043 at most.
+  Reserving four times its cost, it lost about 0.01, and 0.034 at most. Most
   callers send `defaultReservation`, so its size picks the side: small favours
-  long jobs, large penalises them. This is tracked by
-  [#3239](https://github.com/tractat-us/kuilt/issues/3239).
+  long jobs, large penalises them. This is the bound
+  [#3239](https://github.com/tractat-us/kuilt/issues/3239) accepted, and a
+  benchmark measures it.
 - **A cancel, and a sibling's refund across a quiet spell.** A lane that goes
   quiet with one of its own leases open comes back by the clock, which does not
   read the lane's own `ev`. So when that lease completes under its estimate, the
@@ -210,9 +212,12 @@ the one web's overrun owed it, and then the three-to-one pattern resumes.
   competing. A lane away across that refund comes back owed a little more than
   it is. That one is new with the clock: the clamp it replaced brought the lane
   back level, which got this case exactly right, and the regression was
-  accepted for the bursts the clock fixes. These are tracked by
-  [#3238](https://github.com/tractat-us/kuilt/issues/3238) and
-  [#3239](https://github.com/tractat-us/kuilt/issues/3239). The networked
+  accepted for the bursts the clock fixes. The cancel is tracked by
+  [#3238](https://github.com/tractat-us/kuilt/issues/3238). The refund is part
+  of the bound [#3239](https://github.com/tractat-us/kuilt/issues/3239)
+  accepted: over 54 setups with two lanes under one group, a lane that reserved
+  four times the cost of the job that empties its queue cost its honest sibling
+  about 0.03 of share on average. The networked
   `HeddleNode` does not take either path: its `complete` keeps an unused
   reservation at the leaf instead of returning it up the path.
 - **A ceiling that only the reports meet.** Each child's progress is a count of
@@ -227,12 +232,14 @@ the one web's overrun owed it, and then the three-to-one pattern resumes.
   nanoseconds: one reservation can be at most 2⁴⁴ units.
 
 **Sizing estimates.** The estimate and sibling-refund effects both vanish for a
-lease that settles at its estimate, a `cancel` aside. So aim `defaultReservation` at a
-typical job rather than the longest one, and pass a `reservation` per `acquire` when the lane's history gives a
-better guess. Raising `sleeperCredit` does not help: it grants a clamped waker
-idle credit on purpose. The probe behind both
-measurements is not part of the evidence below, which covers only what is on
-`main`.
+lease that settles at its estimate, a `cancel` aside. So aim `defaultReservation` at or a
+little below a typical job, never the longest one: a build that runs past its estimate is
+corrected by `extend` or by its overrun, and hands nothing back. Pass a `reservation` per
+`acquire` when the lane's history gives a better guess. Raising `sleeperCredit` does not
+help: it grants a clamped waker idle credit on purpose. The estimate numbers come from
+`ReservationLeanBenchmark`, an ensemble of about 100 setups that runs on demand
+rather than in every build. `ReservationLeanTest` checks, on every target, that
+ten of those setups run exactly as measured.
 
 ## How fast, how fair
 
