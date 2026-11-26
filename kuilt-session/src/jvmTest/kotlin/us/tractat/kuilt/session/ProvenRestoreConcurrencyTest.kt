@@ -1531,7 +1531,7 @@ class ProvenRestoreConcurrencyTest {
         const val STALE_WELCOME_SPIN_NANOS = 20_000L
 
         val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
-        /** Each arm takes under 40 s on a dev Mac; the cap is a wedge backstop with room for a slower runner. */
+        /** Each arm takes under a minute on a dev Mac; the cap is a wedge backstop with room for a slower runner. */
         val ARM_CAP = 3.minutes
         const val EXPIRY_ROUNDS = 10_000
         const val HEAL_ROUNDS = 10_000
