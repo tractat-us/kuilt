@@ -56,11 +56,11 @@ estimates, the next build first:
 
 ```kotlin
 // Each lane's queued builds, by their estimates in minutes, the next one first.
-val queues = mapOf(web to listOf(3L, 12L, 3L, 3L), mobile to listOf(3L, 3L, 3L))
+val queues = mapOf(web to listOf(3L, 12L, 3L, 3L), mobile to listOf(3L, 1L, 3L))
 val both = setOf(web, mobile)
 val before = heddle.snapshot()
 val preview = heddle.previewPicks(queues, eligible = both)
-check(preview == listOf(web, mobile, web, mobile, web, web, mobile))
+check(preview == listOf(web, mobile, web, mobile, mobile, web, web))
 check(heddle.snapshot() == before)
 // Were every build 3 minutes, mobile's second would run sixth. Web's 12-minute build spends
 // four builds' worth of web's share, so mobile's moves up to fourth.

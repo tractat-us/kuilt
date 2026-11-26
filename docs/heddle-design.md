@@ -2995,7 +2995,8 @@ scratch engine.
   the head and not the reservation. A grant funded at the reservation still
   tops the root up for the reservation, so the refund stays at the root as
   supply: what is minted can run ahead of an engine that leased at the head, and
-  nothing below the root sees it.
+  no holding or net position below the root sees it (the gross lifetime counters
+  do: a `release` bumps `returned` and leaves issuance alone).
 - The list stops at the first refusal, including the position-ceiling refusal
   the overflow fix adds (#3313). When the `acquire` lands and its `extend` is
   refused, that pick is left out and the list ends there, even when the root

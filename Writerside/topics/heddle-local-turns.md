@@ -169,8 +169,8 @@ the one web's overrun owed it, and then the three-to-one pattern resumes.
 - **Predict, then watch.** `previewPicks` lists the lanes the next acquires would
   pick, changing nothing. Run the acquires and compare. When each lane knows its
   own next job, pass each lane's queue of estimates instead of a count. Each pick
-  then reserves the default and extends to the winning lane's job, as your loop
-  would.
+  then reserves the default and extends to the winning lane's job, or shrinks to
+  it when the job is shorter, as your loop would.
 - **Run the evidence.** From the repository root:
 
 ```shell

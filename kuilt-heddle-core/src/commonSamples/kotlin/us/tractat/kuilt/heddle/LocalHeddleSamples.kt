@@ -340,8 +340,8 @@ internal fun sampleBuildFarm() {
 
 /**
  * Who goes next when each lane knows its own next job: the preview takes each lane's queue of
- * estimates, and each pick reserves the slot's default and then extends to the job, as a caller
- * running the queues would. Previewing moves nothing, and the real loop matches it.
+ * estimates, and each pick reserves the slot's default and then extends to the job, or shrinks to it
+ * when the job is shorter, as a caller running the queues would. Previewing moves nothing, and the real loop matches it.
  */
 @Suppress("unused")
 internal fun samplePreviewQueues() {
@@ -356,17 +356,17 @@ internal fun samplePreviewQueues() {
     heddle.reconcileCapacity(totalSlots = 4L)
 
     // Each lane's queued builds, by their estimates in minutes, the next one first.
-    val queues = mapOf(web to listOf(3L, 12L, 3L, 3L), mobile to listOf(3L, 3L, 3L))
+    val queues = mapOf(web to listOf(3L, 12L, 3L, 3L), mobile to listOf(3L, 1L, 3L))
     val both = setOf(web, mobile)
     val before = heddle.snapshot()
     val preview = heddle.previewPicks(queues, eligible = both)
-    check(preview == listOf(web, mobile, web, mobile, web, web, mobile))
+    check(preview == listOf(web, mobile, web, mobile, mobile, web, web))
     check(heddle.snapshot() == before)
     // Were every build 3 minutes, mobile's second would run sixth. Web's 12-minute build spends
     // four builds' worth of web's share, so mobile's moves up to fourth.
     check(heddle.previewPicks(mapOf(web to 4, mobile to 3), both, List(7) { 3L }) == listOf(web, mobile, web, web, web, mobile, mobile))
 
-    // The real loop: lease a slot at the default, extend it to the winner's own estimate, pop it.
+    // The real loop: lease a slot at the default, extend or shrink it to the winner's own estimate, pop it.
     val remaining = queues.mapValues { (_, queue) -> ArrayDeque(queue) }
     val picked = preview.indices.map {
         val waiting = both.filterTo(HashSet()) { remaining.getValue(it).isNotEmpty() }
@@ -374,6 +374,7 @@ internal fun samplePreviewQueues() {
         check(out is AcquireOutcome.Acquired)
         val estimate = remaining.getValue(out.lease.leaf).removeFirst()
         if (estimate > 3L) check(heddle.extend(out.lease.id, amount = estimate - 3L, waiting = waiting) is LeaseOutcome.Done)
+        else if (estimate < 3L) check(heddle.shrink(out.lease.id, amount = 3L - estimate) == LeaseOutcome.Done(0L, 0L, 0L))
         out.lease.leaf
     }
     check(picked == preview)

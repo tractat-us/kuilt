@@ -20,7 +20,10 @@ import kotlin.test.assertTrue
  * Every engine here has capacity reconciled, so a pick tops the root up: [LocalHeddleShrinkTest]'s
  * oracle reconciled none. An acquire at `r` is funded for `r`, so the refund stays at the root as
  * supply, and an engine that shrank can hold, and have minted, more at the root than one that leased
- * at the head. Everything below the root agrees, and so does what has left the root, minted less held.
+ * at the head. Every holding and net position below the root agrees, and so does what has left the root, minted
+ * less held. The gross lifetime counters do not: a `release` bumps `returned` and leaves issuance
+ * alone, so on the shrink path effective issuance and `returned` count the reservation `r`, not
+ * the head `h`.
  *
  * Exact fingerprints over a few fixed seeds, each walking a `List` the test built, so they run on
  * every target. Each run is built once per test.
@@ -198,6 +201,8 @@ class LocalHeddleShrinkAtGrantTest {
         var shrinks = 0
         var extends = 0
         var topUps = 0
+        // The twin is built with `admit`, whose funding mints only the shortfall; the totals part for that
+        // reason, not because of the shrink (an acquire-at-the-head twin keeps them equal in most seeds).
         var mintsApart = 0
         for (step in 0 until STEPS) {
             val open = shrunk.snapshot().leases
@@ -252,7 +257,7 @@ class LocalHeddleShrinkAtGrantTest {
             { assertTrue(runs.all { it.shrinks >= 5 }, "shrinks per seed: ${runs.map { it.shrinks }}") },
             { assertTrue(runs.all { it.extends >= 1 }, "extends per seed: ${runs.map { it.extends }}") },
             { assertTrue(runs.all { it.topUps >= 1 }, "top-ups per seed: ${runs.map { it.topUps }}") },
-            { assertTrue(runs.all { it.mintsApart >= 1 }, "steps with the mint totals apart, per seed: ${runs.map { it.mintsApart }}") },
+            { assertTrue(runs.all { it.mintsApart >= 1 }, "steps with the mint totals apart, per seed (the twin's admit funds only the shortfall and never tops up, so this reflects its funding, not the shrink): ${runs.map { it.mintsApart }}") },
         )
     }
 
