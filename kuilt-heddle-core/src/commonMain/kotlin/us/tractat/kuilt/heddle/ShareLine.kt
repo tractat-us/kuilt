@@ -74,11 +74,11 @@ public class ShareLine internal constructor(
      * position is [group]'s virtual service there, and the front its competing siblings' weighted
      * mean, the one [WaitExplanation.BehindAtLevel] reports. So wherever [LocalHeddleView.explain]
      * answers [WaitExplanation.BehindAtLevel] at that parent for a leaf beneath [group], this is
-     * `weight × (frontWide − leafSideVirtualServiceWide)`, while every competing child of that
-     * parent holds less than `2⁶¹` units outstanding. One past that still competes, so it counts in
-     * this front, but the pick and `explain` count it as idle and leave it out of theirs, and the two
-     * can then differ even in sign (#3707). Only `2¹⁷` leases of the largest reservation open at once
-     * beneath one edge, or as many extensions of one, reach it.
+     * `weight × (frontWide − leafSideVirtualServiceWide)`, for every outstanding below
+     * `Long.MAX_VALUE`: a competing child asks for more than it holds however much that is, so the
+     * pick counts it in its front as this line does (#3707). A child holding exactly
+     * `Long.MAX_VALUE` still competes but asks for nothing, so the pick leaves it out of its front
+     * and this line does not; that child is far past the lifetime limit, where no pick serves it.
      *
      * A child that has competed since its parent began reads what it is owed of the service handed
      * out beneath that parent. A child coming back to compete does not always read `0`. One the

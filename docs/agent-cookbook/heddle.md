@@ -612,9 +612,9 @@ a leaf loses. The same line answers it for every row.
 - **Positive is owed, negative is ahead.** It is `weight × (front − position)` at the group's
   parent, so the lags of one parent's competing children add up to `0`. Where `explain` answers
   `BehindAtLevel` for a leaf beneath the group, it equals `weight × (frontWide −
-  leafSideVirtualServiceWide)`, unless a competing child of that parent holds `2⁶¹` units
-  outstanding: the pick then counts it idle and the line does not, so the two can differ even in
-  sign (#3707).
+  leafSideVirtualServiceWide)` for every outstanding below `Long.MAX_VALUE`. Only a competing
+  child holding exactly `Long.MAX_VALUE`, far past the lifetime limit, is counted idle by the pick
+  and not by the line (#3707).
 - **It is read as the next pick there would read it.** A group that comes back after idling is
   moved first, as the pick moves it: one the engine saw stop keeps the lag it left with; one
   clamped, or a newborn, reads `0` or under a sixteenth of a unit below, or above zero under a

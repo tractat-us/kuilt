@@ -3,6 +3,7 @@ package us.tractat.kuilt.heddle
 import kotlinx.serialization.BinaryFormat
 import kotlinx.serialization.StringFormat
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.plusOrNull
 
 /**
  * How much supply a [LocalHeddle] keeps ahead of its leases, in rounds of capacity: one round is
@@ -800,12 +801,15 @@ public class LocalHeddle private constructor(
             afterPick?.invoke(group)
             val grant = pick.grant
             val edge = grant.attachment
+            // After the pick, so a full lane that is next in line stalls its parent rather than
+            // being skipped for a sibling (#3475): a refusal moves nothing, so it is picked again.
+            // Before the reservation check: within one reservation of `Long.MAX_VALUE` an edge's
+            // saturated target trims its grant (#3707), and such an edge is always past the
+            // watermark, so it answers `LifetimeExhausted` rather than throw.
+            if (!pickFits(pick.ledger.effectiveIssuance(edge), reservation)) return Descent.Exhausted(group)
             check(grant.amount == reservation) {
                 "picked ${edge.value} for ${grant.amount}, not the reservation $reservation"
             }
-            // After the pick, so a full lane that is next in line stalls its parent rather than
-            // being skipped for a sibling (#3475): a refusal moves nothing, so it is picked again.
-            if (!pickFits(pick.ledger.effectiveIssuance(edge), reservation)) return Descent.Exhausted(group)
             levels += Level(group, pick.ledger, edge)
             local = checkNotNull(seatThenDelegate(pick.ledger, listOf(edge), reservation, demands.waiting)) {
                 "the delegation of $reservation down ${edge.value}, just picked, was refused"
@@ -1731,7 +1735,7 @@ public class LocalHeddle private constructor(
                 when {
                     reserved == 0L -> local
                     !local.roomFor(it, reserved) -> null
-                    else -> seatThenDelegate(local, it, reserved, observedDemand(reserved))
+                    else -> seatThenDelegate(local, it, reserved, observedDemand(local, reserved))
                 }
             }
             if (path == null || delegated == null) {
@@ -1992,11 +1996,12 @@ public class LocalHeddle private constructor(
      * open lease onto its new path ([apply]). Each edge as the allocator last observed it; only
      * seating reads it, to find the front a newborn joins, and it observes nothing. Every charging
      * call observes its own waiting set instead (#3471).
+     *
+     * [ledger] is the working ledger as it stands for this lease, the leases moved before it
+     * included, so a wanted edge's target is lifted from what it holds there ([wanted], #3707).
      */
-    private fun observedDemand(amount: Long): (AttachmentId) -> Demand {
-        val wants = Demand(targetOutstanding = UNBOUNDED_TARGET, maximumUsefulGrant = amount)
-        return { edge -> if (allocator.lastObservedDemanding(edge) == true) wants else Demand.NONE }
-    }
+    private fun observedDemand(ledger: EntitlementLedger, amount: Long): (AttachmentId) -> Demand =
+        { edge -> if (allocator.lastObservedDemanding(edge) == true) wanted(ledger.outstanding(edge), amount) else Demand.NONE }
 
     /** This epoch's one mint id, `local#<epoch>`. */
     private val epochMintId: MintId get() = MintId("local#$epoch")
@@ -2031,11 +2036,10 @@ public class LocalHeddle private constructor(
      * edges is never wanted, so no pick can lead into it.
      */
     internal fun demands(base: EntitlementLedger, waiting: Set<GroupId>, eligible: Set<GroupId>, reservation: Long): Demands {
-        val wants = Demand(targetOutstanding = UNBOUNDED_TARGET, maximumUsefulGrant = reservation)
         val waitingGroups = base.reachable(waiting)
         // eligible ⊆ waiting, so equal sizes mean equal sets, and the lift is shared.
         val eligibleGroups = if (eligible.size == waiting.size) waitingGroups else base.reachable(eligible)
-        return Demands(demandOver(base, waitingGroups, wants), demandOver(base, eligibleGroups, wants))
+        return Demands(demandOver(base, waitingGroups, reservation), demandOver(base, eligibleGroups, reservation))
     }
 
     /**
@@ -2121,10 +2125,10 @@ public class LocalHeddle private constructor(
          * bound. It does not bound the service a parent hands down over its lifetime either; the
          * ledger's `Long` counters do (see "The lifetime limit" in the class KDoc).
          *
-         * It exists to keep [UNBOUNDED_TARGET] unbounded in practice. Every pick asks for
-         * `UNBOUNDED_TARGET − outstanding` on an edge, so the edge goes on reading as wanting the
-         * whole reservation until its outstanding reaches 2^61 − 2^44: over 130,000 maximum-size
-         * reservations open under one edge at once.
+         * A pick grants a wanted edge the whole reservation however much is open beneath it: the
+         * edge asks for [UNBOUNDED_TARGET] more than it holds (#3707), far above this. Only within
+         * one reservation of `Long.MAX_VALUE` is the grant trimmed, and an edge there is long past
+         * the lifetime watermark, so the pick answers `LifetimeExhausted` instead.
          */
         public const val MAX_RESERVATION: Long = 1L shl 44
 
@@ -2155,12 +2159,17 @@ public class LocalHeddle private constructor(
         public const val MAX_RECORDED_OVERRUN: Long = LIFETIME_HEADROOM / 2
 
         /**
-         * The target every wanted edge advertises, `Long.MAX_VALUE / 4` (just under 2^61): far above
-         * any outstanding a run reaches (see [MAX_RESERVATION]), and far enough below `Long.MAX_VALUE`
-         * that [HeddlePolicy]'s `targetOutstanding − outstanding`, which is not overflow-checked, cannot
-         * wrap for any outstanding above `−3 × 2^61`. A healthy ledger's outstanding is never negative.
+         * How far above what it already holds a wanted edge's target sits: `Long.MAX_VALUE / 4`,
+         * just under 2^61. A wanted edge advertises `outstanding + UNBOUNDED_TARGET`, saturating at
+         * `Long.MAX_VALUE` ([wanted], #3707), so its need, `target − outstanding`, is this constant
+         * until the sum saturates, far above any reservation however much is open beneath it.
+         * [HeddlePolicy]'s subtraction is not overflow-checked, and the target is at most
+         * `Long.MAX_VALUE`, and a negative outstanding's target is exactly this constant (the
+         * `maxOf(outstanding, 0)` lift in [wanted]), so the subtraction cannot wrap for any
+         * outstanding of `−3 × 2^61` or more; a target of `Long.MAX_VALUE` against an outstanding
+         * of −1 would wrap. A healthy ledger's outstanding is never negative.
          */
-        private const val UNBOUNDED_TARGET: Long = Long.MAX_VALUE / 4
+        internal const val UNBOUNDED_TARGET: Long = Long.MAX_VALUE / 4
 
         internal fun requireReservation(name: String, amount: Long) =
             require(amount in 1L..MAX_RESERVATION) { "$name must be in 1..$MAX_RESERVATION, was $amount" }
@@ -2353,11 +2362,33 @@ public class LocalHeddle private constructor(
          * largest reservation only fills the demand in.
          */
         internal fun waitingOver(ledger: EntitlementLedger, competing: Set<GroupId>): (AttachmentId) -> Demand =
-            demandOver(ledger, competing, Demand(targetOutstanding = UNBOUNDED_TARGET, maximumUsefulGrant = MAX_RESERVATION))
+            demandOver(ledger, competing, MAX_RESERVATION)
 
-        /** [wants] for an edge whose child is in [groups], [Demand.NONE] for every other. */
-        private fun demandOver(ledger: EntitlementLedger, groups: Set<GroupId>, wants: Demand): (AttachmentId) -> Demand =
-            { edge -> if (ledger.record(edge)?.child in groups) wants else Demand.NONE }
+        /**
+         * [wanted] for an edge whose child is in [groups], lifted from what it holds in [ledger],
+         * and [Demand.NONE] for every other.
+         *
+         * The step at a parent reads its children on a ledger that can differ from [ledger] only on
+         * edges above that parent: a descent, a charge and a reload each delegate down one edge per
+         * parent, after that parent's step. So each child's outstanding here is the one the step
+         * reads beside it.
+         */
+        private fun demandOver(ledger: EntitlementLedger, groups: Set<GroupId>, grant: Long): (AttachmentId) -> Demand =
+            { edge -> if (ledger.record(edge)?.child in groups) wanted(ledger.outstanding(edge), grant) else Demand.NONE }
+
+        /**
+         * The demand a wanted edge advertises: at most [grant] in one go, toward a target
+         * [UNBOUNDED_TARGET] above the [outstanding] it already holds, saturating at
+         * `Long.MAX_VALUE` (#3707). So an edge that competes reads as demanding,
+         * `target − outstanding > 0`, for every outstanding below `Long.MAX_VALUE`. At exactly
+         * `Long.MAX_VALUE` it competes and does not demand: the one value where the two predicates
+         * part. Such an edge is far past the lifetime watermark, so no pick could serve it anyway.
+         *
+         * A negative outstanding, which only a damaged ledger holds, lifts from zero, since [Demand]
+         * refuses a negative target, and the edge still reads as demanding.
+         */
+        internal fun wanted(outstanding: Long, grant: Long): Demand =
+            Demand(targetOutstanding = maxOf(outstanding, 0L).plusOrNull(UNBOUNDED_TARGET) ?: Long.MAX_VALUE, maximumUsefulGrant = grant)
     }
 }
 
