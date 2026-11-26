@@ -141,6 +141,29 @@ class WakeClampOpenLeaseTest {
         )
     }
 
+    /** How far `a` stands ahead of `b` on [h]'s share line, in units of service: `lag(b) − lag(a)`. */
+    private fun aAheadOfB(h: LocalHeddle): Rational {
+        val line = h.shareLine(both)
+        return assertNotNull(line.lag(b)) - assertNotNull(line.lag(a))
+    }
+
+    /**
+     * The share line takes the step a pick would, so on the restarted engine it reads `a` as far
+     * ahead of `b` as the kept one does: its open lease counted past the front, before any pick has
+     * clamped it.
+     */
+    @Test
+    fun theShareLineCountsTheOpenLeaseAsThePickWould() {
+        val read = rows.filter { it.settle == Settle.COMPLETE }.distinctBy { it.reserved }.map { row ->
+            val (h, _) = aWentIdleWithItsLeaseOpen(row.reserved)
+            Triple(row.reserved, aAheadOfB(restored(h, keepMemory = true)), aAheadOfB(restored(h, keepMemory = false)))
+        }
+        assertAll(
+            { assertEquals(listOf(Rational.of(1L, 1L), Rational.of(8L, 1L)), read.map { it.second }, "the rig: a stands its open reservation ahead on the kept engine, $read") },
+            *read.map { (reserved, kept, dropped) -> { assertEquals(kept, dropped, "reserved $reserved: the restarted engine's line reads a where the kept one does") } }.toTypedArray(),
+        )
+    }
+
     private companion object {
         const val WARM_UP = 20
         const val ALONE = 4
