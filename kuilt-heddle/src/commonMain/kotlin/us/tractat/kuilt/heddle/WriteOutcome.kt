@@ -142,10 +142,11 @@ internal fun AllocationOutcome.toScheduleOutcome(): ScheduleOutcome = when (this
 
 /**
  * What [HeddleNode.reconcileOwn] did: it moved this peer's own share of a retired edge's accounts,
- * found none of its own left to move, or could not move yet.
+ * found none of its own left to move, could not move yet, or must not move at all.
  *
  * [NoRetiredEdge] and [NoLiveEdge] clear by themselves as the reweight's steps reach this peer, so
- * call again later. [Refused] does not, and the strand stays as it is.
+ * call again later. [TwoLiveEdges], [CrossParent] and [Refused] do not: nothing was written, and
+ * the strand stays as it is until an operator changes the tree.
  */
 public sealed interface ReconcileOwnOutcome {
 
@@ -170,16 +171,31 @@ public sealed interface ReconcileOwnOutcome {
     /** This peer sees no retired edge into the child: the retire has not reached it yet, or there is none. */
     public data object NoRetiredEdge : ReconcileOwnOutcome
 
-    /**
-     * The child has a retired inbound edge but not exactly one live one to move onto: the new edge
-     * is not active on this peer's view yet, or two are.
-     */
+    /** The child has a retired inbound edge and no live one yet: the new edge is not active on this peer's view. */
     public data object NoLiveEdge : ReconcileOwnOutcome
 
     /**
-     * The move was refused, and [reason] says why. Nothing was written and the strand stays. The
-     * retired edges hang off another parent, or this peer's own rows cannot cover what was charged
-     * through them, as when it spent credit another peer handed it.
+     * The child has two or more live inbound [edges], so there is no one edge to move onto. The
+     * ledger quarantines such a child (`LedgerConflict.DualActiveInbound`), and it does not clear by
+     * itself: an operator closes and drains all but one of the edges, and then this peer calls again.
+     */
+    public data class TwoLiveEdges(public val edges: List<AttachmentId>) : ReconcileOwnOutcome
+
+    /**
+     * Some retired edges into the child hang off another parent than its live edge's [liveParent]:
+     * [foreign] names each such edge with its parent. A move conserves only within one parent, so
+     * nothing moved, the same-parent edges included. It does not clear by itself.
+     */
+    public data class CrossParent(
+        public val liveParent: GroupId,
+        public val foreign: Map<AttachmentId, GroupId>,
+    ) : ReconcileOwnOutcome
+
+    /**
+     * The ledger refused the move, and [reason] says why: this peer's own rows cannot cover what was
+     * charged through them, as when it spent credit another peer handed it, or they are inconsistent,
+     * as a restart that moved from stale finals can leave them. Nothing was written and the strand
+     * stays.
      */
     public data class Refused(public val reason: String) : ReconcileOwnOutcome
 }
