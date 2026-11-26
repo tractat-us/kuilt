@@ -24,7 +24,6 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_BASE_CONFIG
-import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_SEED
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
 import us.tractat.kuilt.raft.test.RAFT_SIM_WEDGE_BACKSTOP
 import us.tractat.kuilt.raft.test.dumpOnWedge
@@ -37,7 +36,6 @@ import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomHost
 import us.tractat.kuilt.session.test.FakeRoom
 import us.tractat.kuilt.test.FakeSeam
-import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -155,14 +153,9 @@ internal fun serverClusterSimTest(
         nodeIds = all,
         scope = this,
         nodeScope = backgroundScope,
-        nodeFactory = { id, transport, storage, childScope ->
-            val config = if (id in voters) voterConfig else voterConfig.copy(learners = setOf(id))
-            childScope.raftNode(
-                config,
-                transport,
-                storage,
-                MULTI_NODE_SIM_BASE_CONFIG.copy(random = Random(MULTI_NODE_SIM_SEED + all.indexOf(id))),
-            )
+        nodeFactory = { start ->
+            val config = if (start.id in voters) voterConfig else voterConfig.copy(learners = setOf(start.id))
+            start.scope.raftNode(config, start.transport, start.storage, MULTI_NODE_SIM_BASE_CONFIG.copy(random = start.random))
         },
     )
     val self = PeerId(voters.first().value)

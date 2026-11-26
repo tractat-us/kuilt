@@ -19,12 +19,11 @@ import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
-import us.tractat.kuilt.raft.RaftStorage
-import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_BASE_CONFIG
 import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_SEED
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
+import us.tractat.kuilt.raft.test.NodeStart
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.random.Random
 import kotlin.test.Test
@@ -142,16 +141,12 @@ class ExactlyOnceHappyPathTest {
  * the learner client from the first heartbeat. Per-node seeded [Random] for distinct election
  * timeouts; [ClientId] bound to node id for stable dedup identity.
  */
-private fun voterAndLearnerFactory(
-    config: ClusterConfig,
-): (NodeId, RaftTransport, RaftStorage, CoroutineScope) -> RaftNode = { id, transport, storage, scope ->
-    val nodeIndex = config.allMembers.sortedBy { it.value }.indexOf(id).toLong()
-    val nodeConfig = MULTI_NODE_SIM_BASE_CONFIG.copy(random = Random(MULTI_NODE_SIM_SEED + nodeIndex))
-    scope.raftNode(
+private fun voterAndLearnerFactory(config: ClusterConfig): (NodeStart) -> RaftNode = { start ->
+    start.scope.raftNode(
         clusterConfig = config,
-        transport = transport,
-        storage = storage,
-        raftConfig = nodeConfig,
-        identity = ClientIdentity.Durable(ClientId(id.value), issuedThrough = 0L),
+        transport = start.transport,
+        storage = start.storage,
+        raftConfig = MULTI_NODE_SIM_BASE_CONFIG.copy(random = start.random),
+        identity = ClientIdentity.Durable(ClientId(start.id.value), issuedThrough = 0L),
     )
 }

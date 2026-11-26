@@ -28,7 +28,6 @@ import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_BASE_CONFIG
-import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_SEED
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
@@ -363,14 +362,10 @@ internal class GovernedCluster(
 internal suspend fun TestScope.governedCluster(size: Int, quantum: Long, cap: Long): GovernedCluster {
     val ids = (1..size).map { NodeId("g$it") }
     val clusterConfig = ClusterConfig(voters = ids.toSet())
-    // One seed per start, so a restarted peer's `ClientIdentity.Auto` id is new, as a real process's
-    // is. The sim's default factory now does the same (#3425), but its first starts are seeded
-    // `baseSeed + nodeIndex` and these are not: the acceptance arms, and the mutation table #3418
-    // recorded, were measured on these trajectories, so moving to the default would move every arm.
-    var starts = 0L
-    val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope) { id, transport, storage, child ->
-        val seed = MULTI_NODE_SIM_SEED + ids.indexOf(id) + 1_000L * starts++
-        child.raftNode(clusterConfig, transport, storage, MULTI_NODE_SIM_BASE_CONFIG.copy(random = Random(seed)))
+    // The sim seeds each start itself, so a restarted peer's `ClientIdentity.Auto` id is new, as a
+    // real process's is (#3425, #3659).
+    val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope) { start ->
+        start.scope.raftNode(clusterConfig, start.transport, start.storage, MULTI_NODE_SIM_BASE_CONFIG.copy(random = start.random))
     }
     val loom = InMemoryLoom()
     val peers = ids.mapIndexed { i, id -> GovernedCluster.boot(this, sim, loom, id, joinAt = i, quantum = quantum, cap = cap) }
