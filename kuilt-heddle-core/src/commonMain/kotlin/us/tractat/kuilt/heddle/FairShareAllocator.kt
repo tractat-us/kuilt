@@ -107,20 +107,6 @@ public class FairShareAllocator(
     private val shiftRemainders = HashMap<AttachmentId, ShiftRemainder>()
 
     /**
-     * Once switched a twin that never rebased. Nothing rebases now (design §7.1, step B), so it does
-     * nothing: setting it changes no pick, and it reads what was last set. Kept because 0.7.5
-     * published it.
-     */
-    @HeddleInternalApi
-    @Deprecated("Nothing rebases (design §7.1, step B); this switch does nothing.")
-    public var rebaseEnabled: Boolean = true
-
-    /** Once the count of rebases this allocator made. Nothing rebases now, so it reads zero. */
-    @HeddleInternalApi
-    @Deprecated("Nothing rebases (design §7.1, step B); this always reads zero.")
-    public val rebases: Int get() = 0
-
-    /**
      * An allocator that resumes from [memory], as if it were the allocator [memory] was exported
      * from. Building one over a copy of a live allocator's [FairShareAllocator.memory] gives a
      * throwaway that picks exactly as the live one would next.
@@ -617,19 +603,19 @@ public class FairShareAllocator(
             ?.let { readVirtual(HeddlePolicy.effectiveTicksWide(it), it.record.weight) }
 
     /**
-     * The highest effective position among [parent]'s active children in [ledger], each as a
-     * fraction of its own [positionCeiling]: how far the parent has climbed. Nothing rebases it
-     * back down (#3472), so a busy parent passes `1` in time, and the public virtual-time reads
-     * there saturate at the ceiling; no pick is affected, since a pick orders the wide position.
-     * Zero when [parent] has no active children. A diagnostic that reads this allocator's wake clamps,
-     * so a caller sharing the allocator must hold whatever lock guards it.
+     * How far [parent] has climbed: the highest effective position among its active children in
+     * [ledger], each divided by its own position ceiling, the largest position a `Long` could hold
+     * on that child's grid. A plain ratio with no unit, `0.0` at the start and `1.0` at the ceiling.
+     *
+     * Nothing rebases a parent back down (#3472), so a busy parent passes `1.0` in time. Past it the
+     * deprecated `Rational` virtual-time reads saturate at the ceiling; no pick is affected, since a
+     * pick orders the full 128-bit position. `0.0` when [parent] has no active children.
+     *
+     * A diagnostic, read from this allocator's wake clamps, so it is this peer's reading and not a
+     * replicated value. A caller sharing the allocator must hold whatever lock guards it.
      */
-    @HeddleInternalApi
-    public fun peakPositionFraction(
-        ledger: EntitlementLedger,
-        parent: GroupId,
-        demand: (AttachmentId) -> Demand,
-    ): Double = policyEdges(ledger, parent, demand).maxOfOrNull { edge ->
+    public fun peakPositionFraction(ledger: EntitlementLedger, parent: GroupId): Double =
+        policyEdges(ledger, parent, demand = { Demand.NONE }).maxOfOrNull { edge ->
         HeddlePolicy.effectiveTicksWide(edge).toDouble() / positionCeiling(edge.record.weight).toDouble()
     } ?: 0.0
 

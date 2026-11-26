@@ -2541,11 +2541,13 @@ public class EntitlementLedger private constructor(
     internal fun forgottenGenerationFloor(): Long = forgotten.generationFloor
 
     /**
-     * Whether this ledger has forgotten anything. A replicated ledger never has: `:kuilt-heddle` reads
-     * this to refuse, at decode, a ledger a peer sent with a fold in it. [HeddleInternalApi] because
-     * `internal` cannot cross the module boundary.
+     * Whether this ledger has forgotten anything: `true` once a retired edge has been folded away
+     * into the ledger's forgotten totals, `false` while every edge it ever held is still kept whole.
+     *
+     * Forgetting removes slots, so it is not a join: it is one writer's act, and only a [LocalHeddle]
+     * does it. A replicated ledger never forgets, so a ledger arriving from a peer with this `true` is
+     * foreign or corrupt, and `:kuilt-heddle` refuses one at decode.
      */
-    @HeddleInternalApi
     public fun hasForgotten(): Boolean = !forgotten.isEmpty()
 
     /** Every edge id mentioned by any component. */
@@ -2557,12 +2559,16 @@ public class EntitlementLedger private constructor(
      * and whose lifecycle is [Lifecycle.ACTIVE] or [Lifecycle.CLOSING] (a still-draining closing edge
      * counts; it can carry entitlement). Sorted by id so every peer folds the same order.
      *
-     * This is the exact predicate [LedgerConflict.DualActiveInbound] fires on. The **H5 control plane**
+     * This is [LedgerConflict.DualActiveInbound]'s predicate over the non-divergent edges. The conflict
+     * counts every live edge in the inbound index, a divergent edge included, so such an edge counts
+     * toward it without being listed here. The **H5 control plane**
      * reads it *before* applying an `activate` proposal so the log's serialization can refuse the
      * loser of two overlapping reshapes as a structured conflict — instead of letting both apply and
-     * quarantine the lineage (design §9, §5.2, §10.11). [HeddleInternalApi] — control-plane + test support.
+     * quarantine the lineage (design §9, §5.2, §10.11).
+     *
+     * A healthy ledger answers at most one edge for any child. Empty for a child nothing feeds, or one
+     * fed only by edges still [Lifecycle.PREPARED] or already [Lifecycle.RETIRED].
      */
-    @HeddleInternalApi
     public fun liveInboundEdges(child: GroupId): List<AttachmentId> =
         index.value.inbound[child].orEmpty().filter { e ->
             recordOf(e)?.child == child &&
@@ -2642,13 +2648,14 @@ public class EntitlementLedger private constructor(
     public fun mintedTotal(): Long = minted.values.fold(0L) { acc, m -> checkedAdd(acc, m.amount) }
 
     /**
-     * The distinct roots supply has been minted at, sorted — one on a healthy ledger. More is the
-     * [LedgerConflict.MultipleRoots] fault (#1751). [HeddleInternalApi] — test support.
+     * The distinct groups supply has been minted at, sorted by id: the roots of the trees this
+     * ledger funds. One on a healthy ledger, and empty before the first mint. More than one is the
+     * [LedgerConflict.MultipleRoots] fault (#1751), so a caller about to mint can ask it first rather
+     * than learn of the fault afterwards.
      *
      * A zero-amount record counts: it is still evidence of a mint act on a second tree, and
      * excluding it would make the report depend on an amount the fault has nothing to do with.
      */
-    @HeddleInternalApi
     public fun mintedRoots(): List<GroupId> = minted.values.mapTo(HashSet()) { it.root }.sorted()
 
     /**

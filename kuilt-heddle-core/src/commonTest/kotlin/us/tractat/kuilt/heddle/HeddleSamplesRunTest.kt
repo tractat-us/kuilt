@@ -103,6 +103,9 @@ class HeddleSamplesRunTest {
     fun shareLineLagHolds() = sampleShareLineLag()
 
     @Test
+    fun weightBudgetHolds() = sampleWeightBudget()
+
+    @Test
     fun fairShareQueueHolds() = sampleFairShareQueue()
 
     @Test

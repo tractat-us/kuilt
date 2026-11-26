@@ -110,7 +110,7 @@ class LocalHeddleExplainTest {
         val front = (xRead + yRead) / Rational.of(2L)
         assertAll(
             { assertEquals(listOf(x, x, x), leased, "the rig: every lease went to x") },
-            { assertTrue(h.allocator.peakPositionFraction(ledger, root) { Demand.NONE } > 1.0, "the rig: x is past its ceiling") },
+            { assertTrue(h.allocator.peakPositionFraction(ledger, root) > 1.0, "the rig: x is past its ceiling") },
             { assertEquals(ceiling, xRead, "the rig: x's public read is held at its ceiling") },
             { assertEquals(Rational.ZERO, yRead, "the rig: y stands at its start, never served") },
             { assertEquals(WaitExplanation.BehindAtLevel(root, y, ceiling, front, front), h.explain(x, both, both)) },
