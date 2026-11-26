@@ -1481,19 +1481,25 @@ denominators share no factor are refused below it too.
 
 **Two known fairness gaps**, both smallest when a lease settles at its estimate:
 
-- **An estimate's size leans share.** A lease counts at its reservation until `complete`, so a
-  lane that under-reserves looks cheaper while it runs and gains share; one that over-reserves
-  loses it. Most callers send `defaultReservation`, so its size picks the side. Aim it at a
-  typical job, and pass a per-lease `reservation` when history gives a better one. Tracked by
-  [#3239](https://github.com/tractat-us/kuilt/issues/3239).
+- **A wrong estimate reorders picks and never changes a charge.** An open lease counts at its
+  reservation, and `complete` charges the leaf exactly the cost it is given, so a leaf's spend is
+  what its completions reported. While a lease is open, a lane that reserves low looks cheaper and
+  wins picks it should not, and one that reserves high loses them: closed-loop, about 0.01 of share
+  on average at one level. A refund is what can move a sibling: on two-level rigs, a lane that
+  reserves four times the cost on the job that empties its queue costs its honest sibling about
+  0.03, against 0.003 for one that reserves 1 and `extend`s as it runs. So reserve at or below the
+  cost: aim `defaultReservation` at or a little below a typical job, never the longest, pass a
+  per-lease `reservation` when history gives a better one, and `extend` a lease that reaches what
+  it holds. Accepted and pinned on ensembles of rigs by `ReservationLeanTest`
+  ([#3239](https://github.com/tractat-us/kuilt/issues/3239)).
 - **A cancel is charged nothing, and a sibling's refund leaks across a gap.** A lane that cancels
   the job ending each burst gains share (+0.015 to +0.044 on the slot probe). And a *sibling's*
   reservation counts in the net-service clock at the weight of everyone asking, while its refund
   lands at the weight of whoever is still asking, so a lane away across a sibling's refund comes
   back owed more than it is: 19 / 10 on a rig whose fair split is 15 / 14. A lane's own refund
-  across its own gap is read correctly. Tracked by
-  [#3238](https://github.com/tractat-us/kuilt/issues/3238) and
-  [#3239](https://github.com/tractat-us/kuilt/issues/3239). `HeddleNode`'s `complete` keeps an
+  across its own gap is read correctly. The cancel is tracked by
+  [#3238](https://github.com/tractat-us/kuilt/issues/3238); the sibling's refund is the bound
+  [#3239](https://github.com/tractat-us/kuilt/issues/3239) accepted, above. `HeddleNode`'s `complete` keeps an
   unused earmark at the leaf, so `HeddleNode` does not take either path.
 
 ## Fair share across peers

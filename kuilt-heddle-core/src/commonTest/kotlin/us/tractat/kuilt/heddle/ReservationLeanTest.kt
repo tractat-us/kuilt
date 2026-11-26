@@ -21,8 +21,9 @@ import kotlin.test.assertTrue
  * The charge half is exact: a leaf's spend is the costs its completions reported, here on three
  * leases and inside [ReservationLeanRig.run] on every lease of every rig below. The pick half is a
  * lean in share, and it is pinned on **ensembles** of rigs, never on one: a single rig's share is
- * quantised, and at think 7 three unrelated arms all read +0.030. Every value is a share less the
- * same rig's honest arm, so it measures only what the estimate changed. Each ensemble row pins the
+ * quantised (#3239's design note found three unrelated arms all reading +0.030 at think 7). Every
+ * value is a share less the same rig's honest arm, so it measures only what the estimate changed.
+ * Each ensemble row pins the
  * mean within [MEAN_TOLERANCE] and keeps every rig inside the measured extremes widened by
  * [EXTREME_TOLERANCE]; the means red when the lean moves either way, the extremes only when it
  * grows.
