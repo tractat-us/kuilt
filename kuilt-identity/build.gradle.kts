@@ -269,3 +269,41 @@ if (runRealKeychainTests) {
         }
     }
 }
+
+// The device run (#3226): `./gradlew :kuilt-identity:connectedDebugAndroidTest` with a device or an
+// emulator attached. AndroidJUnitRunner runs the androidInstrumentedTest classes against the real
+// AndroidKeyStore provider.
+android {
+    defaultConfig { testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+}
+
+// How many rows each device's result file must hold. AGP reports a connected run that executed
+// nothing as a success, so without this an un-run class reads as green. Adding or removing a device
+// test means changing this number in the same commit. A row an assumption skipped still counts, and
+// the verify names every skipped row, so a device that could not reach a rig says so.
+val expectedDeviceTestRows = 0
+
+tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
+    val results = layout.buildDirectory.dir("outputs/androidTest-results/connected/debug")
+    val expected = expectedDeviceTestRows
+    var startedAt = 0L
+    doFirst { startedAt = System.currentTimeMillis() }
+    doLast {
+        val dir = results.get().asFile
+        val files = dir.walkTopDown().filter { it.isFile && it.name.startsWith("TEST-") && it.extension == "xml" }.toList()
+        check(files.isNotEmpty()) { "device run: no result file under $dir, so nothing ran" }
+        files.forEach { file ->
+            check(file.lastModified() >= startedAt) { "device run: $file predates this run, so it is stale" }
+            val xml = file.readText()
+            val rows = Regex("<testcase\\b").findAll(xml).count()
+            val skipped = Regex("""<testcase name="([^"]+)" classname="([^"]+)"[^>]*>\s*<skipped""").findAll(xml)
+                .map { "${it.groupValues[2].substringAfterLast('.')}.${it.groupValues[1]}" }
+                .toList()
+            check(rows == expected) { "device run: ${file.name} holds $rows rows, expected $expected" }
+            logger.lifecycle(
+                "device run: ${file.name}: $rows of $expected rows, ${skipped.size} skipped" +
+                    if (skipped.isEmpty()) "" else ": " + skipped.joinToString(),
+            )
+        }
+    }
+}
