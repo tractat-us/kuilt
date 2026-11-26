@@ -38,6 +38,9 @@ public data class SupplyPolicy(
  *
  * @property defaultReservation the cost a lease reserves when the caller passes no estimate, in the
  *   caller's cost unit (time, by convention: R2). Positive, and at most [LocalHeddle.MAX_RESERVATION].
+ *   Size it at or a little below a typical job, never at the longest: a lease that settles under
+ *   its reservation refunds the rest, and a refund is what can move a sibling (see "A wrong
+ *   estimate" on [LocalHeddle]).
  * @property sleeperCredit the virtual-time credit a **clamped** waker may keep (design §10.6): a
  *   group this engine saw idle but never saw stop asking, one it first saw idle say. A group it
  *   saw stop comes back moved by its parent's net-service clock, and this credit
@@ -313,6 +316,32 @@ public sealed interface LeaseOutcome {
  * comes back by its parent's clock, as far ahead or behind as it was when it was cut off, rather
  * than owed the slots it could not have used (§7.2, #3376). One this engine never saw leave is
  * clamped as a waker.
+ *
+ * ## A wrong estimate
+ *
+ * An open lease counts at its reservation. A wrong estimate reorders picks and never changes a
+ * charge. Reserve at or below the cost and [extend]: a refund is what can move a sibling.
+ *
+ * A pick delegates the reservation down the lease's path, so while the lease is open every group on
+ * it carries the estimate, not the cost. [complete] then charges the leaf exactly the cost it is
+ * given, extending an overrun or handing the unused remainder back up the path, so a leaf's spend
+ * is the sum of the costs its completions reported, whatever was reserved. What the estimate did
+ * change is the picks made while the lease was open. A lane that reserves low looks cheaper than it
+ * is and can win a pick it should not, and one that reserves high loses one. Where each job waits
+ * on the one before, those picks lean the lane's share: on an ensemble of 48 closed-loop rigs at one
+ * level, by about 0.01 on average, towards the lane that reserves low.
+ *
+ * A refund is what reaches an honest sibling. The parent's net-service clock counted the open
+ * reservation at the weight of everyone asking, and the refund lands at the weight of whoever is
+ * still asking, so a lease that settles under its reservation while a sibling is away moves that
+ * sibling (#3376). On an ensemble of 54 two-level rigs, a lane that reserves four times the cost on
+ * the job that empties its queue gains about 0.045 and costs its honest sibling about 0.03 on
+ * average; reserving 1 and extending as it runs, it costs the sibling about 0.003.
+ *
+ * So size [LocalPolicy.defaultReservation] at or a little below a typical job, never at the
+ * longest: an estimate that runs short is corrected by [extend] or by the overrun at [complete],
+ * and neither hands anything back. Pass a `reservation` per [acquire] when the lane's history gives
+ * a better one, and [extend] a lease that reaches what it holds.
  *
  * ## What a lease ends at
  *
