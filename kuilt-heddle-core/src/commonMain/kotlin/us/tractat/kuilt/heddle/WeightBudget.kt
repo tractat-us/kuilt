@@ -13,6 +13,8 @@ package us.tractat.kuilt.heddle
  *
  * The rule is the one [LocalHeddle.apply] enforces, asked without applying anything. Use it to vet
  * a weight before proposing the edge, rather than re-deriving the arithmetic.
+ *
+ * @sample us.tractat.kuilt.heddle.sampleWeightBudget
  */
 public fun weightFitsTheBudget(weight: Weight): Boolean = weightsFitTheBudget(listOf(weight))
 
@@ -29,6 +31,8 @@ public fun weightFitsTheBudget(weight: Weight): Boolean = weightsFitTheBudget(li
  * refuses that one on its own. A sibling whose record is divergent is left out, as
  * [LocalHeddle.apply] leaves it out: the policy drops such an edge, so it never enters a pick.
  * Budget only: an activation that passes here can still be refused for the position limit.
+ *
+ * @sample us.tractat.kuilt.heddle.sampleWeightBudget
  */
 public fun EntitlementLedger.activationFitsTheBudget(edge: AttachmentId): Boolean {
     val record = record(edge) ?: return true
