@@ -338,12 +338,16 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
   (Decided 18). When the member's link heals, its return meets a connected seat under another key
   and is refused `KeyConflict`. Every member knows who is partitioned, so this needs no guessing.
   An app must name a device by `Member.key`, never by its peer id: bystanders see
-  `Left(id, PartitionExpired)` then `Joined(id)` under a different key. Closing it needs
-  authenticated peer ids, the channel binding below.
+  `Left(id, PartitionExpired)` then `Joined(id)` under a different key. A channel binding would
+  not close it, since the bystander binds its own link honestly. Only a change to rule 3, or peer
+  ids a peer cannot choose, would close it (proposed Decided 33, options B and C).
 - **Not protected:** an active relay sitting on the victim's own link over an unauthenticated
   fabric. Peer ids are self-chosen on WebSocket and star fabrics, so such a relay can forward a
-  challenge and its answer. Closing that needs channel binding (a TLS exporter from #3157, or
-  `kuilt-nw`'s PSK session); the proof layout reserves a field for it, empty in this slice.
+  challenge and its answer. A channel binding would close this row, and only this row, on a fabric
+  whose joiner can read one: WebSocket to a TLS-terminating host from a non-browser client, Nearby,
+  and WebRTC. On `kuilt-nw` a relay that is a member holds the room key, so the PSK session binds
+  nothing against it. Multipeer, TCP and a browser's WebSocket have nothing to bind. The proof
+  layout reserves the field, empty, and the binding is deferred (proposed Decided 33).
 - **The key binds the handshake, not later frames.** On a `Mesh`, a link that later takes a
   member's peer id (#2387) sends frames under that member's `Member.key`. Deployments on
   `HostedOverlay` should use a binding `LinkAdmission` until #2387 lands.
