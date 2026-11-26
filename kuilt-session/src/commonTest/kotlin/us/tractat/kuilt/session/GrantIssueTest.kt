@@ -27,6 +27,7 @@ import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.admit.AdmissionDecision
 import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.GrantIssuer
 import us.tractat.kuilt.session.admit.GrantReach
 import us.tractat.kuilt.session.admit.GrantTerms
 import us.tractat.kuilt.session.admit.HostAdmission
@@ -42,6 +43,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -200,6 +202,25 @@ class GrantIssueTest {
     }
 
     // ── Renewal ──────────────────────────────────────────────────────────────
+
+    /**
+     * The schedule the ruling on #3709 set: [AdmissionPolicy.open]'s hour is renewed every 15
+     * minutes, so a device away up to 45 minutes after its last contact gets back in on its pass. A
+     * term too short to divide stays at 1 ms rather than 0, and a term that never ends is never
+     * renewed.
+     */
+    @Test
+    fun anHourIsRenewedEveryQuarterHour() {
+        val hour = GrantTerms(1.hours)
+        val period = assertNotNull(GrantIssuer.refreshPeriodMillis(hour)).milliseconds
+        assertAll(
+            { assertEquals(15.minutes, period, "every quarter of the hour") },
+            { assertEquals(45.minutes, hour.readmitFor - period, "the floor: three quarters of the hour") },
+            { assertEquals(1L, GrantIssuer.refreshPeriodMillis(GrantTerms(1.milliseconds)), "a 1 ms term is renewed every 1 ms, not every 0") },
+            { assertEquals(1L, GrantIssuer.refreshPeriodMillis(GrantTerms(3.milliseconds)), "and so is any term shorter than its renewal count") },
+            { assertEquals(null, GrantIssuer.refreshPeriodMillis(GrantTerms(Duration.INFINITE)), "a term that never ends is never renewed") },
+        )
+    }
 
     /**
      * A connected member is sent a fresh pass every half of its lifetime, and not before: none at

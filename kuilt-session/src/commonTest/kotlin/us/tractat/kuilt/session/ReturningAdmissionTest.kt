@@ -6,6 +6,7 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.identity.DeviceKey
@@ -21,6 +22,7 @@ import us.tractat.kuilt.session.admit.AdmissionDecision
 import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmissionRequest
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.GrantIssuer
 import us.tractat.kuilt.session.admit.GrantReach
 import us.tractat.kuilt.session.admit.GrantTerms
 import us.tractat.kuilt.session.admit.HostAdmission
@@ -38,6 +40,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * A device whose seat is gone, but which still holds a good pass from this host, comes back without
@@ -52,6 +55,21 @@ class ReturningAdmissionTest {
     private companion object {
         /** A host key that is not this room's host's. */
         const val ANOTHER_HOST = 7
+
+        /** A term whose renewal period is long against the host's partition detection and seat hold. */
+        val FLOOR_TERM: Duration = 40.seconds
+
+        /** How often the host renews a pass on [FLOOR_TERM], from the constant. */
+        val FLOOR_PERIOD: Duration = FLOOR_TERM / GrantIssuer.RENEWALS_PER_TERM
+
+        /**
+         * Renewals Bob receives before he drops. Odd, so the renewal he misses is an even-numbered one:
+         * a host renewing every half term would have renewed him last a whole half term before it.
+         */
+        const val RENEWED = 3
+
+        /** How long before a renewal falls due Bob drops: long enough for the host to see it first. */
+        val DROP_MARGIN: Duration = 1.seconds
     }
 
     private val bob = PeerId("bob")
@@ -454,6 +472,117 @@ class ReturningAdmissionTest {
             { assertEquals(Grant.NO_EXPIRY, reissued.notAfter, "the returning pass still never expires") },
             { assertEquals<GrantScope>(GrantScope.AnyRoomOfIssuer, reissued.scope, "and is still good in any room") },
             { assertTrue(!(host.room as SeamRoom).renewsPassForTest(bobAgain), "a pass that never expires is never renewed") },
+        )
+        host.room.leave()
+    }
+
+    // ── How long a dropped device keeps its way back in (#3709) ─────────────
+
+    /** What [dropJustBeforeARenewal] left: the host, the policy's count, and the device's last pass. */
+    private class Dropped(val host: RawHost, val counted: Counted, val held: Grant, val lastContact: Long, val renewals: Int, val issuedAts: List<Long>)
+
+    /**
+     * Bob is admitted on [FLOOR_TERM], stays connected through [RENEWED] renewals, and drops
+     * [DROP_MARGIN] before the next one is due, so the host holds him as partitioned when it falls due
+     * and sends him nothing more: the pass he keeps is the one issued a whole period before his last
+     * contact, the worst case the schedule allows. The period is the term over
+     * [GrantIssuer.RENEWALS_PER_TERM], derived here from the constant rather than from the room.
+     */
+    private suspend fun TestScope.dropJustBeforeARenewal(): Dropped {
+        val counted = Counted { GrantTerms(FLOOR_TERM) }
+        val host = rawHost(joiners = setOf(bob, bobAgain), admission = counted.admission)
+        val admittedAt = testScheduler.currentTime
+        host.admit(bob, bobKey, nonce = 1)
+        host.advanceKeeping(setOf(bob), FLOOR_PERIOD * (RENEWED + 1) - DROP_MARGIN)
+        host.ping(bob)
+        testScheduler.runCurrent()
+        val lastContact = testScheduler.currentTime
+        val sentAtDrop = host.passesTo(bob)
+        // Silent from here: partitioned before the next renewal falls due, then let go.
+        testScheduler.advanceTimeBy(FLOOR_PERIOD)
+        testScheduler.runCurrent()
+        val sentAfterDrop = host.passesTo(bob)
+        assertAll(
+            { assertTrue(DROP_MARGIN > PARTITION_DETECTED, "rig: the host has called Bob partitioned before the next renewal falls due") },
+            { assertEquals(null, host.member(bob), "rig: Bob's seat is gone, so a return is on the pass or vetted") },
+            { assertEquals(sentAtDrop, sentAfterDrop, "rig: nothing was sent to Bob after his last contact") },
+            { assertEquals(listOf(bobKey.id), counted.keys(), "rig: Bob was vetted once, when he joined") },
+        )
+        return Dropped(
+            host = host,
+            counted = counted,
+            held = sentAtDrop.last(),
+            lastContact = lastContact,
+            renewals = host.renewalsTo(bob),
+            issuedAts = sentAtDrop.map { it.issuedAt - admittedAt },
+        )
+    }
+
+    private fun RawHost.renewalsTo(peer: PeerId): Int = sentTo(peer).count { it is AdmitMessage.GrantRenewal }
+
+    /**
+     * The floor (#3709): a device that drops just before a renewal is due, and comes back three
+     * quarters of its term after its last contact, gets back in on its pass. The policy is not asked,
+     * and the host marks the join as the device returning.
+     *
+     * The renewals it relies on are counted and dated: one every quarter term, the last a whole period
+     * before the drop. A host that renewed every half term would have left Bob on an older pass, run
+     * out by now.
+     */
+    @Test
+    fun aDeviceAwayThreeQuartersOfItsTermReturnsOnItsPass() = runTest {
+        val dropped = dropJustBeforeARenewal()
+        val host = dropped.host
+        val away = FLOOR_TERM - FLOOR_PERIOD
+        testScheduler.advanceTimeBy(dropped.lastContact + away.inWholeMilliseconds - testScheduler.currentTime)
+        testScheduler.runCurrent()
+        val mark = host.events.mark()
+
+        host.admit(bobAgain, bobKey, nonce = 2, grants = listOf(dropped.held))
+
+        val period = FLOOR_PERIOD.inWholeMilliseconds
+        assertAll(
+            { assertEquals(RENEWED, dropped.renewals, "rig: Bob was renewed every period while connected") },
+            { assertEquals((0..RENEWED).map { it * period }, dropped.issuedAts, "rig: the Welcome's pass, then one per period") },
+            { assertEquals(dropped.lastContact + DROP_MARGIN.inWholeMilliseconds - period, dropped.held.issuedAt, "rig: his last pass was issued a whole period before the renewal he missed") },
+            { assertEquals(away.inWholeMilliseconds, testScheduler.currentTime - dropped.lastContact, "rig: he was away three quarters of the term") },
+            { assertEquals(listOf(bobKey.id), dropped.counted.keys(), "a return on a pass the schedule kept good never asks the policy") },
+            {
+                assertEquals(
+                    listOf(ReturningMark(previousId = bob)),
+                    host.events.since(mark).filterIsInstance<MembershipEvent.Joined>().map { it.returning },
+                    "the host marks it as Bob's device returning",
+                )
+            },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * The ceiling: the same drop, back the instant a whole term has passed since the pass Bob holds
+     * was issued, is decided as a newcomer. The policy is asked once, and the join is not marked.
+     */
+    @Test
+    fun aDeviceBackATermAfterItsLastPassIsVetted() = runTest {
+        val dropped = dropJustBeforeARenewal()
+        val host = dropped.host
+        testScheduler.advanceTimeBy(dropped.held.issuedAt + FLOOR_TERM.inWholeMilliseconds - testScheduler.currentTime)
+        testScheduler.runCurrent()
+        val mark = host.events.mark()
+
+        host.admit(bobAgain, bobKey, nonce = 2, grants = listOf(dropped.held))
+
+        assertAll(
+            { assertEquals(RENEWED, dropped.renewals, "rig: Bob was renewed every period while connected") },
+            { assertEquals(dropped.held.notAfter, testScheduler.currentTime, "rig: his last pass ran out this instant") },
+            { assertEquals(listOf(bobKey.id, bobKey.id), dropped.counted.keys(), "past his pass, the policy is asked once more") },
+            {
+                assertEquals(
+                    listOf<ReturningMark?>(null),
+                    host.events.since(mark).filterIsInstance<MembershipEvent.Joined>().map { it.returning },
+                    "an ordinary admission, not a return",
+                )
+            },
         )
         host.room.leave()
     }
