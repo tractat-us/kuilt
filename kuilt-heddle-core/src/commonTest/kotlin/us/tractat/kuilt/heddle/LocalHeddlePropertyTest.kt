@@ -177,8 +177,8 @@ class LocalHeddlePropertyTest {
     /**
      * The queues `previewPicks` lists the leaves the real loop over those queues picks, and changes
      * nothing (#3321). The real loop is what a caller with those queues does: `acquire` at the slot's
-     * reservation, `extend` by `head − reservation` when the winner's head is larger, then pop the
-     * head. Heads straddle the reservation and the weights are mixed. Even seeds reconcile a capacity;
+     * reservation, `extend` by `head − reservation` when the winner's head is larger, or `shrink` by
+     * `reservation − head` when it is smaller (#3648), then pop the head. Heads straddle the reservation and the weights are mixed. Even seeds reconcile a capacity;
      * odd ones hold a fixed supply, so some loops end on an `acquire` refused for supply and some on
      * an `extend`, whose pick is then in neither list.
      */
@@ -186,6 +186,7 @@ class LocalHeddlePropertyTest {
     fun queuePreviewEqualsTheRealLoop() {
         var picked = 0
         var extendedPicks = 0
+        var shrunkPicks = 0
         var drained = 0
         var endedOnAcquire = 0
         var endedOnExtend = 0
@@ -226,6 +227,10 @@ class LocalHeddlePropertyTest {
                 if (out == AcquireOutcome.SupplyExhausted || out is AcquireOutcome.LifetimeExhausted) endedOnAcquire++
                 if (out !is AcquireOutcome.Acquired) break
                 val head = remaining.getValue(out.lease.leaf).removeFirst()
+                if (head < r) {
+                    check(h.shrink(out.lease.id, r - head) == LeaseOutcome.Done(0L, 0L, 0L))
+                    shrunkPicks++
+                }
                 if (head > r) {
                     if (h.extend(out.lease.id, head - r, waiting = leaves.filterTo(HashSet()) { remaining.getValue(it).isNotEmpty() }) !is LeaseOutcome.Done) {
                         endedOnExtend++
@@ -245,6 +250,7 @@ class LocalHeddlePropertyTest {
         assertAll(
             { assertTrue(picked > QUEUE_PREVIEW_SEEDS, "previews picked something: $picked") },
             { assertTrue(extendedPicks > 0, "some pick was extended to its head: $extendedPicks") },
+            { assertTrue(shrunkPicks > 0, "some pick was shrunk to its head: $shrunkPicks") },
             { assertTrue(drained > 0, "some loop ran until nothing it could pick was queued: $drained") },
             { assertTrue(endedOnAcquire > 0, "some loop ended on a refused acquire: $endedOnAcquire") },
             { assertTrue(endedOnExtend > 0, "some loop ended on a refused extend: $endedOnExtend") },

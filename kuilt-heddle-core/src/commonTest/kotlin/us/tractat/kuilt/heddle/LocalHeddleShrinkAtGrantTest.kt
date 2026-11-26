@@ -62,7 +62,7 @@ class LocalHeddleShrinkAtGrantTest {
 
     /** Each leaf's queue, head first, with heads drawn either side of [R]: some leaves left empty. */
     private fun queues(rng: Random): Map<GroupId, List<Long>> =
-        leaves.associateWith { List(rng.nextInt(5)) { 1L + rng.nextInt(2 * R.toInt()) } }.filterValues { it.isNotEmpty() }
+        leaves.filter { rng.nextInt(4) != 0 }.associateWith { List(2 + rng.nextInt(5)) { 1L + rng.nextInt(2 * R.toInt() - 1) } }
 
     /** How a model sizes the lease a grant opens for [head]: at the head, or at `max(head, r)` as before #3648. */
     private fun interface Sizing {

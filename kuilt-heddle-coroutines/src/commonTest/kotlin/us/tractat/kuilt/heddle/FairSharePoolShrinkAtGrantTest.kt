@@ -35,8 +35,8 @@ class FairSharePoolShrinkAtGrantTest {
     private val leaves = listOf(tree.groupId("p", "p0"), tree.groupId("p", "p1"), tree.groupId("q", "q0"), tree.groupId("q", "q1"))
 
     /**
-     * Waiters in arrival order, asking either side of the default of [R]: seven of the eleven below
-     * it, two above.
+     * Waiters in arrival order, asking either side of the default of [R]: eight of the eleven below
+     * it, one at it, two above.
      */
     private val arrivals = listOf(
         leaves[0] to 1L, leaves[2] to 2L, leaves[1] to 4L, leaves[3] to 1L, leaves[0] to 7L, leaves[2] to 1L,
@@ -114,7 +114,7 @@ class FairSharePoolShrinkAtGrantTest {
         val asked = arrivals.groupBy({ it.first }, { it.second })
         assertAll(
             { assertEquals(arrivals.size, byLease.size, "the rig: every waiter is granted") },
-            { assertEquals(7, arrivals.count { it.second < R }, "the rig: seven waiters ask below the default") },
+            { assertEquals(8, arrivals.count { it.second < R }, "the rig: eight waiters ask below the default") },
             { assertEquals(asked, byLease.groupBy({ it.leaf }, { it.reserved }), "each lease holds what its waiter asked, head first") },
             { assertEquals(byLease.map { it.reserved }, engine.snapshot().leases.sortedBy { it.id }.map { it.reserved }, "on the engine's side too") },
             { assertEquals(modelled, byLease.map { it.leaf }, "the grants against the model with no shrink") },
