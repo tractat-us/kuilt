@@ -8407,6 +8407,11 @@ val verifyTestResultParity by tasks.registering {
     val suiteName = Regex("""<testsuite\s+name="([^"]+)"""")
     // Bytes of each results XML scanned for its `<testsuite name=…>` header. It is the second line.
     val suiteHeaderScan = 2048
+    // Test tasks that run ONE suite by design and are not a target, so they are never compared: a
+    // run built to hold one class would otherwise owe every commonTest class the targets ran.
+    // `:kuilt-identity`'s real-Keychain run (#3310) is one iosTest suite in a booted simulator, which
+    // checks its own row count.
+    val singleSuiteRuns = setOf("iosSimulatorArm64RealKeychainTest")
     val ci = providers.environmentVariable("CI")
     val askedForByName = gradle.startParameter.taskNames.any { it.substringAfterLast(':') == name }
     doLast {
@@ -8428,7 +8433,7 @@ val verifyTestResultParity by tasks.registering {
 
         surfaces.forEach { (modulePath, commonTestRoot, resultsRoot) ->
             val taskDirs = (resultsRoot.listFiles() ?: emptyArray())
-                .filter { it.isDirectory }
+                .filter { it.isDirectory && it.name !in singleSuiteRuns }
                 .associateWith { dir -> dir.listFiles { f -> f.name.startsWith("TEST-") && f.extension == "xml" }.orEmpty() }
                 .filterValues { it.isNotEmpty() }
             if (taskDirs.size < 2) {
