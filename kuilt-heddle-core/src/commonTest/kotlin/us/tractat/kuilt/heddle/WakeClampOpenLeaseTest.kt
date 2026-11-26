@@ -125,7 +125,7 @@ class WakeClampOpenLeaseTest {
      * The rig, standing: the wake left `a`'s lease edge an offset of at least the lease's own
      * reservation, in ticks. Clamped at the front alone, seven of the eight cells read `0`, since
      * `a` wakes level with or ahead of that front. Only the dropped engine's reserved-1 row stays
-     * past it either way: `b`'s four jobs alone carried the front 4 units past `a`'s 1.
+     * past it either way: `b`'s four jobs alone leave `a` 3 units behind the front, 48 ticks.
      */
     private fun clampedPastItsLease(cells: Map<Row, Cell>, column: String, of: (Cell) -> Run): Array<() -> Unit> =
         cells.map { (row, cell) ->
