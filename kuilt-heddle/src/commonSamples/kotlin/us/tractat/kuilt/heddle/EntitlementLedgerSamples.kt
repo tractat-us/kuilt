@@ -106,3 +106,21 @@ internal fun HeddleNode.sampleScheduleOutcomes(root: GroupId): String =
         // Only a governed node has a write gate; a static node never answers this.
         is GateClosed -> "gate closed: ${outcome.reason}"
     }
+
+/**
+ * Repair this peer's own row after an internal group was reweighted under [heddleStatic]: the old
+ * edge into [child] is retired, the new one is active, and what this peer spent through the old
+ * one is re-homed onto the new one. Every peer runs this for itself.
+ */
+internal fun HeddleNode.sampleReconcileOwn(child: GroupId): String =
+    when (val outcome = reconcileOwn(child)) {
+        // Moved: this peer's share of the old edges now rides the live edge.
+        is ReconcileOwnOutcome.Repaired -> "moved ${outcome.credit} credit and ${outcome.spent} spent onto ${outcome.onto.value}"
+        // This peer's row is already drained. Calling again is harmless.
+        ReconcileOwnOutcome.NothingToRepair -> "nothing of mine to move"
+        // The retire, or the new edge's activation, has not reached this peer yet. Call again later.
+        ReconcileOwnOutcome.NoRetiredEdge -> "no retired edge yet"
+        ReconcileOwnOutcome.NoLiveEdge -> "no live edge yet"
+        // Nothing was written: the strand stays, and the reason says why.
+        is ReconcileOwnOutcome.Refused -> "refused: ${outcome.reason}"
+    }
