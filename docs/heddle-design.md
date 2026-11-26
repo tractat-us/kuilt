@@ -339,7 +339,7 @@ reserve maximumCost   →  local earmark against holdings(leafPath, self)
 execute
 complete(actualCost)  →  spent += actualCost on EVERY edge of the captured
                           path; earmark released; remainder back in holdings
-cancel                →  complete with actualCost = 0
+cancel                →  complete with actualCost = 0, for work that never ran
 ```
 
 `actualCost > maximumCost` is rejected as an invariant violation, never
@@ -2062,8 +2062,11 @@ from 0.0157 to 0.0113 overall and from 0.089 to 0.073 over its worst window.
 - **The two-level spill** is the same channel one level up, and is smaller, not
   gone: +0.045 / −0.029 at t7, against the clamp's +0.111 / −0.100.
 - **A cancelled job that held its slot** is charged nothing, with or without a
-  gap (+0.030 at t7). #3238 stays open until a control with no idle gap
-  separates that from wake credit.
+  gap (+0.030 at t7). That is `cancel`'s contract, not wake credit, and it is
+  settled in §7.4 (#3238). The control with no idle gap separates the two: a
+  lane that never idles and cancels every fourth job gains +0.0712, where the
+  charges alone predict 4/7 − 1/2 = +0.0714. A cancel charged its reservation
+  takes the gapped rows to exactly zero, so none of them was wake credit.
 - **A child that asks but cannot be served**, trimmed or ineligible for every
   slot, still counts in the clock's weight and slows it. Not measured.
 
@@ -2203,7 +2206,8 @@ Three properties of §7.3 carry the rest of this section.
    - **A draining path.** When an edge of a lease's path is no longer ACTIVE, the
      overrun is charged only on the ACTIVE prefix, and the edges below it are
      charged the reservation.
-   - **`cancel`** charges nothing, however long the work ran.
+   - **`cancel`** charges nothing, however long the work ran, so it is for work
+     that never ran (Settled, below).
 
    So reservation error *can* move shares. A design that keeps the delegated
    amount at the slot's `r` leaves every share exactly as slot length leaves it.
@@ -2431,6 +2435,16 @@ prototype below must show the gain first.
 
 #### Settled — don't reopen
 
+- **`cancel` is for work that never ran** (#3238). Work that held its slot
+  settles with `complete(lease, elapsed)`, so a charge is always the cost the
+  caller reported. A cancel of work that ran is a free ride its siblings pay
+  for. With no idle gap, a lane that cancels one job in four beside an equal
+  sibling gains +0.0712 of share, against 4/7 − 1/2 = +0.0714 from the charges
+  alone (`WakeCreditSlotTest`). With gaps, cancelling a job reserved at 8 and
+  one reserved at 1 differ by +0.0001 on average over 48 rigs, so the size of
+  the refund does not matter. A second verb, `cancel(lease, cost)`, was ruled
+  out: it would charge exactly what `complete` charges, since there is no
+  observed-cost estimate and no abandoned state for it to differ in.
 - I3, the subtree's own pick as an interior length: exact, but a speculative
   descent per eligible subtree and a second copy of §7.2's one-front rule
   (#3229).
