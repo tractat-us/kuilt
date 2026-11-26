@@ -94,6 +94,8 @@ send it again: a second `mint` creates more supply.
 
 Attachments move through **prepared → active → closing → retired**.
 Closing stops new delegation; retirement requires observed allowance to drain.
+A prepared attachment that nothing has crossed can skip ahead: it retires at
+once, with no closing step.
 But a local observation cannot prove that all peers have stopped writing.
 
 For governed recovery, `quiesce` asks enrolled peers to stop writing a retired
