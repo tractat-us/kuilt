@@ -1,26 +1,27 @@
 <!--
 DRAFT — GitHub release body for v0.7.7. Paste everything below the closing `-->` into the
-release, above GitHub's generated "What's Changed" list. Every `ASSUMES` comment names an
-unwritten task of #3159 whose final shape the snippet guesses; re-check each against `main`
-at the tag, then delete the comments before posting.
+release, above GitHub's generated "What's Changed" list. Refreshed 2026-11-26 against
+`origin/main` at `5faee4dc92`. Three `ASSUMES` comments remain, one per PR still open on that
+date (#3712, #3717, #3719). At the tag, check each with `gh pr view <N> --json state`: delete the
+comment if it MERGED, or delete the comment and the text it covers if it did not.
 -->
 
 ## Highlights
 
 **A device that comes back is recognised.** When a phone kills your app, or a laptop sleeps
 through a dropped link, the room now lets that device back in by itself: into the same seat
-if the host is still holding it, or straight past the host's vetting if it was away less than
-an hour. Nobody presses anything and your app writes no reconnect code.
+if the host is still holding it, or straight past the host's vetting if it was away up to an
+hour. Nobody presses anything and your app writes no reconnect code.
 
 It works because each device now keeps a key of its own. While a device is in a room, the host
 keeps handing it a signed pass: "this key may come back until this time." Coming back means
 showing the pass and proving you hold the key.
 
-**This release breaks the wire and the API, on purpose, in a patch.** Every peer in a room must
-run 0.7.7. A peer on 0.7.6 or older is turned away at the door with
-`RejectCode.ProtocolMismatch`, and a 0.7.7 peer cannot join an older host. Upgrade the hosts and
-the joiners of one deployment together. Pre-1.0, a patch is how kuilt ships; this one needs the
-care a major would.
+**This release breaks the wire and the API, on purpose, in a patch. Upgrade every peer of a room
+together.** 0.7.6 speaks admit protocol 2; 0.7.7 speaks 9 and accepts nothing else. A 0.7.6 peer is
+turned away at the door with `RejectCode.ProtocolMismatch`, and a 0.7.7 peer cannot join a 0.7.6
+host. So the hosts, servers and joiners of one deployment move to 0.7.7 in one step. Pre-1.0, a
+patch is how kuilt ships; this one needs the care a major would.
 
 **Coming back (`:kuilt-session`)**
 
@@ -28,31 +29,46 @@ There are three ways back in, and the app sees each one differently.
 
 | Away for | What happens | What your app sees |
 |---|---|---|
-| Less than the seat is held (60 s by default) | Restored to the same membership, after a healed link **or a process restart** | `MembershipEvent.Resumed`. No `Left`, no `Joined` |
-| Less than its pass lasts (1 h from last contact by default) | Let back in with no vetting | `Joined(member, returning = ReturningMark(previousId))` on the host and every bystander |
+| Less than the seat is held (60 s by default) | Restored to the same membership, after a healed link **or a process restart** | `MembershipEvent.Resumed`; bystanders hear only `Unpaused`. No `Left`, no `Joined` |
+| Up to its pass's floor (1 h after last contact under `AdmissionPolicy.open()`, sometimes up to 1.5 h) | Let back in with no vetting | `Joined(member, returning = ReturningMark(previousId))` on the host and every bystander |
 | Longer | Asked again, like a newcomer | A plain `Joined` |
 
-<!-- ASSUMES Task 2.6: `MembershipEvent.Joined(member, returning: ReturningMark? = null)` and `ReturningMark(previousId: PeerId?)`. -->
+<!-- ASSUMES: #3712 merges before the tag. Without it the middle row reads "30 to 60 min after last contact under `AdmissionPolicy.open()`", and the highlight above says "up to half an hour". -->
+
+In the last two rows the old membership is gone: the host and bystanders saw it leave with
+`PartitionExpired` when its hold ran out. A device whose room kept running through the outage
+hears `MembershipEvent.Readmitted`. Whatever your app tied to the old membership starts over.
 
 - One handshake covers joining and every return: `Hello → Challenge → Proof → Welcome/Reject`.
   The host signs its challenge, so a joiner knows the host's key is real (#3159).
-- A device that restarts with a new peer id gets its old seat back. The old membership leaves
-  with `LeaveReason.Superseded(by)`, and the new one inherits it.
-  <!-- ASSUMES Task 1.6: `LeaveReason.Superseded(by: PeerId)`. -->
-- Two tabs of one browser share one key, and each gets its own seat. **`Member.key` is not unique
-  in a roster**, so never assume one member per key.
+- A device that restarts under a new peer id while its seat is held gets that seat back. The old
+  membership leaves with `LeaveReason.Superseded(by)`, and the new one inherits it. A process still
+  running under the superseded id is told so with `RejectCode.Superseded` and ends with
+  `Left(self, Superseded(by))` instead of timing out (#3697).
+- A second live process on one device, such as a second browser tab, shares the device's key and
+  gets a seat of its own. **`Member.key` is not unique in a roster**, so never assume one member
+  per key.
 - A different device claiming a connected member's peer id is refused with
   `RejectCode.KeyConflict`. A forged or replayed proof gets `RejectCode.BadProof`.
+- A returning device that missed a departure while it was away now drops that member, with the
+  new `LeaveReason.Unobserved` (#3641).
 - Joiners can send the app's own device id with `join(…, deviceId =)`. The proof signs over it.
 
 **Who may come back (`:kuilt-session`, `:kuilt-identity`)**
 
-- Hosts now ask an `AdmissionPolicy` about newcomers, and only about newcomers. A held seat or a
-  valid pass never reaches the policy. `AdmissionPolicy.open()` lets everyone in with a one-hour pass.
+- Hosts now ask an `AdmissionPolicy` about newcomers, and only about newcomers (#3699). A held
+  seat or a valid pass never reaches the policy. `AdmissionPolicy.open()` lets everyone in.
 - The policy chooses each pass's terms. `GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer)`
   is a friend's pass: it never expires and works in any room the same host runs.
+- The host renews a pass while its device stays connected (#3701). A pass lives one and a half
+  times `GrantTerms.readmitFor` and is renewed every half of `readmitFor`, so `readmitFor` is the
+  least time a device away after its last contact can still return on it (#3712). A renewal that
+  fails to sign or send is tried again, closing in on the pass's end (#3717).
+  <!-- ASSUMES: #3712 and #3717 merge before the tag. Without #3712 a pass lives `readmitFor` and `readmitFor` is the most, not the least. Without #3717 a failed renewal waits a whole period. -->
 - `RevocationList.revoke(key, notBefore)` voids the passes a device already holds. It is **not a
   ban** and **does not remove anyone present**. Keep your own blocked set for that.
+- A pass dated more than five minutes in the host's future is refused as
+  `GrantVerdict.NotYetValid` (#3643).
 - A pass is good only with the host that issued it. After a lobby re-election, or on a different
   cluster server, a returning device is asked again.
 
@@ -63,32 +79,86 @@ Keychain on iOS (this device only), the Android Keystore, a non-extractable WebC
 wasmJs, and a file on macOS and desktop JVM. All of these shipped in 0.7.5 and 0.7.6; 0.7.7 is
 where rooms start using them.
 
+- A store that checks its key at launch no longer replaces the key when the crypto provider
+  fails for a moment. Only a check that ran and refused counts as a damaged key (#3719).
+  <!-- ASSUMES: #3719 merges before the tag. -->
+- `DeviceKey.sign` is now `@IdentityInternalApi`. To sign your app's own bytes, use
+  `DeviceKey.signApp(context, message)` and check with `DidKey.verifyApp(context, message,
+  signature)`. Those signatures can never be passed off as one of kuilt's own statements (#3613).
+
+## Also in this release
+
+**Fair-share scheduling (`:kuilt-heddle-core`, `:kuilt-heddle`).** An admin screen can now edit a
+scheduler's groups without writing any tree code. Read the live tree as a `TopologyDocument`,
+edit it by path (`addChild`, `remove`, `move`, `rename`, `setWeight`, `setMaxConcurrent`,
+`setTemplate`), list what changed with `changesTo` (each `TopologyChange` says, through
+`saveEffect`, whether a group keeps its history), preview with `previewApply`, and `apply` only
+if nobody changed the tree since you loaded it. `ShareLine` gives every group's share of the pool
+and how far it stands from it (`lag`). Templates can nest attached children. The heddle cookbook
+has a minimal editor, end to end. Smaller fixes: a snapshot whose books do not balance decodes as
+`Corrupt`; a waker clamped after a restart keeps what its open leases reserve; `retire` takes an
+unused prepared edge; and `HeddleNode.reconcileOwn` lets a static peer repair its own row after a
+reweight (#3652).
+
+**Replication (`:kuilt-quilter`).** Anti-entropy ships much less when peers are idle or slightly
+behind. At most one whole state is in flight per replica and per peer link, a stale digest is told
+apart from a behind one (the new `QuiltMessage.VectorDigest`), and a behind state draws a digest
+or a `QuiltMessage.StateReply` instead of another whole state. An older peer drops the two new
+messages and still converges.
+
+**Liveness and membership.** Heartbeat frames are told apart by a byte prefix instead of a full
+decode. Across `:kuilt-session`, `:kuilt-game`, `:kuilt-gossip`, `:kuilt-warp` and
+`:kuilt-heddle`, an event from a liveness detector counts only while that detector still watches
+the peer, so a stale detector can no longer evict, release or reroute anyone. Several roster
+races in `:kuilt-session` are closed by sending each fan-out from the section that decided it.
+
+**Games and warp.** An eviction keeps spectators closed, admission after a replacement closes
+only once the roster is full, and a queued vacate counts only while the voter is still vacating
+(`:kuilt-game`). An older ring rebuild never overwrites a newer one (`:kuilt-warp`).
+
 ## Breaking changes
 
-- **Admit protocol.** Every admit message changed. Old and new peers cannot share a room.
-  <!-- ASSUMES Task 2.6: the protocol line ends at 9, with MIN_SUPPORTED = MAX_SUPPORTED = CURRENT. -->
+- **Admit protocol.** 2 in 0.7.6, 9 in 0.7.7, with `MIN_SUPPORTED = MAX_SUPPORTED = CURRENT = 9`.
+  Old and new peers cannot share a room.
 - **`DeviceKeyStore` is required** on `SeamRoomFactory`, `SeamRoomFactory.systemClock`,
   `LoomRoomHost`, `NwRoomHost`, `MultipeerRoomHost`, `KtorRoomHost` and `clusterClient`.
-- **Hosts take a `HostAdmission(policy, revocations)`**: `RoomFactory.host`, `KtorRoomHost`,
-  `LoomRoomHost` and friends, and the election lobby.
-  <!-- ASSUMES Task 2.4: the parameter is named `admission` on every host entry point. -->
+- **Hosts take a required `admission: HostAdmission(policy, revocations)`**:
+  `RoomFactory.host`, `ElectionLobby.start`, and the `LoomRoomHost`, `NwRoomHost`,
+  `MultipeerRoomHost` and `KtorRoomHost` constructors.
 - **`adopt` takes an `AdoptRole`**, `AdoptRole.Host(admission, roomId)` or `AdoptRole.Joiner`, in
-  place of `SessionRole` plus `roomId`. <!-- ASSUMES Task 2.4. -->
+  place of `SessionRole` plus `roomId`.
 - **`Member` gains a required `key: DidKey`.** Code that builds a `Member`, such as a test fake, must
   pass one. `fakeKeyStore(index)` in `:kuilt-identity-test` gives you fixed test keys.
-- **`ResumeSecret` and the `Resume` frame are gone.** `ResumeToken` loses `secret`. A token your
-  app serialised under 0.7.6 no longer decodes. Delete it rather than migrate it.
-  <!-- ASSUMES Task 1.8: `ResumeToken` keeps peerId, roomId and issuedAt; whether `Room.resume` and `Room.resumeToken` survive is decided there. -->
+  `MemberIdentity.dedupKey` is gone; key on `Member.key`.
+- **Resume is retired.** `Room.resume`, `Room.resumeToken`, `ResumeToken`, `ResumeSecret`, the
+  `Resume`/`ResumeAck` frames and `ServerClusterReconnect`'s token calls are removed. A token your
+  app stored is dead data: delete it. A `Room` implementation, such as a test fake, drops those
+  overrides; `:kuilt-session-test`'s `FakeRoom` already has.
+- **Events.** `MembershipEvent.Joined` gains `returning`, and `MembershipEvent.Readmitted`,
+  `LeaveReason.Superseded(by)` and `LeaveReason.Unobserved` are new. An exhaustive `when` over
+  either sealed type stops compiling until it handles them, which is the point.
 - **Reject codes.** `ResumeTokenInvalid`, `ResumeWindowNotYetOpen` and `ResumeWindowExpired` are
-  removed. `BadProof`, `KeyConflict` and `AdmissionPolicyFailed` are new. A `Reject` now carries
-  `retryable` on the wire, so your own code arrives as `RejectCode.Unknown(id, retryable)` with the
-  flag you set. <!-- ASSUMES Task 2.5: Unknown gains `retryable`. -->
+  removed. `BadProof`, `KeyConflict` and `Superseded` (terminal) and `HostFailed` and
+  `AdmissionPolicyFailed` (retryable) are new. A `Reject` now carries `retryable` on the wire, so
+  your own code arrives as `RejectCode.Unknown(id, retryable)` with the flag you set.
 - **`RoomFactory.join` and `ElectionLobby.start`/`awaitRoom` gain `deviceId`.** Callers are
   source-compatible; an implementer of either interface must add the parameter.
 - **`JoinerReconnectController.tryResume` takes a `ProvenResume`**, which only the room can build,
-  after it has checked the key. A custom hold policy changes its signature.
-  <!-- ASSUMES Task 1.5: `tryResume(resume: ProvenResume, at: Long)`. -->
+  after it has checked the key. A custom hold policy changes its signature. `ResumeResult` keeps
+  only the verdicts a hold policy returns; the joiner-side outcomes are internal.
 - A held seat now survives a **process restart** too, which changes what a custom hold policy sees.
+- **`:kuilt-identity`.** `DeviceKey.sign` needs `@OptIn(IdentityInternalApi::class)`, and a
+  `DeviceKey` written outside kuilt marks its `sign` override `@IdentityInternalApi`.
+  `GrantVerdict.NotYetValid` is new.
+- **`:kuilt-conformance`.** `RoomConformanceSuite.newResumeHarness` is replaced by
+  `newReturnHarness(scope): ReturnFixture`, either `Supported(ReturnHarness)` or
+  `Unsupported(trackingUrl)`. A `ReturnDevice` must run every `launch` and `launchBeside` on the
+  device's **one** key store, as an app's launches share its platform store. A harness that gives
+  each launch its own store reds `returnInsideGrantNoVetting`, `expiredGrantIsVetted` and
+  `revokedSubjectIsVetted`, on the policy being asked (#3708). `DeviceKeyStoreConformanceSuite`
+  gains two rows on how a store keeps passes.
+- **`:kuilt-raft-test`.** `MultiNodeRaftSim`'s `nodeFactory` takes one `NodeStart` and returns
+  the `RaftNode`. Seed a custom node from `start.random`, so a restarted node draws a fresh seed.
 
 ## Migrating from 0.7.6
 
@@ -127,7 +197,6 @@ val admission = HostAdmission(
 )
 val room = factory.host(Pattern("board"), memberName = "Iain", admission = admission)
 ```
-<!-- ASSUMES Task 2.4: `host(pattern, memberName, roomId, admission)` with a named `admission`. -->
 
 To vet newcomers, write the policy yourself. Decide on `request.key`, which the joiner proved, and
 never on `request.displayName`, which is its say-so:
@@ -155,7 +224,6 @@ when (room.resume(token)) { /* … */ }
 
 // 0.7.7: nothing to write. Watch the roster instead.
 ```
-<!-- ASSUMES Tasks 1.7–1.8: the joiner re-Hellos on its own; if `Room.resume` survives, it is no longer needed by apps. -->
 
 **4. Recognise people by key, not by peer id.** A returning device may have a new peer id.
 
@@ -163,6 +231,7 @@ when (room.resume(token)) { /* … */ }
 room.events.collect { event ->
     when (event) {
         is MembershipEvent.Resumed -> Unit // same seat, nothing to redraw
+        is MembershipEvent.Readmitted -> resetMyOwnSeat() // this device is back, as a new membership
         is MembershipEvent.Joined ->
             if (event.returning != null) showBack(event.member.key) else showNew(event.member.key)
         is MembershipEvent.Left ->
@@ -172,7 +241,6 @@ room.events.collect { event ->
     }
 }
 ```
-<!-- ASSUMES Tasks 1.6 and 2.6: `Joined.returning`, `LeaveReason.Superseded`. -->
 
 On a joiner's roster, only the host's key is verified by the joiner itself. Every other member's
 key is the host's word.
