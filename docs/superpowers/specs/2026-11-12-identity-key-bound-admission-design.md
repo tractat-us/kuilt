@@ -31,7 +31,7 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
      the process restarted, and nobody's screen changes. A restarted process under a new peer id takes
      the seat over: members present see `Left(old, Superseded(by = new))` then `Joined(new)`, with
      identity and key kept (the slice-1 gate).
-   - *Away less than the re-admission period* (default **1 hour**, per room; the window after last contact is at least half of it, per Amendment N and #3709):
+   - *Away less than the re-admission period* (default **1 hour**, per room; the window after last contact is at least three quarters of it, per Amendment O and #3709):
      re-admitted with no vetting, announced to everyone as the same device returning.
    - *Longer*: ordinary admission, as if new.
 2. **The grant's lifetime is the host's choice, per member (Iain).** A stranger gets the room's
@@ -409,9 +409,10 @@ The check must re-read the seat under the room lock **at Proof time**, not at Ch
 
 ### Grant refresh
 
-A grant is issued in the Welcome and **re-issued every `readmitFor / 2`** on the member's direct
-lane while it stays connected, so a pass held at last contact has between `readmitFor / 2` and
-`readmitFor` left (Amendment N; #3709 decides whether to narrow it). The joiner keeps the
+A grant is issued in the Welcome and **re-issued every `readmitFor / 4`** on the member's direct
+lane while it stays connected, so a pass held at last contact has between three quarters of
+`readmitFor` and all of it left, provided the last renewal reached the device (Amendment O, #3709;
+a lost renewal is not resent, #3711). The joiner keeps the
 newest grant per issuer **and scope** in its `DeviceKeyStore` (Decided 21).
 
 ### The host's decision point

@@ -405,6 +405,15 @@ The slice-2 spec-conformance review found no code bug in 2.1–2.6. Its rulings:
 - **The test gaps in merged slice-2 code go into #3708's fix round:** row 6's Returning arm, Amendment K's refusing-policy and heal-during-vetting arms, Decided 14's takeover inheritance, and Amendment L's renewal-cannot-displace half. Each comes with a mutation that turns it red.
 - **Informational:** #3697 changed the v7 wire without bumping `ProtocolVersion`, against the per-PR rule. It stopped mattering at 2.5's v8 and needs no action.
 
+## Amendment O — the readmit window, and the harness hooks (Iain, 2026-11-25)
+
+- **#3709 is ruled: the host renews a pass every `readmitFor / 4`** (option 2). A pass held at last contact then has between three quarters of `readmitFor` and all of it left, provided the last renewal reached the device: 45 to 60 minutes under `AdmissionPolicy.open()`. Iain: "the difference between 45 and 60 minutes isn't going to be upsetting or noticeable for folks, and we can tune it."
+  - The divisor is one named internal constant, not a public setting: a pass does not carry its renewal period, so a per-room knob could not follow a device that returns on its pass.
+  - The docs state the floor plainly. Longer passes (option 3) are not taken.
+  - Not a wire change, so no `ProtocolVersion` bump.
+  - A renewal lost on a dying link is still never resent, which lowers the floor. That is #3711 (needs-design).
+- **`ReturnHarness` gets public hooks to plant a pass and to launch under a superseded id** (#3710, a future improvement). This reverses Amendment N's "waits until a non-reference harness needs it": the three foreign-pass refusal rows, their control arm and the Decided 32 row move into `RoomConformanceSuite` behind an optional two-armed fixture. Until #3710 lands they stay where Amendment N put them.
+
 ## Global Constraints
 
 - **Each task is one PR and one sub-issue of #3159.**
