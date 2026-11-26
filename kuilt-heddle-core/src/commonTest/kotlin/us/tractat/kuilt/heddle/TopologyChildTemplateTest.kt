@@ -194,7 +194,6 @@ class TopologyChildTemplateTest {
             {
                 assertEquals(
                     listOf(
-                        Close(e("root/tenants/!x@3:1#2"), runtime("x")),
                         Retire(e("root/tenants/!x@3:1#2"), runtime("x")),
                         Retire(e("root/tenants/!x@2:1#1"), runtime("x")),
                     ),
@@ -210,14 +209,14 @@ class TopologyChildTemplateTest {
     }
 
     /**
-     * The window the one-unit contract on [TopologyStep] covers. A reweight whose prepare alone
-     * landed leaves the child ACTIVE beside a PREPARED replacement; a detach then closes the
-     * prepared edge before retiring it, and every prefix in between holds two live inbound edges.
-     * The whole list leaves none, and each prefix re-detaches to exactly the rest — which rests on
-     * a drained retire sorting first even once the abandoned edge is no longer PREPARED.
+     * The window #3198 closed. A reweight whose prepare alone landed leaves the child ACTIVE beside a
+     * PREPARED replacement. A detach used to close the prepared edge before retiring it, and every
+     * prefix in between held two live inbound edges. Now the prepared edge is retired straight from
+     * PREPARED, so no prefix of the list, applied one step at a time, holds two. Each prefix still
+     * re-detaches to exactly the rest.
      */
     @Test
-    fun detachingBesideAPreparedReplacementIsOneUnit() {
+    fun detachingBesideAPreparedReplacementNeverHoldsTwoLiveEdges() {
         val ledger = attached(bootFrom(pool()), "x")
         val half = applyClean(Topology.diff(pool(marker = 3), ledger, generation = 0).take(1), ledger)
         val p = e("root/tenants/!x@3:1#2")
@@ -228,14 +227,15 @@ class TopologyChildTemplateTest {
         assertAll(
             { assertEquals(Lifecycle.PREPARED, half.lifecycle(p), "the rig left the replacement prepared") },
             { assertEquals(Lifecycle.ACTIVE, half.lifecycle(a), "beside the active edge") },
-            { assertEquals(listOf(Close(p, runtime("x")), Close(a, runtime("x")), Retire(a, runtime("x")), Retire(p, runtime("x"))), detach) },
+            { assertEquals(listOf(Close(a, runtime("x")), Retire(a, runtime("x")), Retire(p, runtime("x"))), detach) },
             { assertEquals(detach, removal, "a template going away takes the same steps") },
-            *(1..2).map { cut ->
-                { assertEquals(listOf(LedgerConflict.DualActiveInbound(runtime("x"))), dualLive(applyClean(detach.take(cut), half)), "cut $cut") }
+            *(0..detach.size).map { cut ->
+                { assertEquals(emptyList(), dualLive(applyClean(detach.take(cut), half)), "cut $cut") }
             }.toTypedArray(),
             *(0..detach.size).map { cut ->
                 { assertEquals(detach.drop(cut), pool(marker = 3).detach(tenants, "x", applyClean(detach.take(cut), half)), "re-detach after cut $cut") }
             }.toTypedArray(),
+            { assertEquals(Lifecycle.RETIRED, applyClean(detach, half).lifecycle(p), "the prepared edge is retired") },
             { assertEquals(emptyList(), applyClean(detach, half).validate()) },
             { assertEquals(emptyList(), applyClean(removal, half).validate()) },
         )
