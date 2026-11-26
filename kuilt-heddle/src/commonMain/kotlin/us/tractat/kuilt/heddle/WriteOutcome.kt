@@ -140,11 +140,46 @@ internal fun AllocationOutcome.toScheduleOutcome(): ScheduleOutcome = when (this
     is AllocationOutcome.WeightBudget -> ScheduleOutcome.WeightBudget(parent)
 }
 
-/** What [HeddleNode.reconcileOwn] did. */
+/**
+ * What [HeddleNode.reconcileOwn] did: it moved this peer's own share of a retired edge's accounts,
+ * found none of its own left to move, or could not move yet.
+ *
+ * [NoRetiredEdge] and [NoLiveEdge] clear by themselves as the reweight's steps reach this peer, so
+ * call again later. [Refused] does not, and the strand stays as it is.
+ */
 public sealed interface ReconcileOwnOutcome {
-    public data class Repaired(public val onto: AttachmentId, public val from: List<AttachmentId>) : ReconcileOwnOutcome
+
+    /**
+     * This peer's share moved from the retired edges [from] onto the live edge [onto]. [credit] is
+     * what the old edges carried for this peer, issued less returned. [spent] is the service already
+     * charged through them, which moves with it.
+     */
+    public data class Repaired(
+        public val onto: AttachmentId,
+        public val from: List<AttachmentId>,
+        public val credit: Long,
+        public val spent: Long,
+    ) : ReconcileOwnOutcome
+
+    /**
+     * This peer's rows on the retired edges are already drained: it repaired before, or it never
+     * wrote there. Other peers' rows may still be stranded, and each of them repairs its own.
+     */
     public data object NothingToRepair : ReconcileOwnOutcome
+
+    /** This peer sees no retired edge into the child: the retire has not reached it yet, or there is none. */
     public data object NoRetiredEdge : ReconcileOwnOutcome
+
+    /**
+     * The child has a retired inbound edge but not exactly one live one to move onto: the new edge
+     * is not active on this peer's view yet, or two are.
+     */
     public data object NoLiveEdge : ReconcileOwnOutcome
+
+    /**
+     * The move was refused, and [reason] says why. Nothing was written and the strand stays. The
+     * retired edges hang off another parent, or this peer's own rows cannot cover what was charged
+     * through them, as when it spent credit another peer handed it.
+     */
     public data class Refused(public val reason: String) : ReconcileOwnOutcome
 }

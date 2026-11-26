@@ -274,49 +274,79 @@ public class HeddleNode internal constructor(
     /** Retire a drained [edge] ([EntitlementLedger.retire]); returns whether it applied. */
     public fun retire(edge: AttachmentId): Boolean = applyIfPresent { it.retire(edge) }
 
+    /**
+     * Re-home **this peer's own** share of what [child]'s retired inbound edges carried onto its live
+     * inbound edge, so a reweight of an internal group does not leave [child]'s holdings negative
+     * (#3649). Each peer calls it for itself, as it calls [schedule]. Once every peer that spent
+     * through the old edge has, the ledger validates clean.
+     *
+     * **Why every peer can call it on its own: one writer per row.** Every counter slot of the
+     * ledger is keyed by the replica that writes it, and on a static node that replica is its only
+     * writer. The move reads only `self`'s base slots on the retired edges and writes only
+     * `self`-keyed slots: it drains `self`'s slots on the old edges and credits `self`'s relocation
+     * slots on the live one. Two peers' moves touch disjoint slots and join without conflict, in any
+     * order and across a partition, and no peer derives another's row from a gossip view of it.
+     * `HeddleNodeReconcileOwnPropertyTest` pins that on three peers.
+     *
+     * **Mark, then read, under the node lock.** The retired edges are first marked locally
+     * unwritable, the mark the governed barrier uses, so a reservation captured across one and
+     * completed afterwards charges the live edge instead. Then `self`'s finals are read and the move
+     * is published, in the same locked section, so no completion lands between the mark and the
+     * read. A restart forgets the marks, and it forgets every reservation with them, so nothing left
+     * after it can charge a retired edge.
+     *
+     * Only edges from the live edge's parent move, because a move conserves only within one parent.
+     * Calling it again is harmless and answers [ReconcileOwnOutcome.NothingToRepair].
+     *
+     * [GovernedHeddleNode] does not expose this: there every relocation goes through the control
+     * log, with [GovernedHeddleNode.reconcile].
+     *
+     * @sample us.tractat.kuilt.heddle.sampleReconcileOwn
+     */
     public fun reconcileOwn(child: GroupId): ReconcileOwnOutcome = lock.withLock {
-        // A buffered charge may land on the live edge now; flush before the finals are read.
+        // A buffered charge may have a live edge to land on now: flush it so the finals cover it.
         flushBufferedCharges()
         var outcome: ReconcileOwnOutcome = ReconcileOwnOutcome.NothingToRepair
         ledgerQuilter.mutateOrSkip { s ->
-            val live = s.liveInboundEdges(child).singleOrNull()
-            val parent = live?.let { s.record(it)?.parent }
-            val strand = s.retiredInboundEdges(child).filter { parent != null && s.record(it)?.parent == parent }.sorted()
-            when {
-                s.retiredInboundEdges(child).isEmpty() -> {
-                    outcome = ReconcileOwnOutcome.NoRetiredEdge
-                    null
-                }
-                live == null || parent == null -> {
-                    outcome = ReconcileOwnOutcome.NoLiveEdge
-                    null
-                }
-                strand.isEmpty() -> {
-                    outcome = ReconcileOwnOutcome.NoRetiredEdge
-                    null
-                }
-                else -> {
-                    // Mark, then read, in one locked section: a completion after this re-homes off the strand.
-                    quiescedEdges += strand
-                    val finals = strand.associateWith { edge -> mapOf(self to s.baseFinalsOn(edge, self)) }
-                    when (val move = s.relocationPatch(live, finals)) {
-                        is Relocation.Moved -> {
-                            outcome = ReconcileOwnOutcome.Repaired(onto = live, from = strand)
-                            Patch(move.patch)
-                        }
-                        Relocation.Nothing -> {
-                            outcome = ReconcileOwnOutcome.NothingToRepair
-                            null
-                        }
-                        is Relocation.Refused -> {
-                            outcome = ReconcileOwnOutcome.Refused(move.reason)
-                            null
-                        }
-                    }
-                }
-            }
+            val (answer, patch) = ownRelocation(s, child)
+            outcome = answer
+            patch
         }
         outcome
+    }
+
+    /**
+     * [reconcileOwn]'s decision on [s]: the answer, and the patch to publish with it, if any. Marks
+     * the strand quiesced before it reads the finals there. Always called under [lock].
+     */
+    private fun ownRelocation(s: EntitlementLedger, child: GroupId): Pair<ReconcileOwnOutcome, Patch<EntitlementLedger>?> {
+        val retired = s.retiredInboundEdges(child)
+        if (retired.isEmpty()) return ReconcileOwnOutcome.NoRetiredEdge to null
+        val live = s.liveInboundEdges(child).singleOrNull() ?: return ReconcileOwnOutcome.NoLiveEdge to null
+        val parent = s.record(live)?.parent ?: return ReconcileOwnOutcome.NoLiveEdge to null
+        val strand = retired.filter { s.record(it)?.parent == parent }.sorted()
+        if (strand.isEmpty()) {
+            return ReconcileOwnOutcome.Refused(
+                "${child.value}'s retired inbound edges ${retired.map { it.value }} hang off another parent than " +
+                    "${parent.value}, and a move conserves only within one parent",
+            ) to null
+        }
+        quiescedEdges += strand
+        val finals = strand.associateWith { edge -> mapOf(self to s.baseFinalsOn(edge, self)) }
+        return when (val move = s.relocationPatch(live, finals)) {
+            is Relocation.Moved -> {
+                val moved = move.patch
+                fun delta(family: CounterFamily): Long = moved.storedSlot(family, live, self) - s.storedSlot(family, live, self)
+                ReconcileOwnOutcome.Repaired(
+                    onto = live,
+                    from = strand,
+                    credit = delta(CounterFamily.ISSUED_RELOC_IN),
+                    spent = delta(CounterFamily.LEAF_RELOC_IN) + delta(CounterFamily.ROLLUP_RELOC_IN),
+                ) to Patch(moved)
+            }
+            Relocation.Nothing -> ReconcileOwnOutcome.NothingToRepair to null
+            is Relocation.Refused -> ReconcileOwnOutcome.Refused(move.reason) to null
+        }
     }
 
     /**
