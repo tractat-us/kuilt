@@ -483,7 +483,7 @@ The host keeps, for each member, its key. On a verified Proof:
 | same | same | held (partitioned or still connected) | **Restored**: the same membership (the `Welcome` carries its `membership` id). `MembershipEvent.Resumed` only if the seat was `Partitioned`; a still-connected seat's old link is superseded silently (plan Amendment E) |
 | new | same | held, **partitioned** | **Restored under the new id**: the old member leaves with a dedicated `LeaveReason` (superseded), the new one inherits the seat's identity and key under a fresh membership id (plan Amendment E); one event pair, ordered through `fanOutToOtherMembers`, for every member present for it. A joiner that was away hears the successor in its admission burst, and its roster rebuild drops the old id later (Amendment G). With several partitioned seats, the most recently connected (Decided 30) |
 | new | same | held, all **connected** | **Additional seat**: admitted as a new member under the same key; no seat is superseded (Decided 30). A joiner presenting the host's own key is decided against the joiner seats that key holds, never the host's: with none it falls to the rows below, and a later tab gets an additional seat. The TCK row is #3656 |
-| any | same | gone, grant `Valid` | **Returning**: admitted without calling vetting; the roster Welcome carries a `returning` mark |
+| any | same | gone, grant `Valid` (presented, or the last pass this host signed that key, per proposed Decided 34) | **Returning**: admitted without calling vetting; the roster Welcome carries a `returning` mark |
 | same | **different** | connected | **Rejected**, terminal — a different device claiming a connected member's id (Decided 18) |
 | same | **different** | partitioned | old seat released; the key is decided again without it: **Returning** with a valid grant, else **ordinary admission** as a new member (Decided 18, 23) |
 | any | — | none, no valid grant | ordinary admission through `AdmissionPolicy` |
@@ -505,6 +505,16 @@ pass held at last contact has between `readmitFor` and `1.5 × readmitFor` left,
 renewal reached the device (Amendment O, #3709). A renewal that fails to sign or send is retried,
 with a backoff that tightens near the end of the device's last pass (#3711). The joiner keeps the
 newest grant per issuer **and scope** in its `DeviceKeyStore` (Decided 21).
+
+*Proposed (Decided 34, #3727):* delivery stops mattering to the host that issued the pass. A renewal
+lost when the link dies does not lower the floor: nothing after it arrived, so the pass before it
+still has more than `readmitFor` left at the device's last contact. The floor dips only when a frame
+is lost while later ones still arrive. For that case the host lets a device whose seat is gone back
+in on the last pass it *signed* that key, kept in its departed-member record and checked by
+`GrantTrust` like a presented one, whether or not the pass ever reached the device. No ack is sent,
+nothing changes on the wire, and `ProtocolVersion` stays 9. What is left is a host restart, or a
+record pushed out by 256 later departures: after either, the device's own pass is all there is, and
+the proviso above applies again.
 
 ### The host's decision point
 
@@ -557,7 +567,10 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
 - `join`/`adopt` gain a `deviceId` parameter; today nothing sends one.
 - The host forgets a departed member's key and previous peer id once the last pass it *issued* that
   membership expires (from slice 2), keeping at most 256 such records, oldest out first. A takeover
-  writes none (Amendment M). In slice 1 a departed member is forgotten at once, except a superseded id, which
+  writes none (Amendment M). *Proposed (Decided 34):* the record also keeps that pass, the signed
+  `Grant`, and with several tabs whichever pass runs out later, so a device whose last renewal never
+  arrived returns on it. The record still names the id the latest departure held. The admit-proof's
+  channel-binding field stays reserved and empty (proposed Decided 33). In slice 1 a departed member is forgotten at once, except a superseded id, which
   `SupersededIds` keeps with its key (at most 64) while its successor is seated.
 
 ### Configuration and call sites
@@ -609,7 +622,11 @@ Slices 1 and 2 get a spec-conformance review against this document as well as a 
 - **#2387** — mesh dedup sits below the session Hello; its fix is a proof in `MeshHello` behind a
   verifier interface `:kuilt-core` defines and `:kuilt-identity` implements. Its own spec.
 - **`RoomAuthorizer` seeing the key** — same layering, same follow-on.
-- A `Pending` frame for slow vetting; channel binding; personas and delegation.
+- A `Pending` frame for slow vetting; personas and delegation.
+- **Channel binding** (proposed Decided 33, #3696). It closes the active-relay row only, on
+  WebSocket to a TLS-terminating host from a non-browser client, Nearby and WebRTC. It is a
+  `ProtocolVersion` step whenever it lands. **Reopen trigger:** a consumer whose threat model includes
+  an active relay on a member's own link, on one of those fabrics.
 
 ## Left to the builder
 
