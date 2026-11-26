@@ -12,6 +12,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 import kotlin.time.Instant
 
 /**
@@ -170,6 +171,50 @@ class HeddleNodeRestartCreditTest {
             { assertEquals(true, cells.values.all { it.keptSawA }, "the rig: the kept node has some") },
             { assertEquals(listOf(10, 6, 6, 6), cells.values.map { it.kept }, "the kept column\n${table(cells)}") },
             { assertEquals(listOf(10, 6, 6, 6), cells.values.map { it.dropped }, "the dropped column: level with the kept one, nothing forgiven\n${table(cells)}") },
+        )
+    }
+
+    /** The node once `a`, still asking, has been granted [held] while `b` asked nothing. */
+    private suspend fun TestScope.aRanOnWhileBIdled(held: Long): HeddleNode {
+        val node = staticCluster(root, peers = 1, mint = mapOf(0 to MINT), topology = topology, quantum = QUANTUM).peers.single().node
+        repeat(WARM_UP) { node.job() }
+        // b stops asking; a is granted `held` and keeps asking for more.
+        node.advertise(toP, Demand(targetOutstanding = node.outstanding(toP) + held, maximumUsefulGrant = held))
+        assertEquals(ScheduleOutcome.Delegated(1), node.schedule(root), "the root tops p up by $held")
+        node.advertise(toA, Demand(targetOutstanding = node.outstanding(toA) + 2 * held, maximumUsefulGrant = held))
+        node.advertise(toB, Demand.NONE)
+        assertEquals(ScheduleOutcome.Delegated(1), node.schedule(p), "a's grant of $held, b idle")
+        return node
+    }
+
+    /**
+     * The other history of the same ledger (#3721, ruling 3): `a` is the front, holding 8 it has
+     * not spent, and `b` idled while it was granted, so `b`'s lag is one it should forfeit. Kept,
+     * the node saw `b` leave and moves it by its parent's clock, level with `a`: 10 of 20. Dropped,
+     * the new incarnation meets both for the first time, clamps `a` 8 past itself and `b` to the
+     * front, and `b` keeps the 8 as lag: `a` takes 6.
+     *
+     * No clamp gets this row and the held-8 rows of [aRestartedNodeKeepsCountingTheGrantsAWakerHolds]
+     * both right, since the restarted node cannot tell them apart; this one pins what the clamp
+     * gives up, and that it is bounded. `b`'s 8 picks ahead are a gap of 8, every pick after them
+     * alternating, so `2 · (kept − dropped)` is the gap, and it is at most `a`'s outstanding.
+     */
+    @Test
+    fun aRunningFrontHoldingGrantsLeavesAnIdleSiblingAtMostThatLag() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val row = Row("running front holds 8, b idle", held = 8L, settle = Settle.NOTHING, cost = 0L)
+        val node = aRanOnWhileBIdled(row.held)
+        val outstanding = node.outstanding(toA)
+        val fresh = restarted(node)
+        val wasEmpty = fresh.allocatorMemoryForTest == AllocatorMemory.EMPTY
+        val dropped = fresh.aPicks(row)
+        val kept = node.aPicks(row)
+        assertAll(
+            { assertEquals(row.held, outstanding, "the rig: a holds its grant across the restart") },
+            { assertTrue(wasEmpty, "the rig: the restarted node has no wake memory") },
+            { assertEquals(10, kept, "kept: b comes back by its parent's clock, level with a") },
+            { assertEquals(6, dropped, "dropped: b is clamped to the front a is clamped past, and keeps the gap") },
+            { assertTrue(kept != dropped, "the two histories read apart: kept $kept, dropped $dropped") },
+            { assertTrue(2L * (kept - dropped) <= outstanding, "the lag b keeps, ${2 * (kept - dropped)}, is at most a's outstanding, $outstanding") },
         )
     }
 
