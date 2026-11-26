@@ -196,8 +196,8 @@ the one web's overrun owed it, and then the three-to-one pattern resumes.
   Reserving four times its cost, it lost about 0.01, and 0.034 at most. Most
   callers send `defaultReservation`, so its size picks the side: small favours
   long jobs, large penalises them. This is the bound
-  [#3239](https://github.com/tractat-us/kuilt/issues/3239) accepted, and a test
-  pins it.
+  [#3239](https://github.com/tractat-us/kuilt/issues/3239) accepted, and a
+  benchmark measures it.
 - **A cancel, and a sibling's refund across a quiet spell.** A lane that goes
   quiet with one of its own leases open comes back by the clock, which does not
   read the lane's own `ev`. So when that lease completes under its estimate, the
@@ -235,7 +235,9 @@ little below a typical job, never the longest one: a build that runs past its es
 corrected by `extend` or by its overrun, and hands nothing back. Pass a `reservation` per
 `acquire` when the lane's history gives a better guess. Raising `sleeperCredit` does not
 help: it grants a clamped waker idle credit on purpose. The estimate numbers come from
-`ReservationLeanTest`, which pins them on every target.
+`ReservationLeanBenchmark`, an ensemble of about 100 setups that runs on demand
+rather than in every build. `ReservationLeanTest` checks, on every target, that
+ten of those setups run exactly as measured.
 
 ## How fast, how fair
 

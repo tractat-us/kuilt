@@ -40,8 +40,9 @@ import kotlin.test.assertTrue
  * arm, 0.0844.
  *
  * Each arm also pins a fingerprint, a hash of every rig's integer slot times in ensemble order, the
- * honest arms included, since a rig moving by 0.04 moves its ensemble's mean by under 0.001. The
- * values were measured on the JVM and macosArm64 alike.
+ * honest arms included, since a rig moving by 0.04 moves its ensemble's mean by under 0.001. They
+ * were pinned on the JVM. The means and extremes matched macosArm64 to four places; the
+ * fingerprints have not yet been run there.
  */
 class ReservationLeanBenchmark {
 
@@ -104,8 +105,9 @@ class ReservationLeanBenchmark {
      *
      * It does not isolate the refund that lands in the sibling's gap. With `complete`'s refund
      * removed, the unreturned reservation stays on `g`'s path and still costs `a2` through `g`, and
-     * the clearance reads 0.0146: about two thirds of what this sees is the over-reservation, a
-     * third the refund. [CLEARANCE] sits between the two, so that mutation still reds it.
+     * the clearance against the quarter arm reads 0.0146: about two thirds of what this sees is the
+     * over-reservation, a third the refund. [CLEARANCE] sits between the two, so that mutation reds
+     * the quarter row (the extend row, at 0.0207, stays green).
      */
     @Test
     fun overReservingTheLastJobCostsTheSiblingMoreThanNeverOverReserving() {
@@ -132,7 +134,7 @@ class ReservationLeanBenchmark {
     )
 
     private fun fingerprintIs(label: String, pinned: Long, actual: Long): () -> Unit =
-        { assertEquals(pinned, actual, "$label: the hash of every rig's slot times, pinned on JVM and macosArm64") }
+        { assertEquals(pinned, actual, "$label: the hash of every rig's slot times, pinned on the JVM") }
 
     private fun pin(arm: OneLevelArm, row: Row, fingerprint: Long) =
         assertAll(*(checks(arm.lane, row) + fingerprintIs(row.label, fingerprint, arm.fingerprint)).toTypedArray())

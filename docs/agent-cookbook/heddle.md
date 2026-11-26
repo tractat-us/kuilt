@@ -1493,8 +1493,11 @@ denominators share no factor are refused below it too.
   default, which overruns and never extends, is in that regime. So reserve at or below the
   cost: aim `defaultReservation` at or a little below a typical job, never the longest, pass a
   per-lease `reservation` when history gives a better one, and `extend` a lease that reaches what
-  it holds. Accepted and pinned on ensembles of rigs by `ReservationLeanTest`
-  ([#3239](https://github.com/tractat-us/kuilt/issues/3239)).
+  it holds. Accepted ([#3239](https://github.com/tractat-us/kuilt/issues/3239)):
+  `ReservationLeanTest` pins ten rigs' slot times exactly on every target, and the means and
+  worst rigs above are an ensemble benchmark, run on demand only
+  ([#3724](https://github.com/tractat-us/kuilt/issues/3724)) with
+  `./gradlew :kuilt-heddle-core:jvmTest -Pkuilt.benchmark.tests=true --tests '*ReservationLeanBenchmark*'`.
 - **A cancel is charged nothing, and a sibling's refund leaks across a gap.** A lane that cancels
   the job ending each burst gains share (+0.015 to +0.044 on the slot probe). And a *sibling's*
   reservation counts in the net-service clock at the weight of everyone asking, while its refund

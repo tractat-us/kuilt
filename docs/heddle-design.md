@@ -2422,8 +2422,9 @@ prototype below must show the gain first.
 - A wrong estimate is accepted and pinned, not corrected. The contract: "An open
   lease counts at its reservation. A wrong estimate reorders picks and never
   changes a charge. Reserve at or below the cost and `extend`: a refund is what
-  can move a sibling." `ReservationLeanTest` pins its ensemble means and worst
-  rigs (#3239, [ruling](https://github.com/tractat-us/kuilt/issues/3239#issuecomment-7181473134)).
+  can move a sibling." `ReservationLeanTest` pins ten rigs' slot times exactly
+  on every target, and the on-demand `ReservationLeanBenchmark` pins the
+  ensemble means and worst rigs (#3239, #3724, [ruling](https://github.com/tractat-us/kuilt/issues/3239#issuecomment-7181473134)).
 - Rewinding refunds in the net-service clock, to close P2 and the two-level
   spill (§7.2): exact needs, per lease and per level, who was asking at the
   grant, which is snapshot format 2. Rejected: accept and pin was the pick (#3239, [ruling](https://github.com/tractat-us/kuilt/issues/3239#issuecomment-7181473134)).
