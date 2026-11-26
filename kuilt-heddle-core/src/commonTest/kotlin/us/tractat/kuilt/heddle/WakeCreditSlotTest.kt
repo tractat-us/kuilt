@@ -13,7 +13,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * A lane's lease that straddles its idle gap (#3238), and noisy honest costs, on [WakeCreditRig]
+ * A lane's lease that straddles its idle gap (#3238), noisy honest costs, and a cancel of work that ran, on [WakeCreditRig]
  * through [LocalHeddle] (#3376).
  *
  * Every number is a share **less the same rig's honest arm**, so the arms measure only what the
