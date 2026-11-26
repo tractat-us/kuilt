@@ -121,6 +121,8 @@ internal fun HeddleNode.sampleReconcileOwn(child: GroupId): String =
         // The retire, or the new edge's activation, has not reached this peer yet. Call again later.
         ReconcileOwnOutcome.NoRetiredEdge -> "no retired edge yet"
         ReconcileOwnOutcome.NoLiveEdge -> "no live edge yet"
-        // Nothing was written: the strand stays, and the reason says why.
+        // The rest write nothing and do not clear by themselves: the tree needs an operator.
+        is ReconcileOwnOutcome.TwoLiveEdges -> "close all but one of ${outcome.edges.map { it.value }}"
+        is ReconcileOwnOutcome.CrossParent -> "retired edges hang off ${outcome.foreign.values.map { it.value }}, not ${outcome.liveParent.value}"
         is ReconcileOwnOutcome.Refused -> "refused: ${outcome.reason}"
     }

@@ -22,8 +22,9 @@ import kotlin.time.Instant
 
 /**
  * [HeddleNode.reconcileOwn] step by step (#3649): the #3176 reproduction on one static peer, each
- * outcome as the reweight's steps arrive, a restart between the repair and a late completion, and
- * the two refusals. The many-peer property is `HeddleNodeReconcileOwnPropertyTest`.
+ * outcome as the reweight's steps arrive, a late completion after the repair, a node booted from a
+ * repaired ledger, the stale-finals residual a static restart can leave, and each refusal. The
+ * many-peer property is `HeddleNodeReconcileOwnPropertyTest`.
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class HeddleNodeReconcileOwnTest {
@@ -63,51 +64,108 @@ class HeddleNodeReconcileOwnTest {
         }
 
     /**
-     * A restart forgets the quiesce marks, and the reservations with them (#3649's unverified point).
-     * Peer 1 reserves across the old edge while cut off, the retire lands, and it repairs. It then
-     * restarts from its ledger: the old reservation no longer exists, so completing it charges
-     * nothing, and a fresh reservation captures the new edge. The retired edge never moves again.
+     * A reservation taken across the old edge and completed after its peer's repair charges the new
+     * edge, not the drained old one: the repair marked the old edge for that peer. Peer 1 reserves
+     * while cut off, peer 0 reweights without seeing the grant, and after the heal peer 1 repairs,
+     * then completes.
      */
     @Test
-    fun aRestartForgetsTheMarksAndTheReservationsThatNeededThem() =
+    fun aCompletionAfterTheRepairChargesTheNewEdge() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val scope = childScope()
-            val h = staticCluster(ROOT, peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = TOPOLOGY, nodeScope = scope)
-            spend(h.peers[0].node, 5L)
-            h.pump(1_000L)
-            h.partition(1)
-            val lateNode = h.peers[1].node
-            val late = assertIs<ReserveOutcome.Reserved>(grantAndReserve(lateNode, 6L), "rig: a reservation across the old edge")
-            val reweighter = h.peers[0].node
-            check(reweighter.prepare(NEW_RECORD) && reweighter.close(OLD) && reweighter.retire(OLD) && reweighter.activate(NEW)) {
-                "rig: peer 0 reweights acme without seeing peer 1's grant"
-            }
-            h.pump()
-            h.heal(1)
-            h.pump(1_000L)
-            assertIs<ReconcileOwnOutcome.Repaired>(reweighter.reconcileOwn(ACME))
-            val own = assertIs<ReconcileOwnOutcome.Repaired>(lateNode.reconcileOwn(ACME), "peer 1 repairs with its reservation open")
-            h.pump(1_000L)
-            val saved = lateNode.ledger.value
-            val oldEdgeBefore = checkNotNull(saved.edge(OLD))
-            scope.cancel()
-
-            val restarted = rebootSecondPeer(saved, epoch = 1L)
-            check(restarted.self == lateNode.self) { "rig: the restart keeps its identity, ${restarted.self} vs ${lateNode.self}" }
-            restarted.complete(late.id, 6L)
-            val afterTheLostCompletion = restarted.ledger.value
-            val fresh = assertIs<ReserveOutcome.Reserved>(restarted.reserve(LANE, 6L), "the restarted peer re-reserves its holdings")
-            restarted.complete(fresh.id, 6L)
-            val l = restarted.ledger.value
+            val late = lateReservationAcrossTheRetire()
+            val peer1 = late.h.peers[1].node
+            assertIs<ReconcileOwnOutcome.Repaired>(late.h.peers[0].node.reconcileOwn(ACME))
+            val own = assertIs<ReconcileOwnOutcome.Repaired>(peer1.reconcileOwn(ACME), "peer 1 repairs with its reservation open")
+            val before = peer1.ledger.value
+            peer1.complete(late.id, LATE_COST)
+            late.h.pump(1_000L)
+            val after = peer1.ledger.value
             assertAll(
-                { assertEquals(6L, own.credit, "rig: the open reservation's grant moved with the repair") },
+                { assertEquals(LATE_COST, own.credit, "rig: the open reservation's grant moved with the repair") },
                 { assertEquals(0L, own.spent, "rig: nothing of it was spent before the repair") },
-                { assertEquals(saved, afterTheLostCompletion, "the forgotten reservation charges nothing") },
-                { assertEquals(ReconcileOwnOutcome.NothingToRepair, restarted.reconcileOwn(ACME), "the repair is in the ledger, not in the marks") },
-                { assertEquals(oldEdgeBefore, l.edge(OLD), "the retired edge never moves again") },
-                { assertEquals(11L, checkNotNull(l.edge(NEW)).spent, "both peers' spends ride the new edge") },
+                {
+                    assertEquals(
+                        before.storedSlot(CounterFamily.ROLLUP_SPENT, NEW, peer1.self) + LATE_COST,
+                        after.storedSlot(CounterFamily.ROLLUP_SPENT, NEW, peer1.self),
+                        "the charge rolls up through the new edge",
+                    )
+                },
+                { assertEquals(before.edge(OLD), after.edge(OLD), "the drained old edge is not charged") },
+                { assertEquals(emptyList(), after.validate()) },
+                { assertEquals(ReconcileOwnOutcome.NothingToRepair, peer1.reconcileOwn(ACME)) },
+                { assertEquals(null, after.conservationShortfallOver(GROUPS, late.h.peers.map { it.id })) },
+            )
+        }
+
+    /**
+     * The repair lives in the ledger, not in the marks: a node booted from a ledger that already
+     * holds its repair has no marks, answers `NothingToRepair`, reserves on the new edge, and never
+     * charges the retired one.
+     *
+     * This is **not** how a [heddleStatic] node restarts. That boots from its mint and gets its earlier
+     * writes back by anti-entropy, and what that can leave is
+     * [aRepairFromStaleFinalsLeavesALateChargeStranded].
+     */
+    @Test
+    fun aNodeBootedFromARepairedLedgerNeedsNoMarks() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val late = lateReservationAcrossTheRetire()
+            val peer1 = late.h.peers[1].node
+            assertIs<ReconcileOwnOutcome.Repaired>(late.h.peers[0].node.reconcileOwn(ACME))
+            assertIs<ReconcileOwnOutcome.Repaired>(peer1.reconcileOwn(ACME))
+            late.h.pump(1_000L)
+            val saved = peer1.ledger.value
+            late.scope.cancel()
+
+            val booted = bootSecondPeer(saved)
+            check(booted.self == peer1.self) { "rig: the same identity, ${booted.self} vs ${peer1.self}" }
+            val again = booted.reconcileOwn(ACME)
+            val fresh = assertIs<ReserveOutcome.Reserved>(booted.reserve(LANE, LATE_COST), "the booted node reserves its holdings")
+            booted.complete(fresh.id, LATE_COST)
+            val l = booted.ledger.value
+            assertAll(
+                { assertEquals(ReconcileOwnOutcome.NothingToRepair, again) },
+                { assertEquals(saved.edge(OLD), l.edge(OLD), "the retired edge never moves again") },
+                { assertEquals(5L + LATE_COST, checkNotNull(l.edge(NEW)).spent, "both peers' spends ride the new edge") },
                 { assertEquals(emptyList(), l.validate()) },
-                { assertEquals(null, l.conservationShortfallOver(GROUPS, h.peers.map { it.id })) },
+                { assertEquals(null, l.conservationShortfallOver(GROUPS, late.h.peers.map { it.id })) },
+            )
+        }
+
+    /**
+     * What a static restart can leave (relocation design §6.5 residual 2, on the static path). A peer
+     * completes a late charge across the retired edge before repairing, and that write reaches the
+     * others but not its own restarted view. It repairs from finals without the charge, and when the
+     * charge comes back it sits on the drained edge: `PerEdgeSafety`, and every later call answers
+     * the relocation refusal.
+     */
+    @Test
+    fun aRepairFromStaleFinalsLeavesALateChargeStranded() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val loom = InMemoryLoom()
+            val seam = loom.host(Pattern("reconcile-own-stale"))
+            val self = ReplicaId(seam.selfId.value)
+            val other = ReplicaId("other-peer")
+            val start = buildInitialLedger(ROOT, mapOf(self to 100L, other to 100L), TOPOLOGY)
+            // The other peer spends through the old edge and, not seeing this peer's grant, reweights.
+            val theirs = start.steps({ it.delegate(other, OLD, 5L) }, { it.delegate(other, LANE_EDGE, 5L) }, { it.spend(other, LANE, 5L) })
+            val reweighted = theirs.steps({ it.prepare(NEW_RECORD) }, { it.close(OLD) }, { it.retire(OLD) }, { it.activate(NEW) })
+            // This peer took a grant across the old edge first; its view is the two merged.
+            val seen = reweighted.piece(start.steps({ it.delegate(self, OLD, LATE_COST) }, { it.delegate(self, LANE_EDGE, LATE_COST) }))
+            val lateCharge = checkNotNull(seen.spendCaptured(self, listOf(OLD, LANE_EDGE), LATE_COST))
+            val node = HeddleNode(
+                scope = backgroundScope, seam = seam, self = self, initialLedger = seen,
+                clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+                config = heddleTestConfig(seed = 13), epoch = 1L,
+            )
+            val stale = node.reconcileOwn(ACME)
+            node.asControlSink().publish(lateCharge) // its own earlier write, back by anti-entropy
+            val conflicts = node.ledger.value.validate()
+            val after = node.reconcileOwn(ACME)
+            assertAll(
+                { assertEquals(ReconcileOwnOutcome.Repaired(NEW, listOf(OLD), credit = LATE_COST, spent = 0L), stale, "rig: the move missed the charge") },
+                { assertTrue(LedgerConflict.PerEdgeSafety(OLD) in conflicts, "the charge sits on the drained edge: $conflicts") },
+                { assertIs<ReconcileOwnOutcome.Refused>(after, "and a later call cannot move it") },
             )
         }
 
@@ -124,18 +182,16 @@ class HeddleNodeReconcileOwnTest {
             val seam = loom.host(Pattern("reconcile-own-transfer"))
             val self = ReplicaId(seam.selfId.value)
             val donor = ReplicaId("donor")
-            var l = buildInitialLedger(ROOT, mapOf(donor to 100L, self to 0L), TOPOLOGY)
-            fun step(patch: Patch<EntitlementLedger>?) {
-                l = l.piece(checkNotNull(patch) { "rig: a ledger step refused" })
-            }
-            step(l.delegate(donor, OLD, 10L))
-            step(l.transfer(ACME, donor, self, 10L))
-            step(l.delegate(self, LANE_EDGE, 10L))
-            step(l.spend(self, LANE, 10L))
-            step(l.prepare(NEW_RECORD))
-            step(l.close(OLD))
-            step(l.retire(OLD))
-            step(l.activate(NEW))
+            val l = buildInitialLedger(ROOT, mapOf(donor to 100L, self to 0L), TOPOLOGY).steps(
+                { it.delegate(donor, OLD, 10L) },
+                { it.transfer(ACME, donor, self, 10L) },
+                { it.delegate(self, LANE_EDGE, 10L) },
+                { it.spend(self, LANE, 10L) },
+                { it.prepare(NEW_RECORD) },
+                { it.close(OLD) },
+                { it.retire(OLD) },
+                { it.activate(NEW) },
+            )
             val node = HeddleNode(
                 scope = backgroundScope, seam = seam, self = self, initialLedger = l,
                 clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
@@ -143,7 +199,7 @@ class HeddleNodeReconcileOwnTest {
             )
             val outcome = node.reconcileOwn(ACME)
             assertAll(
-                { assertTrue((outcome as? ReconcileOwnOutcome.Refused)?.reason.orEmpty().contains("cover"), "names the uncovered spend: $outcome") },
+                { assertIs<ReconcileOwnOutcome.Refused>(outcome) },
                 { assertEquals(l, node.ledger.value, "nothing was written") },
             )
         }
@@ -155,15 +211,80 @@ class HeddleNodeReconcileOwnTest {
             val h = staticCluster(ROOT, peers = 1, mint = mapOf(0 to 100L), topology = TOPOLOGY)
             val node = h.peers[0].node
             spend(node, 4L)
-            val under = AttachmentRecord(AttachmentId("other/acme@1"), OTHER, ACME, Weight.ONE)
-            check(node.prepare(under) && node.close(OLD) && node.retire(OLD) && node.activate(under.id)) { "rig: acme moves under other" }
+            check(node.prepare(UNDER_OTHER) && node.close(OLD) && node.retire(OLD) && node.activate(UNDER_OTHER.id)) { "rig: acme moves under other" }
             val before = node.ledger.value
             val outcome = node.reconcileOwn(ACME)
             assertAll(
-                { assertTrue((outcome as? ReconcileOwnOutcome.Refused)?.reason.orEmpty().contains("another parent"), "names the parents: $outcome") },
+                { assertEquals(ReconcileOwnOutcome.CrossParent(OTHER, mapOf(OLD to ROOT)), outcome) },
                 { assertEquals(before, node.ledger.value, "nothing was written") },
             )
         }
+
+    /**
+     * One retired edge from the live parent and one from another: nothing moves, not even the
+     * same-parent one, so `NothingToRepair` never stands for a strand left in place.
+     */
+    @Test
+    fun oneForeignRetiredEdgeRefusesTheWholeMove() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val h = staticCluster(ROOT, peers = 1, mint = mapOf(0 to 100L), topology = TOPOLOGY)
+            val node = h.peers[0].node
+            spend(node, 4L)
+            check(node.prepare(UNDER_OTHER) && node.close(OLD) && node.retire(OLD) && node.activate(UNDER_OTHER.id)) { "rig: acme moves under other" }
+            val reweighted = AttachmentRecord(AttachmentId("other/acme@2"), OTHER, ACME, Weight.of(2L))
+            check(node.prepare(reweighted) && node.close(UNDER_OTHER.id) && node.retire(UNDER_OTHER.id) && node.activate(reweighted.id)) {
+                "rig: then acme is reweighted under other"
+            }
+            val before = node.ledger.value
+            val outcome = node.reconcileOwn(ACME)
+            assertAll(
+                { assertEquals(listOf(OLD, UNDER_OTHER.id), before.retiredInboundEdges(ACME).sorted(), "rig: two retired edges") },
+                { assertEquals(ReconcileOwnOutcome.CrossParent(OTHER, mapOf(OLD to ROOT)), outcome) },
+                { assertEquals(before, node.ledger.value, "nothing was written") },
+            )
+        }
+
+    /** Two live inbound edges leave no one edge to move onto; the answer names them and nothing moves. */
+    @Test
+    fun twoLiveInboundEdgesAreNamed() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val h = staticCluster(ROOT, peers = 1, mint = mapOf(0 to 100L), topology = TOPOLOGY)
+            val node = h.peers[0].node
+            spend(node, 4L)
+            check(node.prepare(NEW_RECORD) && node.close(OLD) && node.retire(OLD) && node.activate(NEW)) { "rig: the reweight" }
+            val third = AttachmentRecord(AttachmentId("root/acme@3"), ROOT, ACME, Weight.of(3L))
+            check(node.prepare(third) && node.activate(third.id)) { "rig: a second live edge into acme" }
+            val before = node.ledger.value
+            val outcome = node.reconcileOwn(ACME)
+            assertAll(
+                { assertEquals(ReconcileOwnOutcome.TwoLiveEdges(listOf(NEW, third.id)), outcome) },
+                { assertEquals(before, node.ledger.value, "nothing was written") },
+            )
+        }
+
+    /** A two-peer cluster where peer 1, cut off, reserved across the old edge before peer 0 reweighted it; healed. */
+    private class LateReservation(val h: StaticCluster, val scope: CoroutineScope, val id: ReservationId)
+
+    private suspend fun TestScope.lateReservationAcrossTheRetire(): LateReservation {
+        val scope = childScope()
+        val h = staticCluster(ROOT, peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = TOPOLOGY, nodeScope = scope)
+        spend(h.peers[0].node, 5L)
+        h.pump(1_000L)
+        h.partition(1)
+        val late = assertIs<ReserveOutcome.Reserved>(grantAndReserve(h.peers[1].node, LATE_COST), "rig: a reservation across the old edge")
+        val reweighter = h.peers[0].node
+        check(reweighter.prepare(NEW_RECORD) && reweighter.close(OLD) && reweighter.retire(OLD) && reweighter.activate(NEW)) {
+            "rig: peer 0 reweights acme without seeing peer 1's grant"
+        }
+        h.pump()
+        h.heal(1)
+        h.pump(1_000L)
+        return LateReservation(h, scope, late.id)
+    }
+
+    /** Apply each step to the ledger in turn, failing loud on a refusal. */
+    private fun EntitlementLedger.steps(vararg step: (EntitlementLedger) -> Patch<EntitlementLedger>?): EntitlementLedger =
+        step.fold(this) { l, s -> l.piece(checkNotNull(s(l)) { "rig: a ledger step refused" }) }
 
     /** [node] takes a grant of [amount] through `acme` and spends all of it at the lane. */
     private fun spend(node: HeddleNode, amount: Long) {
@@ -183,17 +304,17 @@ class HeddleNodeReconcileOwnTest {
     }
 
     /**
-     * The cluster's second peer booted again, alone, from [ledger], as a restart from a durable copy
-     * would be. A fresh fabric's second seam carries the same identity, `peer-2`.
+     * A node with the cluster's second peer's identity, booted alone from [ledger]. A fresh fabric's
+     * second seam carries the same identity, `peer-2`.
      */
-    private suspend fun TestScope.rebootSecondPeer(ledger: EntitlementLedger, epoch: Long): HeddleNode {
+    private suspend fun TestScope.bootSecondPeer(ledger: EntitlementLedger): HeddleNode {
         val loom = InMemoryLoom()
         loom.host(Pattern("reconcile-own-restart"))
         val seam = loom.join(InMemoryTag("peer-2"))
         return HeddleNode(
             scope = backgroundScope, seam = seam, self = ReplicaId(seam.selfId.value), initialLedger = ledger,
             clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
-            config = heddleTestConfig(seed = 11), epoch = epoch,
+            config = heddleTestConfig(seed = 11), epoch = 1L,
         )
     }
 
@@ -210,6 +331,8 @@ class HeddleNodeReconcileOwnTest {
         val NEW = AttachmentId("root/acme@2")
         val LANE_EDGE = AttachmentId("acme/lane@1")
         val NEW_RECORD = AttachmentRecord(NEW, ROOT, ACME, Weight.of(2L))
+        val UNDER_OTHER = AttachmentRecord(AttachmentId("other/acme@1"), OTHER, ACME, Weight.ONE)
+        const val LATE_COST = 6L
         val TOPOLOGY = listOf(
             AttachmentRecord(OLD, ROOT, ACME, Weight.ONE),
             AttachmentRecord(LANE_EDGE, ACME, LANE, Weight.ONE),
