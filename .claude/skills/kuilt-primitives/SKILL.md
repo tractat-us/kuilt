@@ -28,7 +28,7 @@ Paths are relative to this skill's directory. Each file is a few rows; read it w
 |Replication|`reference/replication.md`|converging state, a room too big for all-to-all, dealing, fair random, dedup, overflow-safe totals, archives, sealed boxes — the CRDT zoo, `Quilter`, `GossipSeam`, `DealSession`, `FairRandom`, `mulDiv`/`WideSum`, `BoltDecorator`, `SealedBox`|
 |Fabrics|`reference/fabrics.md`|discovery, a peer id off the wire, framing a stream, TCP, a cancelled dial, sending to yourself, a seam's terminal state, durable storage — `discoveryRoster`, `PeerIdentityRegistry`, `framed()`, `TcpLoom`, `ownedWebSocketSession`, `SeamStateGate`, `DurableStore`, `KuiltVersion`|
 |Consensus|`reference/consensus.md`|propose/commit turns, a server holding the log, Raft state across a restart — `GameSession`, `TurnSequencer`, `ClusterClient`, `ServerCluster`, `DurableStoreRaftStorage`|
-|Heddle|`reference/heddle.md`|fair-share scheduling and quota ledgers — `LocalHeddle`, `FairSharePool`, `HeddleNode`, `heddleGoverned`|
+|Heddle|`reference/heddle/scheduling.md`; editing the group tree: `reference/heddle/tree-editing.md`|fair-share scheduling and quota ledgers — `LocalHeddle`, `FairSharePool`, `HeddleNode`, `heddleGoverned`; an admin editing, previewing and saving the tree — `TopologyDocument`, `changesTo`, `previewApply`|
 |Otel|`reference/otel.md`|log capture, log context, telemetry health, batched metrics — `installLogCapture`, `withLogContext`, `WarpTelemetry`, `WarpMetricExporter`|
 |Warp|`reference/warp.md`|where a task may run, a blob cache, running code another peer sent — `Affinity`, `Creel`, `WasmRuntime`|
 
@@ -41,7 +41,7 @@ In kuilt, read it directly; consumers take the first working rung:
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
 3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 
-`<path>` may also be `.claude/skills/kuilt-primitives/reference/<family>.md` on `main`, for a copy that lacks it.
+`<path>` may also be `.claude/skills/kuilt-primitives/` plus a file the table names, on `main`, for a copy that lacks it.
 
 **Editing this skill:** description ≤ 1,536 chars, this body ≤ 8 KiB, each `reference/` file ≤ 4 KiB.
 A new route is a row in its family's file; past 4 KiB, split it into `reference/<family>/<section>.md`.

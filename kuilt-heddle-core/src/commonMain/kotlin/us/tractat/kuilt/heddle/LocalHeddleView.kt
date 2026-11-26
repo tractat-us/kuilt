@@ -96,7 +96,7 @@ public class LocalHeddleView internal constructor(
      * winner's head is larger than [reservation], [LocalHeddle.extend] the lease by the difference,
      * then pop the head. An extend makes no pick, so the order is the one the slot's own reservation
      * decides, and the head sets only what the lease holds: `max(reservation, head)`. A head below
-     * [reservation] holds [reservation], since a lease cannot shrink.
+     * [reservation] holds [reservation]: the preview does not [LocalHeddle.shrink] a lease.
      *
      * The list ends when no waiting leaf is eligible, or at the first call that is refused. When the
      * acquire lands and its extend is the call

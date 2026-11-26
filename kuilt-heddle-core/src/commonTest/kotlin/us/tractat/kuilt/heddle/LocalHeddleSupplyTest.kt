@@ -252,7 +252,7 @@ class LocalHeddleSupplyTest {
     }
 
     /**
-     * A head below the reservation is charged the reservation, since a lease cannot shrink (#3321):
+     * A head below the reservation is charged the reservation, since the preview does not shrink a lease (#3321):
      * the preview with a's heads at 1 is the preview with them at the reservation, which is the
      * count-based preview at that reservation. The rig: a's heads above the reservation do change
      * the order, so the heads are read.

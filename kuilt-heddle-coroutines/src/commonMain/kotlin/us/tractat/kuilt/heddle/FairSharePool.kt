@@ -217,7 +217,7 @@ public class FairSharePool(
      * the slot: the lease is cancelled with nothing charged.
      *
      * @param reservation the cost the caller expects the work to take. Below the engine's default the
-     *   lease holds the default, since a lease cannot shrink. Above it, the lease holds [reservation]
+     *   lease holds the default: the pool does not [LocalHeddle.shrink] a lease. Above it, the lease holds [reservation]
      *   when the engine can extend it that far; otherwise it holds the default, and the rest arrives
      *   as an overrun at [complete].
      * @throws IllegalArgumentException when [reservation] is not in `1..`[LocalHeddle.MAX_RESERVATION],

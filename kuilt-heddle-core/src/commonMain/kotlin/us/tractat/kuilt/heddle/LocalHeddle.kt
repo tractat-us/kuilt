@@ -99,8 +99,10 @@ public data class LocalHeddleRevision(public val epoch: Long, public val count: 
 /**
  * One open lease: one slot of work running for [leaf].
  *
- * @property reserved the cost delegated to it so far: its reservation plus every extension. `0` for
- *   a lease [LocalHeddle.admit] opened past the lifetime limit, which reserved nothing.
+ * @property reserved the cost delegated to it so far: its reservation plus every extension, less
+ *   every [LocalHeddle.shrink]. `0` for a lease [LocalHeddle.admit] opened past the lifetime limit,
+ *   which reserved nothing, and for one shrunk by all it reserved. A lease at `0` is still open, and
+ *   a removal of its lane still waits on it.
  * @property startedAt when the work started, as the caller reported it, in the cost unit. Stored
  *   and handed back, never read by a pick: two runs that differ only in start times make the same
  *   picks.
@@ -213,7 +215,11 @@ public data class LeaseReconciliation(
             require(elapsed >= 0L) { "elapsed must be non-negative, was $elapsed" }
         }
 
-        /** What the engine handed this lease: its reservation plus every extension, [Lease.reserved]. */
+        /**
+         * What the engine handed this lease and it kept: its reservation plus every extension, less
+         * every [LocalHeddle.shrink], [Lease.reserved]. A shrunk orphan's [defaultSettlement] is so
+         * capped at its shrunk size, `0` for one shrunk whole.
+         */
         public val granted: Long get() = lease.reserved
 
         /**
@@ -226,7 +232,7 @@ public data class LeaseReconciliation(
 }
 
 /**
- * What [LocalHeddle.extend], [LocalHeddle.complete] or [LocalHeddle.cancel] did.
+ * What [LocalHeddle.extend], [LocalHeddle.shrink], [LocalHeddle.complete] or [LocalHeddle.cancel] did.
  *
  * @sample us.tractat.kuilt.heddle.sampleRefusals
  */
@@ -249,7 +255,7 @@ public sealed interface LeaseOutcome {
      * and no cost at all. That work's cost arrives at its [LocalHeddle.complete], so a caller summing
      * [unrecorded] over both calls counts it twice. Sum it over completions only.
      *
-     * All three are `0` for a cancel, and for an extend that landed.
+     * All three are `0` for a cancel, a shrink, and an extend that landed.
      */
     public data class Done(public val charged: Long, public val overrun: Long, public val unrecorded: Long) : LeaseOutcome
 
@@ -284,6 +290,8 @@ public sealed interface LeaseOutcome {
  * it really cost and hands back what it did not use. Cost is time, by convention, in whatever unit
  * the caller counts in. A lease that runs long is [extend]ed, or charged its overrun at the end;
  * a charge is never refused. Work another scheduler already started is [admit]ted, with no pick.
+ * A job shorter than the slot's reservation is [shrink]ed straight after the pick, as if the lease
+ * had been opened at its size.
  * Every call that charges, [admit], [extend] and [complete], takes the waiting set, and the wake
  * memory observes it as a pick would have before the charge lands (#3471).
  *
@@ -678,7 +686,7 @@ public class LocalHeddle private constructor(
 
     /**
      * How far this engine has come: moved by every call that can change it, [acquire], [admit],
-     * [extend], [complete], [cancel], [reconcileCapacity], [apply], [attach] and [detach], whatever
+     * [extend], [shrink], [complete], [cancel], [reconcileCapacity], [apply], [attach] and [detach], whatever
      * the call returns, since a refused [acquire] may still move the wake memory. Never moved by a
      * read ([topology], [snapshot], [persist], [previewPicks], [previewApply], [explain],
      * [entitlement], [reconcileLeases]), nor by a call that throws, which changes nothing, nor by a
@@ -1111,6 +1119,55 @@ public class LocalHeddle private constructor(
     }
 
     /**
+     * Hand back [amount] of what [lease] reserves, up the path it was opened on, as [complete] hands
+     * back an unused remainder. The lease stays open, reserving [amount] less. It charges nothing and
+     * observes nothing, so it takes no waiting set, and it is never refused, as [complete] is not:
+     * a draining path takes the refund as it takes [cancel]'s.
+     *
+     * Its use is straight after a pick, when the work the slot went to is shorter than the
+     * reservation the slot was acquired at. There, before any other call, it leaves every position
+     * and the wake memory as if the lease had been opened at the smaller size: the grant and the
+     * refund fall in the same step of the parent's clock. Later, it is a refund like any other, and
+     * moves the lane's position back as [complete]'s remainder would.
+     *
+     * Returns [LeaseOutcome.Done] with nothing charged, or [LeaseOutcome.Unknown] or
+     * [LeaseOutcome.Stale] when no lease is open under that id.
+     *
+     * Shrunk by all it reserves, the lease stays open at `0`, and a reload removing its lane waits
+     * on it as on any open lease, as [StepRefusal.Draining] with nothing [outstanding][StepRefusal.Draining.outstanding]
+     * when it is the only one there, until it is completed or cancelled.
+     *
+     * @throws IllegalArgumentException when [amount] is not in `1..`[Lease.reserved]: a lease cannot
+     *   hand back more than it reserves, and a lease reserving nothing, one admitted past the lifetime
+     *   limit or shrunk whole already, has nothing to hand back.
+     * @sample us.tractat.kuilt.heddle.sampleShrinkAfterPick
+     */
+    public fun shrink(lease: LeaseId, amount: Long): LeaseOutcome = atomically {
+        require(amount >= 1L) { "shrink amount must be positive, was $amount" }
+        val current = open[lease] ?: return@atomically missing(lease)
+        shrinkOpen(current, amount, current.path)
+    }
+
+    /**
+     * The test seam for [shrink]'s positive control: a shrink that hands [amount] back across the
+     * leaf's own edge only, leaving every edge above it as it was. Never correct; a test checks that
+     * the shrink oracle tells it apart from [shrink].
+     */
+    internal fun shrinkAtTheLeafOnlyForTest(lease: LeaseId, amount: Long): LeaseOutcome = atomically {
+        val current = checkNotNull(open[lease]) { "no open lease $lease" }
+        shrinkOpen(current, amount, listOf(current.path.last()))
+    }
+
+    /** [shrink] of [current], handing [amount] back up [refundedOn], which is its path in every caller but the test seam's. */
+    private fun shrinkOpen(current: OpenLease, amount: Long, refundedOn: List<AttachmentId>): LeaseOutcome {
+        val reserved = current.lease.reserved
+        require(amount <= reserved) { "shrink amount must be at most what the lease reserves, $reserved, was $amount" }
+        ledger = releaseUp(ledger, refundedOn, amount)
+        open[current.lease.id] = current.copy(lease = current.lease.copy(reserved = reserved - amount))
+        return LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L)
+    }
+
+    /**
      * Who would go next: the leaves `reservations.size` calls to [acquire] would pick, in order,
      * if nothing else happened in between. Changes nothing, not even the wake memory. Answered by a
      * view of this engine's state: see [LocalHeddleView.previewPicks].
@@ -1243,8 +1300,8 @@ public class LocalHeddle private constructor(
      * move onto it the same way.
      *
      * **A removal drains.** A removed child is closed at once, so nothing new is leased there, and
-     * retires once its open leases complete; until then it is [StepRefusal.Draining], naming the
-     * leases it waits for. A removal under a reweighted group wins: that group's reweight waits
+     * retires once its open leases complete, whatever they reserve; until then it is
+     * [StepRefusal.Draining], naming the leases it waits for. A removal under a reweighted group wins: that group's reweight waits
      * too, as [StepRefusal.Draining], and changes nothing until every lease beneath it can move. A
      * lease whose work is gone is found by [reconcileLeases] and settled with [complete], so an
      * orphan holds a reload up no longer than that.
@@ -1591,11 +1648,17 @@ public class LocalHeddle private constructor(
         for (lease in moving) local = releaseUp(local, lease.path, lease.lease.reserved)
 
         val movingIds = moving.mapTo(HashSet()) { it.lease.id }
+        // The open leases that stay across [edge]: a retire there waits on each, whatever it
+        // reserves. One that reserves nothing, shrunk whole or admitted past the lifetime limit,
+        // leaves no units outstanding, and the ledger would retire the edge beneath it (#3648).
+        fun staying(edge: AttachmentId): List<Lease> =
+            open.values.filter { it.lease.id !in movingIds && edge in it.path }.map { it.lease }.sortedBy { it.id }
         fun refusal(step: TopologyStep, reason: String): StepRefusal {
-            val outstanding = if (step is TopologyStep.Retire) local.outstanding(step.edge) else 0L
-            if (outstanding == 0L) return StepRefusal.Refused(step.child, step, reason)
-            val blocking = open.values.filter { it.lease.id !in movingIds && step.edgeOf() in it.path }.map { it.lease }.sortedBy { it.id }
-            return StepRefusal.Draining(step.child, step.edgeOf(), outstanding, blocking)
+            if (step !is TopologyStep.Retire) return StepRefusal.Refused(step.child, step, reason)
+            val outstanding = local.outstanding(step.edge)
+            val blocking = staying(step.edge)
+            if (outstanding == 0L && blocking.isEmpty()) return StepRefusal.Refused(step.child, step, reason)
+            return StepRefusal.Draining(step.child, step.edge, outstanding, blocking)
         }
         val applied = ArrayList<TopologyStep>()
         val draining = ArrayList<StepRefusal>()
@@ -1608,7 +1671,8 @@ public class LocalHeddle private constructor(
             // Retires run bottom-up, so a group's retire waits on every group below it whose change did
             // not land: one stopped in this attempt, or one left out of it.
             val below = (stopped.asSequence() + leftOut.asSequence()).filter { it.value.startsWith(child.value + "/") }.minOrNull()
-            val stepped = if (step is TopologyStep.Retire && below != null) null else local.applyStep(step)
+            val held = step is TopologyStep.Retire && staying(step.edge).isNotEmpty()
+            val stepped = if (step is TopologyStep.Retire && (below != null || held)) null else local.applyStep(step)
             // An activation whose weight would put its parent's weight products out of Long, or make
             // the set too fine for one full lease: the ledger would take it, and every pick at that
             // parent would then throw, or one under-charged lease could carry a child past its ceiling (#3313, #3353).
@@ -1626,6 +1690,7 @@ public class LocalHeddle private constructor(
             }
             val reason = when {
                 below != null -> "${below.value}, below it, did not retire"
+                held -> "an open lease crosses it"
                 overBudget -> "its weight would put its siblings' weight arithmetic out of Long, or let one full lease carry a child past its ceiling"
                 pastLimit -> "seated level with the furthest-ahead of its siblings, it would carry its parent past the position limit"
                 else -> "the ledger refused it"
@@ -1660,8 +1725,8 @@ public class LocalHeddle private constructor(
         for (lease in moving) {
             val path = local.lineageOf(lease.lease.leaf)?.takeIf { p -> p.isNotEmpty() && p.all { local.lifecycle(it) == Lifecycle.ACTIVE } }
             val reserved = lease.lease.reserved
-            // A lease admitted past the lifetime limit reserves nothing, so there is nothing to move;
-            // one whose reservation the new path has no room for within `Long` is not moved (#3475).
+            // A lease reserving nothing, admitted past the lifetime limit or shrunk whole, has nothing
+            // to move; one whose reservation the new path has no room for within `Long` is not moved (#3475).
             val delegated = path?.let {
                 when {
                     reserved == 0L -> local
@@ -1702,7 +1767,7 @@ public class LocalHeddle private constructor(
      * they settle; otherwise [child] is [StepRefusal.Refused] at its first step. A wait this call
      * found is in [waits]; one an earlier call left, such as a removal still draining when an
      * [attach] lands beneath the group put back over it, is read off [local]: the cause's inbound
-     * edge CLOSING with units still outstanding on it (#3508).
+     * edge CLOSING with units still outstanding on it, or an open lease across it (#3508, #3648).
      */
     private fun cutOff(child: GroupId, local: EntitlementLedger, steps: List<TopologyStep>, waits: Map<GroupId, StepRefusal.Draining>): StepRefusal {
         val names = child.value.split('/')
@@ -1720,15 +1785,16 @@ public class LocalHeddle private constructor(
     }
 
     /**
-     * [group]'s wait, when its inbound edge here is CLOSING with units still outstanding on it: that
-     * edge, those units, and this engine's open leases whose path crosses it, in id order. `null`
-     * for any other edge, or none.
+     * [group]'s wait, when its inbound edge here is CLOSING with units still outstanding on it, or
+     * with one of this engine's open leases across it, which may reserve nothing (#3648): that edge,
+     * those units, and those leases, in id order. `null` for any other edge, or none.
      */
     private fun EntitlementLedger.drainingInto(group: GroupId): StepRefusal.Draining? {
         val edge = lineageOf(group)?.lastOrNull() ?: return null
+        if (lifecycle(edge) != Lifecycle.CLOSING) return null
         val outstanding = outstanding(edge)
-        if (lifecycle(edge) != Lifecycle.CLOSING || outstanding == 0L) return null
         val blocking = open.values.filter { edge in it.path }.map { it.lease }.sortedBy { it.id }
+        if (outstanding == 0L && blocking.isEmpty()) return null
         return StepRefusal.Draining(group, edge, outstanding, blocking)
     }
 

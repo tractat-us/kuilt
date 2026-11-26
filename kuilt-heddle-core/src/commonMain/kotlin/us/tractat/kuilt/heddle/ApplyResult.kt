@@ -20,10 +20,14 @@ public sealed interface StepRefusal {
 
     /**
      * [edge], which is [child]'s own edge or that of a waiting group above [child] (see below),
-     * still carries [outstanding] units, so it cannot retire yet: the change waits for that work
-     * to finish. [blockingLeases] are this engine's open leases whose path
+     * still carries [outstanding] units, or an open lease, so it cannot retire yet: the change waits
+     * for that work to finish. [blockingLeases] are this engine's open leases whose path
      * crosses [edge], in id order; complete or cancel them, or settle them through
      * [LocalHeddle.reconcileLeases] if their work is gone, and apply again.
+     *
+     * [outstanding] is the units on [edge], and `0` when every lease there reserves nothing (one
+     * [LocalHeddle.shrink]ed whole, or admitted past the lifetime limit): the wait is then the
+     * leases, which [blockingLeases] names, never empty in that case.
      *
      * A removal that waits has already closed [edge], so nothing new is leased across it. A
      * reweight that waits, because a lease beneath it sits under a child the same reload removes,

@@ -535,6 +535,39 @@ class LocalHeddleLifetimeTest {
         )
     }
 
+    /**
+     * The removal of a lane whose open lease reserved nothing waits on that lease, though its edge
+     * carries no units, and lands once it settles: a retire there would leave the lease open on a
+     * retired edge (#3648).
+     */
+    @Test
+    fun aRemovalWaitsOnALeaseThatReservedNothing() {
+        val h = engine()
+        val edge = h.path(a).single()
+        h.pump(h.path(a), to = Long.MAX_VALUE - R + 1L)
+        val admitted = assertIs<AcquireOutcome.Acquired>(h.admit(a, setOf(a), startedAt = 0L, reservation = R)).lease
+        val withoutA = draft("life") {
+            lane("b")
+            group("g") {
+                lane("x")
+                lane("y")
+            }
+        }
+        val waiting = h.apply(withoutA, generation = 1L)
+        val restored = LocalHeddle.decode(Json.encodeToString(LocalHeddleSnapshot.serializer(), h.persist()), Json)
+        val done = h.complete(admitted.id, actualCost = R, waiting = emptySet())
+        val landed = h.apply(withoutA, generation = 1L)
+        assertAll(
+            { assertEquals(0L, admitted.reserved, "the rig: the admit reserved nothing") },
+            { assertEquals(listOf(StepRefusal.Draining(a, edge, 0L, listOf(admitted))), waiting.refusals, "a's removal waits on the lease") },
+            { assertIs<RestoreResult.Restored>(restored, "a snapshot taken while it waits restores") },
+            { assertIs<LeaseOutcome.Done>(done) },
+            { assertEquals(emptyList(), landed.refusals, "and lands once it settles") },
+            { assertEquals(emptyList(), h.state().ledger.lineageOf(a), "a has no lineage left") },
+            { assertEquals(emptyList(), h.state().ledger.validate()) },
+        )
+    }
+
     // ─── A reweight moving a lease at the limit ──────────────────────────────────────────────────
 
     private val reweighted = draft("life") {

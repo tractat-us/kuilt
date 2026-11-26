@@ -112,6 +112,9 @@ class HeddleSamplesRunTest {
     fun admitExternalHolds() = sampleAdmitExternal()
 
     @Test
+    fun shrinkAfterPickHolds() = sampleShrinkAfterPick()
+
+    @Test
     fun refusalsHold() = sampleRefusals()
 
     @Test
