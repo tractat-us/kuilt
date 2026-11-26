@@ -296,6 +296,19 @@ public final class us/tractat/kuilt/heddle/HeddleNode$Companion {
 public abstract interface class us/tractat/kuilt/heddle/ReconcileOwnOutcome {
 }
 
+public final class us/tractat/kuilt/heddle/ReconcileOwnOutcome$CrossParent : us/tractat/kuilt/heddle/ReconcileOwnOutcome {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/Map;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/Map;
+	public final fun copy-jc7CSWg (Ljava/lang/String;Ljava/util/Map;)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$CrossParent;
+	public static synthetic fun copy-jc7CSWg$default (Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$CrossParent;Ljava/lang/String;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$CrossParent;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getForeign ()Ljava/util/Map;
+	public final fun getLiveParent-urUY4Jo ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/heddle/ReconcileOwnOutcome$NoLiveEdge : us/tractat/kuilt/heddle/ReconcileOwnOutcome {
 	public static final field INSTANCE Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$NoLiveEdge;
 	public fun equals (Ljava/lang/Object;)Z
@@ -341,6 +354,17 @@ public final class us/tractat/kuilt/heddle/ReconcileOwnOutcome$Repaired : us/tra
 	public final fun getFrom ()Ljava/util/List;
 	public final fun getOnto-i0YUZAc ()Ljava/lang/String;
 	public final fun getSpent ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ReconcileOwnOutcome$TwoLiveEdges : us/tractat/kuilt/heddle/ReconcileOwnOutcome {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$TwoLiveEdges;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$TwoLiveEdges;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ReconcileOwnOutcome$TwoLiveEdges;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEdges ()Ljava/util/List;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
