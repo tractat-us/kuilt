@@ -336,6 +336,10 @@ internal class GovernedCluster(
      * so the replica id no longer matches the seam's. The arms that use this read only what each
      * peer's own control plane publishes, never gossip.
      *
+     * `self = { old.replica }` waives `heddleGoverned`'s `self == Seam.selfId` precondition on
+     * purpose. On a fabric that issues a fresh `selfId` per boot, as this one does, a real reboot gets
+     * a new key prefix and cannot collide at all; the collision needs an identity kept across boots.
+     *
      * Nothing is pumped after the boot and nothing is enrolled, so the restarted control plane has
      * replayed nothing yet: the caller decides whether its first acts are drawn before or after replay.
      */

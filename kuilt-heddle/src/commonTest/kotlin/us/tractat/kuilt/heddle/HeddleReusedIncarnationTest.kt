@@ -80,6 +80,11 @@ class HeddleReusedIncarnationTest {
                 val reason = assertIs<ControlConflict.Refused>(refused.conflict).reason
                 assertTrue(run.baseKey in reason && "incarnation" in reason, "the refusal names the reuse: $reason")
             },
+            {
+                // A refused act reports where it was written: its own entry when proposed, else nowhere.
+                val ownIndex = newMints.singleOrNull()?.first ?: ControlOutcome.NOT_COMMITTED
+                assertEquals(ownIndex, run.outcome.index, "the refusal reports the act's own index, not the old one's ${run.oldIndex}")
+            },
             *run.cluster.peers.map { peer ->
                 { assertEquals(SUPPLY, peer.node.ledger.value.mintedTotal(), "nothing more is minted on ${peer.replica}") }
             }.toTypedArray(),
