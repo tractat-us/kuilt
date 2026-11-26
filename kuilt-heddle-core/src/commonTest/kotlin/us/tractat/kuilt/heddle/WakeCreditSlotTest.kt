@@ -9,6 +9,7 @@ import us.tractat.kuilt.heddle.WakeCreditRig.WakeConfig
 import us.tractat.kuilt.test.assertAll
 import kotlin.math.abs
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -26,8 +27,8 @@ import kotlin.test.assertTrue
  */
 class WakeCreditSlotTest {
 
-    private fun oneLevel(arm: Arm, think: Long, costs: List<Long> = listOf(8L)): WakeCreditRig.Run =
-        WakeCreditRig.run(WakeConfig(WakeCreditRig.oneLevel(), listOf(LaneSpec(A, arm, think, BURST, costs)), horizon = HORIZON))
+    private fun oneLevel(arm: Arm, think: Long, costs: List<Long> = listOf(8L), burst: Int = BURST): WakeCreditRig.Run =
+        WakeCreditRig.run(WakeConfig(WakeCreditRig.oneLevel(), listOf(LaneSpec(A, arm, think, burst, costs)), horizon = HORIZON))
 
     private fun twoLevel(arm: Arm, think: Long): WakeCreditRig.Run = WakeCreditRig.run(
         WakeConfig(
@@ -115,6 +116,35 @@ class WakeCreditSlotTest {
         assertAll(*checks.toTypedArray())
     }
 
+    /**
+     * The no-gap control: what `cancel` on work that ran costs everyone else, with no idle gap for
+     * wake credit to hide in (#3238). A lane that never idles cancels the last of every four jobs
+     * against an always-backlogged sibling at equal weight, all of its jobs costing 8.
+     *
+     * The oracle, from the charges alone. Both lanes ask at every call, so fair share levels what
+     * each was **charged**. Let `s_a` and `s_b` be the slot time each lane held. `b` is charged all
+     * of `s_b`; `a` is charged three jobs of every four, all the same size, so `3/4 · s_a`. Level
+     * charges give `s_b = 3/4 · s_a`, so `a` holds `s_a / (s_a + 3/4 · s_a) = 4/7` of the slots,
+     * where settling every job at its cost holds `1/2`. The cancels gain `a` `4/7 − 1/2 = 1/14`.
+     *
+     * The same rig settling those jobs with `complete(lease, elapsed)` gains nothing: that is the
+     * honest arm, and its share is pinned at a half. The rig is deterministic, so both measured
+     * shares are pinned as well as the oracle.
+     */
+    @Test
+    fun aCancelledJobThatRanIsAFreeRideOfExactlyItsCost() {
+        val honest = oneLevel(Arm.HONEST, WakeCreditRig.NEVER_IDLES, burst = 4)
+        val cancel = oneLevel(Arm.CANCEL_LAST, WakeCreditRig.NEVER_IDLES, burst = 4)
+        val oracle = 4.0 / 7.0 - 1.0 / 2.0
+        assertAll(
+            { assertEquals(0 to 0, cancel.wakes to cancel.wakesWithOpenLease, "the cancelling lane was never seen idle") },
+            { assertEquals(0 to 0, honest.wakes to honest.wakesWithOpenLease, "the honest lane was never seen idle") },
+            within("honest share", honest.share(A), 0.5, NO_GAP_PIN_TOLERANCE),
+            within("cancel gain against the oracle", cancel.share(A) - honest.share(A), oracle, NO_GAP_ORACLE_TOLERANCE),
+            within("cancel gain as measured", cancel.share(A) - honest.share(A), NO_GAP_MEASURED_GAIN, NO_GAP_PIN_TOLERANCE),
+        )
+    }
+
     private fun fmt(d: Double): String = (kotlin.math.round(d * 10_000) / 10_000).toString()
 
     private companion object {
@@ -124,5 +154,8 @@ class WakeCreditSlotTest {
         const val STRADDLE_TOLERANCE = 0.005
         const val NOISE_TOLERANCE = 0.015
         const val PIN_TOLERANCE = 0.003
+        const val NO_GAP_MEASURED_GAIN = 0.0
+        const val NO_GAP_ORACLE_TOLERANCE = 0.001
+        const val NO_GAP_PIN_TOLERANCE = 0.0001
     }
 }
