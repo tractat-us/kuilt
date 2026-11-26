@@ -274,7 +274,7 @@ if (runRealKeychainTests) {
 // emulator attached. AndroidJUnitRunner runs the androidInstrumentedTest classes against the real
 // AndroidKeyStore provider.
 android {
-    defaultConfig { testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { testInstrumentationRunner = "us.tractat.kuilt.identity.IdentityDeviceTestRunner" }
 }
 
 // How many rows each device's result file must hold. AGP reports a connected run that executed
