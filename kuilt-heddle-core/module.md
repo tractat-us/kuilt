@@ -54,7 +54,9 @@ The rest of the surface, by what you would ask it:
   `entitlement` owes it nothing until a lease beneath the node closes. Work
   already running is never refused or preempted.
 - **Other endings.** `extend` reserves more for a job still running, `cancel`
-  charges nothing, and `admit` charges work that started without a pick.
+  hands back a job that never ran and charges nothing, and `admit` charges work
+  that started without a pick. A job that ran settles with `complete` at what it
+  cost, however it ended.
 - **The tree changes.** `apply` takes a whole new `Topology` and returns an
   `ApplyResult`, whose `StepRefusal`s name what is still draining.
   `attach` and `detach` add and remove children the
