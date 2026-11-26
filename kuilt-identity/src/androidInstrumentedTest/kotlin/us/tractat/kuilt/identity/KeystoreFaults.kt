@@ -102,11 +102,16 @@ internal object KeystoreFaults {
 
     /**
      * Makes a key under [alias] that needs the screen lock, then removes the screen lock, which the
-     * Keystore answers by invalidating that key for good: the one damage a device run can rig without
+     * Keystore answers by being done with that key for good: the one damage a device run can rig without
      * root. Needs a device with no screen lock of its own, since setting one is how the key is made and
      * removing it needs the old PIN; a phone with a lock skips this by assumption.
+     *
+     * Android 13 and later only. Measured on an Android 11 emulator, removing the screen lock left the
+     * whole Keystore "not initialized" (`KeyStoreException: Keystore not initialized`) for every key of
+     * the app until a reboot, so the rig there damaged every row after it rather than one key.
      */
     fun plantKeyInvalidatedByRemovingTheScreenLock(alias: String) {
+        assumeTrue("rig: below Android 13 removing the screen lock breaks the whole Keystore until a reboot", Build.VERSION.SDK_INT >= KEYSTORE_EXCEPTION_API)
         val keyguard = InstrumentationRegistry.getInstrumentation().context.getSystemService(KeyguardManager::class.java)
         assumeTrue("rig: this device has a screen lock of its own, and the rig would have to remove it", !keyguard.isDeviceSecure)
         val set = DeviceShell.run("locksettings set-pin $RIG_PIN")
