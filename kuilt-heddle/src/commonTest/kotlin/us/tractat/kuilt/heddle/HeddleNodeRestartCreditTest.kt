@@ -12,11 +12,34 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.test.assertNotEquals
 import kotlin.time.Instant
 
 /**
- * MEASURING.
+ * A `HeddleNode` restart forgives a waker the grants it still holds (#3721). This pins today's
+ * numbers, measured before any fix: the evidence ruling 2 of #3721 asked for. It is the twin of
+ * `WakeClampOpenLeaseTest` in `:kuilt-heddle-core`, shaped like #3238's table.
+ *
+ * The rig: `root → p → {a, b}` at equal weight, quantum 8. A pick tops `p` up from the root by
+ * exactly one grant's worth and lets `p` grant it, so each `schedule(p)` is one pick, and the
+ * winner spends it at once, as a finished job. Both ask through a warm-up of [WARM_UP] picks. Then
+ * `a`'s last grant is [Row.held] units, with `b` competing but unservable, and `a` keeps them
+ * unspent. `a` stops asking and `b` runs [ALONE] picks alone, so the node sees `a` stop holding
+ * them. Then 20 picks with both asking; after the first, `a` settles what it held as [Row.settle]
+ * says. Each cell counts `a`'s 20 picks.
+ *
+ * **Kept** is the node that saw it all, so `a` returns moved by its parent's clock and no clamp
+ * runs. **Dropped** is a new incarnation over the same ledger: the same replica and its holdings,
+ * and no wake memory, since a `HeddleNode` keeps none across a restart. It meets `a` demanding for
+ * the first time and clamps it to the front, which forgives the units `a` holds, since a
+ * position counts what was issued down an edge, spent or not.
+ *
+ * Nothing a `HeddleNode` does hands a grant back: `complete` keeps the unused part at the leaf, so
+ * "unspent" is the nearest row to #3238's cancel. How `a` settles therefore moves no position, and
+ * the three held-8 rows read alike.
+ *
+ * **The forgiven credit is in the three held-8 cells**: dropped 10 against kept 6, four extra picks
+ * of 20 for `a`. Held 1 reads 10 and 10. A fix that clamps a waker past the front by what it holds
+ * turns those three dropped cells to 6, and this test red.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class HeddleNodeRestartCreditTest {
@@ -145,8 +168,8 @@ class HeddleNodeRestartCreditTest {
             { assertEquals(rows.map { it.held }, cells.values.map { it.heldAtRestart }, "the rig: a holds its grants across the restart") },
             { assertEquals(true, cells.values.all { it.droppedWasEmpty }, "the rig: the restarted node has no wake memory") },
             { assertEquals(true, cells.values.all { it.keptSawA }, "the rig: the kept node has some") },
-            { assertNotEquals(-1, cells.size) },
-            { assertEquals(emptyList(), cells.values.map { it.kept to it.dropped }, table(cells)) },
+            { assertEquals(listOf(10, 6, 6, 6), cells.values.map { it.kept }, "the kept column\n${table(cells)}") },
+            { assertEquals(listOf(10, 10, 10, 10), cells.values.map { it.dropped }, "the dropped column: the held-8 cells are the forgiven credit\n${table(cells)}") },
         )
     }
 
