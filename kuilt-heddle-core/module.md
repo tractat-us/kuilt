@@ -233,8 +233,8 @@ A position does still have a
 ceiling, past which the public virtual-time reads saturate, the penalty side.
 Nothing rebases a busy parent (#3472): a position only counts up from its edge's
 start, so a long-running parent passes its ceiling, and only those reads
-saturate. A newborn is seated at the front, a clamped waker at the front less its
-sleeper credit, and a returner where its parent's net-service clock puts it, each
+saturate. A newborn is seated at the front, a clamped waker at the front plus what its
+open leases reserve, less its sleeper credit (#3238), and a returner where its parent's net-service clock puts it, each
 exactly, wherever that is, and the picks order them all exactly (design §7.1).
 Every `LocalHeddle` call that charges, `admit`, `extend` and `complete`, takes the
 waiting set and observes it before its charge lands (#3471).

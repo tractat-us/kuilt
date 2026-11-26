@@ -97,10 +97,12 @@ count, and the time it sat out counts for nothing. A team the engine never saw
 go quiet, one it first saw idle say, is clamped instead:
 
 ```text
-offset = max(0, front − ev − sleeperCredit / w)
+offset = max(0, front + reserved / w − ev − sleeperCredit / w)
 ```
 
-`front` is the weighted average `ev` of the siblings that kept competing, with
+`reserved` is what the team's open leases still reserve. Those builds are
+running, so they count as the team's own, and their refund later is its own
+too. `front` is the weighted average `ev` of the siblings that kept competing, with
 every waker left out. If none of them is competing, the front is the team
 furthest ahead, counting the idle ones, the wakers, and each new team at zero.
 That can cost a team a turn, but never give it an extra one. A child's offset
