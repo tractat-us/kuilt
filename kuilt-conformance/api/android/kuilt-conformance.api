@@ -415,6 +415,41 @@ public final class us/tractat/kuilt/conformance/ObligationDeclaration$Proven : u
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract interface class us/tractat/kuilt/conformance/PassPlanter {
+	public abstract fun plant-FWQZRWY (Lus/tractat/kuilt/identity/AdmissionProof;Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/PassPlanting {
+}
+
+public final class us/tractat/kuilt/conformance/PassPlanting$Supported : us/tractat/kuilt/conformance/PassPlanting {
+	public fun <init> (Lus/tractat/kuilt/conformance/PlantedPassRig;)V
+	public final fun component1 ()Lus/tractat/kuilt/conformance/PlantedPassRig;
+	public final fun copy (Lus/tractat/kuilt/conformance/PlantedPassRig;)Lus/tractat/kuilt/conformance/PassPlanting$Supported;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/PassPlanting$Supported;Lus/tractat/kuilt/conformance/PlantedPassRig;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/PassPlanting$Supported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRig ()Lus/tractat/kuilt/conformance/PlantedPassRig;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/PassPlanting$Unsupported : us/tractat/kuilt/conformance/PassPlanting {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/PassPlanting$Unsupported;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/PassPlanting$Unsupported;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/PassPlanting$Unsupported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTrackingUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/PlantedPassRig {
+	public abstract fun hostPass-iCRWAGs (Ljava/lang/String;Lus/tractat/kuilt/identity/GrantScope;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun newDevice (Lus/tractat/kuilt/conformance/PassPlanter;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun strangerPass-iCRWAGs (Ljava/lang/String;Lus/tractat/kuilt/identity/GrantScope;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public abstract class us/tractat/kuilt/conformance/PrincipalAttestationConformanceSuite {
 	public fun <init> ()V
 	public final fun attestedPrincipalIsReportedForAdmittedPeer ()V
@@ -569,20 +604,57 @@ public final class us/tractat/kuilt/conformance/ReturnFixture$Unsupported : us/t
 }
 
 public final class us/tractat/kuilt/conformance/ReturnHarness {
-	public fun <init> (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/core/Tag;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)V
+	public fun <init> (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/core/Tag;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/conformance/PassPlanting;Lus/tractat/kuilt/conformance/ReusedIdLaunch;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)V
 	public final fun getHostFactory ()Lus/tractat/kuilt/session/RoomFactory;
 	public final fun getHostHeartbeat ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
 	public final fun getHostPattern ()Lus/tractat/kuilt/core/Pattern;
 	public final fun getJoinTag ()Lus/tractat/kuilt/core/Tag;
 	public final fun getJoinerHeartbeat ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
+	public final fun getPassPlanting ()Lus/tractat/kuilt/conformance/PassPlanting;
+	public final fun getReusedIdLaunch ()Lus/tractat/kuilt/conformance/ReusedIdLaunch;
 	public final fun hostTab (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun newDevice (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/ReusedIdDevice : us/tractat/kuilt/conformance/ReturnDevice {
+	public abstract fun launchBesideAs-t5-yf_A (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/ReusedIdLaunch {
+}
+
+public final class us/tractat/kuilt/conformance/ReusedIdLaunch$Supported : us/tractat/kuilt/conformance/ReusedIdLaunch {
+	public fun <init> (Lus/tractat/kuilt/conformance/ReusedIdRig;)V
+	public final fun component1 ()Lus/tractat/kuilt/conformance/ReusedIdRig;
+	public final fun copy (Lus/tractat/kuilt/conformance/ReusedIdRig;)Lus/tractat/kuilt/conformance/ReusedIdLaunch$Supported;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/ReusedIdLaunch$Supported;Lus/tractat/kuilt/conformance/ReusedIdRig;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/ReusedIdLaunch$Supported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRig ()Lus/tractat/kuilt/conformance/ReusedIdRig;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/ReusedIdLaunch$Unsupported : us/tractat/kuilt/conformance/ReusedIdLaunch {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/ReusedIdLaunch$Unsupported;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/ReusedIdLaunch$Unsupported;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/ReusedIdLaunch$Unsupported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTrackingUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/ReusedIdRig {
+	public abstract fun newDevice (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public fun <init> ()V
 	public final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat ()V
 	public final fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat ()V
+	public final fun aPlantedGoodPassLetsTheDeviceInUnvetted ()V
+	public final fun aProcessUnderASupersededIdEndsSuperseded ()V
 	public final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage ()V
 	public final fun aReturnAfterTheSeatWentIsReadmitted ()V
 	public final fun aSecondLiveProcessGetsAnAdditionalSeat ()V
@@ -594,6 +666,8 @@ public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public fun getAwaitBudget-FghU774 ()Lkotlin/time/Duration;
 	public final fun getFastHeartbeatConfig ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
 	public fun getMemberInboxCapacity ()I
+	public final fun grantForAnotherRoomIsIgnored ()V
+	public final fun grantForAnotherSubjectIsIgnored ()V
 	public final fun hostFactoryAssignsHostRole ()V
 	public final fun hostLostEmptiesTheRosterBeforeItCompletesTheHostsReader ()V
 	public final fun hostLostIsTerminalBroadcastIsNoOp ()V
@@ -632,6 +706,7 @@ public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public final fun revokedSubjectIsVetted ()V
 	public final fun rosterIsEmptyBeforeAnyHandshake ()V
 	public final fun theTeardownFaultReallyFires ()V
+	public final fun untrustedIssuerIsIgnored ()V
 }
 
 public abstract interface class us/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection {

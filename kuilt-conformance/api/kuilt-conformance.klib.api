@@ -37,6 +37,20 @@ abstract fun interface <#A: kotlin/Any?> us.tractat.kuilt.conformance.lattice/Op
     abstract fun applyRandomOp(#A, kotlin/Int, kotlin.random/Random): #A // us.tractat.kuilt.conformance.lattice/OperationGenerator.applyRandomOp|applyRandomOp(1:0;kotlin.Int;kotlin.random.Random){}[0]
 }
 
+abstract fun interface us.tractat.kuilt.conformance/PassPlanter { // us.tractat.kuilt.conformance/PassPlanter|null[0]
+    abstract suspend fun plant(us.tractat.kuilt.identity/AdmissionProof, us.tractat.kuilt.identity/DidKey, kotlin.collections/List<kotlin/ByteArray>): kotlin.collections/List<us.tractat.kuilt.identity/Grant> // us.tractat.kuilt.conformance/PassPlanter.plant|plant(us.tractat.kuilt.identity.AdmissionProof;us.tractat.kuilt.identity.DidKey;kotlin.collections.List<kotlin.ByteArray>){}[0]
+}
+
+abstract fun interface us.tractat.kuilt.conformance/ReusedIdRig { // us.tractat.kuilt.conformance/ReusedIdRig|null[0]
+    abstract suspend fun newDevice(): us.tractat.kuilt.conformance/ReusedIdDevice // us.tractat.kuilt.conformance/ReusedIdRig.newDevice|newDevice(){}[0]
+}
+
+abstract interface us.tractat.kuilt.conformance/PlantedPassRig { // us.tractat.kuilt.conformance/PlantedPassRig|null[0]
+    abstract suspend fun hostPass(us.tractat.kuilt.identity/DidKey, us.tractat.kuilt.identity/GrantScope): us.tractat.kuilt.identity/Grant // us.tractat.kuilt.conformance/PlantedPassRig.hostPass|hostPass(us.tractat.kuilt.identity.DidKey;us.tractat.kuilt.identity.GrantScope){}[0]
+    abstract suspend fun newDevice(us.tractat.kuilt.conformance/PassPlanter): us.tractat.kuilt.conformance/ReturnDevice // us.tractat.kuilt.conformance/PlantedPassRig.newDevice|newDevice(us.tractat.kuilt.conformance.PassPlanter){}[0]
+    abstract suspend fun strangerPass(us.tractat.kuilt.identity/DidKey, us.tractat.kuilt.identity/GrantScope): us.tractat.kuilt.identity/Grant // us.tractat.kuilt.conformance/PlantedPassRig.strangerPass|strangerPass(us.tractat.kuilt.identity.DidKey;us.tractat.kuilt.identity.GrantScope){}[0]
+}
+
 abstract interface us.tractat.kuilt.conformance/ReturnDevice { // us.tractat.kuilt.conformance/ReturnDevice|null[0]
     abstract val heals // us.tractat.kuilt.conformance/ReturnDevice.heals|{}heals[0]
         abstract fun <get-heals>(): kotlin/Int // us.tractat.kuilt.conformance/ReturnDevice.heals.<get-heals>|<get-heals>(){}[0]
@@ -47,6 +61,10 @@ abstract interface us.tractat.kuilt.conformance/ReturnDevice { // us.tractat.kui
     abstract suspend fun launch(kotlin/Boolean = ...): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnDevice.launch|launch(kotlin.Boolean){}[0]
     abstract suspend fun launchBeside(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnDevice.launchBeside|launchBeside(){}[0]
     abstract suspend fun restore() // us.tractat.kuilt.conformance/ReturnDevice.restore|restore(){}[0]
+}
+
+abstract interface us.tractat.kuilt.conformance/ReusedIdDevice : us.tractat.kuilt.conformance/ReturnDevice { // us.tractat.kuilt.conformance/ReusedIdDevice|null[0]
+    abstract suspend fun launchBesideAs(us.tractat.kuilt.core/PeerId): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReusedIdDevice.launchBesideAs|launchBesideAs(us.tractat.kuilt.core.PeerId){}[0]
 }
 
 sealed interface us.tractat.kuilt.conformance/CancelledCallerFixture { // us.tractat.kuilt.conformance/CancelledCallerFixture|null[0]
@@ -316,6 +334,34 @@ sealed interface us.tractat.kuilt.conformance/ObligationDeclaration { // us.trac
     }
 }
 
+sealed interface us.tractat.kuilt.conformance/PassPlanting { // us.tractat.kuilt.conformance/PassPlanting|null[0]
+    final class Supported : us.tractat.kuilt.conformance/PassPlanting { // us.tractat.kuilt.conformance/PassPlanting.Supported|null[0]
+        constructor <init>(us.tractat.kuilt.conformance/PlantedPassRig) // us.tractat.kuilt.conformance/PassPlanting.Supported.<init>|<init>(us.tractat.kuilt.conformance.PlantedPassRig){}[0]
+
+        final val rig // us.tractat.kuilt.conformance/PassPlanting.Supported.rig|{}rig[0]
+            final fun <get-rig>(): us.tractat.kuilt.conformance/PlantedPassRig // us.tractat.kuilt.conformance/PassPlanting.Supported.rig.<get-rig>|<get-rig>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.conformance/PlantedPassRig // us.tractat.kuilt.conformance/PassPlanting.Supported.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.conformance/PlantedPassRig = ...): us.tractat.kuilt.conformance/PassPlanting.Supported // us.tractat.kuilt.conformance/PassPlanting.Supported.copy|copy(us.tractat.kuilt.conformance.PlantedPassRig){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/PassPlanting.Supported.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/PassPlanting.Supported.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/PassPlanting.Supported.toString|toString(){}[0]
+    }
+
+    final class Unsupported : us.tractat.kuilt.conformance/PassPlanting { // us.tractat.kuilt.conformance/PassPlanting.Unsupported|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/PassPlanting.Unsupported.<init>|<init>(kotlin.String){}[0]
+
+        final val trackingUrl // us.tractat.kuilt.conformance/PassPlanting.Unsupported.trackingUrl|{}trackingUrl[0]
+            final fun <get-trackingUrl>(): kotlin/String // us.tractat.kuilt.conformance/PassPlanting.Unsupported.trackingUrl.<get-trackingUrl>|<get-trackingUrl>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.conformance/PassPlanting.Unsupported.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.conformance/PassPlanting.Unsupported // us.tractat.kuilt.conformance/PassPlanting.Unsupported.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/PassPlanting.Unsupported.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/PassPlanting.Unsupported.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/PassPlanting.Unsupported.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.conformance/RestartFixture { // us.tractat.kuilt.conformance/RestartFixture|null[0]
     abstract val store // us.tractat.kuilt.conformance/RestartFixture.store|{}store[0]
         abstract fun <get-store>(): us.tractat.kuilt.store/DurableStore // us.tractat.kuilt.conformance/RestartFixture.store.<get-store>|<get-store>(){}[0]
@@ -360,6 +406,34 @@ sealed interface us.tractat.kuilt.conformance/ReturnFixture { // us.tractat.kuil
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/ReturnFixture.Unsupported.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/ReturnFixture.Unsupported.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.conformance/ReturnFixture.Unsupported.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.conformance/ReusedIdLaunch { // us.tractat.kuilt.conformance/ReusedIdLaunch|null[0]
+    final class Supported : us.tractat.kuilt.conformance/ReusedIdLaunch { // us.tractat.kuilt.conformance/ReusedIdLaunch.Supported|null[0]
+        constructor <init>(us.tractat.kuilt.conformance/ReusedIdRig) // us.tractat.kuilt.conformance/ReusedIdLaunch.Supported.<init>|<init>(us.tractat.kuilt.conformance.ReusedIdRig){}[0]
+
+        final val rig // us.tractat.kuilt.conformance/ReusedIdLaunch.Supported.rig|{}rig[0]
+            final fun <get-rig>(): us.tractat.kuilt.conformance/ReusedIdRig // us.tractat.kuilt.conformance/ReusedIdLaunch.Supported.rig.<get-rig>|<get-rig>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.conformance/ReusedIdRig // us.tractat.kuilt.conformance/ReusedIdLaunch.Supported.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.conformance/ReusedIdRig = ...): us.tractat.kuilt.conformance/ReusedIdLaunch.Supported // us.tractat.kuilt.conformance/ReusedIdLaunch.Supported.copy|copy(us.tractat.kuilt.conformance.ReusedIdRig){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/ReusedIdLaunch.Supported.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/ReusedIdLaunch.Supported.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/ReusedIdLaunch.Supported.toString|toString(){}[0]
+    }
+
+    final class Unsupported : us.tractat.kuilt.conformance/ReusedIdLaunch { // us.tractat.kuilt.conformance/ReusedIdLaunch.Unsupported|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/ReusedIdLaunch.Unsupported.<init>|<init>(kotlin.String){}[0]
+
+        final val trackingUrl // us.tractat.kuilt.conformance/ReusedIdLaunch.Unsupported.trackingUrl|{}trackingUrl[0]
+            final fun <get-trackingUrl>(): kotlin/String // us.tractat.kuilt.conformance/ReusedIdLaunch.Unsupported.trackingUrl.<get-trackingUrl>|<get-trackingUrl>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.conformance/ReusedIdLaunch.Unsupported.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.conformance/ReusedIdLaunch.Unsupported // us.tractat.kuilt.conformance/ReusedIdLaunch.Unsupported.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/ReusedIdLaunch.Unsupported.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/ReusedIdLaunch.Unsupported.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/ReusedIdLaunch.Unsupported.toString|toString(){}[0]
     }
 }
 
@@ -1208,6 +1282,12 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat() // us.tractat.kuilt.conformance/RoomConformanceSuite.aJoinerPresentingTheHostsKeyGetsAJoinerSeat|aJoinerPresentingTheHostsKeyGetsAJoinerSeat(){}[0]
 
     // Targets: [apple]
+    final fun aPlantedGoodPassLetsTheDeviceInUnvetted() // us.tractat.kuilt.conformance/RoomConformanceSuite.aPlantedGoodPassLetsTheDeviceInUnvetted|aPlantedGoodPassLetsTheDeviceInUnvetted(){}[0]
+
+    // Targets: [apple]
+    final fun aProcessUnderASupersededIdEndsSuperseded() // us.tractat.kuilt.conformance/RoomConformanceSuite.aProcessUnderASupersededIdEndsSuperseded|aProcessUnderASupersededIdEndsSuperseded(){}[0]
+
+    // Targets: [apple]
     final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage() // us.tractat.kuilt.conformance/RoomConformanceSuite.aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage|aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(){}[0]
 
     // Targets: [apple]
@@ -1230,6 +1310,12 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
 
     // Targets: [apple]
     final fun expiredGrantIsVetted() // us.tractat.kuilt.conformance/RoomConformanceSuite.expiredGrantIsVetted|expiredGrantIsVetted(){}[0]
+
+    // Targets: [apple]
+    final fun grantForAnotherRoomIsIgnored() // us.tractat.kuilt.conformance/RoomConformanceSuite.grantForAnotherRoomIsIgnored|grantForAnotherRoomIsIgnored(){}[0]
+
+    // Targets: [apple]
+    final fun grantForAnotherSubjectIsIgnored() // us.tractat.kuilt.conformance/RoomConformanceSuite.grantForAnotherSubjectIsIgnored|grantForAnotherSubjectIsIgnored(){}[0]
 
     // Targets: [apple]
     final fun hostFactoryAssignsHostRole() // us.tractat.kuilt.conformance/RoomConformanceSuite.hostFactoryAssignsHostRole|hostFactoryAssignsHostRole(){}[0]
@@ -1339,11 +1425,20 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     // Targets: [apple]
     final fun theTeardownFaultReallyFires() // us.tractat.kuilt.conformance/RoomConformanceSuite.theTeardownFaultReallyFires|theTeardownFaultReallyFires(){}[0]
 
+    // Targets: [apple]
+    final fun untrustedIssuerIsIgnored() // us.tractat.kuilt.conformance/RoomConformanceSuite.untrustedIssuerIsIgnored|untrustedIssuerIsIgnored(){}[0]
+
     // Targets: [wasmJs]
     final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aDifferentKeyOnAPartitionedIdReleasesTheSeat|aDifferentKeyOnAPartitionedIdReleasesTheSeat(){}[0]
 
     // Targets: [wasmJs]
     final fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aJoinerPresentingTheHostsKeyGetsAJoinerSeat|aJoinerPresentingTheHostsKeyGetsAJoinerSeat(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aPlantedGoodPassLetsTheDeviceInUnvetted(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aPlantedGoodPassLetsTheDeviceInUnvetted|aPlantedGoodPassLetsTheDeviceInUnvetted(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aProcessUnderASupersededIdEndsSuperseded(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aProcessUnderASupersededIdEndsSuperseded|aProcessUnderASupersededIdEndsSuperseded(){}[0]
 
     // Targets: [wasmJs]
     final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage|aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage(){}[0]
@@ -1368,6 +1463,12 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
 
     // Targets: [wasmJs]
     final fun expiredGrantIsVetted(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.expiredGrantIsVetted|expiredGrantIsVetted(){}[0]
+
+    // Targets: [wasmJs]
+    final fun grantForAnotherRoomIsIgnored(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.grantForAnotherRoomIsIgnored|grantForAnotherRoomIsIgnored(){}[0]
+
+    // Targets: [wasmJs]
+    final fun grantForAnotherSubjectIsIgnored(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.grantForAnotherSubjectIsIgnored|grantForAnotherSubjectIsIgnored(){}[0]
 
     // Targets: [wasmJs]
     final fun hostFactoryAssignsHostRole(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.hostFactoryAssignsHostRole|hostFactoryAssignsHostRole(){}[0]
@@ -1476,6 +1577,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
 
     // Targets: [wasmJs]
     final fun theTeardownFaultReallyFires(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.theTeardownFaultReallyFires|theTeardownFaultReallyFires(){}[0]
+
+    // Targets: [wasmJs]
+    final fun untrustedIssuerIsIgnored(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.untrustedIssuerIsIgnored|untrustedIssuerIsIgnored(){}[0]
 }
 
 abstract class us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite { // us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite|null[0]
@@ -2107,7 +2211,7 @@ final class us.tractat.kuilt.conformance/MatrixEntry { // us.tractat.kuilt.confo
 }
 
 final class us.tractat.kuilt.conformance/ReturnHarness { // us.tractat.kuilt.conformance/ReturnHarness|null[0]
-    constructor <init>(us.tractat.kuilt.session/RoomFactory, us.tractat.kuilt.core/Pattern, us.tractat.kuilt.core/Tag, us.tractat.kuilt.liveness/HeartbeatConfig, us.tractat.kuilt.liveness/HeartbeatConfig, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/ReturnDevice>, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.session/RoomFactory>) // us.tractat.kuilt.conformance/ReturnHarness.<init>|<init>(us.tractat.kuilt.session.RoomFactory;us.tractat.kuilt.core.Pattern;us.tractat.kuilt.core.Tag;us.tractat.kuilt.liveness.HeartbeatConfig;us.tractat.kuilt.liveness.HeartbeatConfig;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.conformance.ReturnDevice>;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.session.RoomFactory>){}[0]
+    constructor <init>(us.tractat.kuilt.session/RoomFactory, us.tractat.kuilt.core/Pattern, us.tractat.kuilt.core/Tag, us.tractat.kuilt.liveness/HeartbeatConfig, us.tractat.kuilt.liveness/HeartbeatConfig, us.tractat.kuilt.conformance/PassPlanting, us.tractat.kuilt.conformance/ReusedIdLaunch, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/ReturnDevice>, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.session/RoomFactory>) // us.tractat.kuilt.conformance/ReturnHarness.<init>|<init>(us.tractat.kuilt.session.RoomFactory;us.tractat.kuilt.core.Pattern;us.tractat.kuilt.core.Tag;us.tractat.kuilt.liveness.HeartbeatConfig;us.tractat.kuilt.liveness.HeartbeatConfig;us.tractat.kuilt.conformance.PassPlanting;us.tractat.kuilt.conformance.ReusedIdLaunch;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.conformance.ReturnDevice>;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.session.RoomFactory>){}[0]
 
     final val hostFactory // us.tractat.kuilt.conformance/ReturnHarness.hostFactory|{}hostFactory[0]
         final fun <get-hostFactory>(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnHarness.hostFactory.<get-hostFactory>|<get-hostFactory>(){}[0]
@@ -2119,6 +2223,10 @@ final class us.tractat.kuilt.conformance/ReturnHarness { // us.tractat.kuilt.con
         final fun <get-joinTag>(): us.tractat.kuilt.core/Tag // us.tractat.kuilt.conformance/ReturnHarness.joinTag.<get-joinTag>|<get-joinTag>(){}[0]
     final val joinerHeartbeat // us.tractat.kuilt.conformance/ReturnHarness.joinerHeartbeat|{}joinerHeartbeat[0]
         final fun <get-joinerHeartbeat>(): us.tractat.kuilt.liveness/HeartbeatConfig // us.tractat.kuilt.conformance/ReturnHarness.joinerHeartbeat.<get-joinerHeartbeat>|<get-joinerHeartbeat>(){}[0]
+    final val passPlanting // us.tractat.kuilt.conformance/ReturnHarness.passPlanting|{}passPlanting[0]
+        final fun <get-passPlanting>(): us.tractat.kuilt.conformance/PassPlanting // us.tractat.kuilt.conformance/ReturnHarness.passPlanting.<get-passPlanting>|<get-passPlanting>(){}[0]
+    final val reusedIdLaunch // us.tractat.kuilt.conformance/ReturnHarness.reusedIdLaunch|{}reusedIdLaunch[0]
+        final fun <get-reusedIdLaunch>(): us.tractat.kuilt.conformance/ReusedIdLaunch // us.tractat.kuilt.conformance/ReturnHarness.reusedIdLaunch.<get-reusedIdLaunch>|<get-reusedIdLaunch>(){}[0]
 
     final suspend fun hostTab(): us.tractat.kuilt.session/RoomFactory // us.tractat.kuilt.conformance/ReturnHarness.hostTab|hostTab(){}[0]
     final suspend fun newDevice(): us.tractat.kuilt.conformance/ReturnDevice // us.tractat.kuilt.conformance/ReturnHarness.newDevice|newDevice(){}[0]
