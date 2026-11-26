@@ -162,6 +162,18 @@ kotlin {
             // Logback ListAppender, as FileDeviceKeyStoreTest does.
             implementation(libs.logback)
         }
+        // The Android Keystore store against a REAL `AndroidKeyStore` provider, on a device or an emulator
+        // (#3226): the androidUnitTest suites above run over FakeKeystore, which reads AOSP but measures
+        // nothing. Its own tree, not commonTest's, so a device run is these classes alone. Run it with
+        // `:kuilt-identity:connectedDebugAndroidTest`; nothing in `build` or `check` does, since a PR
+        // runner has no device. `build` still compiles it, through lint's androidTest analysis.
+        getByName("androidInstrumentedTest").dependencies {
+            implementation(project(":kuilt-conformance"))
+            implementation(project(":kuilt-test"))
+            implementation(libs.kotlin.testJunit)
+            implementation(libs.kotlinx.coroutines.test)
+            implementation(libs.androidx.test.runner)
+        }
         jvmTest.dependencies {
             // Compile scope: FileDeviceKeyStoreTest reads the replacement warning off a Logback
             // ListAppender, the line an operator would actually see.
