@@ -36,8 +36,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AppleDevice
  * suite pins it on both platforms (`unreadableGrantsAreRefusedNotRewritten`), over a grants record
  * the process may not open.
  *
- * A signing fault during the self-test is the provider failing, not the key: [SoftwareDeviceKey.readBack]
- * throws [IllegalStateException] for it, and so does this store, keeping the key.
+ * A signing or verifying fault during the self-test is the provider failing, not the key:
+ * [SoftwareDeviceKey.readBack] throws [IllegalStateException] for it, and so does this store, keeping
+ * the key, with nothing written to the medium.
  *
  * ## Several stores over one medium
  *

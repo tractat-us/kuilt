@@ -46,7 +46,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.FileDeviceK
  * Anything else that stops the key file being read — no permission, a symbolic-link loop, an I/O or
  * network file-system error — throws [java.io.IOException], and nothing is written. Only an absent
  * file means "no key yet". Replacing a key the store could not even look at would turn a passing
- * fault into a new identity, silently.
+ * fault into a new identity, silently. For the same reason a cryptographic provider that fails while
+ * signing or verifying the self-test throws [IllegalStateException] and leaves the file as it is.
  *
  * ## Crash safety
  *

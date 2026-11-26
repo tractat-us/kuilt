@@ -114,13 +114,14 @@ internal class SoftwareDeviceKey private constructor(
          *
          * Names the key from the JWK's own `x` and `y`, decodes its `d` with the platform's private
          * decoder, then signs [SELF_TEST] with `d` and verifies that signature under the name, through
-         * [DidKey.verify] and so through the same on-curve check and decompression every other device
+         * [selfTestVerifies] and so through the same on-curve check and decompression every other device
          * applies to that name. A key that passes signs for the name every room will check it
          * against. Only the bytes can make it [StoredKey.Refused]: bytes that are not a P-256 JWK, a
          * point that is not on the curve, a `d` out of range, and a `d` that belongs to some other key.
-         * A provider that fails while it signs throws instead, since that says nothing about the
-         * bytes and a store must not replace a sound key over it. A decoder's exception is the one
-         * case that cannot be told apart, and is read as the bytes' fault.
+         * A provider that fails while it signs or verifies throws instead, since that says nothing
+         * about the bytes and a store must not replace a sound key over it. That is why the verify is
+         * not [DidKey.verify], which answers `false` for a provider that failed (#3596). A decoder's
+         * exception is the one case that cannot be told apart, and is read as the bytes' fault.
          *
          * The name is read here rather than through a provider, because the three disagree about a
          * JWK's public half (all measured on #3224): the JDK keeps the file's `x` and `y`; CryptoKit's
@@ -129,9 +130,12 @@ internal class SoftwareDeviceKey private constructor(
          * carrying `d` through its public decoder. WebCrypto also checks the pair itself on import,
          * so there a mismatched pair is refused by the decoder before the self-test runs.
          *
+         * @param verifier the self-test's verify: the provider's, or a test's that fails where no
+         *   provider can be made to.
+         * @param sign the self-test's signing, injected for the same reason.
          * @throws IllegalStateException when this platform's cryptographic provider cannot run at all,
-         *   fails while signing, or mints a cancellation while decoding: none of which says anything
-         *   about [jwk], so none may be read as a reason to replace it.
+         *   fails while signing or verifying, or mints a cancellation while decoding: none of which
+         *   says anything about [jwk], so none may be read as a reason to replace it.
          */
         suspend fun readBack(
             jwk: ByteArray,
@@ -141,8 +145,8 @@ internal class SoftwareDeviceKey private constructor(
             val ecdsa = algorithms().ecdsa
             var failing = "its x, y and d are not a P-256 key"
             // Only reading the bytes can condemn them: the JSON, the coordinates, the scalar's range and
-            // the provider's decoder. Signing below is the provider's own work on a key already read, so
-            // a failure there says nothing about the bytes and throws instead.
+            // the provider's decoder. Signing and verifying below are the provider's own work on a key
+            // already read, so a failure there says nothing about the bytes and throws instead.
             val (privateKey, name) = try {
                 val name = nameInJwk(jwk)
                 failing = "it does not decode as a P-256 JWK"
@@ -159,7 +163,7 @@ internal class SoftwareDeviceKey private constructor(
                 return StoredKey.Refused("$failing (${e::class.simpleName})")
             }
             val signature = providerCall(::signingFailed) { sign(privateKey, SELF_TEST) }
-            if (!name.verify(SELF_TEST, signature)) {
+            if (!name.selfTestVerifies(SELF_TEST, signature, verifier)) {
                 return StoredKey.Refused("its private half does not sign for the name its public half gives, ${name.value}")
             }
             return StoredKey.Usable(SoftwareDeviceKey(privateKey, name))
