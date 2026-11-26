@@ -13,9 +13,9 @@ import kotlin.time.Duration.Companion.milliseconds
  *
  * The room calls these outside its lock, since signing suspends: [issue] on every direct `Welcome`,
  * and again every [refreshPeriodMillis] (a third of the pass's life, [PERIODS_PER_PASS]) while the
- * member stays connected, as long as [mayIssue] holds. The terms come from the member's membership: the
- * policy's at admission, or those the pass a device returned on carried ([termsOf], #3222). A restore
- * or a takeover keeps them.
+ * member stays connected, as long as [mayIssue] holds. The terms come from the member's membership:
+ * the policy's at admission, or those the pass a device returned on carried ([termsOf], #3222). A
+ * restore or a takeover keeps them.
  *
  * Stateless: the terms live on the membership and the schedule in the room's renewal jobs, so what a
  * host remembers of a member that left is the room's too (`DepartedMembers`).

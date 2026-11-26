@@ -58,9 +58,9 @@ quietly starting from nothing, and leaves the bytes where they are.
 A room puts these together for you. In `:kuilt-session`, a host gives each device it lets in a
 pass, renews it while the device stays connected, and lets a device whose seat is gone back in on
 a good pass without asking the app. A device away up to the pass's term after its last contact
-still holds a good one, provided the last renewal reached it. A
-device whose pass ran out, or was issued before its host revoked the device, is decided by the
-app's admission policy like any newcomer.
+still holds a good one, provided the last renewal reached it. A device whose pass ran out, or was
+issued before its host revoked the device, is decided by the app's admission policy like any
+newcomer.
 
 The store. A device is recognised only if it comes back with the same key, so the key has to
 outlive the app. `DeviceKeyStore` is where it lives: the first `deviceKey()` call makes it and every
