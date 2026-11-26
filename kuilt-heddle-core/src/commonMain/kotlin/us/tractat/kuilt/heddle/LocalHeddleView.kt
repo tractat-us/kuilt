@@ -92,11 +92,12 @@ public class LocalHeddleView internal constructor(
      *
      * [queues] lists each leaf's queued jobs by their reservations, head first. A leaf counts as
      * waiting while its list is not empty. Each pick does what that caller does:
-     * [LocalHeddle.acquire] with [reservation] among the waiting leaves in [eligible], then, when the
-     * winner's head is larger than [reservation], [LocalHeddle.extend] the lease by the difference,
-     * then pop the head. An extend makes no pick, so the order is the one the slot's own reservation
-     * decides, and the head sets only what the lease holds: `max(reservation, head)`. A head below
-     * [reservation] holds [reservation]: the preview does not [LocalHeddle.shrink] a lease.
+     * [LocalHeddle.acquire] with [reservation] among the waiting leaves in [eligible], then size the
+     * lease to the winner's head, then pop the head: when the head is smaller than [reservation],
+     * [LocalHeddle.shrink] the lease by the difference, and when it is larger, [LocalHeddle.extend]
+     * it. Neither makes a pick, so the order is the one the slot's own reservation decides, and the
+     * head sets what the lease holds. The shrink comes straight after the pick, so the next pick
+     * reads the positions an acquire at the head would have left (#3648).
      *
      * The list ends when no waiting leaf is eligible, or at the first call that is refused. When the
      * acquire lands and its extend is the call
@@ -128,7 +129,10 @@ public class LocalHeddleView internal constructor(
             val out = scratch.acquire(waitingNow, eligibleNow, startedAt = 0L, reservation = reservation)
             if (out !is AcquireOutcome.Acquired) break
             val head = remaining.getValue(out.lease.leaf).removeFirst()
-            if (head > reservation) {
+            if (head < reservation) {
+                val shrunk = scratch.shrink(out.lease.id, reservation - head)
+                check(shrunk == LeaseOutcome.Done(0L, 0L, 0L)) { "the shrink of ${out.lease.id}, just acquired, answered $shrunk" }
+            } else if (head > reservation) {
                 val stillWaiting = remaining.filterValues { it.isNotEmpty() }.keys
                 if (scratch.extend(out.lease.id, head - reservation, stillWaiting) !is LeaseOutcome.Done) break
             }

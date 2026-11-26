@@ -1184,8 +1184,8 @@ public class LocalHeddle private constructor(
 
     /**
      * Who would go next, with each leaf's own next job: the leaves a caller's loop over [queues]
-     * would pick, in order, acquiring at [reservation] and extending to the winner's head, if
-     * nothing else happened in between. Changes nothing, not even the wake memory. Answered by a
+     * would pick, in order, acquiring at [reservation] and then shrinking or extending the lease to
+     * the winner's head, if nothing else happened in between. Changes nothing, not even the wake memory. Answered by a
      * view of this engine's state: see [LocalHeddleView.previewPicks].
      *
      * @throws IllegalArgumentException when [reservation] or any queued reservation, not only a
