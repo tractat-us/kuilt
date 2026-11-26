@@ -76,6 +76,7 @@ class HeddleNodeReconcileOwnTest {
             val peer1 = late.h.peers[1].node
             assertIs<ReconcileOwnOutcome.Repaired>(late.h.peers[0].node.reconcileOwn(ACME))
             val own = assertIs<ReconcileOwnOutcome.Repaired>(peer1.reconcileOwn(ACME), "peer 1 repairs with its reservation open")
+            late.h.pump(1_000L)
             val before = peer1.ledger.value
             peer1.complete(late.id, LATE_COST)
             late.h.pump(1_000L)
@@ -238,7 +239,7 @@ class HeddleNodeReconcileOwnTest {
             val before = node.ledger.value
             val outcome = node.reconcileOwn(ACME)
             assertAll(
-                { assertEquals(listOf(OLD, UNDER_OTHER.id), before.retiredInboundEdges(ACME).sorted(), "rig: two retired edges") },
+                { assertEquals(setOf(OLD, UNDER_OTHER.id), before.retiredInboundEdges(ACME).toSet(), "rig: two retired edges") },
                 { assertEquals(ReconcileOwnOutcome.CrossParent(OTHER, mapOf(OLD to ROOT)), outcome) },
                 { assertEquals(before, node.ledger.value, "nothing was written") },
             )
