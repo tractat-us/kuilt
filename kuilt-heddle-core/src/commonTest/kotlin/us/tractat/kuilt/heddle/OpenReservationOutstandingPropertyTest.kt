@@ -34,9 +34,10 @@ import kotlin.test.assertEquals
  * [LocalHeddle.snapshot] returns in [LeaseId] order, and the edges are sorted before they are
  * compared, so a seed walks the same trajectory on every target.
  *
- * The positive control is a shrink that hands back across the leaf's edge only
- * ([LocalHeddle.shrinkAtTheLeafOnlyForTest]): it must red at every shrink of a lease whose path
- * has an edge above its leaf's, the edges where the lease's reservation no longer matches.
+ * The positive control walks each seed again with every shrink handing back across the leaf's
+ * edge only ([LocalHeddle.shrinkAtTheLeafOnlyForTest]), up to the first shrink of a path with an
+ * edge above its leaf's. It must red at that step and not before, since a one-edge shrink at the
+ * leaf is the whole path's. Every seed reaches one.
  */
 class OpenReservationOutstandingPropertyTest {
 
@@ -319,30 +320,39 @@ class OpenReservationOutstandingPropertyTest {
         const val OTHER_CEILING = 2L
 
         /** The control's verdict on each seed: measured on JVM, macosArm64 and wasmJs, identical on all three. */
-        val CONTROL: List<String> = List(SEEDS) { "?" }
+        val CONTROL: List<String> = listOf(
+            "redded at its first shrink across two edges, after 0 on one",
+            "redded at its first shrink across two edges, after 1 on one",
+            "redded at its first shrink across two edges, after 1 on one",
+            "redded at its first shrink across two edges, after 1 on one",
+            "redded at its first shrink across two edges, after 0 on one",
+            "redded at its first shrink across two edges, after 0 on one",
+        )
 
         /** Measured on JVM, macosArm64 and wasmJs, identical on all three. */
         val EXPECTED: Map<String, Int> = linkedMapOf(
-            "edges compared" to 8591,
-            "of which outstanding" to 3834,
-            "steps with a draining CLOSING edge" to 286,
-            "acquired" to 151,
-            "acquired with a ceiling full" to 41,
-            "acquired on a branch, three edges down" to 48,
-            "extended" to 54,
-            "completed within the reservation" to 54,
-            "completed overrunning it" to 59,
-            "cancelled" to 61,
-            "settled across a CLOSING edge" to 22,
-            "admitted" to 45,
-            "reweights that moved a lease" to 19,
-            "removals over an open lease" to 5,
-            "other reloads" to 20,
-            "attached" to 32,
+            "edges compared" to 10265,
+            "of which outstanding" to 3216,
+            "steps with a draining CLOSING edge" to 175,
+            "acquired" to 154,
+            "acquired with a ceiling full" to 43,
+            "acquired on a branch, three edges down" to 59,
+            "extended" to 47,
+            "completed within the reservation" to 47,
+            "completed overrunning it" to 73,
+            "cancelled" to 56,
+            "shrunk in part" to 27,
+            "shrunk whole" to 31,
+            "settled across a CLOSING edge" to 21,
+            "admitted" to 33,
+            "reweights that moved a lease" to 31,
+            "removals over an open lease" to 3,
+            "other reloads" to 23,
+            "attached" to 28,
             "detached" to 24,
-            "detaches over an open lease" to 33,
-            "restored with memory" to 70,
-            "restored without memory" to 66,
+            "detaches over an open lease" to 24,
+            "restored with memory" to 66,
+            "restored without memory" to 56,
         )
     }
 }
