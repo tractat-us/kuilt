@@ -567,13 +567,6 @@ public class LocalHeddle private constructor(
      */
     private val openElsewhere: Map<GroupId, Int> = emptyMap(),
     /**
-     * What leases this engine does not hold reserve on each edge, as [openElsewhere] counts them:
-     * the real engine's, for the throwaway engine of a [LocalHeddleView], so a waker it clamps is
-     * counted past the front by them as the real engine would count it (#3238). Empty for every
-     * real engine. Never changes, so it lives outside [Core].
-     */
-    private val reservedElsewhere: Map<AttachmentId, Long> = emptyMap(),
-    /**
      * Called after each level's pick, once the wake memory has moved and before the delegation: the
      * seam a test throws from to fail an [acquire] part-way, since no input reaches the invariant
      * checks there. `null` in every engine but the one [withAfterPickForTest] builds. Nullable
@@ -787,12 +780,11 @@ public class LocalHeddle private constructor(
      * throwaway engine.
      */
     internal fun descend(base: EntitlementLedger, demands: Demands, eligible: Set<GroupId>, reservation: Long): Descent {
-        val reserved = openReserved()
         var local = base
         val levels = ArrayList<Level>()
         var group = root
         while (group !in eligible || !local.isLeasable(group)) {
-            val pick = when (val step = allocator.pickChildStep(group, local, demands.waiting, demands.eligible, reserved)) {
+            val pick = when (val step = allocator.pickChildStep(group, local, demands.waiting, demands.eligible)) {
                 is FairShareAllocator.ChildStep.Picked -> step.pick
                 FairShareAllocator.ChildStep.NoPick -> return Descent.Refused(group)
                 // The seat and wake step there would pass the position limit (design §7.1).
@@ -837,24 +829,6 @@ public class LocalHeddle private constructor(
         openElsewhere.plusCounts(ledger.openBeneath(open.values.asSequence().map { it.path }, leasable))
 
     /**
-     * What the open leases reserve on each edge of their paths, this engine's own and
-     * [reservedElsewhere]: what a waker the wake step clamps is counted past its parent's front by
-     * (#3238). Derived on each call, as [openBeneath] is.
-     */
-    internal fun reservedBeneath(): Map<AttachmentId, Long> =
-        reservedOnPaths(open.values.asSequence().map { it.path to it.lease.reserved }, reservedElsewhere)
-
-    /**
-     * [reservedBeneath] as the wake step reads it, summed only if a waker is clamped. Taken once per
-     * call, before the call opens, extends or closes a lease: each reservation is then the one its
-     * delegation already put on the ledger the step reads.
-     */
-    private fun openReserved(): (AttachmentId) -> Long {
-        val sums by lazy { reservedBeneath() }
-        return { edge -> sums[edge] ?: 0L }
-    }
-
-    /**
      * [waiting] and [eligible] without every leaf beneath a group at its ceiling: what a pick
      * builds its demand views over, so a capped group is wanted by nobody and counts as idle at its
      * parent. A name no pick can end at stays, so it is still reported as it is with no ceiling.
@@ -874,7 +848,7 @@ public class LocalHeddle private constructor(
      * hands over the live allocator, which the view only ever forks.
      */
     private fun view(): LocalHeddleView =
-        LocalHeddleView(root, policy, epoch, ledger, allocator, capacity, leasable, openBeneath = openBeneath(), reservedBeneath = reservedBeneath())
+        LocalHeddleView(root, policy, epoch, ledger, allocator, capacity, leasable, openBeneath = openBeneath())
 
     /**
      * Charge work another scheduler already started at [leaf]: open a lease for it with no pick,
@@ -923,7 +897,7 @@ public class LocalHeddle private constructor(
         val seen = observedWaiting(base, waiting, running = leaf, reservation)
         if (!base.canEndAt(leaf)) {
             // The refused acquire's pick observes at the root before it finds nothing to pick.
-            allocator.settle(root, base, seen, openReserved())
+            allocator.settle(root, base, seen)
             return@atomically AcquireOutcome.NoLiveLineage(leaf)
         }
         val path = checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }
@@ -1083,10 +1057,9 @@ public class LocalHeddle private constructor(
         seen: (AttachmentId) -> Demand,
     ): Delegated {
         var local = start
-        val reserved = openReserved()
         for ((index, edge) in path.withIndex()) {
             val parent = checkNotNull(local.record(edge)) { "charged path edge ${edge.value} has no record" }.parent
-            local = allocator.settle(parent, local, seen, reserved)
+            local = allocator.settle(parent, local, seen)
             if (local.gauge(edge) == null) {
                 val seated = allocator.seatUnseated(parent, local, seen)
                 if (seated.gauge(edge) == null) return Delegated(local, index)
@@ -1848,7 +1821,7 @@ public class LocalHeddle private constructor(
      * them as this engine's would.
      */
     private fun copyOf(afterPick: ((GroupId) -> Unit)?, forgets: Boolean): LocalHeddle =
-        LocalHeddle(root, policy, epoch, ledger, allocator, leasable, openElsewhere, reservedElsewhere, afterPick, forgets)
+        LocalHeddle(root, policy, epoch, ledger, allocator, leasable, openElsewhere, afterPick, forgets)
             .also { it.core = core.fork(core.revision) }
 
     /** The path [lease] charges, for tests: what it was opened on, or what a reweight moved it onto. */
@@ -2248,10 +2221,9 @@ public class LocalHeddle private constructor(
 
         /**
          * A throwaway engine over [ledger] that picks, and tops up, as one with [allocator]'s wake
-         * memory and [capacity] would next, with [openElsewhere] counted against every ceiling and
-         * [reservedElsewhere] past the front a waker is clamped to, each beside the leases it opens
-         * itself. [allocator] becomes its own, so pass a fork. What a [LocalHeddleView] plays its
-         * questions forward on.
+         * memory and [capacity] would next, with [openElsewhere] counted against every ceiling beside
+         * the leases it opens itself. [allocator] becomes its own, so pass a fork. What a
+         * [LocalHeddleView] plays its questions forward on.
          */
         internal fun scratch(
             root: GroupId,
@@ -2262,9 +2234,8 @@ public class LocalHeddle private constructor(
             leasable: Leasable,
             capacity: Capacity,
             openElsewhere: Map<GroupId, Int>,
-            reservedElsewhere: Map<AttachmentId, Long>,
         ): LocalHeddle =
-            LocalHeddle(root, policy, epoch, ledger, allocator, leasable, openElsewhere, reservedElsewhere).also { it.capacity = capacity }
+            LocalHeddle(root, policy, epoch, ledger, allocator, leasable, openElsewhere).also { it.capacity = capacity }
 
         /**
          * An engine over [ledger] as it stands, with a fresh allocator, leasing what [leasable]
@@ -2392,16 +2363,3 @@ public class LocalHeddle private constructor(
     }
 }
 
-/**
- * What [leases], each a path and its reservation, reserve on each edge of their paths, summed,
- * with [elsewhere] added: the reservations a clamped waker is counted past its parent's front by
- * (#3238). An edge no lease crosses is absent.
- */
-internal fun reservedOnPaths(leases: Sequence<Pair<List<AttachmentId>, Long>>, elsewhere: Map<AttachmentId, Long>): Map<AttachmentId, Long> {
-    val sums = HashMap(elsewhere)
-    for ((path, reserved) in leases) {
-        if (reserved == 0L) continue
-        for (edge in path) sums[edge] = checkedAdd(sums[edge] ?: 0L, reserved)
-    }
-    return sums
-}

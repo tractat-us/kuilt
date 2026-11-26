@@ -44,17 +44,11 @@ public class LocalHeddleView internal constructor(
      * Every throwaway engine counts it beside the leases it opens. Empty when no ceiling is set.
      */
     private val openBeneath: Map<GroupId, Int>,
-    /**
-     * What the leases open when the state was taken reserve on each edge of their paths: summed,
-     * not carried, since the wake step needs only the sum a waker is clamped past the front by
-     * (#3238). Every throwaway engine counts it beside the leases it opens.
-     */
-    private val reservedBeneath: Map<AttachmentId, Long>,
 ) {
 
     /** An engine over this view's state, with its own copy of the wake memory: it picks and tops up as the engine would next. */
     private fun scratch(): LocalHeddle =
-        LocalHeddle.scratch(root, policy, epoch, ledger, allocator.fork(), leasable, capacity, openBeneath, reservedBeneath)
+        LocalHeddle.scratch(root, policy, epoch, ledger, allocator.fork(), leasable, capacity, openBeneath)
 
     /**
      * Who would go next: the leaves `reservations.size` calls to [LocalHeddle.acquire] would pick,
@@ -288,7 +282,7 @@ public class LocalHeddleView internal constructor(
     public fun shareLine(waiting: Set<GroupId>): ShareLine {
         val competing = ledger.reachable(ledger.belowCeilings(waiting, openBeneath, root, leasable), root, leasable)
         // Placing copies what each parent's step reads of the wake memory, so the engine's own is never moved.
-        return ShareLine.over(ledger, root, competing, allocator, LocalHeddle.waitingOver(ledger, competing)) { reservedBeneath[it] ?: 0L }
+        return ShareLine.over(ledger, root, competing, allocator, LocalHeddle.waitingOver(ledger, competing))
     }
 }
 
