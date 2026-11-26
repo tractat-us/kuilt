@@ -5,6 +5,7 @@ import android.util.Log
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.runTest
+import org.junit.Assume.assumeTrue
 import us.tractat.kuilt.identity.KeystoreFaults.Outcome
 import us.tractat.kuilt.test.assertAll
 import java.io.File
@@ -67,6 +68,31 @@ class KeystoreFaultDeviceTest {
             { if (verdict is FailureVerdict.Unknown) assertIs<Outcome.Threw>(atOnce, "of unknown cause, the key is kept until the hour is up") },
             { assertNotNull(replacement, "within the hour the device has a key again: at once $atOnce, an hour on $anHourOn") },
             { assertNotEquals(original, replacement, "and it is a new key") },
+        )
+    }
+
+    /**
+     * A key whose blob metadata row in keystore2's database does not decode. Measured on Android 14,
+     * keystore2 answers the signature with `SYSTEM_ERROR`, which [judge] reads as the Keystore's own
+     * trouble ([FailureVerdict.Keep]): the store throws on every launch and never replaces the key,
+     * however long it lasts. That is the bound Decided 29 states for "a key that fails forever with a
+     * flagged code"; this row pins that real damage reaches it. If Decided 29 changes, this row changes.
+     */
+    @Test
+    fun aCorruptBlobMetadataRowIsKeptAsTheKeystoresOwnTrouble() = runTest {
+        assumeTrue("needs KeyStoreException's flags, Android 13 and later", Build.VERSION.SDK_INT >= KEYSTORE_EXCEPTION_API)
+        store().deviceKey()
+        KeystoreFaults.corruptBlobMetadata(alias)
+        val failure = assertNotNull(backendFailure(), "rig: the key still answers as present")
+        val verdict = judge(failure, Build.VERSION.SDK_INT)
+        clock += 61.minutes.inWholeMilliseconds
+        var made = 0
+        val anHourOn = outcomeOf { store { made++ }.deviceKey().id }
+        record("corrupt blob metadata", "failure=${failure.description} cause=${failure.cause.describeChain()} verdict=${verdict.name} anHourOn=${anHourOn.describe()}")
+        assertAll(
+            { assertIs<FailureVerdict.Keep>(verdict, "SYSTEM_ERROR reads as the Keystore's own trouble: ${failure.cause.describeChain()}") },
+            { assertIs<Outcome.Threw>(anHourOn, "so the store still throws an hour on") },
+            { assertEquals(0, made, "and makes no key") },
         )
     }
 

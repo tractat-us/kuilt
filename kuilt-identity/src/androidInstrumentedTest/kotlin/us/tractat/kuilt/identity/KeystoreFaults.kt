@@ -76,6 +76,24 @@ internal object KeystoreFaults {
         return out
     }
 
+    /**
+     * Overwrites keystore2's metadata for the key blob under [alias] (Android 12 and later) with bytes
+     * that do not decode, so the key loads and its blob cannot be read when it signs.
+     */
+    fun corruptBlobMetadata(alias: String): String {
+        assumeRoot()
+        check(keystore2) { "precondition: keystore2, Android 12 and later" }
+        val out = DeviceShell.asRoot(
+            """
+            DB=/data/misc/keystore/persistent.sqlite
+            ID=$(sqlite3 ${'$'}DB "SELECT id FROM keyentry WHERE alias='$alias' AND namespace=${DeviceShell.uid} AND domain=0;")
+            sqlite3 ${'$'}DB "UPDATE blobmetadata SET data=X'FFFF' WHERE blobentryid IN (SELECT id FROM blobentry WHERE keyentryid=${'$'}ID AND subcomponent_type=0); SELECT changes();"
+            """.trimIndent(),
+        )
+        check((out.trim().lines().lastOrNull()?.toIntOrNull() ?: 0) > 0) { "rig: no blob metadata under $alias to corrupt: $out" }
+        return out
+    }
+
     /** Whether the Keystore still holds a key blob under [alias], read off its storage as root. */
     fun keyBlobExists(alias: String): Boolean {
         val out = if (keystore2) {

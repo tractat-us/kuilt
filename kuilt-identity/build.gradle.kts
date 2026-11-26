@@ -281,7 +281,7 @@ android {
 // nothing as a success, so without this an un-run class reads as green. Adding or removing a device
 // test means changing this number in the same commit. A row an assumption skipped still counts, and
 // the verify names every skipped row, so a device that could not reach a rig says so.
-val expectedDeviceTestRows = 23
+val expectedDeviceTestRows = 24
 
 tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
     val results = layout.buildDirectory.dir("outputs/androidTest-results/connected/debug")
