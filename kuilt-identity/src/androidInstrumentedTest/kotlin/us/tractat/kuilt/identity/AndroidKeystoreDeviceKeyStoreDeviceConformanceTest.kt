@@ -31,11 +31,11 @@ import kotlin.test.AfterTest
  *
  * Each damage hook is a fault the real Keystore really holds, never a fake standing in:
  *
- * - **corrupt key:** a key that needs the screen lock, planted under the alias, then the screen lock
- *   removed, so the Keystore is done with it for good. Needs a device with no screen lock of its own,
- *   and is skipped elsewhere. A corrupted key *blob* is a different fault: Decided 29 waits out an hour
- *   on the answer a real Keystore gives it, which this property's "replaced at once" cannot express, so
- *   [KeystoreFaultDeviceTest] measures it;
+ * - **corrupt key:** the key's metadata rows deleted from keystore2's database, which keystore2 reports
+ *   as `VALUE_CORRUPTED` (public code 7) — the code the unit-test rig throws, now from a real Keystore.
+ *   Needs root, so it is skipped on a retail phone. A key *blob* of random bytes is a different answer,
+ *   code 10, on which Decided 29 waits out an hour, which this property's "replaced at once" cannot
+ *   express; [KeystoreFaultDeviceTest] measures that one;
  * - **mismatched key:** the certificate of one Keystore key imported beside a different private key;
  * - **cleared key:** the alias deleted;
  * - **interrupted write** (`AtomicMedium`): as the unit-test subclass gives it;
@@ -68,7 +68,7 @@ class AndroidKeystoreDeviceKeyStoreDeviceConformanceTest : DeviceKeyStoreConform
             reopen = { beforeKeyIsMade ->
                 AndroidKeystoreDeviceKeyStore(alias, directory, AndroidKeystoreBackend, Build.VERSION.SDK_INT, { NOW }, beforeKeyIsMade = beforeKeyIsMade)
             },
-            corruptKey = { KeystoreFaults.plantKeyInvalidatedByRemovingTheScreenLock(alias) },
+            corruptKey = { KeystoreFaults.corruptKeyMetadata(alias) },
             plantMismatchedKey = { plantMismatchedKey(alias) },
             clearKey = {
                 check(AndroidKeystoreBackend.getCertificatePublicKey(alias) != null) { "precondition: there was a key to clear" }

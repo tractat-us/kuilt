@@ -55,6 +55,27 @@ internal object KeystoreFaults {
         return out
     }
 
+    /**
+     * Deletes keystore2's metadata rows for the key under [alias] (Android 12 and later), which keystore2
+     * answers with `VALUE_CORRUPTED`, public code 7: measured on Android 14, `getKey` throws
+     * `UnrecoverableKeyException` caused by `KeyStoreException` code 7 ("Trying to get creation date").
+     * The one real corruption found that the Keystore itself calls corrupted; a key blob of random bytes
+     * is code 10 instead, which Decided 29 deliberately waits an hour on.
+     */
+    fun corruptKeyMetadata(alias: String): String {
+        assumeRoot()
+        check(keystore2) { "precondition: keystore2, Android 12 and later" }
+        val out = DeviceShell.asRoot(
+            """
+            DB=/data/misc/keystore/persistent.sqlite
+            ID=$(sqlite3 ${'$'}DB "SELECT id FROM keyentry WHERE alias='$alias' AND namespace=${DeviceShell.uid} AND domain=0;")
+            sqlite3 ${'$'}DB "DELETE FROM keymetadata WHERE keyentryid=${'$'}ID; SELECT changes();"
+            """.trimIndent(),
+        )
+        check((out.trim().lines().lastOrNull()?.toIntOrNull() ?: 0) > 0) { "rig: no metadata under $alias to delete: $out" }
+        return out
+    }
+
     /** Whether the Keystore still holds a key blob under [alias], read off its storage as root. */
     fun keyBlobExists(alias: String): Boolean {
         val out = if (keystore2) {
