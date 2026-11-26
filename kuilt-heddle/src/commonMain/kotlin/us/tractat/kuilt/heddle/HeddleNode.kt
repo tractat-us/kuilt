@@ -703,7 +703,12 @@ public class HeddleNode internal constructor(
         for (pending in retry) charge(pending.capturedPath, pending.amount)
     }
 
-    /** Cancel reservation [id] — a completion charging zero service (design §4.4). */
+    /**
+     * Cancel reservation [id] — a completion charging zero service (design §4.4). It is for work
+     * that never ran. Work that held its earmark settles with [complete] at what it cost, however it
+     * ended: a cancel of work that ran is charged nothing, so the service it used is a free ride its
+     * siblings pay for.
+     */
     override fun cancel(id: ReservationId): Unit = complete(id, 0L)
 
     /**

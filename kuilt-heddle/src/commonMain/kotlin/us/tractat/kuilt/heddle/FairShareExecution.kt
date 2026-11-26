@@ -33,7 +33,11 @@ public interface FairShareExecution {
      */
     public fun complete(id: ReservationId, actualCost: Long)
 
-    /** Cancel reservation [id] — a completion charging zero service (design §4.4). */
+    /**
+     * Cancel reservation [id] — a completion charging zero service (design §4.4). It is for work
+     * that never ran. Work that held its earmark settles with [complete] at what it cost, however it
+     * ended, since a cancel of work that ran is charged nothing and its siblings pay for the ride.
+     */
     public fun cancel(id: ReservationId)
 
     /**
