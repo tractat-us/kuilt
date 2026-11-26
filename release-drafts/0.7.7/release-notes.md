@@ -1,8 +1,8 @@
 <!--
 DRAFT — GitHub release body for v0.7.7. Paste everything below the closing `-->` into the
 release, above GitHub's generated "What's Changed" list. Refreshed 2026-11-26 against
-`origin/main` at `f72f0aaaaf`. No `ASSUMES` comments remain. At the tag, check
-`git log --oneline f72f0aaaaf..<tag>` for anything that merged after.
+`origin/main` at `31ea84acd4`. No `ASSUMES` comments remain. At the tag, check
+`git log --oneline 31ea84acd4..<tag>` for anything that merged after.
 -->
 
 ## Highlights
@@ -99,7 +99,7 @@ per-run nonce, and a mint whose key is already taken is refused and logged. Six 
 leave `@HeddleInternalApi` and become stable: `EntitlementLedger.liveInboundEdges`, `mintedRoots`,
 `hasForgotten` and `activationFitsTheBudget`, `weightFitsTheBudget`, and
 `FairShareAllocator.peakPositionFraction`. The docs now say `cancel` is for work that never ran;
-work that held its slot settles with `complete(lease, elapsed)`. `LocalHeddle`'s KDoc now states what a wrong cost estimate costs a group, with sizing
+work that held its slot settles with `complete(lease, elapsed)`. A slot acquired at the longest job no longer holds a short job's slack until it completes: `LocalHeddle.shrink(lease, amount)` hands part of a lease's reservation back (#3729), and `FairSharePool` and `previewPicks` now shrink a lease to the winner's head at the grant when the head is below the slot's reservation (#3733). A competing edge's demand target now sits above what the edge already holds, so an edge holding a lot no longer reads as idle (#3728). `LocalHeddle`'s KDoc now states what a wrong cost estimate costs a group, with sizing
 guidance on `LocalPolicy.defaultReservation` (#3652).
 
 **Replication (`:kuilt-quilter`).** Anti-entropy ships much less when peers are idle or slightly

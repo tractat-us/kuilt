@@ -1,7 +1,7 @@
 # 0.7.7 release drafts — notes
 
 Drafted 2026-11-20 against `origin/main` at `d951b4c1d` and the epic/3159 plan. **Refreshed
-2026-11-26; reviewed through `origin/main` at `f72f0aaaaf`** (73 commits past `v0.7.6`), reading
+2026-11-26; reviewed through `origin/main` at `31ea84acd4`** (76 commits past `v0.7.6`), reading
 each merge's ABI dump diff and PR body. `ProtocolVersion.CURRENT` is 9 there (MIN = MAX = 9). Nothing was posted, filed or tagged. No Gradle was run.
 
 ## Refresh 2026-11-26: what changed
@@ -50,6 +50,8 @@ each merge's ABI dump diff and PR body. `ProtocolVersion.CURRENT` is 9 there (MI
   `v0.7.6`'s dump has, are deleted, and `peakPositionFraction` drops `demand`), #3725 (docs and
   tests only: `cancel` is for work that never ran) and #3732 (tests only, no production change, so
   it gets no line in the release notes).
+
+- **Second refresh, 2026-11-26 (to `31ea84acd4`): three more heddle merges, no break.** #3729 adds `LocalHeddle.shrink(LeaseId, Long): LeaseOutcome` (one new method in the `:kuilt-heddle-core` dump), #3733 makes `FairSharePool`/`previewPicks` shrink a lease to its head at the grant (no API change), #3728 lifts a competing edge's demand target above what it holds (no ABI change; `UNBOUNDED_TARGET` private→internal). One sentence in the heddle paragraph covers all three. `ProtocolVersion.CURRENT` still 9; no notice mentions heddle, so the notices are unchanged.
 
 - A `ResumeToken` an app stored is now dead data, since the type is gone. The notes say "delete it".
 
@@ -124,8 +126,8 @@ OneScreen on `release-notes.md` and `NOTES.md`).
 ## Posting order, after the stack drains
 
 1. One `./gradlew clean && ./gradlew build --rerun-tasks` on `main` (the 0.7.6 ruling's condition).
-   Run `git log --oneline f72f0aaaaf..origin/main` for anything that merged after this refresh: the
-   heddle wave 3–4 items still open (#3648, #3707, #3199, #3332, #3170 PRs 2–3, #3721 phase 2) and any identity
+   Run `git log --oneline 31ea84acd4..origin/main` for anything that merged after this refresh: the
+   heddle wave 3–4 items still open (#3199, #3332, #3170 PRs 2–3, #3721 phase 2) and any identity
    slice past #3708 each want a line. Re-check `ProtocolVersion.CURRENT` is still 9; a later wire PR bumps it.
 2. Tag `v0.7.7`; wait for the `maven-central` job, then release the PENDING deployment by hand at
    central.sonatype.com and confirm the artifacts resolve.
