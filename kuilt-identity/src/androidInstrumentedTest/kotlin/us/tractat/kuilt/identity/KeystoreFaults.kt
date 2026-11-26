@@ -89,18 +89,31 @@ internal object KeystoreFaults {
         awaitState("stopped")
     }
 
-    /** Starts the Keystore daemon again, and waits until init reports it running. */
+    /**
+     * Starts the Keystore daemon again, and waits until init reports it running **and** its binder service
+     * is registered. Running alone is not enough: measured on Android 14, a call made between the two
+     * still fails as if the daemon were down.
+     */
     fun startKeystore() {
         DeviceShell.asRoot("setprop ctl.start $daemon")
         awaitState("running")
+        awaitUntil("$service registered") { DeviceShell.run("service check $service").contains(": found") }
     }
 
+    private val service get() = if (keystore2) "android.system.keystore2.IKeystoreService/default" else "android.security.keystore"
+
     private fun awaitState(state: String) {
+        awaitUntil("$daemon '$state' (it is '${DeviceShell.run("getprop init.svc.$daemon").trim()}')") {
+            DeviceShell.run("getprop init.svc.$daemon").trim() == state
+        }
+    }
+
+    private fun awaitUntil(what: String, condition: () -> Boolean) {
         repeat(STATE_POLLS) {
-            if (DeviceShell.run("getprop init.svc.$daemon").trim() == state) return
+            if (condition()) return
             Thread.sleep(STATE_POLL_MS)
         }
-        error("rig: $daemon never reached '$state'; it is '${DeviceShell.run("getprop init.svc.$daemon").trim()}'")
+        error("rig: never reached $what")
     }
 
     /** Runs [block] on a thread of its own, bounded, so a Keystore call that blocks on a dead daemon cannot wedge the run. */
