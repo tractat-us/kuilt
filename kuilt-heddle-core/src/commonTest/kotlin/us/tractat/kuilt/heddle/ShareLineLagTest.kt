@@ -160,12 +160,6 @@ class ShareLineLagTest {
         }
     }
 
-    /** What [h]'s open leases reserve on each edge, as its wake step reads it (#3238). */
-    private fun reservedOf(h: LocalHeddle): (AttachmentId) -> Long {
-        val sums = h.reservedBeneath()
-        return { edge -> sums[edge] ?: 0L }
-    }
-
     /**
      * Taking a line leaves the engine's wake memory as it found it, though the step it takes at
      * each parent moves the memory it runs on: counted on a fork, so the rig is not vacuous.
@@ -180,8 +174,7 @@ class ShareLineLagTest {
             assertEquals(before, h.allocator.memory)
             val competing = ledger.reachable(waiting, h.root, Leasable.ByTopology(h.persist().lastApplied))
             val fork = h.allocator.fork()
-            val reserved = reservedOf(h)
-            for (parent in parentsOf(ledger, competing)) fork.settle(parent, ledger, LocalHeddle.waitingOver(ledger, competing), reserved)
+            for (parent in parentsOf(ledger, competing)) fork.settle(parent, ledger, LocalHeddle.waitingOver(ledger, competing))
             if (fork.memory != before) stepsThatMove++
         }
         assertTrue(stepsThatMove > SEEDS, "lines whose steps move the memory they run on: $stepsThatMove")

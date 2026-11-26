@@ -9,18 +9,21 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * What a clamped waker is counted past the front by (#3238) is the edge's own outstanding (#3721).
+ * In a `LocalHeddle`, an edge's outstanding is what the open leases beneath it reserve (#3721).
  *
- * `LocalHeddle` threads one per-edge sum of open reservations through the wake step: the engine's
- * [LocalHeddle.reservedBeneath], which [LocalHeddle.view] hands a [LocalHeddleView] as its field,
- * and the sum [LocalHeddleSnapshot.view] forms from the persisted leases. In `LocalHeddle` every
- * delegation is one lease's reservation, so each should equal [EdgeSummary.outstanding] on every
- * edge, at every step. This asserts both sums against it after every operation, on every edge the
- * ledger knows, including one no lease crosses, where both sides must read `0`.
+ * The wake step clamps a waker past the front by its edge's [EdgeSummary.outstanding] (#3238),
+ * standing for the work it has in flight. Until #3721 a `LocalHeddle` threaded that sum through the
+ * step instead, summed from its open leases; the clamp reads the ledger now, so this is the
+ * property it rests on. In `LocalHeddle` every delegation is one lease's reservation, so the
+ * outstanding on every edge, at every step, should be the reservations of the open leases whose
+ * paths cross it. This sums them here, from the leases [LocalHeddle.persist] keeps, and asserts the
+ * sum against the ledger after every operation, on every edge the ledger knows, including one no
+ * lease crosses, where both sides must read `0`.
  *
  * The tree is `root → {ci: 1 ≤3 {manual, template(2 → 1)}, other: 3 ≤2, spare}`: two attached
  * levels under `ci`, repository → branch, and a ceiling on `ci` and on `other`. The operations
- * are acquire, complete (under, exact and overrunning), cancel, extend, admit, a reweight that
+ * are acquire, complete (under, exact and overrunning), cancel, extend, shrink (part of a
+ * reservation, or all of it), admit, a reweight that
  * moves the open leases onto new edges, a reload that removes `spare` and one that brings it
  * back, attach, detach, and restore with and without the wake memory. A detach or a removal with
  * a lease open beneath leaves a CLOSING edge that drains when the lease settles.
@@ -30,6 +33,10 @@ import kotlin.test.assertEquals
  * reaching one reds. Every draw walks a `List` this file built, or the leases
  * [LocalHeddle.snapshot] returns in [LeaseId] order, and the edges are sorted before they are
  * compared, so a seed walks the same trajectory on every target.
+ *
+ * The positive control is a shrink that hands back across the leaf's edge only
+ * ([LocalHeddle.shrinkAtTheLeafOnlyForTest]): it must red at every shrink of a lease whose path
+ * has an edge above its leaf's, the edges where the lease's reservation no longer matches.
  */
 class OpenReservationOutstandingPropertyTest {
 
@@ -79,85 +86,134 @@ class OpenReservationOutstandingPropertyTest {
     fun theOpenReservationsBeneathAnEdgeAreItsOutstanding() {
         val failures = ArrayList<String>()
         val tally = Tally()
-        for (seed in 0 until SEEDS) {
-            val rng = Random(seed)
-            var h = LocalHeddle.bootWhole(t0, policy, epoch = 0L).also { it.reconcileCapacity(SLOTS) }
-            // Branches start attached, so the first acquires reach two levels.
-            for (names in attachable) h.attach(pathOf(names), generation = 0L)
-            for (step in 0 until STEPS) {
-                val open = h.snapshot().leases
-                val at = "seed $seed step $step"
-                val op = rng.nextInt(13)
-                when {
-                    op <= 2 || open.isEmpty() && op <= 6 -> {
-                        val waiting = subset(rng)
-                        val eligible = waiting.filter { rng.nextBoolean() }
-                        val atCeiling = h.openBeneath().let { (it[ci] ?: 0) >= CI_CEILING.toInt() || (it[other] ?: 0) >= OTHER_CEILING.toInt() }
-                        val out = h.acquire(waiting.toSet(), eligible.toSet(), startedAt = step.toLong(), reservation = 1L + rng.nextInt(5))
-                        if (out is AcquireOutcome.Acquired) {
-                            tally.acquired++
-                            if (atCeiling) tally.acquiredBesideACeiling++
-                            if (out.lease.leaf in branches) tally.acquiredThreeDown++
-                        }
-                    }
-                    op == 3 -> {
-                        val lease = open[rng.nextInt(open.size)]
-                        if (h.extend(lease.id, 1L + rng.nextInt(4), waiting = emptySet()) is LeaseOutcome.Done) tally.extended++
-                    }
-                    op == 4 || op == 5 -> {
-                        val lease = open[rng.nextInt(open.size)]
-                        val draining = closingOn(h, lease.id)
-                        val cost = rng.nextInt(9).toLong()
-                        if (h.complete(lease.id, cost, waiting = emptySet()) is LeaseOutcome.Done) {
-                            if (cost > lease.reserved) tally.overran++ else tally.completed++
-                            if (draining) tally.drained++
-                        }
-                    }
-                    op == 6 -> {
-                        val lease = open[rng.nextInt(open.size)]
-                        val draining = closingOn(h, lease.id)
-                        if (h.cancel(lease.id) is LeaseOutcome.Done) {
-                            tally.cancelled++
-                            if (draining) tally.drained++
-                        }
-                    }
-                    op == 7 -> {
-                        val leaf = leaves[rng.nextInt(leaves.size)]
-                        if (h.admit(leaf, setOf(leaf), startedAt = step.toLong(), reservation = 1L + rng.nextInt(5)) is AcquireOutcome.Acquired) tally.admitted++
-                    }
-                    op == 8 -> {
-                        val next = trees[rng.nextInt(trees.size)]
-                        val paths = open.associate { it.id to h.capturedPath(it.id) }
-                        val result = h.apply(next, generation = 1_000L + step)
-                        if (result.applied.isNotEmpty()) {
-                            when {
-                                open.any { h.capturedPath(it.id) != paths[it.id] } -> tally.reweightsThatMovedALease++
-                                next === removed && open.any { it.leaf == t0.groupId("spare") } -> tally.removalsOverALease++
-                                else -> tally.reloads++
-                            }
-                        }
-                    }
-                    op == 9 -> {
-                        if (h.attach(pathOf(attachable[rng.nextInt(attachable.size)]), generation = 2_000L + step).applied.isNotEmpty()) tally.attached++
-                    }
-                    op == 10 -> {
-                        val result = h.detach(pathOf(attachable[rng.nextInt(attachable.size)]))
-                        if (result.refusals.any { it is StepRefusal.Draining }) tally.detachesOverALease++ else if (result.applied.isNotEmpty()) tally.detached++
-                    }
-                    else -> {
-                        val keep = op == 11
-                        h = restored(h, keep)
-                        if (keep) tally.restoredKept++ else tally.restoredDropped++
-                    }
-                }
-                tally.checks += check(h, at, failures, tally)
-            }
-        }
+        for (seed in 0 until SEEDS) walk(seed, Shrink.WHOLE_PATH, tally, failures)
         assertAll(
             { assertEquals(emptyList(), failures.take(10), "${failures.size} mismatches") },
             { assertEquals(SEEDS * STEPS, tally.steps, "every step was checked") },
             { assertEquals(EXPECTED, tally.counts(), "the operations the generator reached") },
         )
+    }
+
+    @Test
+    fun aShrinkAtTheLeafOnlyIsToldApart() {
+        val missed = ArrayList<String>()
+        var redded = 0
+        var unseenOnOneEdge = 0
+        for (seed in 0 until SEEDS) {
+            val failures = ArrayList<String>()
+            val shrunk = walk(seed, Shrink.LEAF_ONLY, Tally(), failures) ?: continue
+            when {
+                failures.isNotEmpty() -> redded++
+                shrunk.size > 1 -> missed += "seed $seed: a shrink across ${shrunk.size} edges went unseen"
+                else -> unseenOnOneEdge++
+            }
+        }
+        assertAll(
+            { assertEquals(emptyList(), missed) },
+            { assertEquals(CONTROL_REDS, redded, "seeds whose first shrink crossed an edge above its leaf's, and redded") },
+            { assertEquals(CONTROL_ONE_EDGE, unseenOnOneEdge, "seeds whose first shrink was on a one-edge path, where leaf-only is the whole path") },
+        )
+    }
+
+    /** How the walk's shrinks hand back: as [LocalHeddle.shrink] does, or across the leaf's edge only. */
+    private enum class Shrink { WHOLE_PATH, LEAF_ONLY }
+
+    /**
+     * One seed's walk of [STEPS] operations, checked after each into [failures]. Under
+     * [Shrink.LEAF_ONLY] it stops at the first shrink, which leaves a ledger later calls need not
+     * settle, and returns the path that shrink crossed; otherwise it returns `null`.
+     */
+    private fun walk(seed: Int, shrinking: Shrink, tally: Tally, failures: MutableList<String>): List<AttachmentId>? {
+        val rng = Random(seed)
+        var h = LocalHeddle.bootWhole(t0, policy, epoch = 0L).also { it.reconcileCapacity(SLOTS) }
+        // Branches start attached, so the first acquires reach two levels.
+        for (names in attachable) h.attach(pathOf(names), generation = 0L)
+        for (step in 0 until STEPS) {
+            val open = h.snapshot().leases
+            val at = "seed $seed step $step"
+            val op = rng.nextInt(14)
+            var shrunkOn: List<AttachmentId>? = null
+            when {
+                op <= 2 || open.isEmpty() && op <= 6 -> {
+                    val waiting = subset(rng)
+                    val eligible = waiting.filter { rng.nextBoolean() }
+                    val atCeiling = h.openBeneath().let { (it[ci] ?: 0) >= CI_CEILING.toInt() || (it[other] ?: 0) >= OTHER_CEILING.toInt() }
+                    val out = h.acquire(waiting.toSet(), eligible.toSet(), startedAt = step.toLong(), reservation = 1L + rng.nextInt(5))
+                    if (out is AcquireOutcome.Acquired) {
+                        tally.acquired++
+                        if (atCeiling) tally.acquiredBesideACeiling++
+                        if (out.lease.leaf in branches) tally.acquiredThreeDown++
+                    }
+                }
+                op == 3 -> {
+                    val lease = open[rng.nextInt(open.size)]
+                    if (h.extend(lease.id, 1L + rng.nextInt(4), waiting = emptySet()) is LeaseOutcome.Done) tally.extended++
+                }
+                op == 4 || op == 5 -> {
+                    val lease = open[rng.nextInt(open.size)]
+                    val draining = closingOn(h, lease.id)
+                    val cost = rng.nextInt(9).toLong()
+                    if (h.complete(lease.id, cost, waiting = emptySet()) is LeaseOutcome.Done) {
+                        if (cost > lease.reserved) tally.overran++ else tally.completed++
+                        if (draining) tally.drained++
+                    }
+                }
+                op == 6 -> {
+                    val lease = open[rng.nextInt(open.size)]
+                    val draining = closingOn(h, lease.id)
+                    if (h.cancel(lease.id) is LeaseOutcome.Done) {
+                        tally.cancelled++
+                        if (draining) tally.drained++
+                    }
+                }
+                op == 7 -> {
+                    val leaf = leaves[rng.nextInt(leaves.size)]
+                    if (h.admit(leaf, setOf(leaf), startedAt = step.toLong(), reservation = 1L + rng.nextInt(5)) is AcquireOutcome.Acquired) tally.admitted++
+                }
+                op == 8 -> {
+                    val next = trees[rng.nextInt(trees.size)]
+                    val paths = open.associate { it.id to h.capturedPath(it.id) }
+                    val result = h.apply(next, generation = 1_000L + step)
+                    if (result.applied.isNotEmpty()) {
+                        when {
+                            open.any { h.capturedPath(it.id) != paths[it.id] } -> tally.reweightsThatMovedALease++
+                            next === removed && open.any { it.leaf == t0.groupId("spare") } -> tally.removalsOverALease++
+                            else -> tally.reloads++
+                        }
+                    }
+                }
+                op == 9 -> {
+                    if (h.attach(pathOf(attachable[rng.nextInt(attachable.size)]), generation = 2_000L + step).applied.isNotEmpty()) tally.attached++
+                }
+                op == 10 -> {
+                    val result = h.detach(pathOf(attachable[rng.nextInt(attachable.size)]))
+                    if (result.refusals.any { it is StepRefusal.Draining }) tally.detachesOverALease++ else if (result.applied.isNotEmpty()) tally.detached++
+                }
+                op == 13 -> {
+                    val reserving = open.filter { it.reserved > 0L }
+                    if (reserving.isNotEmpty()) {
+                        val lease = reserving[rng.nextInt(reserving.size)]
+                        val amount = 1L + rng.nextLong(lease.reserved)
+                        val out = when (shrinking) {
+                            Shrink.WHOLE_PATH -> h.shrink(lease.id, amount)
+                            Shrink.LEAF_ONLY -> h.shrinkAtTheLeafOnlyForTest(lease.id, amount)
+                        }
+                        if (out is LeaseOutcome.Done) {
+                            if (amount == lease.reserved) tally.shrunkWhole++ else tally.shrunk++
+                            shrunkOn = h.capturedPath(lease.id)
+                        }
+                    }
+                }
+                else -> {
+                    val keep = op == 11
+                    h = restored(h, keep)
+                    if (keep) tally.restoredKept++ else tally.restoredDropped++
+                }
+            }
+            tally.checks += check(h, at, failures, tally)
+            if (shrinking == Shrink.LEAF_ONLY && shrunkOn != null) return shrunkOn
+        }
+        return null
     }
 
     /** Whether [lease]'s path crosses a CLOSING edge, so settling it drains one. */
@@ -173,25 +229,33 @@ class OpenReservationOutstandingPropertyTest {
     }
 
     /**
-     * Both threaded sums against each edge's outstanding, on every edge the ledger knows, sorted.
-     * Returns how many edges it compared.
+     * What the open leases reserve on each edge their paths cross, summed: the reference the
+     * ledger's outstanding is checked against. An edge no lease crosses is absent.
+     */
+    private fun reservedOnPaths(open: List<PersistedLease>): Map<AttachmentId, Long> {
+        val sums = LinkedHashMap<AttachmentId, Long>()
+        for (lease in open) for (edge in lease.path) sums[edge] = (sums[edge] ?: 0L) + lease.lease.reserved
+        return sums
+    }
+
+    /**
+     * The open leases' reservations against each edge's outstanding, on every edge the ledger
+     * knows, sorted. Returns how many edges it compared.
      */
     private fun check(h: LocalHeddle, at: String, failures: MutableList<String>, tally: Tally): Int {
         tally.steps++
         val ledger = h.snapshot().ledger
-        val engine = h.reservedBeneath()
-        val persisted = reservedOnPaths(h.persist().open.asSequence().map { it.path to it.lease.reserved }, emptyMap())
+        val reserved = reservedOnPaths(h.persist().open)
         val edges = ledger.allEdges().sortedBy { it.value }
-        for (key in (engine.keys + persisted.keys).sortedBy { it.value }) {
+        for (key in reserved.keys.sortedBy { it.value }) {
             if (key !in ledger.allEdges()) failures += "$at: a lease reserves on ${key.value}, which the ledger does not know"
         }
         var drainingHere = false
         for (edge in edges) {
             val outstanding = checkNotNull(ledger.edge(edge)) { "$at: ${edge.value} has no summary" }.outstanding
-            val mine = engine[edge] ?: 0L
-            val theirs = persisted[edge] ?: 0L
-            if (mine != outstanding || theirs != outstanding) {
-                failures += "$at: ${edge.value} (${ledger.lifecycle(edge)}) outstanding $outstanding, engine sum $mine, snapshot sum $theirs"
+            val sum = reserved[edge] ?: 0L
+            if (sum != outstanding) {
+                failures += "$at: ${edge.value} (${ledger.lifecycle(edge)}) outstanding $outstanding, open leases reserve $sum"
             }
             if (outstanding != 0L) tally.nonZero++
             if (outstanding != 0L && ledger.lifecycle(edge) == Lifecycle.CLOSING) drainingHere = true
@@ -212,6 +276,8 @@ class OpenReservationOutstandingPropertyTest {
         var completed = 0
         var overran = 0
         var cancelled = 0
+        var shrunk = 0
+        var shrunkWhole = 0
         var drained = 0
         var admitted = 0
         var reweightsThatMovedALease = 0
@@ -234,6 +300,8 @@ class OpenReservationOutstandingPropertyTest {
             "completed within the reservation" to completed,
             "completed overrunning it" to overran,
             "cancelled" to cancelled,
+            "shrunk in part" to shrunk,
+            "shrunk whole" to shrunkWhole,
             "settled across a CLOSING edge" to drained,
             "admitted" to admitted,
             "reweights that moved a lease" to reweightsThatMovedALease,
@@ -253,6 +321,12 @@ class OpenReservationOutstandingPropertyTest {
         const val SLOTS = 8L
         const val CI_CEILING = 3L
         const val OTHER_CEILING = 2L
+
+        /** The control's seeds whose first shrink crossed an edge above its leaf's: measured. */
+        const val CONTROL_REDS = 0
+
+        /** The control's seeds whose first shrink was on a one-edge path: measured. */
+        const val CONTROL_ONE_EDGE = 0
 
         /** Measured on JVM, macosArm64 and wasmJs, identical on all three. */
         val EXPECTED: Map<String, Int> = linkedMapOf(
