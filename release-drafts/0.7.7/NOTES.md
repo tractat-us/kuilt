@@ -1,43 +1,65 @@
 # 0.7.7 release drafts — notes
 
-Drafted 2026-11-20 against `origin/main` at `d951b4c1d`, `origin/epic/3159`'s spec and plan, PRs
-#3258 (1.1), #3273 (1.3) and #3598 (#3271), and the unpushed-as-PR 1.4 branch
-`origin/identity/3211-admission-proof` (protocol line at 4). Nothing was posted, filed or tagged.
-No Gradle was run.
+Drafted 2026-11-20 against `origin/main` at `d951b4c1d` and the epic/3159 plan. **Refreshed
+2026-11-26 against `origin/main` at `5faee4dc92`** (69 commits past `v0.7.6`), reading each merge's
+ABI dump diff and PR body. Nothing was posted, filed or tagged. No Gradle was run.
 
-## Contradictions with the brief
+## Refresh 2026-11-26: what changed
+
+- **Every 2026-11-20 `ASSUMES` marker is settled** against the merged code, and removed:
+  - 1.5 `tryResume(resume: ProvenResume, at: Long)`: as assumed (#3604).
+  - 1.6 `LeaveReason.Superseded(by: PeerId)`: as assumed (#3611).
+  - 1.7–1.8: joiners re-Hello by themselves (#3614). **Wrong guess:** `ResumeToken` does not keep
+    three fields; it is deleted outright, with `Room.resume` and `Room.resumeToken` (#3637, Decided
+    31). So the old contradiction 3 is settled: there is no resume API left to document.
+  - 2.4 `admission: HostAdmission`, required and last, on every host entry point including
+    `ElectionLobby.start`; `AdoptRole.Host(admission, roomId)` / `AdoptRole.Joiner`: as assumed (#3699).
+  - 2.5 `Reject.retryable` and `RejectCode.Unknown(id, retryable)`: as assumed (#3701).
+  - 2.6 `Joined(member, returning: ReturningMark? = null)`, `ReturningMark(previousId: PeerId?)`,
+    protocol ends at 9 with MIN = MAX = CURRENT: as assumed (#3705). So contradiction 2 is settled:
+    the notes now name 9, and that 0.7.6 speaks 2.
+- **Added to the release notes**, none of which the 2026-11-20 draft had: `MembershipEvent.Readmitted`
+  and `LeaveReason.Unobserved` (#3641); `RejectCode.Superseded` and `HostFailed`;
+  `MemberIdentity.dedupKey` removed (#3697); `GrantVerdict.NotYetValid` (#3643);
+  `DeviceKey.sign` behind `@IdentityInternalApi` with `signApp`/`verifyApp` (#3613); the
+  `RoomConformanceSuite` return harness and its one-store rule (#3708); `MultiNodeRaftSim`'s
+  `NodeStart` (#3720); pass renewal (#3701), its 1.5× life (#3712) and retries (#3717); the key
+  store's provider-fault fix (#3719); and an "Also in this release" section for heddle waves 1–2
+  and the first wave 3–4 merges, the quilter anti-entropy rounds, the detector-currency fixes and
+  the game/warp fixes.
+- **The 2026-11-20 finding for kuilt is fixed.** The raw-`sign` signing oracle it described is
+  #3613: `DeviceKey.sign` is `@IdentityInternalApi`, and `signApp(context, message)` signs under an
+  `app/` prefix no kuilt statement can share. The f-c notice now points at `signApp`/`verifyApp`.
+- **bee's pin moved.** bee now pins `0.7.0-dev.1926` (kuilt `e979122a9`, already past `v0.7.6`,
+  still admit v2). Old item 8 below is true only of f-c now. f-c still pins `0.7.0-dev.1700`.
+- **Lockstep.** All three posted notices now say outright that every peer of a room upgrades in one
+  step, because the admit wire jumps from 2 to 9.
+
+## Assumptions still open (each is an `ASSUMES` comment)
+
+Three PRs were OPEN on 2026-11-26 (all three reviewed, two with auto-merge armed):
+
+- **#3712** (#3709): a pass lives 1.5 × `readmitFor`, renewed every half of it, so `open()` gives
+  60–90 min after last contact; on `main` today it is 30–60. Markers in `release-notes.md` (the
+  table and the renewal bullet), `notice-fireworks-compose-3862.md` and `notice-bee-149.md`.
+- **#3717** (#3711): a failed renewal is retried with backoff. Stacked on #3712. Marker in
+  `release-notes.md`'s renewal bullet.
+- **#3719** (#3596): a key store keeps its key on a provider fault. Marker in `release-notes.md`.
+
+At the tag: `gh pr view <N> --json state` for each. MERGED: delete the comment. Not merged: delete
+the comment **and** apply the fallback wording it names.
+
+- A `ResumeToken` an app stored is now dead data, since the type is gone. The notes say "delete it".
+
+## Contradictions with the 2026-11-20 brief (kept for the record)
 
 1. **bee#159 is not an issue.** It is a PR, merged 2026-11-09, that fixed bee#126 with bee's own
    kept HTTP identities (`http-sessions.json`). `notice-bee-159.md` recommends not posting and folds
    the one useful sentence into `notice-bee-149.md`; a short optional comment is there if wanted.
-2. **"Admit protocol v3+" is the first step, not the end state.** Every task that changes what a
-   peer sends bumps it (1.3→3, 1.4→4, 1.5→5, 1.6→6, 1.8→7, 2.5→8, 2.6→9), with MIN = MAX = CURRENT.
-   The release notes say "every peer must run 0.7.7" and leave the number in an ASSUMES comment.
-3. **"App-driven `Resume`/`ResumeToken` secrets are retired"** overstates what the plan removes.
-   The plan deletes `ResumeSecret`, the `Resume`/`ResumeAck` frames, `ResumeToken.secret` and three
-   reject codes (1.8). It does **not** list `Room.resume` or `Room.resumeToken` for deletion: 1.7
-   rewrites `resume` to re-Hello, and 1.9 only stops the skill routing apps to it. The notes say
-   "delete your reconnect code" and flag the API's fate as `ASSUMES Tasks 1.7–1.8`. Decide it there;
-   if `Room.resume` survives, its KDoc should say apps never need it.
-4. **Attribution line.** The brief quotes "This issue was generated"; these are comments, so the
-   drafts use pr-conventions' comment form, "This comment was generated by Claude on behalf of @keddie."
-
-## Assumptions (each is an `ASSUMES` comment in `release-notes.md`)
-
-- 1.5: `tryResume(resume: ProvenResume, at: Long)`.
-- 1.6: `LeaveReason.Superseded(by: PeerId)`.
-- 1.7–1.8: joiners re-Hello by themselves; `ResumeToken` keeps peerId, roomId, issuedAt.
-- 2.4: every host entry point takes a parameter named `admission: HostAdmission`, including the
-  election lobby; `adopt` takes `AdoptRole.Host(admission, roomId)` / `AdoptRole.Joiner`.
-- 2.5: `Reject` carries `retryable`, decoded into `RejectCode.Unknown(id, retryable)` (Decided 25).
-- 2.6: `MembershipEvent.Joined(member, returning: ReturningMark? = null)`, `ReturningMark(previousId: PeerId?)`;
-  protocol ends at 9.
-- Already true on `main` (no marker): `HostAdmission`, `AdmissionPolicy`, `GrantTerms`, `GrantReach`,
-  `RevocationList.open/inMemory/revoke`, the five `DeviceKeyStore.platform` signatures,
-  `fakeKeyStore(index)`. The policy snippet is condensed from `hostAdmissionSample`.
-- A `ResumeToken` serialised under 0.7.6 fails to decode under 0.7.7 (a removed field). True for
-  kotlinx-serialization's default `ignoreUnknownKeys = false`; an app with lenient JSON would decode
-  it. The notes say "delete it", which is right either way.
+2. Settled (above): the protocol line ends at 9.
+3. Settled (above): `Room.resume` and `Room.resumeToken` are deleted.
+4. **Attribution line.** These are comments, so the drafts use pr-conventions' comment form, "This
+   comment was generated by Claude on behalf of @keddie."
 
 ## Where the consumer story was hard to explain (most valuable)
 
@@ -47,9 +69,10 @@ No Gradle was run.
    migration example uses, and silently makes a restarted app a stranger. The required parameter
    (Decided 8) makes it a choice but not a visible one. The notes say it twice; a consumer copying
    test code will still get it wrong. Consider a log line when a production room gets an in-memory store.
-2. **Three returns, three event shapes, one of them a rename.** Held seat → `Resumed`. Same device,
+2. **Three returns, four event shapes, one of them a rename.** Held seat → `Resumed`. Same device,
    new peer id → `Left(Superseded)` + `Joined`. Inside the pass → `Joined(returning = …)`, whose
-   `previousId` is null after a host restart. An app that keys people on `PeerId` breaks silently;
+   `previousId` is null after a host restart. And the returning device's own still-running room
+   hears `Readmitted` whenever its seat was gone. An app that keys people on `PeerId` breaks silently;
    the only stable handle is `Member.key`. That is the single most important migration line.
 3. **`Member.key` is not a person, and not unique.** Two tabs share one key and hold two seats
    (Decided 30); one person with two devices has two keys. Both consumers' asks ("one person, N
@@ -59,33 +82,22 @@ No Gradle was run.
    bee#164's one-word "Evict" needs all three. This needed the longest bullet of any notice.
 5. **Trust in a joiner's roster is the host's word.** Only the host's own key is verified by the
    joiner; every other `Member.key` is host-asserted. Easy to state, easy to miss when an app
-   builds its own trust (fireworks-compose's `LobbyPresence`).
+   builds its own trust (fireworks-compose's `LobbyPresence`). `signApp` (#3613) now gives it a safe way to
+   sign presence entries.
 6. **A pass is per host key.** Lobby re-election and multi-server clusters re-vet returning people
    (Decided 11). With `AdmissionPolicy.open()` nobody notices; with a vetting policy, people are
    asked again after a host change. The notes state the rule; neither consumer issue asks about it,
    but fireworks-compose's election lobby will hit it.
 7. **A wire break in a patch, for a fleet that cannot upgrade at once.** Decided 10 rules out mixed
-   versions, and Iain ruled 0.7.7 a patch. fireworks-compose ships to App Store users: a 0.7.7 server
+   versions (0.7.6 speaks 2, 0.7.7 speaks only 9), and Iain ruled 0.7.7 a patch. fireworks-compose ships to App Store users: a 0.7.7 server
    refuses every shipped build. The release notes put this second, in bold; the f-c notice says to
    plan the server and app rollout together. Worth a deliberate ruling on rollout before the tag.
-8. **Both consumers pin old snapshots** (bee `0.7.0-dev.1696`, f-c `0.7.0-dev.1700`), so 0.7.7 also
+8. **f-c pins an old snapshot** (`0.7.0-dev.1700`; bee has since moved to `0.7.0-dev.1926`), so for f-c 0.7.7 also
    brings 0.7.5's breaks (`:kuilt-otel-otlp` no longer ships a Ktor engine, `:kuilt-base` no longer
    transitive, heddle renames). The notices mention the jump but not those items.
 9. **Name collision in bee.** bee has its own `DeviceKey` (a bearer string a link hands out);
    kuilt's is a private key. Same name, opposite security property (kuilt's anti-goal is "a bearer
    secret on disk"). The bee#149 notice calls it out.
-
-## A finding for kuilt, not for the release (not filed)
-
-`DeviceKey.sign(message)` is public and signs raw bytes. kuilt's statements are signatures over
-their layout bytes (a length-prefixed `kuilt/...` tag, then fields). An app that signs
-**peer-supplied** bytes with its device key — the natural way to sign a presence entry, as the f-c
-notice suggests — is a signing oracle: a peer could hand it the bytes of a `kuilt/admit-proof` for
-a real host's challenge and get back a valid proof under the victim's key. The f-c notice tells
-them to put their own tag in front, which closes it if they listen. A structural fix would be a
-domain-separated public sign (`sign(domain, message)` that refuses a `kuilt/` prefix), or making
-raw `sign` `@IdentityInternalApi`. Worth an issue on #3159 before the tag; it is a public-API
-decision, so better made before 0.7.7 than after.
 
 ## Unmet asks
 
@@ -103,13 +115,17 @@ decision, so better made before 0.7.7 than after.
 `pr-conventions`' House style, exit 0 on all five files (warnings only). The warnings: bare `#N`
 CrossRepoRef on bee's own issue numbers inside bee comments, and on kuilt numbers in kuilt's own
 release (both correct where posted); OneScreen on `release-notes.md`, which is release-note length,
-like v0.7.6's. kuilt's root `.vale.ini` reports nothing on the release notes.
+like v0.7.6's. kuilt's root `.vale.ini` reports nothing on the release notes. Re-run on
+2026-11-26 with Vale 3.28.1 after the refresh: the same, exit 0, warnings only (bare `#N` and
+OneScreen on `release-notes.md` and `NOTES.md`).
 
 ## Posting order, after the stack drains
 
-1. Stack merged, then one `./gradlew clean && ./gradlew build --rerun-tasks` on `main` (the 0.7.6
-   ruling's condition). Re-check every `ASSUMES` comment against `main`, fix the snippet, delete the
-   comment. Confirm the final protocol number and the fate of `Room.resume`.
+1. One `./gradlew clean && ./gradlew build --rerun-tasks` on `main` (the 0.7.6 ruling's condition).
+   Settle the three remaining `ASSUMES` comments (#3712, #3717, #3719) as above, and run
+   `git log --oneline 5faee4dc92..origin/main` for anything that merged after this refresh: the
+   heddle wave 3–4 items (#3238, #3239, #3648, #3707, #3057, #3170) and any identity slice past #3708
+   each want a line. Re-check `ProtocolVersion.CURRENT` is still 9; a later wire PR bumps it.
 2. Tag `v0.7.7`; wait for the `maven-central` job, then release the PENDING deployment by hand at
    central.sonatype.com and confirm the artifacts resolve.
 3. Publish the GitHub release: `release-notes.md` (below its leading comment) above GitHub's

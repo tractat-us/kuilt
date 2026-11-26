@@ -1,8 +1,8 @@
 <!--
 DRAFT — GitHub release body for v0.7.7. Paste everything below the closing `-->` into the
 release, above GitHub's generated "What's Changed" list. Refreshed 2026-11-26 against
-`origin/main` at `5faee4dc92`. Three `ASSUMES` comments remain, one per PR still open on that
-date (#3712, #3717, #3719). At the tag, check each with `gh pr view <N> --json state`: delete the
+`origin/main` at `5faee4dc92`. Three `ASSUMES` comments remain, covering the three PRs still open on
+that date (#3712, #3717, #3719). At the tag, check each with `gh pr view <N> --json state`: delete the
 comment if it MERGED, or delete the comment and the text it covers if it did not.
 -->
 
