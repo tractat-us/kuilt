@@ -21,6 +21,7 @@ import java.security.PublicKey
 import java.security.cert.Certificate
 import java.security.spec.ECGenParameterSpec
 import java.util.UUID
+import org.junit.Assume.assumeTrue
 import kotlin.test.AfterTest
 
 /**
@@ -55,6 +56,12 @@ class AndroidKeystoreDeviceKeyStoreDeviceConformanceTest : DeviceKeyStoreConform
     }
 
     override suspend fun newFixture(): DeviceKeyStoreFixture {
+        // As the unit-test subclass, for the reason it gives: below 33 every failure is of unknown cause
+        // and waits out an hour, and on Android 11 and earlier a cleared key under the store's marker is
+        // a failure too, so the suite's damage properties do not hold as it states them. Measured on an
+        // Android 11 emulator, the cleared-key and interrupted-write rows red for exactly that reason.
+        // KeystoreFaultDeviceTest covers those versions.
+        assumeTrue("the suite's damage properties hold as written from Android 13 (API 33)", Build.VERSION.SDK_INT >= KEYSTORE_EXCEPTION_API)
         val alias = "kuilt-identity-device-test-${UUID.randomUUID()}".also(aliases::add)
         val directory = Files.createTempDirectory("kuilt-keystore-device").toFile().also(directories::add)
         return DeviceKeyStoreFixture.Durable(
