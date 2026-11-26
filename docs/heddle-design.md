@@ -2983,14 +2983,19 @@ List<Long>>, eligible, reservation = defaultReservation)`, built in #3321. Each
 leaf's queue lists its jobs' reservations, head first, and it runs on the same
 scratch engine.
 
-- Each pick does what a real caller does: `acquire` with `reservation`, then, when
-  the winner's head is larger, `extend` the lease by `head − reservation`. Then it
-  pops the head.
-- `extend` makes no pick, so the order is the slot-length order, the contract
-  ruled in #3200 (plan Amendment 9). The head sets only what the lease holds,
-  `max(reservation, head)`. A head below the reservation would need the lease to
-  shrink. `LocalHeddle.shrink` now does that for a caller (#3648); the preview
-  does not call it yet, so such a head still holds the reservation.
+- Each pick does what a real caller does: `acquire` with `reservation`, then size
+  the lease to the winner's head. A larger head `extend`s the lease by
+  `head − reservation`; a smaller one `shrink`s it by `reservation − head`,
+  straight after the pick (#3648). Then it pops the head. `FairSharePool` grants
+  a slot the same way.
+- Neither `extend` nor `shrink` makes a pick, so each pick is made at the slot's
+  reservation, the contract ruled in #3200 (plan Amendment 9). The head sets what
+  the lease holds. A shrink straight after the pick leaves every position and the
+  wake memory as a lease opened at the head would, so the picks after it read
+  the head and not the reservation. A grant funded at the reservation still
+  tops the root up for the reservation, so the refund stays at the root as
+  supply: what is minted can run ahead of an engine that leased at the head, and
+  nothing below the root sees it.
 - The list stops at the first refusal, including the position-ceiling refusal
   the overflow fix adds (#3313). When the `acquire` lands and its `extend` is
   refused, that pick is left out and the list ends there, even when the root
@@ -3034,7 +3039,10 @@ position-ceiling refusal, landed in #3352.
 #### Settled — don't reopen
 
 - Settling per-leaf request length first: the preview models the real
-  acquire-then-extend sequence, which changes no order (#3321).
+  acquire-then-resize sequence, so each pick is made at the slot's reservation
+  (#3321, #3648).
+- A head below the lease's reservation: the preview and `FairSharePool` shrink
+  the lease to it at the grant (#3648).
 - `previewPicks(queues: Map<GroupId, List<Long?>>, …)`, with `null` for an
   unknown length, as #3229 planned: superseded by the `List<Long>` form. Once
   type arguments are erased the two have the same JVM signature, so only one can
@@ -3042,11 +3050,6 @@ position-ceiling refusal, landed in #3352.
 - A snapshot view that takes no policy: the snapshot does not keep one (#3321).
 - A view over `LocalHeddleState`: it lacks the capacity and the last applied
   topology (#3321).
-
-#### Open
-
-- A head below the lease's reservation, which would need the lease to shrink.
-  Tracked by #3648.
 
 ---
 
