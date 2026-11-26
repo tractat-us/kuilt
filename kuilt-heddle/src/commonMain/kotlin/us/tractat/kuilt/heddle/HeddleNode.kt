@@ -194,11 +194,13 @@ public class HeddleNode internal constructor(
     private val lostPeers = HashSet<ReplicaId>()
 
     /**
-     * Edges this peer has been told, through the committed control log, that it must never author a
-     * slot on again — the §6.2 step-2 barrier mark ([quiesceLocally]). **Local, in-memory, and
-     * deliberately not replicated:** it is a promise this incarnation made, and a restart replays the
-     * log to restore it before the boot gate lets any mutator run
-     * (`GovernedHeddleNode.isWritable`, relocation design §6.5 residual 3).
+     * Edges this peer must never author a slot on again. On a governed node the committed control
+     * log says so — the §6.2 step-2 barrier mark ([quiesceLocally]). On a static node this peer
+     * marks them itself, once [reconcileOwn] has drained its own rows there. **Local, in-memory, and
+     * deliberately not replicated:** it is a promise this incarnation made. A governed restart
+     * replays the log to restore it before the boot gate lets any mutator run
+     * (`GovernedHeddleNode.isWritable`, relocation design §6.5 residual 3). A static restart loses it,
+     * together with every reservation that could have needed it.
      *
      * Written and read only under [lock], which is what makes the mark atomic with respect to
      * [complete] — the whole defeat of the barrier-vs-completion race.
@@ -617,8 +619,8 @@ public class HeddleNode internal constructor(
      *
      * **The one exception to "charge the captured path": a quiesced edge** (issue #1693;
      * `heddle-design.md` §10 invariant 4 as weakened by §4.4). If the captured path names an edge
-     * this peer has applied a `Quiesce` for, the charge re-homes to that edge's child's **live**
-     * inbound generation. That is not a rewrite of history — a quiesced edge is drained by
+     * this peer has quiesced — by applying a `Quiesce`, or by draining its own rows there with
+     * [reconcileOwn] — the charge re-homes to that edge's child's **live** inbound generation. That is not a rewrite of history — a quiesced edge is drained by
      * construction, so re-homing the completion is the same conserving move the recovery performs,
      * taken at charge time. Charging the dead edge instead is exactly the straggler that would leave
      * a permanently unclearable per-edge-safety violation on it. If no live inbound exists yet, the
@@ -677,8 +679,9 @@ public class HeddleNode internal constructor(
 
     /**
      * Retry every buffered charge, keeping the ones that still have nowhere to re-home to. Always
-     * called under [lock], from [complete], [quiesceLocally], and the control sink's publish — the
-     * three moments at which a live inbound generation can newly exist for a buffered charge.
+     * called under [lock], from [complete], [quiesceLocally], [reconcileOwn] and the control sink's
+     * publish: the moments at which a live inbound generation can newly exist for a buffered charge,
+     * or a strand's finals are about to be read.
      */
     private fun flushBufferedCharges() {
         if (bufferedCharges.isEmpty()) return

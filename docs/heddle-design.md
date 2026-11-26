@@ -2622,7 +2622,12 @@ Carried over from the source intact; each is a named property test (§13).
    log-recorded a promise never to write again, and the re-home is the same
    conserving move the recovery would perform, taken at charge time. A
    single-writer ledger meets that fence by construction, provided no open
-   reservation's captured path crosses an edge of the strand it re-homes.
+   reservation's captured path crosses an edge of the strand it re-homes. On a
+   static node (`heddleStatic`) there is no log: a peer quiesces a retired edge
+   **for itself**, once `HeddleNode.reconcileOwn` has drained its own rows
+   there, and the re-home applies only to that peer's own later completions.
+   The fence it meets is per-row, which is all the re-home needs, since a charge
+   writes only the completing peer's slots (#3649).
 5. **Neutral attachment initialization.** A new generation starts at the
    parent's current virtual time — the front over its *demanding* children,
    not over all its active ones, or the furthest-ahead child when no child but
