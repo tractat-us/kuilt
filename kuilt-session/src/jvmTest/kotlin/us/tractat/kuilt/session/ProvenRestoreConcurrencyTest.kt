@@ -714,8 +714,8 @@ class ProvenRestoreConcurrencyTest {
      * runner), so the arm that it did would red about one run in twelve with nothing wrong (#3730).
      * Every [OLD_FIRST_EVERY]th round therefore holds the fresh id's Proof until the old exchange has
      * sent its own, or was told. The room handles each Proof in a coroutine of its own, so this puts
-     * the old one ahead without deciding it: the two still race (the old one lost 1 of 50 such rounds
-     * in one measured run), and the round is counted like any other.
+     * the old one ahead without deciding it: the two still race (at every 20th round the old one lost
+     * 1 of 50 such rounds in one measured run), and the round is counted like any other.
      */
     @Test
     fun aSupersededProcessReHelloingAgainstItsTakeoverIsToldNotSeated() =
@@ -837,6 +837,7 @@ class ProvenRestoreConcurrencyTest {
                         { assertEquals(0, reSeated, "a superseded process is never seated again: $failures") },
                         { assertEquals(0, wrongOutcome, "one restore, or one takeover and a told old process: $failures") },
                         { assertTrue(oldWon > 0, "the old process restored its seat first in some round") },
+                        { assertTrue(oldWonWhenFirst > 0, "a round that held the fresh proof was won by the old process: the bias fired") },
                         { assertTrue(newWon > 0, "the new id took the seat over first in some round") },
                         { assertTrue(toldAtProof > 0, "in some round the old exchange was challenged before the takeover, and told at its proof") },
                         { assertTrue(slowChallenged > 0, "in some round the host's late challenge reached the old exchange and was answered") },
