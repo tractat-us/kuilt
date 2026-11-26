@@ -1566,6 +1566,42 @@ internal fun HeddleNode.sampleScheduleOutcomes(root: GroupId): String =
 climbed: the highest child position as a fraction of its ceiling. A long-running parent passes
 one; the ledger's virtual-time reads saturate there, and the picks do not change.
 
+## Repairing a reweight on a static cluster
+
+**Intent:** you changed the weight of a group that has children of its own, on peers booted with
+`heddleStatic`, after work had already run under it. The group's holdings now read negative and
+`validate()` reports `PersistentNegativeHoldings`, because that work was charged through the old
+edge and the new one starts empty.
+**Primitive:** `HeddleNode.reconcileOwn(child)` (`:kuilt-heddle`), called by **every** peer for
+itself once the new edge is active. Each peer moves only its own share of the old edge onto the
+new one, so the peers never have to agree on anyone else's numbers, and their repairs join cleanly
+in any order, partitioned or not. The ledger validates clean once every peer that spent through
+the old edge has called it.
+
+<!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleReconcileOwn -->
+```kotlin
+internal fun HeddleNode.sampleReconcileOwn(child: GroupId): String =
+    when (val outcome = reconcileOwn(child)) {
+        // Moved: this peer's share of the old edges now rides the live edge.
+        is ReconcileOwnOutcome.Repaired -> "moved ${outcome.credit} credit and ${outcome.spent} spent onto ${outcome.onto.value}"
+        // This peer's row is already drained. Calling again is harmless.
+        ReconcileOwnOutcome.NothingToRepair -> "nothing of mine to move"
+        // The retire, or the new edge's activation, has not reached this peer yet. Call again later.
+        ReconcileOwnOutcome.NoRetiredEdge -> "no retired edge yet"
+        ReconcileOwnOutcome.NoLiveEdge -> "no live edge yet"
+        // Nothing was written: the strand stays, and the reason says why.
+        is ReconcileOwnOutcome.Refused -> "refused: ${outcome.reason}"
+    }
+```
+
+- **A reservation still open across the old edge is safe.** The call marks the old edge so that
+  completing such a reservation afterwards charges the new edge instead. A restart forgets the
+  mark, and the reservation with it.
+- **A move across parents is refused.** Moving a group under another parent strands it the same
+  way, and nothing conserves across two parents, so `Refused` names them.
+- **A governed node has no such call.** There, `GovernedHeddleNode.reconcile` re-homes the strand
+  through the log, as the next section describes.
+
 ## Minting quota and reshaping with agreement
 
 **Intent:** mint new entitlement or re-parent a group *while the system runs*, and need
