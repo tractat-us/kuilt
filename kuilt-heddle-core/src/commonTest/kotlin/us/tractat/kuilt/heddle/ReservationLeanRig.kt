@@ -70,7 +70,7 @@ internal object ReservationLeanRig {
      * leaf's spend, read off its edge, is the sum of the costs `complete` was given for it, whatever
      * was reserved.
      */
-    fun run(ledger: EntitlementLedger, lanes: List<Lane>): Run {
+    fun run(ledger: EntitlementLedger, lanes: List<Lane>, horizon: Long = HORIZON): Run {
         val h = engineOver(ledger, ROOT, supply = SUPPLY, policy = LocalPolicy(defaultReservation = 1L))
         val states = lanes.map { LaneState(it) }
         val slots = arrayOfNulls<Running>(SLOTS)
@@ -79,7 +79,7 @@ internal object ReservationLeanRig {
         // Sorted, so nothing here walks a hash order.
         fun waiting(): Set<GroupId> = (states.filter { it.queued > 0 }.map { it.spec.leaf } + B).sorted().toSet()
 
-        for (t in 0L until HORIZON) {
+        for (t in 0L until horizon) {
             for (i in slots.indices) {
                 val run = slots[i] ?: continue
                 if (run.endsAt != t) continue
@@ -130,9 +130,9 @@ internal object ReservationLeanRig {
         assertSpendIsReported(h.snapshot().ledger, ledger, states.associate { it.spec.leaf to it.reported } + (B to bReported))
         // Slot time is counted at the pick, so trim what runs past the horizon from every lane alike.
         val laneTime = states.withIndex().associate { (index, lane) ->
-            lane.spec.leaf to lane.slotTime - slots.filterNotNull().filter { it.lane == index }.sumOf { it.endsAt - HORIZON }
+            lane.spec.leaf to lane.slotTime - slots.filterNotNull().filter { it.lane == index }.sumOf { it.endsAt - horizon }
         }
-        val all = laneTime + (B to bTime - slots.filterNotNull().filter { it.lane < 0 }.sumOf { it.endsAt - HORIZON })
+        val all = laneTime + (B to bTime - slots.filterNotNull().filter { it.lane < 0 }.sumOf { it.endsAt - horizon })
         return Run(all, all.values.sum())
     }
 
