@@ -1479,6 +1479,31 @@ weight products would leave `Long`. The limit holds at any lease size, because i
 the largest lease, `MAX_RESERVATION`. It is necessary, not sufficient: several fine weights whose
 denominators share no factor are refused below it too.
 
+**Asking before proposing.** An admin form that takes a weight, or a peer about to propose an
+activation, can ask the rule itself instead of re-deriving the arithmetic.
+`weightFitsTheBudget(weight)` says whether a weight could be activated anywhere, and
+`EntitlementLedger.activationFitsTheBudget(edge)` whether activating a prepared edge fits beside
+the children already active at its parent. Both are the check `LocalHeddle.apply` and `HeddleNode`
+make, asked without applying anything. A weight can pass alone and fail beside a sibling:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/WeightBudgetSamples.kt#sampleWeightBudget -->
+```kotlin
+val heavy = Weight.of(185_000_000_000_000_000L)
+val third = Weight.of(1L, 3L)
+check(weightFitsTheBudget(heavy) && weightFitsTheBudget(third))
+
+var ledger = EntitlementLedger.bootstrap(root, mapOf(alice to 100L), nonce = "genesis")
+ledger = ledger.piece(checkNotNull(ledger.prepare(AttachmentRecord(toHeavy, root, GroupId("heavy"), heavy))))
+ledger = ledger.piece(checkNotNull(ledger.activate(toHeavy)))
+ledger = ledger.piece(checkNotNull(ledger.prepare(AttachmentRecord(toThird, root, GroupId("third"), third))))
+
+// Each fits alone, but not together: ask before proposing the activation, not after.
+check(!ledger.activationFitsTheBudget(toThird))
+```
+
+A `true` from `activationFitsTheBudget` answers the budget only; the position limit can still
+refuse the activation.
+
 **Two known fairness gaps**, both smallest when a lease settles at its estimate:
 
 - **An estimate's size leans share.** A lease counts at its reservation until `complete`, so a
