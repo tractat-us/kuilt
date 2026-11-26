@@ -1994,6 +1994,14 @@ while it was away.
 - **A seated child first seen already asking** has no departure, so it is not
   moved by the clock. It is clamped to the front, by the restart rule above.
   That covers every child of a restarted `HeddleNode`, which keeps no clock.
+- **A clamped child's open leases are counted past the front** (#3238). A
+  `LocalHeddle` clamps a waker to the front plus what its open leases reserve,
+  since those reservations are already in its position. Clamped to the front
+  alone, it was forgiven its work in flight, and the lease's refund then came
+  back as credit: restarted without its memory, a lane with a lease reserving 8
+  and costing 1 took 14 of the next 20 picks where the memory gave it 10. A
+  reload that moves an open lease onto a new edge meets the same clamp and
+  read the same 14. `HeddleNode` opens no leases, so it clamps to the front.
 
 `FairShareAllocator` runs the clock in its seat-and-wake step, `settleJoiners`,
 which every pick, every `LocalHeddle.admit` with a waiting set and the first
@@ -2418,14 +2426,13 @@ prototype below must show the gain first.
   avoided (#3229).
 - Replacing `acquire`'s waiting set with a map of lengths: breaks the public API
   for every caller that has none (#3229).
+- Clamping a waker that holds an open lease to the front alone: it forgave the
+  work in flight, so the lease's refund came back as idle credit. The clamp
+  lands at the front plus what the waker's open leases reserve (#3238).
 - Clamping an out-of-range length: it throws, as `reservation` does (#3229).
 
 #### Open
 
-- The wake clamp freezes a lease's reservation error into a permanent offset when
-  its group wakes mid-lease: idle credit when over-reserved, a penalty when
-  under-reserved. Both exist under slot length. Whether to close it, and how, is
-  being investigated separately (#3238).
 - If C is ever reopened, should lengths reorder interior levels (I2) or only
   siblings (I1)? The prototype's I1 and I2 arms, recorded on #3200, decide.
 

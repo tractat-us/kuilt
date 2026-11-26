@@ -43,9 +43,9 @@ public data class SupplyPolicy(
  *   saw stop comes back moved by its parent's net-service clock, and this credit
  *   does not apply to it, since it would only add credit (#3376). `0`, the default, keeps none.
  *   Non-negative, and at most [LocalHeddle.MAX_RESERVATION]: the credit a waker may keep is
- *   bounded by one lease (§10.6). It is not the whole bound: a lease still
- *   open when its group wakes can hand more back at [LocalHeddle.complete] or [LocalHeddle.cancel],
- *   up to its reservation over the edge's weight, tracked by #3238.
+ *   bounded by one lease (§10.6). A lease still open when its group is clamped adds none: the
+ *   clamp lands the waker at the front plus what its open leases reserve, so what
+ *   [LocalHeddle.complete] or [LocalHeddle.cancel] later hands back is its own refund (#3238).
  * @property supply how far ahead of its leases the engine mints supply.
  * @sample us.tractat.kuilt.heddle.sampleLocalLease
  */
