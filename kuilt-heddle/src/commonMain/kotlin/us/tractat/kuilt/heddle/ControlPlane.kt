@@ -197,7 +197,10 @@ internal data class ControlEnvelope(
 public sealed interface ControlOutcome {
     /**
      * The Raft log index this act committed at, [NOT_COMMITTED] for an act refused before it reached
-     * the log, or [COMMIT_UNKNOWN] when this peer cannot say ([Indeterminate]).
+     * the log, or [COMMIT_UNKNOWN] when this peer cannot say ([Indeterminate]). A mint refused because
+     * an earlier run under a reused incarnation holds its key answers [NOT_COMMITTED] if it was refused
+     * before proposing, and otherwise its own entry's index: it was written there, and deduped against
+     * the key the earlier entry holds.
      */
     public val index: Long
 
@@ -260,7 +263,8 @@ public sealed interface ControlConflict {
      * **locally** because the edge is not drained (retiring a non-drained edge would strand its
      * outstanding entitlement, since a RETIRED edge is no longer on the live lineage the data plane
      * drains through). Also any act a peer refuses because it has already halted at a log entry it
-     * cannot read. The [reason] is a diagnostic string.
+     * cannot read, and a mint whose key an earlier run under a reused incarnation already used
+     * (`heddleGoverned`'s `incarnation`). The [reason] is a diagnostic string.
      */
     public data class Refused(public val reason: String) : ControlConflict
 
@@ -363,19 +367,26 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleControl
  *
  * ## Exactly-once
  *
- * Each act carries a [ControlEnvelope.requestKey] unique per logical act and stable across a retry
- * (`self#incarnation#seq`, plus a per-run nonce on the two acts that move the write gate, below). The
- * apply loop dedups on it ([applied]), and a mint derives its [MintId] from it — so a distinct act
- * never collides (no silent mint loss) and a retry never double-mints.
+ * Each act carries a [ControlEnvelope.requestKey] unique per logical act and stable across a retry:
+ * `self#incarnation#seq` for a mint, and the same plus a per-run [runNonce] for every other act
+ * (#3057). The apply loop dedups on it ([applied]), and a mint derives its [MintId] from it — so a
+ * distinct act never collides (no silent mint loss) and a retry never double-mints.
  * [submit] retries on [LeadershipLostException] reusing the same key + Raft `requestId`, and can be
  * bounded by a timeout.
  *
- * **[incarnation] must be fresh per process incarnation.** The requestKey's restart-safety rests
- * entirely on it: two runs that reuse the same [incarnation] regenerate colliding keys, so a new act
- * would hit the [applied] dedup and silently vanish behind a stale outcome. The node cannot
- * self-generate this without durable storage or true entropy, so the caller injects it ([heddleGoverned])
- * — a boot id, a persisted monotonic epoch, or a UUID. Never derive it from a test-seedable `Random`.
- * Nothing checks this: it is a plain caller-supplied `String`, and a reused value is not detected.
+ * **[incarnation] must be fresh per process incarnation, for the sake of mints.** A mint's key is
+ * `self#incarnation#seq` with no nonce, so that its [MintId] — and with it the ledger — is the same
+ * in two identical runs. Two runs that reuse the same [incarnation] therefore draw the same mint
+ * keys. The node cannot self-generate this without durable storage or true entropy, so the caller
+ * injects it ([heddleGoverned]) — a boot id, a persisted monotonic epoch, or a UUID. Never derive it
+ * from a test-seedable `Random`. Every other act carries [runNonce], so reuse cannot touch it.
+ *
+ * Reuse is caught where it can be seen, and refused with a [ControlConflict.Refused] naming the key,
+ * logged as an error: a mint whose freshly drawn key is already in [applied], and a waiting mint
+ * whose key is first applied by an entry carrying a different command. What it still costs is the
+ * one case neither sees: a mint *identical* to the earlier run's, issued at the same sequence number
+ * before replay reaches the earlier entry, is resolved by that entry and mints once. That errs toward
+ * too little supply, never too much.
  *
  * ## The write gate moves here, not in the caller
  *
@@ -390,9 +401,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleControl
  * The gate must open only on *this run's* enroll, and a run's own acts cannot be recognised by the
  * `self#incarnation#` prefix: that rests on [incarnation] being fresh, which nothing enforces, and a
  * reused one would let replay open the gate of a node that never enrolled. For the same reason these
- * two acts get [gateNonce] in their key, so an older run's act cannot share a key with this run's even
- * under a reused [incarnation]. Without it, the normal boot (enroll first, sequence number 0, replay
- * still behind) would be resolved by the old entry, opening the gate with later barriers unreplayed.
+ * two acts carry [runNonce] in their key, as every act but a mint now does, so an older run's act
+ * cannot share a key with this run's even under a reused [incarnation]. Without it, the normal boot
+ * (enroll first, sequence number 0, replay still behind) would be resolved by the old entry, opening
+ * the gate with later barriers unreplayed.
  *
  * ## The log is dedicated to this control plane, and an entry it cannot read stops it
  *
@@ -463,13 +475,14 @@ internal class HeddleControlPlane(
     /**
      * Fresh per instance and never derived from a seedable generator: the same requirement as
      * [incarnation], met here without trusting a caller. It only has to tell one run of this replica
-     * from another, so it reaches nothing but the two gate-moving keys. [MintId]s stay derived from
-     * keys without it, which keeps a ledger's contents reproducible between runs.
+     * from another, so it goes on every key except a mint's (#3057). None of those acts lands a key
+     * in the ledger, so nothing stops being reproducible. A mint's [MintId] is derived from its key,
+     * so a mint keeps `self#incarnation#seq` and a ledger's contents stay reproducible between runs.
      */
-    private val gateNonce: String = Random.nextLong().toULong().toString(radix = 16).padStart(16, '0')
+    private val runNonce: String = Random.nextLong().toULong().toString(radix = 16).padStart(16, '0')
 
     /** In-flight local submits awaiting their committed outcome, keyed by requestKey. */
-    private val pending = HashMap<String, CompletableDeferred<ControlOutcome>>()
+    private val pending = HashMap<String, PendingAct>()
 
     /**
      * Dedup table: requestKey → the outcome it applied at (exactly-once under retry / re-commit).
@@ -579,34 +592,36 @@ internal class HeddleControlPlane(
      */
     suspend fun submit(command: ControlCommand, timeout: Duration? = null): ControlOutcome {
         val movesGate = movesOwnGate(command)
-        val deferred = CompletableDeferred<ControlOutcome>()
+        val deferred = CompletableDeferred<Resolution>()
         // One step against [latch], which holds the same lock: a call either sees the halt here and
         // writes nothing, or is registered in time for the latch to release it. Split in two, a call
         // could pass the check and then register after the latch, with nothing left to complete it.
         val (key, requestId) = lock.withLock {
             halt()?.let { return refusedAsHalted(it) }
             val base = "${self.value}#$incarnation#$seq"
-            val k = if (movesGate) "$base#$gateNonce" else base
+            val k = if (command is ControlCommand.Mint) base else "$base#$runNonce"
             if (movesGate) ownGateActs += k
             val r = seq
             seq++
-            applied[k]?.let { return it }
-            pending[k] = deferred
+            // This instance has never issued [k], so an applied entry under it is an earlier run's,
+            // under a reused incarnation. Only a mint's key can meet one, since the rest carry the nonce.
+            applied[k]?.let { prior -> return refusedAsReused(k, prior.index, ControlOutcome.NOT_COMMITTED) }
+            pending[k] = PendingAct(command, deferred)
             k to r
         }
         try {
             val bytes = ControlLogCodec.encode(ControlEnvelope(key, command, self))
             // The timeout spans BOTH the propose and the apply-await, so a leader *crash* (a forwarded
             // proposal that never commits and never rejects) surfaces instead of hanging forever.
-            return if (timeout == null) {
-                proposeWithRetry(bytes, requestId)
-                deferred.await()
-            } else {
-                withTimeout(timeout) {
-                    proposeWithRetry(bytes, requestId)
-                    deferred.await()
+            suspend fun proposeAndAwait(): ControlOutcome {
+                val own = proposeWithRetry(bytes, requestId)
+                return when (val resolution = deferred.await()) {
+                    is Resolution.Decided -> resolution.outcome
+                    // Written at its own index, and deduped there against the key the older entry holds.
+                    is Resolution.KeyHeldBy -> refusedAsReused(key, resolution.heldAt, own.index)
                 }
             }
+            return if (timeout == null) proposeAndAwait() else withTimeout(timeout) { proposeAndAwait() }
         } finally {
             lock.withLock { pending.remove(key) }
         }
@@ -619,12 +634,12 @@ internal class HeddleControlPlane(
         else -> false
     }
 
-    private suspend fun proposeWithRetry(bytes: ByteArray, requestId: Long) {
+    /** Propose [bytes] and return the entry it committed as. */
+    private suspend fun proposeWithRetry(bytes: ByteArray, requestId: Long): LogEntry {
         var attempts = 0
         while (true) {
             try {
-                raft.propose(bytes, requestId)
-                return
+                return raft.propose(bytes, requestId)
             } catch (e: LeadershipLostException) {
                 // A forwarded proposal was rejected by a stepping-down leader; retry on the next leader
                 // with the SAME requestId (Raft §8 dedup) and requestKey (apply-side dedup) — exactly-once.
@@ -644,6 +659,37 @@ internal class HeddleControlPlane(
                     "(format version ${halt.version}): this peer applies nothing past it",
             ),
         )
+
+    /**
+     * Refuse an act whose [key] an earlier run of this replica already used, which only a reused
+     * [incarnation] can cause (#3057), and log it as the caller bug it is. [heldAt] is the index of
+     * the entry holding the key, and [index] what the answer reports: [ControlOutcome.NOT_COMMITTED]
+     * when the act was never proposed, or the index of the act's own entry when it was, since that
+     * entry is deduped against the key held at [heldAt]. Either way the act never takes effect. No
+     * throwable exists to attach: nothing failed.
+     */
+    private fun refusedAsReused(key: String, heldAt: Long, index: Long): ControlOutcome {
+        val reason = "request key $key is already held by the entry at index $heldAt, written by an earlier " +
+            "run under the reused incarnation \"$incarnation\": this act never takes effect. " +
+            "Each process incarnation needs a fresh incarnation value"
+        logger.error { "[heddle:${self.value}] REFUSED a control act: $reason" }
+        return ControlOutcome.Conflict(index, ControlConflict.Refused(reason))
+    }
+
+    /**
+     * Complete the call waiting on [envelope]'s key, if this instance has one, with [outcome]. The
+     * waiting call is resolved by the first entry under its key, and when that entry carries a
+     * different command it is an earlier run's, under a reused incarnation, so the call is told the
+     * key is held rather than handed someone else's outcome; [submit] refuses it at its own entry's
+     * index. Only a mint can get here that way. An identical mint is the one reuse this cannot see,
+     * and it mints once. Called under [lock].
+     */
+    private fun completePending(envelope: ControlEnvelope, outcome: ControlOutcome) {
+        val waiting = pending[envelope.requestKey] ?: return
+        waiting.deferred.complete(
+            if (waiting.command == envelope.command) Resolution.Decided(outcome) else Resolution.KeyHeldBy(outcome.index),
+        )
+    }
 
     /**
      * Apply one delivered committed entry, in log order, or stop at it (see the class KDoc).
@@ -686,7 +732,7 @@ internal class HeddleControlPlane(
         val reason = GateClosed.Reason.UnreadableControlEntry(index, version)
         closedBecause.value = reason
         val outcome = ControlOutcome.Indeterminate(reason)
-        pending.values.forEach { it.complete(outcome) }
+        pending.values.forEach { it.deferred.complete(Resolution.Decided(outcome)) }
     }
 
     /** Apply one readable act. Called under [lock]. */
@@ -705,7 +751,7 @@ internal class HeddleControlPlane(
         val prior = applied[envelope.requestKey]
         if (prior != null) {
             // A retry that still committed a second entry — never apply twice; hand back the first outcome.
-            pending[envelope.requestKey]?.complete(prior)
+            completePending(envelope, prior)
             return
         }
         val outcome = decideAndApply(envelope, index)
@@ -714,7 +760,7 @@ internal class HeddleControlPlane(
         if (ownGateActs.remove(envelope.requestKey) && outcome is ControlOutcome.Applied) {
             closedBecause.value = if (envelope.command is ControlCommand.Depart) GateClosed.Reason.Departed else null
         }
-        pending[envelope.requestKey]?.complete(outcome)
+        completePending(envelope, outcome)
     }
 
     /**
@@ -1064,6 +1110,18 @@ internal class HeddleControlPlane(
     private fun apply(patch: Patch<EntitlementLedger>) {
         projection = projection.piece(patch.delta)
         sink.publish(patch)
+    }
+
+    /** A local call awaiting its act's outcome, with the [command] it proposed so a different entry under its key is caught. */
+    private class PendingAct(val command: ControlCommand, val deferred: CompletableDeferred<Resolution>)
+
+    /** What the apply loop tells a waiting call. */
+    private sealed interface Resolution {
+        /** The entry under its key was its own act, and decided [outcome]. */
+        class Decided(val outcome: ControlOutcome) : Resolution
+
+        /** The entry at [heldAt] took its key with a different act: an earlier run's, under a reused incarnation. */
+        class KeyHeldBy(val heldAt: Long) : Resolution
     }
 
     private companion object {

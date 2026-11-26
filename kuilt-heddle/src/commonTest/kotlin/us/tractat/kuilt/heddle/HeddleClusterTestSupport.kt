@@ -255,6 +255,7 @@ internal class GovernedPeer(
     val node: GovernedHeddleNode,
     val gate: GatedSeam,
     val scope: CoroutineScope,
+    val incarnation: String,
 ) {
     val replica: ReplicaId get() = node.self
 }
@@ -338,6 +339,41 @@ internal class GovernedCluster(
         applied("${fresh.replica} enrolls after its restart") { fresh.node.enroll(fresh.replica) }
     }
 
+    /**
+     * Crash peer [i] as [restart] does, and boot it again as the **same** replica under the **same**
+     * incarnation: the caller bug of #3057. Its seam is new, since the fabric gives it a new address,
+     * so the replica id no longer matches the seam's. The arms that use this read only what each
+     * peer's own control plane publishes, never gossip.
+     *
+     * `self = { old.replica }` waives `heddleGoverned`'s `self == Seam.selfId` precondition on
+     * purpose. On a fabric that issues a fresh `selfId` per boot, as this one does, a real reboot gets
+     * a new key prefix and cannot collide at all; the collision needs an identity kept across boots.
+     *
+     * Nothing is pumped after the boot and nothing is enrolled, so the restarted control plane has
+     * replayed nothing yet: the caller decides whether its first acts are drawn before or after replay.
+     */
+    suspend fun restartUnderTheSameIncarnation(i: Int): GovernedPeer {
+        val old = live[i]
+        old.scope.cancel()
+        old.gate.close(CloseReason.Normal)
+        sim.crash(old.raftId)
+        pump(1L)
+        sim.restart(old.raftId)
+        val fresh = boot(
+            test, sim, loom, old.raftId, joinAt = 100 + incarnations++, quantum = quantum, cap = cap,
+            self = { old.replica },
+            incarnation = old.incarnation,
+        )
+        live[i] = fresh
+        return fresh
+    }
+
+    /** Every control act in peer [i]'s durable Raft log, in log order, with the index it sits at. */
+    suspend fun controlLog(i: Int): List<Pair<Long, ControlEnvelope>> =
+        sim.storages.getValue(live[i].raftId).entries(1L).mapNotNull { entry ->
+            (ControlLogCodec.decode(entry.command) as? ControlEntry.Act)?.let { entry.index to it.envelope }
+        }
+
     companion object {
         /** Boot the governed peer for [raftId] on [loom], hosting it when [joinAt] is zero and joining it otherwise. */
         suspend fun boot(
@@ -348,21 +384,23 @@ internal class GovernedCluster(
             joinAt: Int,
             quantum: Long,
             cap: Long,
+            self: (Seam) -> ReplicaId = { ReplicaId(it.selfId.value) },
+            incarnation: String = "${raftId.value}-$joinAt",
         ): GovernedPeer {
             val scope = CoroutineScope(test.backgroundScope.coroutineContext + Job(test.backgroundScope.coroutineContext[Job]))
             val seam = if (joinAt == 0) loom.host(Pattern("heddle-governed")) else loom.join(InMemoryTag("governed-$joinAt"))
             val gate = GatedSeam(seam)
             val node = scope.heddleGoverned(
                 seam = gate,
-                self = ReplicaId(seam.selfId.value),
+                self = self(seam),
                 raft = sim.nodes.getValue(raftId),
                 root = ACCEPTANCE_ROOT,
                 clock = { Instant.fromEpochMilliseconds(test.testScheduler.currentTime) },
                 config = heddleTestConfig(seed = 2_000 + joinAt, quantum = quantum, cap = cap),
-                incarnation = "${raftId.value}-$joinAt",
+                incarnation = incarnation,
                 epoch = joinAt.toLong(),
             )
-            return GovernedPeer(raftId, node, gate, scope)
+            return GovernedPeer(raftId, node, gate, scope, incarnation)
         }
     }
 }

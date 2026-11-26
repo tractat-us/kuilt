@@ -94,12 +94,17 @@ import kotlin.time.Instant
  * @param clock the injected wall clock, used for demand TTL and liveness timing.
  * @param config the policy caps, §8.2 bound cap, TTL, and replication/liveness/RNG knobs.
  * @param incarnation a token that MUST be **fresh on every process incarnation** of this peer — a boot
- *   id, a persisted monotonic epoch, or a UUID. It namespaces the per-act idempotency keys, so restart
- *   safety rests on it: reusing a value across restarts would regenerate colliding keys and a new act
- *   could silently vanish behind the dedup table. It is a required injected dependency precisely because
- *   the node cannot self-generate restart-uniqueness without durable storage or true entropy — never
- *   pass a value derived from a test-seedable `Random`. Nothing detects a reused value. The write gate
- *   is safe under one (its own acts carry a per-run nonce); other acts can still vanish as described.
+ *   id, a persisted monotonic epoch, or a UUID — **for the sake of [GovernedHeddleNode.mint]**. It
+ *   namespaces the per-act idempotency keys. Every act but a mint also carries a per-run nonce, so
+ *   reuse cannot touch it (#3057). A mint's key carries none, because its ledger id derives from the
+ *   key and must be the same in two identical runs; so a reused value regenerates mint keys. A mint
+ *   that draws one is refused with a [ControlConflict.Refused] naming the key, and logged as an
+ *   error, when its key is already applied or is first applied by a different act. What reuse still
+ *   costs: a mint *identical* to the earlier run's, issued at the same sequence number before this
+ *   peer has replayed that run's entry, is resolved by that entry and mints once — too little supply,
+ *   never too much. It is a required injected dependency precisely because the node cannot
+ *   self-generate restart-uniqueness without durable storage or true entropy — never pass a value
+ *   derived from a test-seedable `Random`.
  * @param epoch the **numeric** sibling of [incarnation]: same required per-boot discipline, but it must
  *   be a strictly-increasing `Long` (a persisted monotonic boot counter) because it seeds the *ordering*
  *   of the demand-board clock rather than the *uniqueness* of a dedup key. A restarted peer's demand
