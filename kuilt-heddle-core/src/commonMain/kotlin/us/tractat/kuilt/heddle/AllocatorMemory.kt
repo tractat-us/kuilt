@@ -21,9 +21,9 @@ import us.tractat.kuilt.math.timesWide
  * restart comes back clamped to the front, not moved by its parent's clock, so the lag a short
  * burst left is forgiven, and a child that was owed service loses what it was owed. Nor can it
  * tell an idle sibling from a competing one, so a sibling may keep up to the front child's
- * outstanding of lag it should forfeit ([FairShareAllocator]'s *Two histories*). So the allocator exports its memory through
- * [FairShareAllocator.memory] and takes it back through its constructor, and a caller that persists
- * its ledger persists this beside it.
+ * outstanding of lag it should forfeit ([FairShareAllocator]'s *Two histories*). So the allocator
+ * exports its memory through [FairShareAllocator.memory] and takes it back through its
+ * constructor, and a caller that persists its ledger persists this beside it.
  *
  * It is also how a caller asks a question without changing the answer: a throwaway allocator
  * built over a copy of this value makes the same picks the real one would, and the real one has
