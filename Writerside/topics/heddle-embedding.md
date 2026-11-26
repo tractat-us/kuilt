@@ -206,9 +206,9 @@ Before you ship it, check each of these against your service.
   the job queued and try on the next free runner.
 - **Work started elsewhere** is charged with `admit`, which makes no pick
   and is never refused for supply or a ceiling.
-- **Estimates matter.** Set `defaultReservation` near a typical job, and
-  pass `reservation` when you know better, such as the team's last run time.
-  [How fair is it?](heddle-local.md#how-fair-is-it) shows why.
+- **Estimates matter.** Set `defaultReservation` at or a little below a
+  typical job, and pass `reservation` when you know better, such as the
+  team's last run time. [How fair is it?](heddle-local.md#how-fair-is-it) shows why.
 - **Keep the boot counter durable.** Two engines under one epoch could hand
   out the same lease id. `restore` throws on an epoch that is not higher.
 

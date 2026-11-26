@@ -3,6 +3,7 @@ package us.tractat.kuilt.heddle
 import us.tractat.kuilt.heddle.ReservationLeanRig.A
 import us.tractat.kuilt.heddle.ReservationLeanRig.A1
 import us.tractat.kuilt.heddle.ReservationLeanRig.A2
+import us.tractat.kuilt.heddle.ReservationLeanRig.B
 import us.tractat.kuilt.heddle.ReservationLeanRig.Estimate
 import us.tractat.kuilt.heddle.ReservationLeanRig.Lane
 import us.tractat.kuilt.heddle.ReservationLeanRig.ROOT
@@ -23,13 +24,20 @@ import kotlin.test.assertTrue
  * lean in share, and it is pinned on **ensembles** of rigs, never on one: a single rig's share is
  * quantised (#3239's design note found three unrelated arms all reading +0.030 at think 7). Every
  * value is a share less the same rig's honest arm, so it measures only what the estimate changed.
- * Each ensemble row pins the
- * mean within [MEAN_TOLERANCE] and keeps every rig inside the measured extremes widened by
- * [EXTREME_TOLERANCE]; the means red when the lean moves either way, the extremes only when it
- * grows.
+ * Each ensemble row pins the mean within [MEAN_TOLERANCE] and keeps every rig inside the measured
+ * extremes widened by [EXTREME_TOLERANCE]; the means red when the lean moves either way, the
+ * extremes only when it grows.
  *
- * JVM and macosArm64 measure the same values to the last digit: the rig draws nothing at random
- * and walks no hash order, and the engine orders its outputs by id.
+ * "A refund is what can move a sibling" holds for the means. A sibling's worst rig is another
+ * matter: beside a lane reserving a quarter it loses 0.0805, about what it loses beside the refund
+ * arm, 0.0844.
+ *
+ * Those tolerances cannot see one rig take a different trajectory on one target: a rig moving by
+ * 0.04 moves its ensemble's mean by under 0.001, and no extreme unless it lands past one. So each arm also pins a fingerprint, a hash of
+ * every rig's integer slot times in ensemble order, the honest arms included. It is exact and the
+ * same on every target, since the rig draws nothing at random and walks no hash order, and the
+ * engine orders its outputs by id. Pinned from the JVM and checked on macosArm64; wasmJs runs it
+ * in CI.
  */
 class ReservationLeanTest {
 
@@ -58,51 +66,69 @@ class ReservationLeanTest {
     }
 
     @Test
-    fun oneLevelUnderReservingLeansTheLaneUp() = pin(oneLevel(Estimate.QUARTER), "a, reserves a quarter", 0.0115, -0.0091, 0.0426)
+    fun theHonestArmsRunTheSameSlotTimesOnEveryTarget() = assertAll(
+        fingerprintIs("one level, honest", -769132613410676343L, oneLevel(Estimate.HONEST).fingerprint),
+        fingerprintIs("two levels, honest", 3792682368435449249L, twoLevel(Estimate.HONEST).fingerprint),
+    )
 
     @Test
-    fun oneLevelOverReservingLeansTheLaneDown() = pin(oneLevel(Estimate.FOUR_TIMES), "a, reserves 4×", -0.0115, -0.0338, 0.0)
+    fun oneLevelUnderReservingLeansTheLaneUp() = pin(oneLevel(Estimate.QUARTER), Row("a, reserves a quarter", 0.0115, -0.0091, 0.0426), 8944391974842269373L)
+
+    @Test
+    fun oneLevelOverReservingLeansTheLaneDown() = pin(oneLevel(Estimate.FOUR_TIMES), Row("a, reserves 4×", -0.0115, -0.0338, 0.0), 817825462190311837L)
 
     @Test
     fun oneLevelAnOverReservationOnTheLastJobOfEachBurstLeavesNoLean() =
-        pin(oneLevel(Estimate.FOUR_TIMES_ON_LAST), "a, reserves 4× on each burst's last job", -0.0005, -0.0249, 0.0190)
+        pin(oneLevel(Estimate.FOUR_TIMES_ON_LAST), Row("a, reserves 4× on each burst's last job", -0.0005, -0.0249, 0.0190), 8326974015376676043L)
 
     @Test
     fun oneLevelReservingOneAndExtendingLeansTheLaneUp() =
-        pin(oneLevel(Estimate.ONE_THEN_EXTEND), "a, reserves 1 and extends", 0.0109, 0.0, 0.0662)
+        pin(oneLevel(Estimate.ONE_THEN_EXTEND), Row("a, reserves 1 and extends", 0.0109, 0.0, 0.0662), 3960384338718924673L)
 
     @Test
-    fun twoLevelsUnderReserving() = twoLevel(Estimate.QUARTER).let {
-        pin(it.lane, "a1, reserves a quarter", 0.0273, -0.0444, 0.0875)
-        pin(it.sibling, "a2 beside it", -0.0093, -0.0805, 0.0340)
-    }
+    fun twoLevelsUnderReserving() = pin(
+        twoLevel(Estimate.QUARTER),
+        Row("a1, reserves a quarter", 0.0273, -0.0444, 0.0875),
+        Row("a2 beside it", -0.0093, -0.0805, 0.0340),
+        -89912961515694921L,
+    )
 
     @Test
-    fun twoLevelsOverReserving() = twoLevel(Estimate.FOUR_TIMES).let {
-        pin(it.lane, "a1, reserves 4×", 0.0068, -0.0240, 0.0534)
-        pin(it.sibling, "a2 beside it", -0.0056, -0.0436, 0.0388)
-    }
+    fun twoLevelsOverReserving() = pin(
+        twoLevel(Estimate.FOUR_TIMES),
+        Row("a1, reserves 4×", 0.0068, -0.0240, 0.0534),
+        Row("a2 beside it", -0.0056, -0.0436, 0.0388),
+        1125146888733772167L,
+    )
 
     @Test
-    fun twoLevelsAnOverReservationOnTheLastJobOfEachBurstMovesTheSibling() = twoLevel(Estimate.FOUR_TIMES_ON_LAST).let {
-        pin(it.lane, "a1, reserves 4× on each burst's last job", 0.0447, -0.0174, 0.1200)
-        pin(it.sibling, "a2 beside it", -0.0310, -0.0844, 0.0404)
-    }
+    fun twoLevelsAnOverReservationOnTheLastJobOfEachBurstMovesTheSibling() = pin(
+        twoLevel(Estimate.FOUR_TIMES_ON_LAST),
+        Row("a1, reserves 4× on each burst's last job", 0.0447, -0.0174, 0.1200),
+        Row("a2 beside it", -0.0310, -0.0844, 0.0404),
+        3334978947643611491L,
+    )
 
     @Test
-    fun twoLevelsReservingOneAndExtending() = twoLevel(Estimate.ONE_THEN_EXTEND).let {
-        pin(it.lane, "a1, reserves 1 and extends", 0.0070, -0.0392, 0.0914)
-        pin(it.sibling, "a2 beside it", -0.0032, -0.0425, 0.0364)
-    }
+    fun twoLevelsReservingOneAndExtending() = pin(
+        twoLevel(Estimate.ONE_THEN_EXTEND),
+        Row("a1, reserves 1 and extends", 0.0070, -0.0392, 0.0914),
+        Row("a2 beside it", -0.0032, -0.0425, 0.0364),
+        8519634397680915583L,
+    )
 
     /**
-     * The positive control: the refund landing in a sibling's gap is an effect these ensembles can
-     * see. The arm whose refund lands as its queue empties must cost the honest sibling more, on
-     * average, than either arm that never refunds, by at least [CLEARANCE]. Measured, it clears
-     * reserving a quarter by 0.022 and reserving 1 and extending by 0.028.
+     * The positive control: over-reserving the last job of each burst costs the honest sibling more,
+     * on average, than never over-reserving (reserving a quarter, or 1 and extending), by at least
+     * [CLEARANCE]. Measured, it clears the quarter arm by 0.0217 and the extend arm by 0.0278.
+     *
+     * It does not isolate the refund that lands in the sibling's gap. With `complete`'s refund
+     * removed, the unreturned reservation stays on `g`'s path and still costs `a2` through `g`, and
+     * the clearance reads 0.0146: about two thirds of what this sees is the over-reservation, a
+     * third the refund. [CLEARANCE] sits between the two, so that mutation still reds it.
      */
     @Test
-    fun aRefundInTheGapCostsTheSiblingMoreThanNeverRefunding() {
+    fun overReservingTheLastJobCostsTheSiblingMoreThanNeverOverReserving() {
         val refunds = twoLevel(Estimate.FOUR_TIMES_ON_LAST).sibling.mean
         assertAll(
             *listOf(Estimate.QUARTER, Estimate.ONE_THEN_EXTEND).map { never ->
@@ -110,23 +136,35 @@ class ReservationLeanTest {
                     val without = twoLevel(never).sibling.mean
                     assertTrue(
                         refunds <= without - CLEARANCE,
-                        "a2's mean beside a refund in the gap, ${fmt(refunds)}, against $never, ${fmt(without)}: clearance ${fmt(without - refunds)} < $CLEARANCE",
+                        "a2's mean beside 4× on the last job, ${fmt(refunds)}, against $never, ${fmt(without)}: clearance ${fmt(without - refunds)} < $CLEARANCE",
                     )
                 }
             }.toTypedArray(),
         )
     }
 
-    private fun pin(spread: Spread, label: String, mean: Double, min: Double, max: Double) = assertAll(
-        { assertTrue(abs(spread.mean - mean) <= MEAN_TOLERANCE, "$label: mean ${fmt(spread.mean)}, pinned ${fmt(mean)} ± $MEAN_TOLERANCE") },
-        { assertTrue(spread.min >= min - EXTREME_TOLERANCE, "$label: worst loss ${fmt(spread.min)}, bound ${fmt(min - EXTREME_TOLERANCE)}") },
-        { assertTrue(spread.max <= max + EXTREME_TOLERANCE, "$label: worst gain ${fmt(spread.max)}, bound ${fmt(max + EXTREME_TOLERANCE)}") },
+    private class Row(val label: String, val mean: Double, val min: Double, val max: Double)
+
+    private fun checks(spread: Spread, row: Row): List<() -> Unit> = listOf(
+        { assertTrue(abs(spread.mean - row.mean) <= MEAN_TOLERANCE, "${row.label}: mean ${fmt(spread.mean)}, pinned ${fmt(row.mean)} ± $MEAN_TOLERANCE") },
+        { assertTrue(spread.min >= row.min - EXTREME_TOLERANCE, "${row.label}: worst loss ${fmt(spread.min)}, bound ${fmt(row.min - EXTREME_TOLERANCE)}") },
+        { assertTrue(spread.max <= row.max + EXTREME_TOLERANCE, "${row.label}: worst gain ${fmt(spread.max)}, bound ${fmt(row.max + EXTREME_TOLERANCE)}") },
     )
+
+    private fun fingerprintIs(label: String, pinned: Long, actual: Long): () -> Unit =
+        { assertEquals(pinned, actual, "$label: the hash of every rig's slot times, pinned on JVM and macosArm64") }
+
+    private fun pin(arm: OneLevelArm, row: Row, fingerprint: Long) =
+        assertAll(*(checks(arm.lane, row) + fingerprintIs(row.label, fingerprint, arm.fingerprint)).toTypedArray())
+
+    /** Both lanes' rows and the fingerprint in one [assertAll], so a red lane row cannot hide the sibling's. */
+    private fun pin(arm: TwoLevelArm, lane: Row, sibling: Row, fingerprint: Long) =
+        assertAll(*(checks(arm.lane, lane) + checks(arm.sibling, sibling) + fingerprintIs(lane.label, fingerprint, arm.fingerprint)).toTypedArray())
 
     private companion object {
         const val MEAN_TOLERANCE = 0.005
         const val EXTREME_TOLERANCE = 0.01
-        const val CLEARANCE = 0.015
+        const val CLEARANCE = 0.018
     }
 }
 
@@ -137,33 +175,46 @@ internal class Spread(values: List<Double>) {
     val max: Double = values.max()
 }
 
-internal class LaneAndSibling(val lane: Spread, val sibling: Spread)
+/**
+ * One arm over an ensemble: its spreads, and a [fingerprint] of every rig's integer slot times, in
+ * ensemble order. The spreads are tolerant, so they cannot see one rig take a different trajectory on
+ * one target; the fingerprint is exact, so it can.
+ */
+internal class OneLevelArm(val lane: Spread, val fingerprint: Long)
+
+internal class TwoLevelArm(val lane: Spread, val sibling: Spread, val fingerprint: Long)
 
 private fun fmt(d: Double): String = (round(d * 10_000) / 10_000).toString()
+
+/** Folds [leaves]' slot times in [run] into [into], in the order given. Wraps on overflow, alike on every target. */
+private fun fingerprint(into: Long, run: ReservationLeanRig.Run, leaves: List<GroupId>): Long =
+    leaves.fold(into) { h, leaf -> h * 1_000_003L + run.slotTime(leaf) }
 
 /**
  * Ensemble runs, each computed once per test process and shared by the tests that read it, so the
  * honest arm runs once per level. Not thread-safe, and need not be: tests in one process run one at
  * a time on every target.
  */
-private val oneLevelHonest = mutableMapOf<Pair<Long, Int>, Double>()
-private val oneLevelArms = mutableMapOf<Estimate, Spread>()
+private val oneLevelHonest = mutableMapOf<Pair<Long, Int>, ReservationLeanRig.Run>()
+private val oneLevelArms = mutableMapOf<Estimate, OneLevelArm>()
 private val twoLevelHonest = mutableMapOf<List<Long>, ReservationLeanRig.Run>()
-private val twoLevelArms = mutableMapOf<Estimate, LaneAndSibling>()
+private val twoLevelArms = mutableMapOf<Estimate, TwoLevelArm>()
 
-private fun oneLevelShare(estimate: Estimate, think: Long, burst: Int): Double =
-    ReservationLeanRig.run(ReservationLeanRig.oneLevel(), listOf(Lane(A, estimate, think, burst))).share(A)
+private fun oneLevelRun(estimate: Estimate, think: Long, burst: Int): ReservationLeanRig.Run =
+    ReservationLeanRig.run(ReservationLeanRig.oneLevel(), listOf(Lane(A, estimate, think, burst)))
 
 /** `a` against an always-backlogged `b`, at think 3..14 × burst {2, 3, 4, 8}, cost 8: 48 rigs. */
-private fun oneLevel(estimate: Estimate): Spread = oneLevelArms.getOrPut(estimate) {
-    val deltas = (3L..14L).flatMap { think ->
-        listOf(2, 3, 4, 8).map { burst ->
-            val honest = oneLevelHonest.getOrPut(think to burst) { oneLevelShare(Estimate.HONEST, think, burst) }
-            oneLevelShare(estimate, think, burst) - honest
-        }
+private fun oneLevel(estimate: Estimate): OneLevelArm = oneLevelArms.getOrPut(estimate) {
+    val deltas = mutableListOf<Double>()
+    var print = 17L
+    for (think in 3L..14L) for (burst in listOf(2, 3, 4, 8)) {
+        val honest = oneLevelHonest.getOrPut(think to burst) { oneLevelRun(Estimate.HONEST, think, burst) }
+        val run = if (estimate == Estimate.HONEST) honest else oneLevelRun(estimate, think, burst)
+        deltas += run.share(A) - honest.share(A)
+        print = fingerprint(print, run, listOf(A, B))
     }
     check(deltas.size == 48) { "one level: ${deltas.size} rigs" }
-    Spread(deltas)
+    OneLevelArm(Spread(deltas), print)
 }
 
 private fun twoLevelRun(estimate: Estimate, t1: Long, t2: Long, s2: Long, b2: Int): ReservationLeanRig.Run = ReservationLeanRig.run(
@@ -176,15 +227,17 @@ private fun twoLevelRun(estimate: Estimate, t1: Long, t2: Long, s2: Long, b2: In
  * honest, at `a1`'s think {4, 7, 12} × `a2`'s think {4, 7, 12} × `a2`'s start {0, 2, 5} × `a2`'s
  * burst {2, 4}, cost 8: 54 rigs.
  */
-private fun twoLevel(estimate: Estimate): LaneAndSibling = twoLevelArms.getOrPut(estimate) {
+private fun twoLevel(estimate: Estimate): TwoLevelArm = twoLevelArms.getOrPut(estimate) {
     val lane = mutableListOf<Double>()
     val sibling = mutableListOf<Double>()
+    var print = 17L
     for (t1 in listOf(4L, 7L, 12L)) for (t2 in listOf(4L, 7L, 12L)) for (s2 in listOf(0L, 2L, 5L)) for (b2 in listOf(2, 4)) {
         val honest = twoLevelHonest.getOrPut(listOf(t1, t2, s2, b2.toLong())) { twoLevelRun(Estimate.HONEST, t1, t2, s2, b2) }
-        val run = twoLevelRun(estimate, t1, t2, s2, b2)
+        val run = if (estimate == Estimate.HONEST) honest else twoLevelRun(estimate, t1, t2, s2, b2)
         lane += run.share(A1) - honest.share(A1)
         sibling += run.share(A2) - honest.share(A2)
+        print = fingerprint(print, run, listOf(A1, A2, B))
     }
     check(lane.size == 54) { "two levels: ${lane.size} rigs" }
-    LaneAndSibling(Spread(lane), Spread(sibling))
+    TwoLevelArm(Spread(lane), Spread(sibling), print)
 }

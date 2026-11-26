@@ -39,8 +39,8 @@ public data class SupplyPolicy(
  * @property defaultReservation the cost a lease reserves when the caller passes no estimate, in the
  *   caller's cost unit (time, by convention: R2). Positive, and at most [LocalHeddle.MAX_RESERVATION].
  *   Size it at or a little below a typical job, never at the longest: a lease that settles under
- *   its reservation refunds the rest, and a refund is what can move a sibling (see "A wrong
- *   estimate" on [LocalHeddle]).
+ *   its reservation refunds the rest, and on average a refund is what moves a sibling (see "A
+ *   wrong estimate" on [LocalHeddle]).
  * @property sleeperCredit the virtual-time credit a **clamped** waker may keep (design §10.6): a
  *   group this engine saw idle but never saw stop asking, one it first saw idle say. A group it
  *   saw stop comes back moved by its parent's net-service clock, and this credit
@@ -336,7 +336,9 @@ public sealed interface LeaseOutcome {
  * still asking, so a lease that settles under its reservation while a sibling is away moves that
  * sibling (#3376). On an ensemble of 54 two-level rigs, a lane that reserves four times the cost on
  * the job that empties its queue gains about 0.045 and costs its honest sibling about 0.03 on
- * average; reserving 1 and extending as it runs, it costs the sibling about 0.003.
+ * average; reserving 1 and extending as it runs, it costs the sibling about 0.003. That holds for
+ * the means only. One rig's sibling can lose about as much beside a lane that reserves low: 0.0805
+ * at worst beside one reserving a quarter of the cost, against 0.0844 beside the refund.
  *
  * So size [LocalPolicy.defaultReservation] at or a little below a typical job, never at the
  * longest: an estimate that runs short is corrected by [extend] or by the overrun at [complete],

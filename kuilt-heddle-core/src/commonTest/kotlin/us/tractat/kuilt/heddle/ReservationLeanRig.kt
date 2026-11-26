@@ -16,7 +16,7 @@ import kotlin.test.assertEquals
  * that is also the charged share.
  *
  * [HORIZON] is 1,000 ticks, not the 4,000 of the design note's scratch rig, because Kotlin/Native
- * runs this rig about ten times slower than the JVM. Over the ensembles in [ReservationLeanTest]
+ * ran this rig about 23 times slower than the JVM (604 s against 26 s for the suite, on a loaded box). Over the ensembles in [ReservationLeanTest]
  * the shorter run moves no arm's mean by more than 0.002, nor any extreme by more than 0.0031, on the JVM.
  */
 internal object ReservationLeanRig {
@@ -53,6 +53,9 @@ internal object ReservationLeanRig {
 
     class Run(private val slotTime: Map<GroupId, Long>, private val total: Long) {
         fun share(leaf: GroupId): Double = slotTime.getValue(leaf).toDouble() / total
+
+        /** The slot-time units [leaf]'s leases held: the exact integer [share] divides. */
+        fun slotTime(leaf: GroupId): Long = slotTime.getValue(leaf)
     }
 
     private class Running(val lease: LeaseId, val lane: Int, val start: Long, val endsAt: Long, val cost: Long, var reserved: Long)

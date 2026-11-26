@@ -1485,9 +1485,12 @@ denominators share no factor are refused below it too.
   reservation, and `complete` charges the leaf exactly the cost it is given, so a leaf's spend is
   what its completions reported. While a lease is open, a lane that reserves low looks cheaper and
   wins picks it should not, and one that reserves high loses them: closed-loop, about 0.01 of share
-  on average at one level. A refund is what can move a sibling: on two-level rigs, a lane that
-  reserves four times the cost on the job that empties its queue costs its honest sibling about
-  0.03, against 0.003 for one that reserves 1 and `extend`s as it runs. So reserve at or below the
+  on average at one level. On average a refund is what moves a sibling: on two-level rigs, a lane
+  that reserves four times the cost on the job that empties its queue costs its honest sibling
+  about 0.03, against 0.003 for one that reserves 1 and `extend`s as it runs. That is the means
+  only. In its worst rig the sibling loses 0.0805 beside a lane reserving a quarter of the cost,
+  about the 0.0844 it loses beside the refund, and a `FairSharePool.withSlot` caller at a low
+  default, which overruns and never extends, is in that regime. So reserve at or below the
   cost: aim `defaultReservation` at or a little below a typical job, never the longest, pass a
   per-lease `reservation` when history gives a better one, and `extend` a lease that reaches what
   it holds. Accepted and pinned on ensembles of rigs by `ReservationLeanTest`

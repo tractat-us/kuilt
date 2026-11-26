@@ -2419,6 +2419,20 @@ prototype below must show the gain first.
 - Replacing `acquire`'s waiting set with a map of lengths: breaks the public API
   for every caller that has none (#3229).
 - Clamping an out-of-range length: it throws, as `reservation` does (#3229).
+- A wrong estimate is accepted and pinned, not corrected. The contract: "An open
+  lease counts at its reservation. A wrong estimate reorders picks and never
+  changes a charge. Reserve at or below the cost and `extend`: a refund is what
+  can move a sibling." `ReservationLeanTest` pins its ensemble means and worst
+  rigs (#3239, [ruling](https://github.com/tractat-us/kuilt/issues/3239#issuecomment-7181473134)).
+- Rewinding refunds in the net-service clock, to close P2 and the two-level
+  spill (§7.2): exact needs, per lease and per level, who was asking at the
+  grant, which is snapshot format 2. Rejected: accept and pin was the pick (#3239, [ruling](https://github.com/tractat-us/kuilt/issues/3239#issuecomment-7181473134)).
+- Charging the cost only, so an open lease counts nothing: one lane takes a
+  whole burst, and it moves the replicated gauge's fold axis. Rejected (#3239,
+  [ruling](https://github.com/tractat-us/kuilt/issues/3239#issuecomment-7181473134)).
+- Defaults from observed cost, in place of a fixed `defaultReservation`:
+  parked, not built. The one-level lean they would remove is +0.011 (#3239,
+  [ruling](https://github.com/tractat-us/kuilt/issues/3239#issuecomment-7181473134)).
 
 #### Open
 

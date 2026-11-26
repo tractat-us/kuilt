@@ -571,8 +571,9 @@ was really charged. Three limits come with that promise, stated plainly.
 
 The last two shrink as estimates get closer to the truth, so:
 
-- **Set `defaultReservation` near a typical build**, not the worst case. A small
-  default favours lanes whose builds run long; a large one penalises them.
+- **Set `defaultReservation` at or a little below a typical build**, not the
+  worst case. A small default favours lanes whose builds run long; a large
+  one penalises them.
 - **Pass a `reservation` when you know better**, such as the lane's last build
   time, as the Mac agent above does.
 - **Know where the quiet-spell effect lives.** It needs a lane that goes quiet
