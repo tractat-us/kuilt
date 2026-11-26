@@ -2263,7 +2263,8 @@ caller that does have estimates and finds a group too coarse.
 **C: lengths that also set the amount.** The lease reserves `r(ℓ)` instead of
 `r`, so in-flight accounting tracks an honest estimate. It is the expensive
 option, and it buys little: a caller can already make a lease's reservation honest
-by reserving `r` and extending to its estimate straight after the pick. Three
+by reserving `r` and, straight after the pick, extending to its estimate or
+shrinking to it (`LocalHeddle.shrink`, #3648). Three
 questions decide its shape.
 
 *An interior edge's length.*
@@ -2988,7 +2989,8 @@ scratch engine.
 - `extend` makes no pick, so the order is the slot-length order, the contract
   ruled in #3200 (plan Amendment 9). The head sets only what the lease holds,
   `max(reservation, head)`. A head below the reservation would need the lease to
-  shrink, which is #3648's question.
+  shrink. `LocalHeddle.shrink` now does that for a caller (#3648); the preview
+  does not call it yet, so such a head still holds the reservation.
 - The list stops at the first refusal, including the position-ceiling refusal
   the overflow fix adds (#3313). When the `acquire` lands and its `extend` is
   refused, that pick is left out and the list ends there, even when the root
