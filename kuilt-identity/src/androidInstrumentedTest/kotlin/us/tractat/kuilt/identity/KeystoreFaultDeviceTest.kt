@@ -50,7 +50,7 @@ class KeystoreFaultDeviceTest {
     fun aCorruptKeyBlobIsReplacedWithinTheHour() = runTest {
         val original = store().deviceKey().id
         val rig = KeystoreFaults.corruptKeyBlob(alias)
-        val failure = backendFailure()
+        val failure = assertNotNull(backendFailure(), "rig: the corrupted key still answers as present")
         val verdict = judge(failure, Build.VERSION.SDK_INT)
         val atOnce = outcomeOf { store().deviceKey().id }
         clock += 61.minutes.inWholeMilliseconds
@@ -83,7 +83,7 @@ class KeystoreFaultDeviceTest {
         record("stopped keystore", "getKey=${getKey.describe()} getCertificate=${getCertificate.describe()} store=$during")
         assertAll(
             {
-                if (Build.VERSION.SDK_INT <= LAST_API_WHERE_GET_KEY_HIDES_FAILURE) {
+                if (Build.VERSION.SDK_INT <= AndroidKeystoreDeviceKeyStore.LAST_API_WHERE_GET_KEY_HIDES_FAILURE) {
                     assertEquals(Outcome.Returned(null), getKey, "on Android 11 and earlier getKey answers no key")
                 } else {
                     assertIs<Outcome.Threw>(getKey, "on Android 12 and later getKey throws")
@@ -96,32 +96,38 @@ class KeystoreFaultDeviceTest {
     }
 
     /**
-     * A key that needs the screen lock, after the screen lock is removed: the Keystore invalidates it for
-     * good, and the store replaces it at once on every version. The rig needs no root.
+     * A key that needs the screen lock, after the screen lock is removed. The Keystore is done with it
+     * for good — measured on Android 16, keystore2 deletes it, so `getKey` answers no key; older Keystores
+     * invalidate it — and the store carries on under one new key at once, on every version. The rig
+     * needs no root.
      */
     @Test
-    fun aKeyInvalidatedForGoodIsReplacedAtOnce() = runTest {
+    fun aKeyTheScreenLockTookWithItIsReplacedAtOnce() = runTest {
         KeystoreFaults.plantKeyInvalidatedByRemovingTheScreenLock(alias)
         val failure = backendFailure()
-        val verdict = judge(failure, Build.VERSION.SDK_INT)
+        val verdict = failure?.let { judge(it, Build.VERSION.SDK_INT) }
         var made = 0
         val atOnce = outcomeOf { store { made++ }.deviceKey().id }
-        record("invalidated key", "failure=${failure.description} cause=${failure.cause.describeChain()} verdict=${verdict.name} store=$atOnce")
+        record(
+            "screen lock removed",
+            "backend=${failure?.let { "${it.description}: ${it.cause.describeChain()}" } ?: "no key"} " +
+                "verdict=${verdict?.name} store=$atOnce",
+        )
         assertAll(
-            { assertIs<FailureVerdict.Replace>(verdict, "the Keystore's verdict that the key is gone for good: ${failure.cause.describeChain()}") },
+            { assertTrue(verdict == null || verdict is FailureVerdict.Replace, "the Keystore says the key is gone for good, or holds none: $verdict") },
             { assertIs<Outcome.Returned<DidKey>>(atOnce, "the store carries on at once") },
             { assertEquals(1, made, "under one new key") },
         )
     }
 
-    /** The first thing the store would see fail, reading the key under [alias] as it does. */
-    private suspend fun backendFailure(): KeystoreFailure {
+    /** The first thing the store would see fail, reading the key under [alias] as it does; `null` for no key. */
+    private suspend fun backendFailure(): KeystoreFailure? {
         val signer = try {
             AndroidKeystoreBackend.getKey(alias)
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()
             return KeystoreFailure.Thrown("loading the key", e)
-        } ?: return KeystoreFailure.NoKeyThoughOneWasMade
+        } ?: return null
         val publicKey = AndroidKeystoreBackend.getCertificatePublicKey(alias) ?: return KeystoreFailure.NoCertificate
         return when (val read = readBack(publicKey, signer, SelfTestVerifier.Provider)) {
             is KeystoreRead.Failed -> read.failure
