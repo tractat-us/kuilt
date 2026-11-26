@@ -102,8 +102,9 @@ rather than fails:
    and a leader actually wins the race. Identical seeds ⇒ split-vote storm ⇒ no leader
    ⇒ hang. A restart gets a fresh seed, still derived from `baseSeed`, the node and its
    start count, so a `ClientIdentity.Auto` node comes back under a new client id as a
-   real process would (#3425). A custom `nodeFactory` that restarts nodes has to do
-   the same.
+   real process would (#3425). The sim picks that seed, not the factory: a custom
+   `nodeFactory` is handed a `NodeStart` and seeds `RaftConfig.random` from its
+   `random`, so it restarts exactly as the default does (#3659).
 4. **Node coroutines on `backgroundScope`.** The infinite loops must be cancelled at
    teardown, or `runTest` reports `UncompletedCoroutinesError`.
 

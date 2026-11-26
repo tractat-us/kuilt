@@ -25,7 +25,7 @@ class TraceAssertionsTest {
     private fun withTrace(body: suspend (MultiNodeRaftSim, FakeRaftNode) -> Unit): TestResult =
         runTest(StandardTestDispatcher(), timeout = RAFT_SIM_WEDGE_BACKSTOP) {
             val sim = MultiNodeRaftSim(listOf(id), this, backgroundScope,
-                nodeFactory = { nodeId, _, _, _ -> FakeRaftNode(nodeId) })
+                nodeFactory = { start -> FakeRaftNode(start.id) })
             val fake = sim.nodes.getValue(id) as FakeRaftNode
             sim.settle()
             body(sim, fake)

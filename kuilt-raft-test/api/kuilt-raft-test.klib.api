@@ -69,7 +69,7 @@ final class us.tractat.kuilt.raft.test/MultiNodeRaftNetwork { // us.tractat.kuil
 }
 
 final class us.tractat.kuilt.raft.test/MultiNodeRaftSim { // us.tractat.kuilt.raft.test/MultiNodeRaftSim|null[0]
-    constructor <init>(kotlin.collections/List<us.tractat.kuilt.raft/NodeId>, kotlinx.coroutines/CoroutineScope, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.raft/RaftConfig = ..., kotlin/Long = ..., kotlin/Int? = ..., kotlin/Function4<us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/RaftTransport, us.tractat.kuilt.raft/RaftStorage, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.raft/RaftNode> = ...) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.raft.NodeId>;kotlinx.coroutines.CoroutineScope;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.raft.RaftConfig;kotlin.Long;kotlin.Int?;kotlin.Function4<us.tractat.kuilt.raft.NodeId,us.tractat.kuilt.raft.RaftTransport,us.tractat.kuilt.raft.RaftStorage,kotlinx.coroutines.CoroutineScope,us.tractat.kuilt.raft.RaftNode>){}[0]
+    constructor <init>(kotlin.collections/List<us.tractat.kuilt.raft/NodeId>, kotlinx.coroutines/CoroutineScope, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.raft/RaftConfig = ..., kotlin/Long = ..., kotlin/Int? = ..., kotlin/Function1<us.tractat.kuilt.raft.test/NodeStart, us.tractat.kuilt.raft/RaftNode> = ...) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.raft.NodeId>;kotlinx.coroutines.CoroutineScope;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.raft.RaftConfig;kotlin.Long;kotlin.Int?;kotlin.Function1<us.tractat.kuilt.raft.test.NodeStart,us.tractat.kuilt.raft.RaftNode>){}[0]
 
     final val network // us.tractat.kuilt.raft.test/MultiNodeRaftSim.network|{}network[0]
         final fun <get-network>(): us.tractat.kuilt.raft.test/MultiNodeRaftNetwork // us.tractat.kuilt.raft.test/MultiNodeRaftSim.network.<get-network>|<get-network>(){}[0]
@@ -103,6 +103,23 @@ final class us.tractat.kuilt.raft.test/MultiNodeRaftSim { // us.tractat.kuilt.ra
     final suspend fun dumpState(kotlin/String): kotlin/String // us.tractat.kuilt.raft.test/MultiNodeRaftSim.dumpState|dumpState(kotlin.String){}[0]
     final suspend fun proposeOnLeader(kotlin/ByteArray, kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>? = ..., kotlin.time/Duration = ...): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.raft.test/MultiNodeRaftSim.proposeOnLeader|proposeOnLeader(kotlin.ByteArray;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>?;kotlin.time.Duration){}[0]
     final suspend fun settle() // us.tractat.kuilt.raft.test/MultiNodeRaftSim.settle|settle(){}[0]
+}
+
+final class us.tractat.kuilt.raft.test/NodeStart { // us.tractat.kuilt.raft.test/NodeStart|null[0]
+    final val id // us.tractat.kuilt.raft.test/NodeStart.id|{}id[0]
+        final fun <get-id>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft.test/NodeStart.id.<get-id>|<get-id>(){}[0]
+    final val random // us.tractat.kuilt.raft.test/NodeStart.random|{}random[0]
+        final fun <get-random>(): kotlin.random/Random // us.tractat.kuilt.raft.test/NodeStart.random.<get-random>|<get-random>(){}[0]
+    final val scope // us.tractat.kuilt.raft.test/NodeStart.scope|{}scope[0]
+        final fun <get-scope>(): kotlinx.coroutines/CoroutineScope // us.tractat.kuilt.raft.test/NodeStart.scope.<get-scope>|<get-scope>(){}[0]
+    final val start // us.tractat.kuilt.raft.test/NodeStart.start|{}start[0]
+        final fun <get-start>(): kotlin/Int // us.tractat.kuilt.raft.test/NodeStart.start.<get-start>|<get-start>(){}[0]
+    final val storage // us.tractat.kuilt.raft.test/NodeStart.storage|{}storage[0]
+        final fun <get-storage>(): us.tractat.kuilt.raft/RaftStorage // us.tractat.kuilt.raft.test/NodeStart.storage.<get-storage>|<get-storage>(){}[0]
+    final val transport // us.tractat.kuilt.raft.test/NodeStart.transport|{}transport[0]
+        final fun <get-transport>(): us.tractat.kuilt.raft/RaftTransport // us.tractat.kuilt.raft.test/NodeStart.transport.<get-transport>|<get-transport>(){}[0]
+
+    final fun toString(): kotlin/String // us.tractat.kuilt.raft.test/NodeStart.toString|toString(){}[0]
 }
 
 final const val us.tractat.kuilt.raft.test/MULTI_NODE_SIM_SEED // us.tractat.kuilt.raft.test/MULTI_NODE_SIM_SEED|{}MULTI_NODE_SIM_SEED[0]

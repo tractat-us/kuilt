@@ -101,7 +101,6 @@ import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.RaftTraceEvent
-import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.raftNode
 import kotlin.random.Random
 import kotlin.test.assertTrue
@@ -127,16 +126,18 @@ import kotlin.time.Duration.Companion.seconds
  *   election orderings; the default [MULTI_NODE_SIM_SEED] is stable across runs.
  * @param maxPayloadBytes Optional payload cap forwarded to [MultiNodeRaftNetwork] — forces
  *   InstallSnapshot chunking in tests that exercise the snapshot-transfer path.
- * @param nodeFactory Override to wire a custom [RaftNode] implementation. The default wires
- *   [CoroutineScope.raftNode] with a per-node, per-start seeded config. Parameters: `(id,
- *   transport, storage, childScope)`. It is called once per start of a node — at construction and
- *   again on every [restart] — and a custom factory that seeds [RaftConfig.random] must give each
- *   start its own seed, for the reason below.
+ * @param nodeFactory Override to wire a custom [RaftNode] implementation. It is called once per
+ *   start of a node, at construction and again on every [restart], with a [NodeStart] carrying the
+ *   node's id, transport, storage and scope, the start count, and that start's seeded
+ *   [NodeStart.random]. The default wires [CoroutineScope.raftNode] with
+ *   `baseConfig.copy(random = start.random)`; a custom factory seeds [RaftConfig.random] from
+ *   [NodeStart.random] the same way, and then derives exactly as a default node would.
  *
  * ## A restart is a new process, so it gets a new seed
  *
- * The default factory seeds a node's first start with `baseSeed + nodeIndex`, and its `k`-th
- * restart with a seed that differs from every earlier one (`simNodeSeed`). It never reuses one.
+ * The sim seeds a node's first start with `baseSeed + nodeIndex`, and its `k`-th restart with a
+ * seed that differs from every earlier one (`simNodeSeed`). It never reuses one, and it picks the
+ * seed itself, so no factory can pick a wrong one (#3659).
  * A [us.tractat.kuilt.raft.ClientIdentity.Auto] node mints its client id from
  * [RaftConfig.random], and the library promises that id changes on restart; in production it does,
  * because the process draws from fresh entropy. Reseeding a restart with its first seed brings the
@@ -154,8 +155,7 @@ public class MultiNodeRaftSim(
     private val baseConfig: RaftConfig = MULTI_NODE_SIM_BASE_CONFIG,
     private val baseSeed: Long = MULTI_NODE_SIM_SEED,
     maxPayloadBytes: Int? = null,
-    private val nodeFactory: (NodeId, RaftTransport, RaftStorage, CoroutineScope) -> RaftNode =
-        defaultNodeFactory(nodeIds, baseConfig, baseSeed),
+    private val nodeFactory: (NodeStart) -> RaftNode = defaultNodeFactory(nodeIds, baseConfig),
 ) {
     /** The in-process channel network shared by all nodes. Use to inject partitions or raw messages. */
     public val network: MultiNodeRaftNetwork = MultiNodeRaftNetwork(maxPayloadBytes)
@@ -164,6 +164,9 @@ public class MultiNodeRaftSim(
     public val storages: Map<NodeId, InMemoryRaftStorage> = nodeIds.associateWith { InMemoryRaftStorage() }
 
     private val scopes: MutableMap<NodeId, CoroutineScope> = mutableMapOf()
+
+    /** How many times each node has been started, so the next [NodeStart] gets the next seed. */
+    private val starts: MutableMap<NodeId, Int> = mutableMapOf()
 
     /** Live node map — entries are removed on [crash] and re-added on [restart]. */
     public val nodes: MutableMap<NodeId, RaftNode> = mutableMapOf()
@@ -187,7 +190,10 @@ public class MultiNodeRaftSim(
     private fun startNode(id: NodeId) {
         val child = CoroutineScope(nodeScope.coroutineContext + Job(nodeScope.coroutineContext[Job]))
         scopes[id] = child
-        val node = nodeFactory(id, network.transport(id), storages.getValue(id), child)
+        val start = starts[id] ?: 0
+        starts[id] = start + 1
+        val seed = simNodeSeed(baseSeed, nodeIds.indexOf(id), start)
+        val node = nodeFactory(NodeStart(id, network.transport(id), storages.getValue(id), child, Random(seed), start))
         nodes[id] = node
         collectTrace(id, node)
         collectStateMachine(id, node)
@@ -743,18 +749,9 @@ internal fun simNodeSeed(baseSeed: Long, nodeIndex: Int, start: Int): Long {
 /** The 64-bit golden-ratio constant: odd, so multiplying by it is a bijection on [Long]. */
 private const val RESTART_SEED_STRIDE: Long = -0x61c8864680b583ebL
 
-private fun defaultNodeFactory(
-    nodeIds: List<NodeId>,
-    baseConfig: RaftConfig,
-    baseSeed: Long,
-): (NodeId, RaftTransport, RaftStorage, CoroutineScope) -> RaftNode {
+private fun defaultNodeFactory(nodeIds: List<NodeId>, baseConfig: RaftConfig): (NodeStart) -> RaftNode {
     val clusterConfig = ClusterConfig(voters = nodeIds.toSet())
-    // One count per node, bumped on each call: the sim calls the factory once per start.
-    val starts = mutableMapOf<NodeId, Int>()
-    return { id, transport, storage, childScope ->
-        val start = starts[id] ?: 0
-        starts[id] = start + 1
-        val seed = simNodeSeed(baseSeed, nodeIds.indexOf(id), start)
-        childScope.raftNode(clusterConfig, transport, storage, baseConfig.copy(random = Random(seed)))
+    return { start ->
+        start.scope.raftNode(clusterConfig, start.transport, start.storage, baseConfig.copy(random = start.random))
     }
 }

@@ -15,11 +15,9 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_BASE_CONFIG
-import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_SEED
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
-import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -41,18 +39,18 @@ class CachedResultClusterE2ETest {
                 nodeIds = ids,
                 scope = this,
                 nodeScope = backgroundScope,
-                nodeFactory = { id, transport, storage, scope ->
-                    val bounded = object : RaftTransport by transport {
-                        override val maxPayloadBytes: Int get() = budgets.getValue(id)
+                nodeFactory = { start ->
+                    val bounded = object : RaftTransport by start.transport {
+                        override val maxPayloadBytes: Int get() = budgets.getValue(start.id)
                         override suspend fun sendTo(peer: NodeId, message: ByteArray) {
                             if (message.size > maxPayloadBytes) dropped += message.size
-                            else transport.sendTo(peer, message)
+                            else start.transport.sendTo(peer, message)
                         }
                     }
-                    scope.raftNode(
-                        config, bounded, storage,
-                        MULTI_NODE_SIM_BASE_CONFIG.copy(random = Random(MULTI_NODE_SIM_SEED + ids.indexOf(id))),
-                        ClientIdentity.Durable(ClientId(id.value), issuedThrough = 0L),
+                    start.scope.raftNode(
+                        config, bounded, start.storage,
+                        MULTI_NODE_SIM_BASE_CONFIG.copy(random = start.random),
+                        ClientIdentity.Durable(ClientId(start.id.value), issuedThrough = 0L),
                     )
                 },
             )
