@@ -698,6 +698,31 @@ internal suspend fun sampleDeviceProof() {
 }
 ```
 
+**The server's nonces, spent once:** `ProofNonces`. Do not hand-roll a table of issued nonces, a timestamp nonce with no record of spends, or a "seen" set with no bound. A table of issued nonces is state an anonymous flood fills for free. `ProofNonces.create()` makes one per server process, with a 32-byte secret from the platform's CSPRNG that never leaves it. `issue()` returns a 41-byte nonce that carries its own time and a MAC under that secret, so the server keeps no record of handing it out. `check(nonce)` answers `NonceCheck.Unknown` for one this instance did not issue (another process's, one from before a restart), `Expired` once its 60 s are up, or `Fresh`. Only a `Fresh` can be spent. `spend(fresh)` answers `Spent` once and `Replayed` for every spend after, from any thread. Spend only after the proof's signature checks out, so someone who saw the nonce in flight cannot burn it with a bad signature. The spent set holds at most 65 536 live entries; a full set answers `Overloaded` (back off) rather than forget a live one, and frees each slot as its nonce runs out. The instance keeps its own time on a monotonic `TimeSource`, so no wall-clock step, back, or forward and back again, lets a spent nonce in twice. It also reads the wall `Clock`, and when the two disagree by more than the ttl (a clock change, or a sleep the time source did not count) it draws a new secret: every outstanding nonce is then `Unknown`, and a `Fresh` checked before is `Expired` at its spend. In a test, pass `timeSource` and `clock` to `create` and move them together, unless the step is what you are testing. One process is the scope: behind a load balancer, route the nonce fetch and the dial to the same instance.
+
+<!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleProofNonces -->
+```kotlin
+internal suspend fun sampleProofNonces() {
+    // One per server process, made at start-up. Its secret never leaves it, and it keeps its own time.
+    val nonces = ProofNonces.create() // 60 s each, at most 65 536 spent ones kept
+
+    // A device asks for a nonce, and the server keeps no record of handing it out.
+    val served = nonces.issue()
+
+    // The device dials with a proof over it. The server checks the nonce is its own and fresh…
+    val fresh = nonces.check(served)
+    check(fresh is NonceCheck.Fresh)
+    // …checks the proof's signature (not shown), and only then spends the nonce.
+    check(nonces.spend(fresh) == NonceSpend.Spent)
+
+    // The same proof again is a replay, whoever sends it. A minute on, it is Expired instead,
+    // and if the wall clock jumps the server draws a new secret, so it is Unknown: either way the
+    // device fetches another.
+    val again = nonces.check(served)
+    check(again is NonceCheck.Fresh && nonces.spend(again) == NonceSpend.Replayed)
+}
+```
+
 **A pass to come back:** `Grant`. Do not hand-roll a "remember this device" cookie or a signed blob that lets an *already-admitted* device back in. A grant is not an invite: it names the key of a device the host has already let in once, so a newcomer has nothing to put in it. `Grant.issue(host, subject, scope, issuedAt, notAfter)` is the host's signed statement that the device with key `subject` may return to `GrantScope.Room(roomId)`, or to `GrantScope.AnyRoomOfIssuer`, until `notAfter` (`Grant.NO_EXPIRY` for never). Times are epoch milliseconds you pass in; a grant never reads a clock. `wire` is what the device keeps and presents, and `Grant.decode(wire)` reads it back, `null` on anything malformed. A grant is not a secret, since it is useless without the subject's key. `isSignedByIssuer` checks the signature and nothing else: whether the issuer, subject, room and expiry are right for this room now is `GrantTrust`'s job, below.
 
 <!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleIssueGrant -->

@@ -115,6 +115,50 @@ sealed interface us.tractat.kuilt.identity/GrantVerdict { // us.tractat.kuilt.id
     }
 }
 
+sealed interface us.tractat.kuilt.identity/NonceCheck { // us.tractat.kuilt.identity/NonceCheck|null[0]
+    final class Fresh : us.tractat.kuilt.identity/NonceCheck { // us.tractat.kuilt.identity/NonceCheck.Fresh|null[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/NonceCheck.Fresh.toString|toString(){}[0]
+    }
+
+    final object Expired : us.tractat.kuilt.identity/NonceCheck { // us.tractat.kuilt.identity/NonceCheck.Expired|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/NonceCheck.Expired.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/NonceCheck.Expired.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/NonceCheck.Expired.toString|toString(){}[0]
+    }
+
+    final object Unknown : us.tractat.kuilt.identity/NonceCheck { // us.tractat.kuilt.identity/NonceCheck.Unknown|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/NonceCheck.Unknown.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/NonceCheck.Unknown.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/NonceCheck.Unknown.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.identity/NonceSpend { // us.tractat.kuilt.identity/NonceSpend|null[0]
+    final object Expired : us.tractat.kuilt.identity/NonceSpend { // us.tractat.kuilt.identity/NonceSpend.Expired|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/NonceSpend.Expired.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/NonceSpend.Expired.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/NonceSpend.Expired.toString|toString(){}[0]
+    }
+
+    final object Overloaded : us.tractat.kuilt.identity/NonceSpend { // us.tractat.kuilt.identity/NonceSpend.Overloaded|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/NonceSpend.Overloaded.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/NonceSpend.Overloaded.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/NonceSpend.Overloaded.toString|toString(){}[0]
+    }
+
+    final object Replayed : us.tractat.kuilt.identity/NonceSpend { // us.tractat.kuilt.identity/NonceSpend.Replayed|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/NonceSpend.Replayed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/NonceSpend.Replayed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/NonceSpend.Replayed.toString|toString(){}[0]
+    }
+
+    final object Spent : us.tractat.kuilt.identity/NonceSpend { // us.tractat.kuilt.identity/NonceSpend.Spent|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/NonceSpend.Spent.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/NonceSpend.Spent.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/NonceSpend.Spent.toString|toString(){}[0]
+    }
+}
+
 final class us.tractat.kuilt.identity/AdmissionProof { // us.tractat.kuilt.identity/AdmissionProof|null[0]
     final val deviceId // us.tractat.kuilt.identity/AdmissionProof.deviceId|{}deviceId[0]
         final fun <get-deviceId>(): kotlin/String // us.tractat.kuilt.identity/AdmissionProof.deviceId.<get-deviceId>|<get-deviceId>(){}[0]
@@ -259,6 +303,32 @@ final class us.tractat.kuilt.identity/InMemoryDeviceKeyStore : us.tractat.kuilt.
     final suspend fun grants(): kotlin.collections/List<us.tractat.kuilt.identity/Grant> // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.grants|grants(){}[0]
     final suspend fun keepFreshGrant(us.tractat.kuilt.identity/Grant) // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.keepFreshGrant|keepFreshGrant(us.tractat.kuilt.identity.Grant){}[0]
     final suspend fun keepGrant(us.tractat.kuilt.identity/Grant) // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.keepGrant|keepGrant(us.tractat.kuilt.identity.Grant){}[0]
+}
+
+final class us.tractat.kuilt.identity/ProofNonces { // us.tractat.kuilt.identity/ProofNonces|null[0]
+    final val capacity // us.tractat.kuilt.identity/ProofNonces.capacity|{}capacity[0]
+        final fun <get-capacity>(): kotlin/Int // us.tractat.kuilt.identity/ProofNonces.capacity.<get-capacity>|<get-capacity>(){}[0]
+    final val ttl // us.tractat.kuilt.identity/ProofNonces.ttl|{}ttl[0]
+        final fun <get-ttl>(): kotlin.time/Duration // us.tractat.kuilt.identity/ProofNonces.ttl.<get-ttl>|<get-ttl>(){}[0]
+
+    final fun spend(us.tractat.kuilt.identity/NonceCheck.Fresh): us.tractat.kuilt.identity/NonceSpend // us.tractat.kuilt.identity/ProofNonces.spend|spend(us.tractat.kuilt.identity.NonceCheck.Fresh){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.identity/ProofNonces.toString|toString(){}[0]
+    final suspend fun check(kotlin/ByteArray): us.tractat.kuilt.identity/NonceCheck // us.tractat.kuilt.identity/ProofNonces.check|check(kotlin.ByteArray){}[0]
+    final suspend fun issue(): kotlin/ByteArray // us.tractat.kuilt.identity/ProofNonces.issue|issue(){}[0]
+
+    final object Companion { // us.tractat.kuilt.identity/ProofNonces.Companion|null[0]
+        final const val DEFAULT_CAPACITY // us.tractat.kuilt.identity/ProofNonces.Companion.DEFAULT_CAPACITY|{}DEFAULT_CAPACITY[0]
+            final fun <get-DEFAULT_CAPACITY>(): kotlin/Int // us.tractat.kuilt.identity/ProofNonces.Companion.DEFAULT_CAPACITY.<get-DEFAULT_CAPACITY>|<get-DEFAULT_CAPACITY>(){}[0]
+        final const val NONCE_SIZE // us.tractat.kuilt.identity/ProofNonces.Companion.NONCE_SIZE|{}NONCE_SIZE[0]
+            final fun <get-NONCE_SIZE>(): kotlin/Int // us.tractat.kuilt.identity/ProofNonces.Companion.NONCE_SIZE.<get-NONCE_SIZE>|<get-NONCE_SIZE>(){}[0]
+
+        final val DEFAULT_TTL // us.tractat.kuilt.identity/ProofNonces.Companion.DEFAULT_TTL|{}DEFAULT_TTL[0]
+            final fun <get-DEFAULT_TTL>(): kotlin.time/Duration // us.tractat.kuilt.identity/ProofNonces.Companion.DEFAULT_TTL.<get-DEFAULT_TTL>|<get-DEFAULT_TTL>(){}[0]
+        final val MAX_TTL // us.tractat.kuilt.identity/ProofNonces.Companion.MAX_TTL|{}MAX_TTL[0]
+            final fun <get-MAX_TTL>(): kotlin.time/Duration // us.tractat.kuilt.identity/ProofNonces.Companion.MAX_TTL.<get-MAX_TTL>|<get-MAX_TTL>(){}[0]
+
+        final suspend fun create(kotlin.time/Duration = ..., kotlin/Int = ..., kotlin.time/TimeSource = ..., kotlin.time/Clock = ...): us.tractat.kuilt.identity/ProofNonces // us.tractat.kuilt.identity/ProofNonces.Companion.create|create(kotlin.time.Duration;kotlin.Int;kotlin.time.TimeSource;kotlin.time.Clock){}[0]
+    }
 }
 
 final class us.tractat.kuilt.identity/RevocationList { // us.tractat.kuilt.identity/RevocationList|null[0]
