@@ -78,10 +78,10 @@ class ShareLineHadTest {
 
     /**
      * The identity the ruling asks to be pinned, exactly: at every competing parent, for each
-     * competing child `s`, `lag = share_ℓ · (N + F) − c_s − F_s`, with `share_ℓ = w_s / Σw`, `c_s`
-     * and `N = Σc` the base committed service this test reads off the ledger itself, and `F_s` and
-     * `F = ΣF` the line's [ShareLine.forgiven]. Beside it, `had` is `c_s / N` and the `had`s add up
-     * to `1` wherever `N` is not `0`.
+     * competing child `s`, `lag = share_ℓ · (N + F) − c_s − F_s`, with `share_ℓ = w_s / Σw`, `N = Σc`
+     * the base committed service this test reads off the ledger itself, `c_s = had · N` read back
+     * through the line, and `F_s` and `F = ΣF` the line's [ShareLine.forgiven]. Beside it, `had` is
+     * the ledger's `c_s / N` and the `had`s add up to `1` wherever `N` is not `0`.
      *
      * Counted: rows where something was forgiven, rows where the forgiven term moves the lag
      * (`share_ℓ · F ≠ F_s`, so dropping it would red), rows whose effective committed service is
@@ -109,8 +109,8 @@ class ShareLineHadTest {
                 val had = kids.map { checkNotNull(line.had(it.child)) { "${it.child.value} reads a lag" } }
                 for ((i, kid) in kids.withIndex()) {
                     val share = weightOf(kid.weight) / weights
-                    val c = Rational.of(committed[i])
-                    val expected = share * (Rational.of(n) + f) - c - forgiven[i]
+                    // c_s read back through the line, `had · N`, so the identity holds the line's had too.
+                    val expected = share * (Rational.of(n) + f) - had[i] * Rational.of(n) - forgiven[i]
                     assertAll(
                         { assertEquals(expected, line.lag(kid.child), "${kid.child.value} beneath ${parent.value}: the identity") },
                         { assertEquals(if (n == 0L) Rational.ZERO else Rational.of(committed[i], n), had[i], "${kid.child.value}'s had") },
