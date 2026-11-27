@@ -827,36 +827,36 @@ an app passes the `LinkAdmission` to `hostedOverlay`.
 ### Slices
 
 Each is one PR and one behaviour move, and carries its `kuilt-primitives` route, cookbook entry
-and ABI dump. None is filed.
+and ABI dump. Each is a standalone issue, labelled `ready`.
 
-1. **`DeviceProof`** (`:kuilt-identity`): layout, `sign`, `decode`, `isSignedBy`. Tests: golden
+1. **`DeviceProof`**, #3775 (`:kuilt-identity`): layout, `sign`, `decode`, `isSignedBy`. Tests: golden
    vector, bytes fixed; decode refuses a non-empty binding field, a wrong tag or version, and each
    malformed field; cross-decode, where none of `admit-proof`, `challenge`, `grant` or a `signApp`
    output decodes as a device proof, nor the reverse; a signature by another key, and a substituted
    subject, both refused.
-2. **`ProofNonces`** (`:kuilt-identity`): issue and spend, with the clock and CSPRNG injected. Its
+2. **`ProofNonces`**, #3776 (`:kuilt-identity`): issue and spend, with the clock and CSPRNG injected. Its
    first task is the HMAC probe on every target. Tests: spend once, then `Replayed`; two concurrent
    spends on a multi-threaded dispatcher, one winner, with the iteration count asserted;
    `ExpiredNonce` at `issuedAt + ttl` and not one millisecond before; another instance's nonce is
    `UnknownNonce`; a full set answers `Overloaded`, then frees space once its entries expire; the
    clock set back and forward never reopens a spent nonce.
-3. **`DeviceProofGate`** (`:kuilt-identity`): the ordered check and `DeviceProofVerdict`. Tests:
+3. **`DeviceProofGate`**, #3777 (`:kuilt-identity`): the ordered check and `DeviceProofVerdict`. Tests:
    one row per verdict, each asserting its rig fired; a bad signature leaves the nonce spendable by
    its holder; a wrong audience is refused before the nonce is touched; revoked, expired, untrusted
    and absent passes each give `Proven` with that pass verdict; on a fake key store it runs on
    wasmJs in virtual time.
-4. **The dialer** (`:kuilt-websocket` `commonMain`): `DeviceProofDialer`, and `weft` on
+4. **The dialer**, #3778 (`:kuilt-websocket` `commonMain`): `DeviceProofDialer`, and `weft` on
    `KtorMeshClientLoom`. Tests: two dials fetch two nonces; the audience comes from the dial URL
    whatever the nonce response says; only the named issuer's pass is presented.
-5. **The suspending extractor** (`:kuilt-websocket`, breaking): the type change on the three server
+5. **The suspending extractor**, #3779 (`:kuilt-websocket`, breaking): the type change on the three server
    classes, with no behaviour change. Tests: the existing attestation tests, unchanged, plus one
    that suspends inside the extractor.
-6. **Ktor glue** (`:kuilt-websocket` `jvmAndAndroidMain`): the nonce route,
+6. **Ktor glue**, #3780 (`:kuilt-websocket` `jvmAndAndroidMain`): the nonce route,
    `ApplicationCall.deviceProof`, `KtorDeviceProof.principal`. Tests, on `testApplication`: a good
    upgrade puts `Principal(did)` on the hub's roster; the same URL dialled twice gets no principal
    the second time; an HTTP call answers each status in the table; a revoked key's dial gets no
    principal unless `newcomer` admits it.
-7. **Keyed hub ids** (`:kuilt-websocket` `commonMain`): `KeyedPeerId` and `LinkAdmission.keyed()`.
+7. **Keyed hub ids**, #3781 (`:kuilt-websocket` `commonMain`): `KeyedPeerId` and `LinkAdmission.keyed()`.
    Tests, beside `MeshAdmissionTest`: a dial under another key claiming a keyed id is refused before
    the dedup tiebreak, the mirror of `controlSpoofedLinkWinsDedupLotteryUnderAcceptAll`; two labels
    under one key both join; an unattested link claiming a keyed id is refused.
