@@ -3232,7 +3232,8 @@ internal class SeamRoom(
         }
         val trust = checkNotNull(grantTrust) { "only a host checks a pass" }
         val now = clock().toEpochMilliseconds()
-        val recorded = lock.withLock { departedMembers.pass(subject, now) }?.let { kept ->
+        // The same pass the joiner presented is checked already, and costs no second signature check.
+        val recorded = lock.withLock { departedMembers.pass(subject, now) }?.takeIf { it != presented }?.let { kept ->
             when (val verdict = verifyOrNull(sender, trust, kept, subject, now) ?: return PassCheck.CheckFailed) {
                 GrantVerdict.Valid -> kept
                 else -> {
