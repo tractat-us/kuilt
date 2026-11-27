@@ -2183,9 +2183,9 @@ internal class SeamRoom(
 
     /**
      * The policy's [decision], and the [request] it was asked about. The request is kept because a
-     * decision is about one link: the principal it names is checked against the link's own each time
-     * the decision is to be acted on ([stillAbout]), since the link can be attested anew while the
-     * policy decides.
+     * decision is about one link: the principal it names is checked against the link's own in every
+     * pass that could act on the decision ([endedByRelink]), since the link can be attested anew while
+     * the policy decides, and a newcomer is admitted with it.
      */
     private class Vetted(val request: AdmissionRequest, val decision: AdmissionDecision)
 
@@ -2276,9 +2276,9 @@ internal class SeamRoom(
      * [asked] is the controller's answer, when it was asked, and the partition episode it was asked
      * about. [released] is the seat an earlier pass released, if any. [vetted] is the policy's answer,
      * once it was asked: it is acted on only while the verdict is still a [SeatDecision.Newcomer], so a
-     * seat the key gained meanwhile is restored instead, and only while the link is still attested as
-     * the principal the policy was asked about ([stillAbout]), so a link attested anew meanwhile is
-     * asked about again.
+     * seat the key gained meanwhile is restored instead. A link attested as another principal than the
+     * one the policy was asked about ends the exchange ([endedByRelink]), and every arm then reads the
+     * challenge as one no longer current.
      */
     private fun settleSeat(
         joinerPeerId: PeerId,
@@ -2294,12 +2294,11 @@ internal class SeamRoom(
         // names when the seat changed. Read at the call, it could name an instant after this id's
         // next drop, and the controller would take it as the end of that newer window (#3675).
         val decidedAtMs = clock().toEpochMilliseconds()
-        val current = pendingChallenges.isCurrent(joinerPeerId, generation)
-        val stillVetted = vetted?.stillAbout(joinerPeerId)
+        val current = pendingChallenges.isCurrent(joinerPeerId, generation) && !endedByRelink(joinerPeerId, generation, vetted)
         val decision = decideUnderRevocation(joinerPeerId, keyed.key, pass, decidedAtMs)
         val outcome = settleSpentWindow(joinerPeerId, current, decision, asked) ?: toldSuperseded(joinerPeerId, keyed, generation, asked) ?: when (decision) {
             is SeatDecision.Restore -> settleRestore(joinerPeerId, generation, current, asked, decidedAtMs)
-            is SeatDecision.ReleaseAndAdmit -> settleRelease(joinerPeerId, keyed, generation, current, decision.released, pass, stillVetted, decidedAtMs)
+            is SeatDecision.ReleaseAndAdmit -> settleRelease(joinerPeerId, keyed, generation, current, decision.released, pass, vetted, decidedAtMs)
             SeatDecision.KeyConflict -> if (retire(joinerPeerId, generation)) {
                 SeatOutcome.Refused(
                     AdmitMessage.Reject("key-conflict: ${joinerPeerId.value} is held by another device", RejectCode.KeyConflict, keyed.joinerNonce),
@@ -2308,7 +2307,7 @@ internal class SeamRoom(
                 SeatOutcome.Stale
             }
             is SeatDecision.RestoreUnderNewId -> settleRestoreUnderNewId(joinerPeerId, generation, current, decision.previous, asked, decidedAtMs)
-            is SeatDecision.Newcomer -> settleNewcomer(joinerPeerId, keyed, generation, current, decision, stillVetted, decidedAtMs)
+            is SeatDecision.Newcomer -> settleNewcomer(joinerPeerId, keyed, generation, current, decision, vetted, decidedAtMs)
             SeatDecision.Returning ->
                 if (retire(joinerPeerId, generation)) admitReturning(joinerPeerId, keyed, checkNotNull(pass) { "only a pass decides Returning" }, decidedAtMs) else SeatOutcome.Stale
         }
@@ -2364,7 +2363,8 @@ internal class SeamRoom(
      * **Vetted before released** (#3220, the coordinator's ruling on #3699's review). When the key
      * decided without the seat is a [SeatDecision.Newcomer], the policy is asked first, with the seat
      * still held, and the seat is released only in the pass that holds its `Admit`; the next pass then
-     * seats the newcomer. A refusal is sent with the seat untouched, and a policy that throws or runs
+     * seats the newcomer, unless its challenge ended in between (a `Goodbye`, a newer Hello, the
+     * deadline, or its link attested anew, [endedByRelink]) or its key gained a seat meanwhile. A refusal is sent with the seat untouched, and a policy that throws or runs
      * out the challenge releases nothing, so a newcomer the policy does not admit cannot evict a
      * partitioned member by knocking under its id. If the member heals meanwhile, the decision is no
      * longer a release: a different key meets a connected seat, [SeatDecision.KeyConflict].
@@ -2400,9 +2400,10 @@ internal class SeamRoom(
      * longer current seats nobody and refuses nobody: a newer Hello from the same sender owes the
      * answer now, and a refusal would end that joiner (census P6).
      *
-     * [vetted] is only ever an answer about the principal the link is attested as now ([stillAbout]),
-     * and the admitted member carries the one the request named, so [Member.principal] is the
-     * principal the policy admitted.
+     * An answer is acted on only through [retire], and [endedByRelink] retires the challenge of a link
+     * attested anew before any arm reads [vetted], so the request's principal is the link's own whenever
+     * an answer is acted on. The admitted member carries the one the request named, so
+     * [Member.principal] is the principal the policy admitted.
      */
     private fun settleNewcomer(
         joinerPeerId: PeerId,
@@ -2427,21 +2428,28 @@ internal class SeamRoom(
     }
 
     /**
-     * **Under [lock].** This answer, while [joinerPeerId]'s link is still attested as the principal its
-     * request named; else null, so the joiner is asked about again.
+     * **Under [lock], with [generation] current.** Whether [vetted]'s request named another principal
+     * than the one [joinerPeerId]'s link is attested as now, in which case this ends the exchange: its
+     * challenge is retired, so no arm acts on the answer, and nothing is sent.
      *
      * The link can change while the policy decides, outside [lock]: a hub re-registers an id from a
      * fresh connection on its first frame, and a peer id is no secret, so a second link authenticated
      * as someone else can take the id over without a Hello, and the challenge stays current (#3773's
-     * review). An answer about one principal is then never acted on for another, in either direction:
-     * neither an admit, which would seat the second link's principal under the first one's decision,
-     * nor a release made for it ([settleRelease]), nor a refusal. Asking again is how the loop already
-     * treats a world that moved while the policy was out, and the challenge's deadline bounds it.
+     * review). The answer was about the first link and nothing about the second, so none of it is
+     * acted on: neither an admit, which would seat the second link under the first one's key and
+     * decision, nor the seat release an admit unlocks ([settleRelease]), nor a refusal. Asking again
+     * would put the second link's principal beside the first link's key and device in one request.
+     *
+     * Nothing is sent because the only link this id reaches now is the one that never said Hello, as
+     * when a sender leaves the seam mid-exchange ([runDetectorRouteWatcher]). The joiner whose Hello it
+     * was recovers by saying Hello again, which opens a newer challenge, and a real reconnect does that
+     * anyway. Logged once per exchange: the next pass finds the challenge retired before it reads this.
      */
-    private fun Vetted.stillAbout(joinerPeerId: PeerId): Vetted? {
-        if (request.principal == attestedPrincipal(joinerPeerId)) return this
-        logger.info { "room.admit.principal-changed peer=${joinerPeerId.value}: its link was attested anew while the policy decided; asking again" }
-        return null
+    private fun endedByRelink(joinerPeerId: PeerId, generation: Long, vetted: Vetted?): Boolean {
+        if (vetted == null || vetted.request.principal == attestedPrincipal(joinerPeerId)) return false
+        retire(joinerPeerId, generation)
+        logger.info { "room.admit.principal-changed peer=${joinerPeerId.value}: its link was attested anew while the policy decided; the exchange ends" }
+        return true
     }
 
     /**
@@ -2796,9 +2804,9 @@ internal class SeamRoom(
      * Who the fabric attested [peerId]'s link as, or null when nothing did: the one source for both the
      * admitted [Member.principal] and the [AdmissionRequest.principal] the policy decides on (#3750).
      * It is read at two instants, when the request is built and when the answer is acted on, and the
-     * link can be attested anew between them, so the two agree only because an answer whose request
-     * names a different principal from the link's now is never acted on ([stillAbout]), and a newcomer
-     * is admitted with its request's principal rather than a third read. The map-keyed roster comes first (hub path:
+     * link can be attested anew between them, so the two agree only because an exchange whose request
+     * names a different principal from the link's now is ended without acting on the answer
+     * ([endedByRelink]), and a newcomer is admitted with its request's principal rather than a third read. The map-keyed roster comes first (hub path:
      * `RoomHubSeam` / `Mesh` keys a principal per peer), then the single-value marker (2-peer relay
      * path: `Seam.withPrincipal`).
      */
