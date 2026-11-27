@@ -35,6 +35,14 @@ class TopologyDocumentEditsPropertyTest {
 
     /** Seeds after [seeds] that each draw a move to an index, so every edit above keeps its own trajectory. */
     private val moveAtSeeds = 1500
+
+    /**
+     * Seeds after those that draw a move to an index whose target, when it is not the child's own
+     * parent, is a group outside that parent and the child's own subtree. Unbiased, a move to
+     * another parent at an interior index is about one draw in three hundred, too few to floor.
+     * Biased, it is about one in forty: most draws still land on a refusal or at the end.
+     */
+    private val moveElsewhereSeeds = 1500
     private val names = listOf("a", "b", "c", "d")
     private val weightOf = mapOf("1" to Weight.ONE, "2" to Weight.of(2), "3/2" to Weight.of(3, 2), "6/4" to Weight.of(3, 2))
     private val weights = weightOf.keys.toList()
@@ -65,12 +73,16 @@ class TopologyDocumentEditsPropertyTest {
         var validTrees = 0
         var invalidTrees = 0
         var startedWithDuplicate = 0
-        for (seed in 0 until seeds + moveAtSeeds) {
+        for (seed in 0 until seeds + moveAtSeeds + moveElsewhereSeeds) {
             val r = Random(seed)
             val model = M.root("root", randomChildren(r, depth = 0))
             if (r.nextInt(6) == 0 && plantDuplicate(model, r)) startedWithDuplicate++
             val before = model.toDocument()
-            val (label, actual, expected) = if (seed < seeds) drawAndApply(before, model, r) else drawMoveAt(before, model, r)
+            val (label, actual, expected) = when {
+                seed < seeds -> drawAndApply(before, model, r)
+                seed < seeds + moveAtSeeds -> drawMoveAt(before, model, r, elsewhere = false)
+                else -> drawMoveAt(before, model, r, elsewhere = true)
+            }
             val outcome = if (expected is TopologyEdit.Edited) "$label:edited" else expected::class.simpleName ?: "?"
             outcomes[outcome] = (outcomes[outcome] ?: 0) + 1
             if ((label == "template" || label.startsWith("move at")) && expected !is TopologyEdit.Edited) outcomes["$label:$outcome"] = (outcomes["$label:$outcome"] ?: 0) + 1
@@ -104,6 +116,10 @@ class TopologyDocumentEditsPropertyTest {
         // Each floor is about half what the generator reaches on the JVM, so a generator that
         // stopped reaching an arm reds, and one that drifted a little does not.
         val tally = listOf("weight", "ceiling", "add", "remove", "rename", "move", "move at", "move at reorder", "template").map { "$it:edited" to (outcomes["$it:edited"] ?: 0) to 50 } +
+            // The one arm a move that appended under another parent would pass, so it is floored on
+            // its own. It is reached 40 times on every target, 35 of them by the biased seeds;
+            // with the bias taken off those seeds it is reached 9 times, below the floor.
+            listOf("move at another parent:edited" to (outcomes["move at another parent:edited"] ?: 0) to 20) +
             listOf("NoSuchNode", "NotAGroup", "DuplicateName", "AtRoot", "IntoItself").map { it to (outcomes[it] ?: 0) to 50 } +
             listOf("NoSuchNode", "NotAGroup", "AtRoot").map { "template:$it" to (outcomes["template:$it"] ?: 0) to 50 } +
             listOf("move at index:NoSuchNode" to (outcomes["move at index:NoSuchNode"] ?: 0) to 50) +
@@ -166,27 +182,42 @@ class TopologyDocumentEditsPropertyTest {
 
     /**
      * Draws one move to an index, half the time into the parent the child already has so that
-     * reorders are reached, and applies it both ways.
+     * reorders are reached, and applies it both ways. With [elsewhere], the other half draws a
+     * group outside that parent and the child's own subtree when the tree has one, so that moves
+     * to another parent at an interior index are reached often enough to floor.
      */
-    private fun drawMoveAt(before: TopologyDocument, model: M, r: Random): Drawn {
+    private fun drawMoveAt(before: TopologyDocument, model: M, r: Random, elsewhere: Boolean): Drawn {
         val path = drawPath(model, r)
-        val target = if (path.isNotEmpty() && r.nextBoolean()) path.dropLast(1) else drawPath(model, r)
+        val target = when {
+            path.isNotEmpty() && r.nextBoolean() -> path.dropLast(1)
+            elsewhere -> otherGroups(model, path).takeIf { it.isNotEmpty() }?.draw(r) ?: drawPath(model, r)
+            else -> drawPath(model, r)
+        }
         // From one before the first child to one past another parent's end, so both ends are
         // reached and refused, as is the end of a reorder, which is the child count less one.
-        val index = r.nextInt(-1, (model.at(target)?.children?.size ?: 0) + 2)
+        val end = model.at(target)?.children?.size ?: 0
+        val index = r.nextInt(-1, end + 2)
         val found = model.at(path) != null
         val expected = model.expectMove(path, target) { index }
-        return Drawn(moveAtLabel(before, found, target + index, expected), before.move(path, target, index), expected)
+        return Drawn(moveAtLabel(before, found, target + index, index < end, expected), before.move(path, target, index), expected)
+    }
+
+    /** Every group in [model], in walk order, that is neither the parent of [path] nor at or below it. */
+    private fun otherGroups(model: M, path: List<Int>): List<List<Int>> = model.paths().filter { candidate ->
+        model.at(candidate)?.group == true && candidate != path.dropLast(1) &&
+            !(candidate.size >= path.size && candidate.subList(0, path.size) == path)
     }
 
     /**
      * Which arm a move to an index took: refused for the index itself, a reorder that changed the
-     * order, or anything else. Once the child to move was [found], the index refusal is the only
-     * one naming the [place] it was to land.
+     * order, a move to another parent that landed [beforeTheEnd] of its children, or anything else.
+     * Once the child to move was [found], the index refusal is the only one naming the [place] it
+     * was to land, and a move to another parent is the only one that replaces the child's history.
      */
-    private fun moveAtLabel(before: TopologyDocument, found: Boolean, place: List<Int>, expected: TopologyEdit): String = when {
+    private fun moveAtLabel(before: TopologyDocument, found: Boolean, place: List<Int>, beforeTheEnd: Boolean, expected: TopologyEdit): String = when {
         found && expected == TopologyEdit.NoSuchNode(place) -> "move at index"
         expected is TopologyEdit.Edited && expected.history == TopologyEdit.History.KEPT && expected.document != before -> "move at reorder"
+        expected is TopologyEdit.Edited && expected.history == TopologyEdit.History.REPLACED && beforeTheEnd -> "move at another parent"
         else -> "move at"
     }
 
