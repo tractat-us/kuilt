@@ -40,6 +40,7 @@ class TopologyDocumentEditsPropertyTest {
      * Seeds after those that draw a move to an index whose target, when it is not the child's own
      * parent, is a group outside that parent and the child's own subtree. Unbiased, a move to
      * another parent at an interior index is about one draw in three hundred, too few to floor.
+     * Biased, it is about one in forty: most draws still land on a refusal or at the end.
      */
     private val moveElsewhereSeeds = 1500
     private val names = listOf("a", "b", "c", "d")
@@ -84,8 +85,6 @@ class TopologyDocumentEditsPropertyTest {
             }
             val outcome = if (expected is TopologyEdit.Edited) "$label:edited" else expected::class.simpleName ?: "?"
             outcomes[outcome] = (outcomes[outcome] ?: 0) + 1
-            val band = if (seed < seeds) "A" else if (seed < seeds + moveAtSeeds) "B" else "C"
-            outcomes["W3787 $band $outcome"] = (outcomes["W3787 $band $outcome"] ?: 0) + 1
             if ((label == "template" || label.startsWith("move at")) && expected !is TopologyEdit.Edited) outcomes["$label:$outcome"] = (outcomes["$label:$outcome"] ?: 0) + 1
             if (actual != expected) {
                 failures += "seed $seed $label\n  before   $before\n  actual   $actual\n  expected $expected"
@@ -118,7 +117,8 @@ class TopologyDocumentEditsPropertyTest {
         // stopped reaching an arm reds, and one that drifted a little does not.
         val tally = listOf("weight", "ceiling", "add", "remove", "rename", "move", "move at", "move at reorder", "template").map { "$it:edited" to (outcomes["$it:edited"] ?: 0) to 50 } +
             // The one arm a move that appended under another parent would pass, so it is floored on
-            // its own: the biased seeds reach it about thirty-five times, the unbiased ones five.
+            // its own. It is reached 40 times on every target, 35 of them by the biased seeds;
+            // with the bias taken off those seeds it is reached 9 times, below the floor.
             listOf("move at another parent:edited" to (outcomes["move at another parent:edited"] ?: 0) to 20) +
             listOf("NoSuchNode", "NotAGroup", "DuplicateName", "AtRoot", "IntoItself").map { it to (outcomes[it] ?: 0) to 50 } +
             listOf("NoSuchNode", "NotAGroup", "AtRoot").map { "template:$it" to (outcomes["template:$it"] ?: 0) to 50 } +
@@ -128,8 +128,6 @@ class TopologyDocumentEditsPropertyTest {
             TopologyEdit.History.entries.map { "${it.name} against changesTo" to (agreements[it] ?: 0) to 30 } +
             listOf("against changesTo" to agreements.values.sum() to 500) +
             listOf("valid trees" to validTrees to 500, "invalid trees" to invalidTrees to 80, "started with a duplicate" to startedWithDuplicate to 150)
-        println("W3787 failures=${failures.size} " + outcomes.entries.filter { it.key.startsWith("W3787") }.sortedBy { it.key }.joinToString())
-        println("W3787 TALLY " + tally.joinToString { (counted, floor) -> "${counted.first}=${counted.second}/$floor" })
         val short = tally.filter { (counted, floor) -> counted.second < floor }.map { (counted, floor) -> "${counted.first}: ${counted.second} < $floor" }
         assertAll(
             { assertEquals(emptyList(), failures.take(5), "${failures.size} failures") },
