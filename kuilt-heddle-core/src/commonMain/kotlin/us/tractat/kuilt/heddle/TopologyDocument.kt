@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.heddle
 
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -26,9 +27,14 @@ import kotlinx.serialization.Serializable
  * `appSettings`, a string map that heddle stores and never reads: the place for whatever the app
  * keeps per node, such as the rule that routes work to a lane or the key a template splits by. The
  * edits carry it with the node ([setAppSettings] sets it), [Topology.from] ignores it, and
- * [appSettingsChangesTo] lists what changed in it between two documents. An empty map is left out
- * of the encoding, so a document with no settings reads and writes exactly as it did before they
- * existed. The root has none; keep tree-wide keys in the app's own file around the document.
+ * [appSettingsChangesTo] lists what changed in it between two documents. The root has none; keep
+ * tree-wide keys in the app's own file around the document.
+ *
+ * An empty map is never encoded, even under `encodeDefaults = true`, so a document with no settings
+ * reads and writes exactly as it did before they existed. A non-empty one does not reach an older
+ * kuilt intact: a strict decode refuses the unknown `appSettings` key, and one with
+ * `ignoreUnknownKeys` drops the settings silently, so a document written back from there has lost
+ * them.
  *
  * @property root the name of the group at the top of the tree.
  * @property children the root's children, in the order written.
@@ -49,6 +55,9 @@ public data class TopologyDocument(public val root: String, public val children:
 
         /** The most leases open beneath this child at once, or `null` for no ceiling; see [Topology.Node.maxConcurrent]. */
         public val maxConcurrent: Long?
+
+        /** The app's own settings for this child, which heddle never reads; empty for none. See [TopologyDocument]. */
+        public val appSettings: Map<String, String>
     }
 
     /**
@@ -74,7 +83,7 @@ public data class TopologyDocument(public val root: String, public val children:
         public val children: List<Node> = emptyList(),
         public val template: ChildTemplate? = null,
         override val maxConcurrent: Long? = null,
-        @IntroducedAt("0.7.8") public val appSettings: Map<String, String> = emptyMap(),
+        @IntroducedAt("0.7.8") @EncodeDefault(EncodeDefault.Mode.NEVER) override val appSettings: Map<String, String> = emptyMap(),
     ) : Node
 
     /**
@@ -96,7 +105,7 @@ public data class TopologyDocument(public val root: String, public val children:
         public val weight: String = "1",
         public val maxConcurrent: Long? = null,
         @IntroducedAt("0.7.7") public val template: ChildTemplate? = null,
-        @IntroducedAt("0.7.8") public val appSettings: Map<String, String> = emptyMap(),
+        @IntroducedAt("0.7.8") @EncodeDefault(EncodeDefault.Mode.NEVER) public val appSettings: Map<String, String> = emptyMap(),
     )
 
     /**
@@ -112,6 +121,6 @@ public data class TopologyDocument(public val root: String, public val children:
         override val name: String,
         override val weight: String = "1",
         @IntroducedAt("0.7.5") override val maxConcurrent: Long? = null,
-        @IntroducedAt("0.7.8") public val appSettings: Map<String, String> = emptyMap(),
+        @IntroducedAt("0.7.8") @EncodeDefault(EncodeDefault.Mode.NEVER) override val appSettings: Map<String, String> = emptyMap(),
     ) : Node
 }

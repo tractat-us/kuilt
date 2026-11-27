@@ -486,10 +486,3 @@ private fun Node.with(
         is Group -> copy(name = name, weight = weight, maxConcurrent = maxConcurrent, appSettings = appSettings)
         is Lane -> copy(name = name, weight = weight, maxConcurrent = maxConcurrent, appSettings = appSettings)
     }
-
-/** The node's own settings; [Node] does not declare them, so a sealed interface gains no member. */
-internal val Node.appSettings: Map<String, String>
-    get() = when (this) {
-        is Group -> appSettings
-        is Lane -> appSettings
-    }
