@@ -49,6 +49,15 @@ runs: one per customer, say, all at the same weight. When the tree comes from
 an admin's file rather than code, decode a `TopologyDocument` and call
 `Topology.from`, which lists every problem with an address instead of throwing.
 
+**Your own settings can ride in the file.** Each group, lane and template in a
+`TopologyDocument` has `appSettings`, a map of text that heddle keeps and never
+reads. Put there what your program knows about each part of the tree, such as
+the rule that sends a build to a lane. The edits keep each setting on its own
+part of the tree when that part moves or is renamed, and
+`appSettingsChangesTo` lists what changed between two files. `Topology.from`
+ignores them, so the running tree cannot give them back: keep the file you
+loaded.
+
 **A rename or a move is a delete plus an add.** A child is known by its name and
 its place in the tree. Rename it, or move it under another group, and the engine
 retires the old child and starts a new one with no fairness history.
