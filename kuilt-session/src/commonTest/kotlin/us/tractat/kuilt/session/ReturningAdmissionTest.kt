@@ -14,6 +14,7 @@ import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.GrantScope
+import us.tractat.kuilt.identity.GrantTrust
 import us.tractat.kuilt.identity.KeyScheme
 import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeDeviceKey
@@ -42,6 +43,7 @@ import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 
 /**
  * A device whose seat is gone, but which still holds a good pass from this host, comes back without
@@ -873,6 +875,55 @@ class ReturningAdmissionTest {
             { assertTrue(newPass.issuedAt > oldPass.issuedAt, "rig: admission issued a newer pass") },
             { assertEquals(2, counted.asked.size, "the pass issued after it lets Bob back unvetted") },
             { assertEquals(ReturnKind.Returning, host.directWelcomesTo(bob).last().returnKind) },
+        )
+        host.room.leave()
+    }
+
+    /**
+     * A pass the host signed while its clock ran ahead, and the link then lost, does not bring a
+     * revoked device back once the clock is corrected (#3755; Decided 24, 34). The host's clock runs
+     * an hour ahead when Bob's renewal is signed, so that renewal is dated an hour out; Bob never gets
+     * it and leaves, and the departed record keeps it. The clock is stepped back and Bob is revoked
+     * with the cutoff one past it, which voids the pass he holds but not the recorded one, dated after
+     * the cutoff. Only [us.tractat.kuilt.identity.GrantTrust.verify]'s
+     * [us.tractat.kuilt.identity.GrantVerdict.NotYetValid] turns the recorded pass away: the seat
+     * decision's own re-check reads the cutoff and the end, which this pass passes.
+     */
+    @Test
+    fun aPostDatedRecordedPassDoesNotBringARevokedDeviceBack() = runTest {
+        val counted = Counted { GrantTerms(FLOOR_TERM) }
+        var aheadMs = 0L
+        val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime + aheadMs) }
+        val host = rawHost(joiners = setOf(bob), clock = clock, admission = counted.admission)
+        host.admit(bob, bobKey, nonce = 1)
+        val held = host.passesTo(bob).single()
+
+        aheadMs = 1.hours.inWholeMilliseconds
+        host.advanceKeeping(alive = setOf(bob), FLOOR_PERIOD + DROP_MARGIN)
+        // The link lost it: Bob holds only [held].
+        val lost = host.passesTo(bob).last()
+        host.say(bob, AdmitMessage.Goodbye)
+        val recordedAtDeparture = (host.room as SeamRoom).departedRecordCountForTest()
+
+        aheadMs = 0L
+        val cutoff = clock().toEpochMilliseconds() + 1
+        counted.revocations.revoke(bobKey.id, notBefore = cutoff)
+        host.admit(bob, bobKey, nonce = 2, grants = listOf(held))
+
+        assertAll(
+            { assertEquals(2, host.passesTo(bob).size, "rig: the host renewed Bob's pass once before he left") },
+            { assertEquals(1, recordedAtDeparture, "rig: the host recorded Bob's departure with a pass") },
+            { assertTrue(held.issuedAt < cutoff, "rig: the revocation voids the pass Bob holds") },
+            { assertTrue(lost.issuedAt >= cutoff, "rig: the cutoff does not void the lost renewal, dated after it") },
+            {
+                assertTrue(
+                    lost.issuedAt > testScheduler.currentTime + GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS,
+                    "rig: the lost renewal is dated past the skew allowance",
+                )
+            },
+            { assertTrue(testScheduler.currentTime < lost.notAfter, "rig: the lost renewal has not run out") },
+            { assertEquals(listOf(bobKey.id, bobKey.id), counted.keys(), "Bob is vetted: a post-dated recorded pass is not good yet") },
+            { assertNull(host.directWelcomesTo(bob).last().returnKind, "an ordinary admission, not a return") },
         )
         host.room.leave()
     }
