@@ -162,6 +162,18 @@ kotlin {
             // Logback ListAppender, as FileDeviceKeyStoreTest does.
             implementation(libs.logback)
         }
+        // The Android Keystore store against a REAL `AndroidKeyStore` provider, on a device or an emulator
+        // (#3226): the androidUnitTest suites above run over FakeKeystore, which reads AOSP but measures
+        // nothing. Its own tree, not commonTest's, so a device run is these classes alone. Run it with
+        // `:kuilt-identity:connectedDebugAndroidTest`; nothing in `build` or `check` does, since a PR
+        // runner has no device. `check` compiles it, through the wiring further down.
+        getByName("androidInstrumentedTest").dependencies {
+            implementation(project(":kuilt-conformance"))
+            implementation(project(":kuilt-test"))
+            implementation(libs.kotlin.testJunit)
+            implementation(libs.kotlinx.coroutines.test)
+            implementation(libs.androidx.test.runner)
+        }
         jvmTest.dependencies {
             // Compile scope: FileDeviceKeyStoreTest reads the replacement warning off a Logback
             // ListAppender, the line an operator would actually see.
@@ -254,6 +266,48 @@ if (runRealKeychainTests) {
                 )
             }
             logger.lifecycle("real-Keychain run: $suite executed ${rows.size} rows against the Keychain")
+        }
+    }
+}
+
+// The device run (#3226): `./gradlew :kuilt-identity:connectedDebugAndroidTest` with a device or an
+// emulator attached. AndroidJUnitRunner runs the androidInstrumentedTest classes against the real
+// AndroidKeyStore provider.
+android {
+    defaultConfig { testInstrumentationRunner = "us.tractat.kuilt.identity.IdentityDeviceTestRunner" }
+}
+
+// The device classes run nowhere a PR builds, so `check` at least compiles them: lint reads their
+// source and compiles none of it, so without this they could stop compiling and nothing would say so.
+tasks.named("check") { dependsOn("compileDebugAndroidTestKotlinAndroid") }
+
+// How many rows each device's result file must hold. AGP reports a connected run that executed
+// nothing as a success, so without this an un-run class reads as green. Adding or removing a device
+// test means changing this number in the same commit. A row an assumption skipped still counts, and
+// the verify names every skipped row, so a device that could not reach a rig says so.
+val expectedDeviceTestRows = 24
+
+tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
+    val results = layout.buildDirectory.dir("outputs/androidTest-results/connected/debug")
+    val expected = expectedDeviceTestRows
+    var startedAt = 0L
+    doFirst { startedAt = System.currentTimeMillis() }
+    doLast {
+        val dir = results.get().asFile
+        val files = dir.walkTopDown().filter { it.isFile && it.name.startsWith("TEST-") && it.extension == "xml" }.toList()
+        check(files.isNotEmpty()) { "device run: no result file under $dir, so nothing ran" }
+        files.forEach { file ->
+            check(file.lastModified() >= startedAt) { "device run: $file predates this run, so it is stale" }
+            val xml = file.readText()
+            val rows = Regex("<testcase\\b").findAll(xml).count()
+            val skipped = Regex("""<testcase name="([^"]+)" classname="([^"]+)"[^>]*>\s*<skipped""").findAll(xml)
+                .map { "${it.groupValues[2].substringAfterLast('.')}.${it.groupValues[1]}" }
+                .toList()
+            check(rows == expected) { "device run: ${file.name} holds $rows rows, expected $expected" }
+            logger.lifecycle(
+                "device run: ${file.name}: $rows of $expected rows, ${skipped.size} skipped" +
+                    if (skipped.isEmpty()) "" else ": " + skipped.joinToString(),
+            )
         }
     }
 }
