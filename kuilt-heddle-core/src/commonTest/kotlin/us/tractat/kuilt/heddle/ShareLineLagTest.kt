@@ -354,6 +354,9 @@ class ShareLineLagTest {
             { assertNull(line.lag(ids.a)) },
             { assertNull(line.lag(ids.b)) },
             { assertEquals(Rational.ZERO, checkNotNull(line.lag(ids.p)) + checkNotNull(line.lag(ids.x)), "the root's row still reads") },
+            { assertNull(line.had(ids.a), "a row reads lag, had and forgiven together or not at all") },
+            { assertNull(line.forgiven(ids.b)) },
+            { assertEquals(Rational.ONE, checkNotNull(line.had(ids.p)) + checkNotNull(line.had(ids.x)), "the root.s hads still read") },
             { assertEquals(Rational.of(1L, 6L), line.share(ids.a)) },
         )
     }
@@ -382,6 +385,8 @@ class ShareLineLagTest {
             { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1L, 30_721L), Weight.of(1L, 30_722L))), "the rig: p's weights fail the budget") },
             { assertNull(line.lag(a)) },
             { assertNull(line.lag(b)) },
+            { assertNull(line.had(a)) },
+            { assertNull(line.forgiven(b)) },
             { assertEquals(Rational.ZERO, checkNotNull(line.lag(p)), "p and x, alone and unserved, stand at the front") },
             { assertEquals(Rational.ZERO, checkNotNull(line.lag(x))) },
             { assertEquals(Rational.of(30_722L, 2L * 61_443L), line.share(a)) },
