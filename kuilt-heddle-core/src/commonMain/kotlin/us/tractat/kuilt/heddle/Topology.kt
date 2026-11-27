@@ -66,6 +66,11 @@ public data class Topology(public val root: String, public val children: List<No
      * [from] reads — `"3"` for a whole number, `"3/2"` for a ratio, always in lowest terms — and
      * every child, template and ceiling is kept, in the order written.
      *
+     * **It writes no app settings.** A [Topology] never holds a document's `appSettings`
+     * ([Topology.from] ignores them), so a document that goes to a [Topology] and back has lost
+     * them. An editor whose app keeps settings in the tree starts from the document it stored, not
+     * from this one.
+     *
      * @sample us.tractat.kuilt.heddle.sampleTopologyToDocument
      */
     public fun toDocument(): TopologyDocument = TopologyDocument(root, children.map { it.written() })

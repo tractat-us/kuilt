@@ -433,3 +433,47 @@ internal fun sampleTopologyDocumentEdits() {
             ),
     )
 }
+
+/**
+ * An app keeps its own settings on each node, such as the rule that routes work to a lane and the
+ * key a template splits by. The edits carry them with the node, heddle never reads them, and
+ * [appSettingsChangesTo] lists what the edits did to them.
+ */
+@Suppress("unused")
+internal fun sampleAppSettings() {
+    val text = """
+        {"root": "pool", "children": [
+          {"type": "group", "name": "ci", "appSettings": {"match": "push"},
+           "template": {"weight": "2", "appSettings": {"split": "repository"}}, "children": [
+            {"type": "lane", "name": "main", "appSettings": {"match": "branch:main"}}
+          ]},
+          {"type": "group", "name": "hobby", "children": [{"type": "lane", "name": "nightly"}]}
+        ]}
+    """
+    val stored = Json.decodeFromString<TopologyDocument>(text)
+
+    // A move takes main's match rule along, and a new rule is one more edit that costs no history.
+    val moved = stored.move(listOf(0, 0), listOf(1), 0)
+    check(moved is TopologyEdit.Edited)
+    val ruled = moved.document.setAppSettings(listOf(1, 1), mapOf("match" to "cron"))
+    check(ruled is TopologyEdit.Edited && ruled.history == TopologyEdit.History.KEPT)
+    val edited = ruled.document
+    check((edited.children[1] as TopologyDocument.Group).children[0] == TopologyDocument.Lane("main", appSettings = mapOf("match" to "branch:main")))
+
+    // heddle reads none of it: the checked tree holds no settings, so toDocument writes none.
+    // An editor starts from the document it stored.
+    val running = Topology.from(edited)
+    check(running is TopologyParse.Valid)
+    check(running.topology.toDocument().children[0] == TopologyDocument.Group("ci", template = TopologyDocument.ChildTemplate("2")))
+
+    // Nodes are matched by their names from the root, as changesTo matches them: main moved, so
+    // its rule is removed where it was and added where it is. A template's settings would come
+    // back at its group's path, at depth 1.
+    check(
+        stored.appSettingsChangesTo(edited) == listOf(
+            AppSettingsChange.Added(listOf(1, 0), listOf("pool", "hobby", "main"), 0, "match", "branch:main"),
+            AppSettingsChange.Added(listOf(1, 1), listOf("pool", "hobby", "nightly"), 0, "match", "cron"),
+            AppSettingsChange.Removed(listOf(0, 0), listOf("pool", "ci", "main"), 0, "match", "branch:main"),
+        ),
+    )
+}
