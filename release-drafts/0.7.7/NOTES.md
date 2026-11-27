@@ -35,6 +35,14 @@ each merge's ABI dump diff and PR body. `ProtocolVersion.CURRENT` is 9 there (MI
 - **Lockstep.** All three posted notices now say outright that every peer of a room upgrades in one
   step, because the admit wire jumps from 2 to 9.
 
+## Third pass, 2026-11-26 night (cut moved up)
+Iain moved the cut: tag as soon as the identity work merges, not Sunday. Covered since `5607981d62`:
+#3740 (an AGENTS.md row, no notes line), #3743 and #3742 (Keychain nightly and Android device
+suite: test infrastructure, no consumer line), #3753 (one new TCK row, under the conformance break,
+plus a new threat bullet), #3748 (the recorded pass, under "Who may come back", plus the conformance
+break's `renewalLoss`), and #3744 (an Android logging caveat, under Migrating). heddle-c5 confirmed
+there's no heddle PR to wait for. `ProtocolVersion.CURRENT` must still be 9.
+
 ## Second pass, later on 2026-11-26
 
 - **No `ASSUMES` markers remain.** The three PRs left open by the first pass merged: #3712 as

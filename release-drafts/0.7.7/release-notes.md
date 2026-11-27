@@ -60,7 +60,10 @@ hears `MembershipEvent.Readmitted`. Whatever your app tied to the old membership
 - The host renews a pass while its device stays connected (#3701). A pass lives one and a half
   times `GrantTerms.readmitFor` and is renewed every half of `readmitFor`, so `readmitFor` is the
   least time a device away after its last contact can still return on it (#3712). A renewal that
-  fails to sign or send is tried again, closing in on the pass's end (#3717).
+  fails to sign or send is tried again, closing in on the pass's end (#3717). A renewal the link
+  takes and then loses no longer strands the device on its older pass: the host lets it back in on
+  the last pass it signed, whether or not it arrived (#3748). That record lives in the host's
+  memory, so after a host restart, or 256 later departures, the device's own pass is all there is.
 - `RevocationList.revoke(key, notBefore)` voids the passes a device already holds. It is **not a
   ban** and **does not remove anyone present**. Keep your own blocked set for that.
 - A pass dated more than five minutes in the host's future is refused as
@@ -164,6 +167,10 @@ only once the roster is full, and a queued vacate counts only while the voter is
   pass or relaunch under a superseded id declares `Unsupported`. They gate six new suite rows: a
   planted pass for another room, for another device, from an untrusted issuer, or not signed by the
   host is ignored, and a process under a superseded id ends `Superseded` (#3710).
+  A third, `renewalLoss: RenewalLoss`, lets the rig lose a renewal on a link that stays up, and
+  gates five rows on returning by the pass the host recorded (#3748). One more row,
+  `aPartitionedIdTakenUnderAnotherKeyRefusesTheMembersReturn`, needs no new hook. It pins the
+  takeover gap below, and it goes red if a change closes that gap (#3753).
 - **`:kuilt-heddle-core`.** `FairShareAllocator.rebaseEnabled` and `rebases`, deprecated no-ops,
   are removed, and `FairShareAllocator.peakPositionFraction` drops its unused `demand` parameter
   (#3723).
@@ -192,6 +199,14 @@ val factory = SeamRoomFactory.systemClock(loom, scope, DeviceKeyStore.platform("
 
 Build one store per device, not per room. In a test, a host and a joiner that share a store are
 one device, and from 0.7.7 they will restore each other's seats.
+
+**On Android, give kuilt's logging somewhere to go before the first call.** kotlin-logging's
+Android artifact logs through SLF4J and doesn't bring it along. So in an app with no SLF4J
+binding, the first kuilt class that logs throws `NoClassDefFoundError: org.slf4j.LoggerFactory`,
+and `DeviceKeyStore.platform(appId, context)` is usually that class. Set
+`System.setProperty("kotlin-logging-to-android-native", "true")` in `Application.onCreate`, or add
+an SLF4J binding. Robolectric tests don't show this, because they have Logback on the classpath
+(#3744).
 
 **2. Tell each host who may come in.** Keep the revocations in a durable store: a friend's pass never
 expires, so an in-memory list forgets on restart and the voided passes work again.
@@ -262,6 +277,12 @@ admission.revocations.revoke(member.key, notBefore = Clock.System.now().toEpochM
 ```
 
 ## What this does not protect against
+
+- On a fabric where peers choose their own ids (WebSocket, the star fabrics), someone else can
+  present a **partitioned** member's id under their own key. The seat is released to them, and the
+  member's return is refused `KeyConflict`. This is the price of letting a device whose key store
+  was cleared keep its id, and channel binding would not change it. Name a device by `Member.key`,
+  never by its peer id.
 
 - A relay sitting on the victim's own link, on a fabric with no channel security of its own, can
   forward a challenge and its answer. Channel binding is reserved in the proof and empty in this
