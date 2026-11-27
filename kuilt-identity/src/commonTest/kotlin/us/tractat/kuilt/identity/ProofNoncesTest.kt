@@ -194,9 +194,10 @@ class ProofNoncesTest {
         val issuedAt = StatementCodec.timeOrNull(behind.copyOfRange(1, 9))
         // Good for its whole ttl from the instance's time, not from the clock that fell behind.
         val lastMoment = T + 30_000 + TTL.inWholeMilliseconds - 1
+        val atLastMoment = nonces.check(behind, lastMoment)
         assertAll(
             { assertEquals(T + 30_000, issuedAt, "stamped with the latest time seen") },
-            { assertIs<NonceCheck.Fresh>(nonces.check(behind, lastMoment), "good to the end of its window") },
+            { assertIs<NonceCheck.Fresh>(atLastMoment, "good to the end of its window") },
         )
     }
 
