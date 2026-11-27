@@ -8,6 +8,8 @@ import io.ktor.server.engine.connector
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume
 import us.tractat.kuilt.core.PeerId
@@ -66,12 +68,21 @@ class HandshakeForensicsTest {
     private suspend fun dialFailure(url: String): Throwable {
         val loom = ForensicLoom(KtorClientLoom(httpClient), forensics) { url }
         val advertisement = WebSocketAdvertisement(url = url, serverPeerId = PeerId("forensics-server"), sessionName = "forensics")
-        return assertFailsWith<Throwable> { loom.weave(Rendezvous.Existing(advertisement)) }
+        // Through `async`, as the suite's `connectedPair` dials: the await is a resumption, so the
+        // throwable that arrives is a stack-trace-recovered copy, and the report has to survive that.
+        return assertFailsWith<Throwable> {
+            coroutineScope { async { loom.weave(Rendezvous.Existing(advertisement)) }.await() }
+        }
     }
 
+    /** The report as a test-results XML shows it: in the printed trace, not merely on some object. */
     private fun Throwable.report(): String {
-        val reports = suppressed.filterIsInstance<HandshakeForensicsReport>()
-        assertEquals(1, reports.size, "the failed dial must carry exactly one forensic report; suppressed=${suppressed.toList()}")
+        val printed = stackTraceToString()
+        val reports = forensicReports()
+        assertAll(
+            { assertEquals(1, reports.size, "the failed dial must carry exactly one forensic report:\n$printed") },
+            { assertContains(printed, "Suppressed: ${HandshakeForensicsReport::class.qualifiedName}: Handshake forensics") },
+        )
         return reports.single().message.orEmpty()
     }
 

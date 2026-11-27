@@ -92,7 +92,7 @@ internal class HandshakeForensics(private val path: String) {
             throw cancelled
         } catch (failure: Throwable) {
             record(Kind.OTHER, "client.dial-failed ${failure::class.simpleName}: ${failure.message}")
-            failure.addSuppressed(HandshakeForensicsReport(failureReport(dialAt)))
+            failure.rootCause().addSuppressed(HandshakeForensicsReport(failureReport(dialAt)))
             throw failure
         }
     }
@@ -122,6 +122,30 @@ internal class HandshakeForensics(private val path: String) {
 
 /** Carries the rendered record; attached as a suppressed exception so the dial's own failure keeps its type. */
 internal class HandshakeForensicsReport(report: String) : Throwable(report, null, false, false)
+
+/**
+ * The innermost throwable of the cause chain, which is where the report has to hang. With assertions
+ * on, kotlinx.coroutines recovers stack traces: each resumption rethrows a fresh copy whose cause is
+ * the original, and drops the instance in between. A report on the caught instance is lost with it
+ * (measured on the CIO conformance rig: the XML had neither the report nor a `Suppressed:` line). The
+ * innermost one is the original, and every copy keeps it as its cause.
+ */
+internal fun Throwable.rootCause(): Throwable {
+    var current = this
+    val visited = mutableSetOf<Throwable>()
+    while (visited.add(current)) current = current.cause ?: break
+    return current
+}
+
+/** The forensic reports anywhere on [this]'s cause chain. */
+internal fun Throwable.forensicReports(): List<HandshakeForensicsReport> =
+    generateSequence(this) { it.cause.takeIf { cause -> cause !== it } }
+        .take(MAX_CAUSE_DEPTH)
+        .flatMap { it.suppressed.asSequence() }
+        .filterIsInstance<HandshakeForensicsReport>()
+        .toList()
+
+private const val MAX_CAUSE_DEPTH = 32
 
 /**
  * Decorates the client loom of a conformance rig so every dial runs through [forensics]. The suite's
