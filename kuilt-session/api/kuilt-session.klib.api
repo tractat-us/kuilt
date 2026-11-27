@@ -1165,7 +1165,7 @@ sealed interface us.tractat.kuilt.session/ReconnectReason { // us.tractat.kuilt.
 }
 
 final class us.tractat.kuilt.session.admit/AdmissionRequest { // us.tractat.kuilt.session.admit/AdmissionRequest|null[0]
-    constructor <init>(us.tractat.kuilt.identity/DidKey, kotlin/String, kotlin/String?) // us.tractat.kuilt.session.admit/AdmissionRequest.<init>|<init>(us.tractat.kuilt.identity.DidKey;kotlin.String;kotlin.String?){}[0]
+    constructor <init>(us.tractat.kuilt.identity/DidKey, kotlin/String, kotlin/String?, us.tractat.kuilt.core/Principal? = ...) // us.tractat.kuilt.session.admit/AdmissionRequest.<init>|<init>(us.tractat.kuilt.identity.DidKey;kotlin.String;kotlin.String?;us.tractat.kuilt.core.Principal?){}[0]
 
     final val deviceId // us.tractat.kuilt.session.admit/AdmissionRequest.deviceId|{}deviceId[0]
         final fun <get-deviceId>(): kotlin/String? // us.tractat.kuilt.session.admit/AdmissionRequest.deviceId.<get-deviceId>|<get-deviceId>(){}[0]
@@ -1173,6 +1173,8 @@ final class us.tractat.kuilt.session.admit/AdmissionRequest { // us.tractat.kuil
         final fun <get-displayName>(): kotlin/String // us.tractat.kuilt.session.admit/AdmissionRequest.displayName.<get-displayName>|<get-displayName>(){}[0]
     final val key // us.tractat.kuilt.session.admit/AdmissionRequest.key|{}key[0]
         final fun <get-key>(): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.session.admit/AdmissionRequest.key.<get-key>|<get-key>(){}[0]
+    final val principal // us.tractat.kuilt.session.admit/AdmissionRequest.principal|{}principal[0]
+        final fun <get-principal>(): us.tractat.kuilt.core/Principal? // us.tractat.kuilt.session.admit/AdmissionRequest.principal.<get-principal>|<get-principal>(){}[0]
 
     final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmissionRequest.toString|toString(){}[0]
 }

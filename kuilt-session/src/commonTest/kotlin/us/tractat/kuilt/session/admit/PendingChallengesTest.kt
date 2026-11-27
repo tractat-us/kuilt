@@ -37,7 +37,7 @@ class PendingChallengesTest {
         val hello = hello("alice")
         val nonce = byteArrayOf(1, 2, 3)
         val deadline = now + 30.seconds
-        table.open(alice, hello, nonce, deadline)
+        table.open(alice, hello, nonce, deadline, principal = null)
 
         val pending = table.take(alice, answering = null)
 
@@ -57,7 +57,7 @@ class PendingChallengesTest {
     @Test
     fun takeAfterExpiryReturnsNull() {
         val deadline = now + 30.seconds
-        table.open(alice, hello("alice"), byteArrayOf(7), deadline)
+        table.open(alice, hello("alice"), byteArrayOf(7), deadline, principal = null)
 
         // Precondition: one millisecond before the deadline the entry exists, so the null below is
         // the deadline's doing and not an entry that was never there.
@@ -74,7 +74,7 @@ class PendingChallengesTest {
     @Test
     fun expiredEntryIsNotCurrent() {
         val deadline = now + 30.seconds
-        table.open(alice, hello("alice"), byteArrayOf(7), deadline)
+        table.open(alice, hello("alice"), byteArrayOf(7), deadline, principal = null)
         val pending = assertNotNull(table.take(alice, answering = null))
 
         now = deadline - 1.milliseconds
@@ -90,12 +90,12 @@ class PendingChallengesTest {
 
     @Test
     fun reopenBySameSenderBumpsTheGenerationAndSupersedesTheOld() {
-        table.open(alice, hello("first"), byteArrayOf(1), now + 30.seconds)
+        table.open(alice, hello("first"), byteArrayOf(1), now + 30.seconds, principal = null)
         val first = assertNotNull(table.take(alice, answering = null))
         // Precondition: the first generation is current before the re-open.
         assertTrue(table.isCurrent(alice, first.generation))
 
-        table.open(alice, hello("second"), byteArrayOf(2), now + 30.seconds)
+        table.open(alice, hello("second"), byteArrayOf(2), now + 30.seconds, principal = null)
         val second = assertNotNull(table.take(alice, answering = null))
 
         assertAll(
@@ -109,8 +109,8 @@ class PendingChallengesTest {
 
     @Test
     fun reopenBeforeTakeOverwritesTheUntakenEntry() {
-        table.open(alice, hello("first"), byteArrayOf(1), now + 30.seconds)
-        table.open(alice, hello("second"), byteArrayOf(2), now + 30.seconds)
+        table.open(alice, hello("first"), byteArrayOf(1), now + 30.seconds, principal = null)
+        table.open(alice, hello("second"), byteArrayOf(2), now + 30.seconds, principal = null)
 
         val pending = assertNotNull(table.take(alice, answering = null))
 
@@ -122,15 +122,15 @@ class PendingChallengesTest {
 
     @Test
     fun sweepOnOpenEvictsExpiredEntriesOfOtherSenders() {
-        table.open(bob, hello("bob"), byteArrayOf(1), now + 10.seconds)
-        table.open(carol, hello("carol"), byteArrayOf(2), now + 60.seconds)
+        table.open(bob, hello("bob"), byteArrayOf(1), now + 10.seconds, principal = null)
+        table.open(carol, hello("carol"), byteArrayOf(2), now + 60.seconds, principal = null)
         now += 20.seconds
 
         // Precondition: bob's entry has expired but is still held. Nothing has looked at it, and no
         // timer runs, so whatever removes it below is the open.
         assertEquals(2, table.retained)
 
-        table.open(alice, hello("alice"), byteArrayOf(3), now + 30.seconds)
+        table.open(alice, hello("alice"), byteArrayOf(3), now + 30.seconds, principal = null)
 
         assertAll(
             { assertEquals(2, table.retained, "bob swept, carol and alice kept") },
@@ -143,7 +143,7 @@ class PendingChallengesTest {
     @Test
     fun takeOfUnknownSenderReturnsNull() {
         val onEmptyTable = table.take(alice, answering = null)
-        table.open(bob, hello("bob"), byteArrayOf(1), now + 30.seconds)
+        table.open(bob, hello("bob"), byteArrayOf(1), now + 30.seconds, principal = null)
 
         assertAll(
             { assertNull(onEmptyTable) },
@@ -154,14 +154,14 @@ class PendingChallengesTest {
 
     @Test
     fun dropRemovesTheEntryAndAReopenDoesNotRevalidateTheOldGeneration() {
-        table.open(alice, hello("first"), byteArrayOf(1), now + 30.seconds)
-        table.open(bob, hello("bob"), byteArrayOf(9), now + 30.seconds)
+        table.open(alice, hello("first"), byteArrayOf(1), now + 30.seconds, principal = null)
+        table.open(bob, hello("bob"), byteArrayOf(9), now + 30.seconds, principal = null)
         val first = assertNotNull(table.take(alice, answering = null))
         assertTrue(table.isCurrent(alice, first.generation))
 
         table.drop(alice)
         val afterDrop = table.isCurrent(alice, first.generation)
-        table.open(alice, hello("second"), byteArrayOf(2), now + 30.seconds)
+        table.open(alice, hello("second"), byteArrayOf(2), now + 30.seconds, principal = null)
         val afterReopen = table.isCurrent(alice, first.generation)
 
         assertAll(
@@ -175,7 +175,7 @@ class PendingChallengesTest {
 
     @Test
     fun retireOnTheCurrentGenerationRemovesTheEntry() {
-        table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds)
+        table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds, principal = null)
         val pending = assertNotNull(table.take(alice, answering = null))
         // Precondition: the entry is held and current, so a `true` below is a removal, not a no-op.
         assertAll(
@@ -196,9 +196,9 @@ class PendingChallengesTest {
     fun retireOnASupersededGenerationLeavesTheNewerEntryTakeable() {
         // The race retire exists for: a decision on generation 1 finishes after a re-Hello opened
         // generation 2. Retiring generation 1 must not cost the joiner its second challenge.
-        table.open(alice, hello("first"), byteArrayOf(1), now + 30.seconds)
+        table.open(alice, hello("first"), byteArrayOf(1), now + 30.seconds, principal = null)
         val first = assertNotNull(table.take(alice, answering = null))
-        table.open(alice, hello("second"), byteArrayOf(2), now + 30.seconds)
+        table.open(alice, hello("second"), byteArrayOf(2), now + 30.seconds, principal = null)
 
         val retired = table.retire(alice, first.generation)
         val second = table.take(alice, answering = null)
@@ -213,7 +213,7 @@ class PendingChallengesTest {
     @Test
     fun retireOnAnExpiredGenerationReturnsFalse() {
         val deadline = now + 30.seconds
-        table.open(alice, hello("alice"), byteArrayOf(1), deadline)
+        table.open(alice, hello("alice"), byteArrayOf(1), deadline, principal = null)
         val pending = assertNotNull(table.take(alice, answering = null))
         now = deadline
         // Precondition: the expired entry is still held, so the false below is about expiry.
@@ -229,7 +229,7 @@ class PendingChallengesTest {
     @Test
     fun openCopiesTheHostNonce() {
         val nonce = byteArrayOf(1, 2, 3)
-        table.open(alice, hello("alice"), nonce, now + 30.seconds)
+        table.open(alice, hello("alice"), nonce, now + 30.seconds, principal = null)
         nonce[0] = 99
 
         val pending = assertNotNull(table.take(alice, answering = null))
@@ -242,7 +242,7 @@ class PendingChallengesTest {
 
     @Test
     fun isCurrentOfUnknownSenderIsFalse() {
-        table.open(bob, hello("bob"), byteArrayOf(1), now + 30.seconds)
+        table.open(bob, hello("bob"), byteArrayOf(1), now + 30.seconds, principal = null)
         val bobs = assertNotNull(table.take(bob, answering = null))
 
         assertAll(
@@ -255,10 +255,10 @@ class PendingChallengesTest {
     @Test
     fun dropOpenedByKeepsAnEntryOpenedAfterTheMark() {
         val before = table.mark()
-        val older = table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds)
+        val older = table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds, principal = null)
         val mark = table.mark()
-        val newer = table.open(alice, hello("alice"), byteArrayOf(2), now + 30.seconds)
-        table.open(bob, hello("bob"), byteArrayOf(3), now + 30.seconds)
+        val newer = table.open(alice, hello("alice"), byteArrayOf(2), now + 30.seconds, principal = null)
+        table.open(bob, hello("bob"), byteArrayOf(3), now + 30.seconds, principal = null)
 
         table.dropOpenedBy(alice, mark)
         val aliceKept = table.isCurrent(alice, newer)
@@ -279,8 +279,8 @@ class PendingChallengesTest {
     /** The route watcher's order (#3610): an entry opened while the read runs is above the mark. */
     @Test
     fun markBeforeMarksAheadOfTheRead() {
-        val before = table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds)
-        val (mark, during) = table.markBefore { table.open(alice, hello("alice"), byteArrayOf(2), now + 30.seconds) }
+        val before = table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds, principal = null)
+        val (mark, during) = table.markBefore { table.open(alice, hello("alice"), byteArrayOf(2), now + 30.seconds, principal = null) }
 
         table.dropOpenedBy(alice, mark)
 
@@ -292,7 +292,7 @@ class PendingChallengesTest {
 
     @Test
     fun dropOpenedByRemovesAnEntryOpenedAtTheMark() {
-        val generation = table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds)
+        val generation = table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds, principal = null)
         assertTrue(table.isCurrent(alice, generation), "precondition: the entry is open")
 
         table.dropOpenedBy(alice, table.mark())

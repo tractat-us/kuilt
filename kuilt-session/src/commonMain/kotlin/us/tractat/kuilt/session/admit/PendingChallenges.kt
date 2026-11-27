@@ -3,6 +3,7 @@ package us.tractat.kuilt.session.admit
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Principal
 import kotlin.time.Instant
 
 /**
@@ -40,7 +41,9 @@ internal class PendingChallenges(private val clock: () -> Instant) {
     /**
      * A challenge handed out by [take]. [generation] identifies this open of [sender]'s entry for
      * [isCurrent]; [keyed] — the Hello, with the key and nonce the gate found in it — and [hostNonce]
-     * are what the Proof is checked against.
+     * are what the Proof is checked against. [principal] is who the fabric attested the sender's link
+     * as when it said Hello, or null when nothing did: the link the whole exchange is about, which a
+     * host compares with the link the id reaches at every step that acts on the exchange.
      *
      * Not a data class: it carries a [ByteArray], whose `equals` is identity.
      */
@@ -49,6 +52,7 @@ internal class PendingChallenges(private val clock: () -> Instant) {
         val keyed: KeyedHello,
         val hostNonce: ByteArray,
         val deadline: Instant,
+        val principal: Principal?,
     )
 
     private class Entry(val pending: Pending) {
@@ -70,15 +74,17 @@ internal class PendingChallenges(private val clock: () -> Instant) {
     /**
      * Records a challenge sent to [sender] in answer to [keyed], replacing any entry [sender] already
      * had, and first sweeps every expired entry of every sender. The entry stops being takeable or
-     * current at [deadline]. [hostNonce] is copied. Returns the new entry's generation, for a caller
-     * that must [retire] it without first taking it.
+     * current at [deadline]. [hostNonce] is copied. [principal] is the sender's link's attested
+     * principal as the Hello found it, kept on the entry ([Pending.principal]); required, so the
+     * caller says what the link was. Returns the new entry's generation, for a caller that must
+     * [retire] it without first taking it.
      */
-    fun open(sender: PeerId, keyed: KeyedHello, hostNonce: ByteArray, deadline: Instant): Long {
+    fun open(sender: PeerId, keyed: KeyedHello, hostNonce: ByteArray, deadline: Instant, principal: Principal?): Long {
         val now = clock()
         return lock.withLock {
             entries.values.removeAll { it.pending.expiredAt(now) }
             val generation = ++nextGeneration
-            entries[sender] = Entry(Pending(generation, keyed, hostNonce.copyOf(), deadline))
+            entries[sender] = Entry(Pending(generation, keyed, hostNonce.copyOf(), deadline, principal))
             generation
         }
     }

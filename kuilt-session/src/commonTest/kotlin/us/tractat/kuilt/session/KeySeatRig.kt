@@ -348,7 +348,11 @@ internal class RawHost(
     }
 }
 
-/** A [RawHost] for [joiners], on device [HOST_DEVICE], with an observed controller, deciding newcomers with [admission]. */
+/**
+ * A [RawHost] for [joiners], on device [HOST_DEVICE], with an observed controller, deciding newcomers
+ * with [admission]. The room adopts [adopted] of the raw seam, which the test still drives directly:
+ * a decorator that adds what a fabric reports beside the frames, such as a `PrincipalRoster`.
+ */
 internal suspend fun TestScope.rawHost(
     joiners: Set<PeerId>,
     hold: ObservedHold = ObservedHold(),
@@ -356,6 +360,7 @@ internal suspend fun TestScope.rawHost(
     clock: () -> Instant = virtualClock(),
     admission: HostAdmission = HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory()),
     roomId: RoomId? = KEY_SEAT_ROOM,
+    adopted: (FakeSeam) -> Seam = { it },
 ): RawHost {
     val seam = FakeSeam(selfId = KEY_SEAT_HOST, initialPeers = setOf(KEY_SEAT_HOST) + joiners)
     val room = SeamRoomFactory(
@@ -366,7 +371,7 @@ internal suspend fun TestScope.rawHost(
         heartbeatConfig = KEY_SEAT_HEARTBEAT,
         admitTimeout = KEY_SEAT_ADMIT_TIMEOUT,
         reconnectControllerFactory = hold.factory,
-    ).adopt(seam, AdoptRole.Host(admission, roomId = roomId), memberName = "Host")
+    ).adopt(adopted(seam), AdoptRole.Host(admission, roomId = roomId), memberName = "Host")
     val events = EventLog(room, backgroundScope)
     testScheduler.runCurrent()
     return RawHost(this, seam, room, hold, events, store.deviceKey().id)
