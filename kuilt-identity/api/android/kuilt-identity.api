@@ -259,6 +259,78 @@ public final class us/tractat/kuilt/identity/KeyScheme$Companion {
 	public final fun getP256 ()Lus/tractat/kuilt/identity/KeyScheme;
 }
 
+public abstract interface class us/tractat/kuilt/identity/NonceCheck {
+}
+
+public final class us/tractat/kuilt/identity/NonceCheck$Expired : us/tractat/kuilt/identity/NonceCheck {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/NonceCheck$Expired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/NonceCheck$Fresh : us/tractat/kuilt/identity/NonceCheck {
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/NonceCheck$Unknown : us/tractat/kuilt/identity/NonceCheck {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/NonceCheck$Unknown;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/identity/NonceSpend {
+}
+
+public final class us/tractat/kuilt/identity/NonceSpend$Expired : us/tractat/kuilt/identity/NonceSpend {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/NonceSpend$Expired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/NonceSpend$Overloaded : us/tractat/kuilt/identity/NonceSpend {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/NonceSpend$Overloaded;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/NonceSpend$Replayed : us/tractat/kuilt/identity/NonceSpend {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/NonceSpend$Replayed;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/NonceSpend$Spent : us/tractat/kuilt/identity/NonceSpend {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/NonceSpend$Spent;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/ProofNonces {
+	public static final field Companion Lus/tractat/kuilt/identity/ProofNonces$Companion;
+	public static final field DEFAULT_CAPACITY I
+	public static final field MAX_NOW J
+	public static final field NONCE_SIZE I
+	public final fun check ([BJLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getCapacity ()I
+	public final fun getTtl-UwyO8pc ()J
+	public final fun issue (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun spend (Lus/tractat/kuilt/identity/NonceCheck$Fresh;J)Lus/tractat/kuilt/identity/NonceSpend;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/ProofNonces$Companion {
+	public final fun create-KLykuaI (JILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun create-KLykuaI$default (Lus/tractat/kuilt/identity/ProofNonces$Companion;JILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun getDEFAULT_TTL-UwyO8pc ()J
+	public final fun getMAX_TTL-UwyO8pc ()J
+}
+
 public final class us/tractat/kuilt/identity/RevocationList {
 	public static final field Companion Lus/tractat/kuilt/identity/RevocationList$Companion;
 	public final fun notBefore-gv087Q4 (Ljava/lang/String;)Ljava/lang/Long;
