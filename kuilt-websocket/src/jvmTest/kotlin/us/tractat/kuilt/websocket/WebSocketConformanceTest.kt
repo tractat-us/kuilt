@@ -22,11 +22,12 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
+import kotlin.test.Test
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 
 /**
  * Verifies that the WebSocket fabric ([KtorServerLoom] / [KtorClientLoom]) satisfies
- * every invariant in [SeamConformanceSuite] over a **real localhost connection** —
+ * every invariant in [SeamConformanceSuite] over a **real loopback connection** —
  * a real Netty server, a real client on [clientEngine], real sockets and frames (ADR-001).
  *
  * [newLoomPair] returns `(KtorServerLoom, KtorClientLoom)` — the actual server and
@@ -70,12 +71,14 @@ open class WebSocketConformanceTest : SeamConformanceSuite() {
         // throwaway `ServerSocket(0).use { it.localPort }` and re-binding the number is a TOCTOU:
         // the probe closes before Netty binds, so another process on a loaded box can take the port
         // in that window (`BindException: Address already in use` — #1590). Binding 0 has no window.
-        server = embeddedServer(Netty, port = 0) {
+        // Bound to loopback, not the wildcard, so no other process can take this port's loopback
+        // dials (#3754; see LOOPBACK_HOST).
+        server = embeddedServer(Netty, port = 0, host = LOOPBACK_HOST) {
+            forensics.install(this)
             // BOTH looms take the observer, not just the client one. The suite's
             // `wovenSeamCapabilityIsHonest` reads the **host** seam — which is this server loom's —
             // so wiring only the client leaves the awaited transition unreachable and the test
             // hangs to the wall-clock backstop instead of failing (measured: 60 s, no assertion).
-            forensics.install(this)
             serverLoom = KtorServerLoom(this, serverPath, connectivity = connectivity)
             forensics.routeInstalled()
         }
@@ -122,13 +125,17 @@ open class WebSocketConformanceTest : SeamConformanceSuite() {
             (rendezvous as? Rendezvous.Existing)?.tag?.let { (it as? WebSocketAdvertisement)?.url } ?: "$rendezvous"
         }
 
+    /** The rig's port is its own: a loopback thief cannot bind it while the rig holds it (#3754). */
+    @Test
+    fun aLoopbackListenerCannotTakeTheRigPort() = assertLoopbackThiefRefused(port)
+
     override fun flushFixture(): FlushFixture = FlushFixture.JoinerUnsupported(
         "OkHttp's session ignores what WebSocket.send returns, so a frame past its 16 MiB queue is dropped " +
             "with no error. The host's burst still runs; CioClientWebSocketConformanceTest is the other end.",
     )
 
     override fun joinTag(): Tag = WebSocketAdvertisement(
-        url = "ws://localhost:$port$serverPath",
+        url = "ws://$LOOPBACK_HOST:$port$serverPath",
         serverPeerId = serverLoom.selfPeerId,
         sessionName = "conformance-client",
     )

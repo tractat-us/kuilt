@@ -74,7 +74,8 @@ abstract class WebSocketConnectionSendConformanceRig(
     // `CoroutineScope` overload and parent the server to the blocking job.
     @BeforeTest
     fun startServer() {
-        server = embeddedServer(Netty, port = 0) {
+        // Loopback, not the wildcard: the address the session dials (#3754; see LOOPBACK_HOST).
+        server = embeddedServer(Netty, port = 0, host = LOOPBACK_HOST) {
             forensics.install(this)
             install(WebSockets)
             routing {
@@ -106,9 +107,15 @@ abstract class WebSocketConnectionSendConformanceRig(
     /** Every binding here is a channel send, which has a cancellation check on its closed path. */
     override fun cancelledCaller(): CancelledCallerFixture = CancelledCallerFixture.Observes
 
+    /** The rig's port is its own: a loopback thief cannot bind it while the rig holds it (#3754). */
+    @Test
+    fun aLoopbackListenerCannotTakeTheRigPort(): TestResult = runTest {
+        assertLoopbackThiefRefused(server.engine.resolvedConnectors().first().port)
+    }
+
     private suspend fun openSession(): Pair<DefaultWebSocketServerSession, DefaultClientWebSocketSession> {
         val port = server.engine.resolvedConnectors().first().port
-        val url = "ws://127.0.0.1:$port$PATH"
+        val url = "ws://$LOOPBACK_HOST:$port$PATH"
         val clientEnd = forensics.dial(url) { httpClient.webSocketSession(url) }
         return withTimeout(SESSION_BOUND) { serverSessions.receive() } to clientEnd
     }

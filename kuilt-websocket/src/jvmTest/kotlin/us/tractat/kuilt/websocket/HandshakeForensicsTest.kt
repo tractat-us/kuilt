@@ -20,6 +20,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 
@@ -43,9 +44,12 @@ class HandshakeForensicsTest {
         servers.forEach { it.stop(gracePeriodMillis = 0, timeoutMillis = 500) }
     }
 
-    /** The rig's own server: bound to the wildcard on port 0, as `WebSocketConformanceTest` binds it. */
-    private fun startRigServer(): Int {
-        val server = embeddedServer(Netty, port = 0) {
+    /**
+     * A rig server on port 0. The default is the wildcard, which the rigs bound before #3774 and the
+     * steal arm needs. [host] = [LOOPBACK_HOST] is how the rigs bind now.
+     */
+    private fun startRigServer(host: String = "0.0.0.0"): Int {
+        val server = embeddedServer(Netty, port = 0, host = host) {
             forensics.install(this)
             KtorServerLoom(this, path)
             forensics.routeInstalled()
@@ -98,6 +102,24 @@ class HandshakeForensicsTest {
             { assertContains(report, "client.dial target=ws://127.0.0.1:$foreignPort$path") },
             { assertContains(report, "client.dial-failed") },
             { assertContains(report, "listeners on :$rigPort") },
+            { assertContains(report, "This server holds the wildcard") },
+        )
+    }
+
+    /**
+     * The rigs' bind since #3774. No socket can share a loopback-bound server's exact address, so the
+     * verdict must not blame a thief on the port. It must point at the dial target instead.
+     */
+    @Test
+    fun aLoopbackRigThatNeverSawTheDialPointsAtTheTarget(): Unit = runBlocking {
+        val rigPort = startRigServer(host = LOOPBACK_HOST)
+        val foreignPort = startForeignServer(host = LOOPBACK_HOST, port = 0)
+        val report = dialFailure("ws://$LOOPBACK_HOST:$foreignPort$path").report()
+        assertAll(
+            { assertContains(report, "server.started bound=$LOOPBACK_HOST:$rigPort") },
+            { assertContains(report, "It holds $LOOPBACK_HOST:$rigPort exactly") },
+            { assertContains(report, "Compare the dial target with server.started") },
+            { assertFalse("This server holds the wildcard" in report, "a loopback rig was blamed on a thief:\n$report") },
         )
     }
 

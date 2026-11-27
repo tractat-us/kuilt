@@ -38,8 +38,11 @@ import kotlin.time.TimeSource
  *  - every request **this** server received, with the peer id it carried and the status it answered;
  *  - on failure only, the TCP listeners on the port, from `lsof`, beside this process's own pid.
  *
- * If the server recorded no request after the dial, the dial reached some other listener on its
- * port. If it recorded the request, its own answer is in the log.
+ * If the server recorded no request after the dial, some other listener answered. For a server on
+ * the wildcard, that can be a socket on the same port. A server bound to one exact address (the rigs
+ * bind `127.0.0.1` since #3774) cannot share it, so the dial went to a different address or port.
+ * The verdict says which case applies. If the server recorded the request, its own answer is in the
+ * log.
  *
  * Instants are `at=+<ms>` on one monotonic clock started when the rig was built, with that start's
  * wall-clock instant in the header so the record can be lined up against other processes' logs.
@@ -53,6 +56,9 @@ internal class HandshakeForensics(private val path: String) {
 
     @Volatile
     private var boundPort: Int? = null
+
+    @Volatile
+    private var boundHost: String? = null
 
     private class Event(val atMillis: Long, val kind: Kind, val line: String)
 
@@ -83,6 +89,7 @@ internal class HandshakeForensics(private val path: String) {
     /** Call once `start(wait = false)` has returned, with the connector the engine actually bound. */
     fun serverStarted(connector: EngineConnectorConfig) {
         boundPort = connector.port
+        boundHost = connector.host
         record(Kind.OTHER, "server.started bound=${connector.host}:${connector.port}")
     }
 
@@ -106,13 +113,19 @@ internal class HandshakeForensics(private val path: String) {
         val log = events.sortedBy { it.atMillis }
         val seen = log.filter { it.kind == Kind.SERVER_REQUEST && it.atMillis >= dialAtMillis }
         val verdict =
-            if (seen.isEmpty()) {
-                "THIS server received no request after the dial at=+${dialAtMillis}ms, so whatever answered it " +
-                    "(a 404, a premature close) was another listener on port $boundPort. On macOS a socket bound " +
-                    "to 127.0.0.1:$boundPort takes loopback dials away from a server bound to the wildcard; see " +
-                    "the listeners below."
-            } else {
-                "THIS server received ${seen.size} request(s) after the dial; its own answer is in the log."
+            when {
+                seen.isNotEmpty() ->
+                    "THIS server received ${seen.size} request(s) after the dial; its own answer is in the log."
+                boundHost in WILDCARD_HOSTS ->
+                    "THIS server received no request after the dial at=+${dialAtMillis}ms, so whatever answered it " +
+                        "(a 404, a premature close) was another listener on port $boundPort. This server holds " +
+                        "the wildcard, and on macOS a socket bound to 127.0.0.1:$boundPort takes loopback dials " +
+                        "away from it; see the listeners below."
+                else ->
+                    "THIS server received no request after the dial at=+${dialAtMillis}ms. It holds " +
+                        "$boundHost:$boundPort exactly, so no other socket can bind that address: whatever " +
+                        "answered (a 404, a premature close) was reached at a different address or port. Compare " +
+                        "the dial target with server.started, and see the listeners below."
             }
         val port = boundPort
         return buildString {
@@ -150,6 +163,9 @@ internal fun Throwable.forensicReports(): List<HandshakeForensicsReport> =
         .toList()
 
 private const val MAX_CAUSE_DEPTH = 32
+
+/** How a connector reports the wildcard: Ktor's default host, and the IPv6 and empty spellings. */
+private val WILDCARD_HOSTS = setOf("0.0.0.0", "::", "*", "")
 
 /**
  * Decorates the client loom of a conformance rig so every dial runs through [forensics]. The suite's
