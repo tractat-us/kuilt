@@ -295,6 +295,19 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
       revocation and expiry included. When both are valid, the more generous one wins, as today.
       The device must still prove its key, so the record is no use to anyone else. It never
       lengthens a pass: it honours a pass the host had already signed.
+    - **Amended (Iain, 2026-11-27, #3762): "revoked passes should generally get removed."** With
+      several tabs the record keeps the good pass the host issued last (by `issuedAt`, then the
+      later-ending), not whichever runs out later. One exception: a pass dated more than the
+      clock-skew allowance ahead when the record is written, which `GrantTrust` would refuse as
+      `NotYetValid`, gives way to one that is not, as the device's own store gives up a post-dated
+      pass for a fresh one. A record whose pass the host's revocations void is dropped, lazily, as an
+      expired one is. A revocation voids a device's passes issued before one cutoff, so it cannot void
+      the last-issued pass and spare an earlier one: a revoked pass never displaces a good one,
+      whether the host revoked before the departures or after. Checking `GrantTrust.verify` when the
+      record is written would lose the good pass to a later revocation. Last-issued is also what "the
+      last pass the host *signed*" says, and what the device's own store keeps. The cost: an earlier
+      tab's pass that runs out later is not kept. "The more generous one wins" is unchanged; it
+      compares a presented pass with the recorded one.
     - **The residue, stated.** The record lives in the host's memory. After a host restart, or once
       256 later departures have pushed it out, the device's own pass is all there is. So a renewal
       lost while later frames still arrive can lower the floor only across a host restart. #3717's
@@ -579,10 +592,10 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
   `AdmissionPolicyFailed` (retryable) a policy that throws.
   No "keyless Hello" code: the `ProtocolVersion` gate already refuses every older peer.
 - `join`/`adopt` gain a `deviceId` parameter; today nothing sends one.
-- The host forgets a departed member's key and previous peer id once the last pass it *issued* that
-  membership expires (from slice 2), keeping at most 256 such records, oldest out first. A takeover
-  writes none (Amendment M). *Decided 34:* the record also keeps that pass, the signed
-  `Grant`, and with several tabs whichever pass runs out later, so a device whose last renewal never
+- The host forgets a departed member's key and previous peer id once the pass it kept for that
+  membership expires or is revoked (amended, #3762; from slice 2), keeping at most 256 such records,
+  oldest out first. A takeover writes none (Amendment M). *Decided 34:* the record also keeps that
+  pass, the signed `Grant`, and with several tabs the good one it issued last (amended, #3762), so a device whose last renewal never
   arrived returns on it. The record still names the id the latest departure held. The admit-proof's
   channel-binding field stays reserved and empty (Decided 33). In slice 1 a departed member is forgotten at once, except a superseded id, which
   `SupersededIds` keeps with its key (at most 64) while its successor is seated.
