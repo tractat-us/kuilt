@@ -475,6 +475,10 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
 1. **Load** the running tree with `LocalHeddle.topology`, and write it out with `toDocument()`.
    Keep the loaded tree as `startedFrom`; see
    [Showing an admin what an edit changes](#showing-an-admin-what-an-edit-changes).
+   `toDocument()` writes no `appSettings`, so an app that uses them loads its stored document
+   instead and keeps `startedFrom` as the topology `Topology.from(stored)` checks. A save that
+   comes back `TreeChanged` then reloads the stored document too; see
+   [An app's own settings on each node](#an-apps-own-settings-on-each-node).
 2. **Edit by path** with `setWeight`, `addChild`, `rename` and the rest, each returning a
    `TopologyEdit`. A `Refused` names the node to blame; see
    [Editing the tree as a document](#editing-the-tree-as-a-document).
@@ -493,7 +497,9 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
 ```kotlin
     val (heddle, _) = LocalHeddle.fromTopology(twoLanes(), LocalPolicy(defaultReservation = 3L), epoch = 0L)
 
-    // Load: the editor opens on the running tree, written out as a document.
+    // Load: the editor opens on the running tree, written out as a document. toDocument writes no
+    // appSettings, so an app that keeps any opens its stored document instead, and takes
+    // startedFrom from Topology.from of that document.
     var startedFrom = heddle.topology
     var document = startedFrom.toDocument()
 
@@ -530,6 +536,7 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
     check(refused is ApplyOutcome.TreeChanged && refused.current == theirs)
 
     // So the page reloads from the running tree, the admin makes the edit again, and the save keeps theirs.
+    // An app that keeps appSettings reloads the document the other admin stored, as it loaded.
     startedFrom = refused.current
     document = (startedFrom.toDocument().rename(listOf(1), "interactive") as TopologyEdit.Edited).document
     document = (document.addChild(emptyList(), TopologyDocument.Lane("batch")) as TopologyEdit.Edited).document
