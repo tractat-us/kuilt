@@ -3,10 +3,14 @@
 package us.tractat.kuilt.conformance
 
 import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.InMemoryTag
@@ -18,6 +22,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.identity.AdmissionProof
@@ -70,10 +75,16 @@ import kotlin.time.Instant
  * fake key, on the test clock. A reused-id device's [ReusedIdDevice.launchBesideAs] starts a process
  * like [ReturnDevice.launchBeside]'s under the id the row names. [passPlanting] and [reusedIdLaunch]
  * let a test declare either hook a gap instead, to walk the suite's skip path.
+ *
+ * [RenewalLoss.Supported] too (#3745): a renewal-losing device's links read every frame its host
+ * sends them, keep each pass a `Welcome` or a renewal carried, and, once the row calls
+ * [RenewalLosingDevice.loseRenewals], drop the running process's renewals on arrival, so the host's
+ * send has already returned. [renewalLoss] lets a test declare it a gap instead.
  */
 internal fun TestScope.referenceReturnHarness(
     passPlanting: (PlantedPassRig) -> PassPlanting = PassPlanting::Supported,
     reusedIdLaunch: (ReusedIdRig) -> ReusedIdLaunch = ReusedIdLaunch::Supported,
+    renewalLoss: (RenewalLossRig) -> RenewalLoss = RenewalLoss::Supported,
 ): ReturnHarness {
     val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) { "runTest supplies a dispatcher" }
     val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
@@ -92,7 +103,7 @@ internal fun TestScope.referenceReturnHarness(
 
     // One process: its own scope, its own client loom and its own link, under one peer id, over the
     // key store of the device it runs on.
-    class Process(val peerId: PeerId, store: DeviceKeyStore, planter: PassPlanter? = null) {
+    class Process(val peerId: PeerId, store: DeviceKeyStore, planter: PassPlanter? = null, tap: PassTap? = null) {
         val scope = CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job]))
         // Atomics, not plain vars: the rig is driven from the test body and read from the rooms'
         // own coroutines, and nothing here may lean on the test dispatcher being single-threaded.
@@ -101,6 +112,8 @@ internal fun TestScope.referenceReturnHarness(
         val weaves = atomic(0)
         /** An impostor took this process's id while it was live; [ReturnDevice.restore] tears the link it displaced. */
         val displaced = atomic(false)
+        /** [RenewalLosingDevice.loseRenewals] was called while this process ran: its link loses every renewal. */
+        val losingRenewals = atomic(false)
         private val base = object : Loom {
             override suspend fun weave(rendezvous: Rendezvous): Seam {
                 check(!down.value) { "the reference return rig holds ${peerId.value}'s link down" }
@@ -121,7 +134,9 @@ internal fun TestScope.referenceReturnHarness(
         }
         val mux = MuxClientLoom(base, Rendezvous.New(Pattern("base")), scope, ::sessionNameOf)
         val factory: RoomFactory = SeamRoomFactory(
-            loom = planter?.let { ProofRewriter(it).over(mux, store) } ?: mux,
+            loom = (planter?.let { ProofRewriter(it).over(mux, store) } ?: mux).let { loom ->
+                tap?.over(loom, losing = { losingRenewals.value }) ?: loom
+            },
             scope = scope,
             clock = clock,
             deviceKeyStore = store,
@@ -139,7 +154,7 @@ internal fun TestScope.referenceReturnHarness(
         }
     }
 
-    fun makeDevice(planter: PassPlanter? = null): ReusedIdDevice {
+    fun makeDevice(planter: PassPlanter? = null, tap: PassTap? = null): RigDevice {
         val index = devices.incrementAndGet()
         // The device's one store, for every process it ever runs: a pass one launch keeps is the next
         // launch's to present, as a platform store keeps it across launches (#3223).
@@ -148,7 +163,7 @@ internal fun TestScope.referenceReturnHarness(
         val besides = atomic(0)
         val current = atomic<Process?>(null)
         val priorHeals = atomic(0)
-        return object : ReusedIdDevice {
+        return object : RigDevice {
             override suspend fun launch(reusePeerId: Boolean): RoomFactory {
                 val previous = current.value
                 check(previous == null || !previous.scope.coroutineContext.job.isActive) {
@@ -161,7 +176,7 @@ internal fun TestScope.referenceReturnHarness(
                     else -> PeerId("device-$index.$launch")
                 }
                 previous?.let { priorHeals.addAndGet(it.heals()) }
-                return Process(id, store, planter).also { current.value = it }.factory
+                return Process(id, store, planter, tap).also { current.value = it }.factory
             }
 
             override suspend fun launchBeside(): RoomFactory {
@@ -169,13 +184,13 @@ internal fun TestScope.referenceReturnHarness(
                 check(running.scope.coroutineContext.job.isActive) { "the process launch() started has ended; launch() again" }
                 // Its own link and peer id, on this device's key store; never `current`, so the
                 // other hooks keep acting on the first process.
-                return Process(PeerId("device-$index.beside-${besides.incrementAndGet()}"), store, planter).factory
+                return Process(PeerId("device-$index.beside-${besides.incrementAndGet()}"), store, planter, tap).factory
             }
 
             override suspend fun launchBesideAs(peerId: PeerId): RoomFactory {
                 val running = checkNotNull(current.value) { "launch() a process before launching another beside it" }
                 check(running.scope.coroutineContext.job.isActive) { "the process launch() started has ended; launch() again" }
-                return Process(peerId, store, planter).factory
+                return Process(peerId, store, planter, tap).factory
             }
 
             override suspend fun kill(socketCloses: Boolean) {
@@ -210,8 +225,21 @@ internal fun TestScope.referenceReturnHarness(
 
             override val heals: Int
                 get() = priorHeals.value + (current.value?.heals() ?: 0)
+
+            override fun loseRenewals() {
+                checkNotNull(tap) { "a device made without a pass tap cannot lose renewals" }
+                checkNotNull(current.value) { "launch() a process before losing its renewals" }.losingRenewals.value = true
+            }
+
+            override val lostRenewals: List<Grant>
+                get() = checkNotNull(tap) { "a device made without a pass tap counts no renewals" }.lost()
+
+            override val deliveredPasses: List<Grant>
+                get() = checkNotNull(tap) { "a device made without a pass tap counts no passes" }.delivered()
         }
     }
+
+    val renewalLossRig = RenewalLossRig { makeDevice(tap = PassTap()) }
 
     // The host's device's one store: the host's own room and every host tab share it, as the tabs of
     // one browser share its IndexedDB, so a pass one tab keeps is the next tab's to present (#3222).
@@ -244,6 +272,7 @@ internal fun TestScope.referenceReturnHarness(
         joinerHeartbeat = REFERENCE_JOINER_HEARTBEAT,
         passPlanting = passPlanting(plantedPassRig),
         reusedIdLaunch = reusedIdLaunch(ReusedIdRig { makeDevice() }),
+        renewalLoss = renewalLoss(renewalLossRig),
         device = { makeDevice() },
         // The host's own key store, under a joiner's link and an id of its own.
         hostTab = { Process(PeerId("host-tab-${hostTabs.incrementAndGet()}"), hostStore).factory },
@@ -308,5 +337,53 @@ private class ProofRewriter(private val planter: PassPlanter) {
         val statement = checkNotNull(AdmissionProof.decode(proof.statement)) { "the room sent a Proof whose statement does not decode" }
         val extra = planter.plant(statement, store.deviceKey().id, proof.grants)
         return AdmitMessage.encode(AdmitMessage.Proof(proof.statement, proof.grants + extra.map { it.wire }))
+    }
+}
+
+/** A device the reference rig makes: every hook, the forging and the losing ones included. */
+private interface RigDevice : ReusedIdDevice, RenewalLosingDevice
+
+/**
+ * Reads every frame a renewal-losing device's links receive, for [RenewalLossRig.newDevice] (#3745):
+ * it keeps each pass a `Welcome` or a renewal carried, and loses each renewal that arrives while
+ * `losing` says so. One per device, over all its processes, so its two lists are the device's.
+ */
+private class PassTap {
+    // A lock, not the test dispatcher, guards the lists: the rooms' coroutines append while the test
+    // body reads.
+    private val lock = reentrantLock()
+    private val lost = mutableListOf<Grant>()
+    private val delivered = mutableListOf<Grant>()
+
+    fun lost(): List<Grant> = lock.withLock { lost.toList() }
+
+    fun delivered(): List<Grant> = lock.withLock { delivered.toList() }
+
+    /** [loom] with every seam it weaves read through this tap, losing renewals while [losing] holds. */
+    fun over(loom: Loom, losing: () -> Boolean): Loom = object : Loom by loom {
+        // Delegation forwards `host` and `join` to [loom]'s own, which would weave past this override.
+        override suspend fun host(pattern: Pattern): Seam = weave(Rendezvous.New(pattern))
+
+        override suspend fun join(tag: Tag): Seam = weave(Rendezvous.Existing(tag))
+
+        override suspend fun weave(rendezvous: Rendezvous): Seam {
+            val seam = loom.weave(rendezvous)
+            return object : Seam by seam {
+                override val incoming: Flow<Swatch> = seam.incoming.filter { swatch -> carries(swatch, losing()) }
+            }
+        }
+    }
+
+    /** Whether to hand [swatch] to the room, keeping the pass it carries as lost or delivered. */
+    private fun carries(swatch: Swatch, losing: Boolean): Boolean {
+        val (bytes, renewal) = when (val message = AdmitMessage.decode(swatch.toByteArray())) {
+            is AdmitMessage.GrantRenewal -> message.grant to true
+            is AdmitMessage.Welcome -> (message.grant ?: return true) to false
+            else -> return true
+        }
+        val grant = checkNotNull(Grant.decode(bytes)) { "the host sent a pass that does not decode" }
+        val lose = renewal && losing
+        lock.withLock { if (lose) lost += grant else delivered += grant }
+        return !lose
     }
 }

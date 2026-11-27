@@ -177,6 +177,62 @@ public interface ReusedIdDevice : ReturnDevice {
 }
 
 /**
+ * Whether a harness can lose a pass renewal on a device's link after its host sent it — and, when it
+ * cannot, **where that is written down** (#3745).
+ *
+ * The row it reaches: the host signs a renewal and sends it, the link takes it and loses it, and the
+ * device goes on holding the pass before it. A host that lets the device back in only on a pass the
+ * device presents then sends it to its admission policy while the pass the host signed last is still
+ * good (Decided 34). A device's link through [ReturnDevice] alone either carries a frame or tears, so
+ * no row driven through it reaches a renewal lost while the link stays up.
+ *
+ * Two arms, as [PassPlanting] has, for the same reason.
+ */
+public sealed interface RenewalLoss {
+
+    /** The harness can lose renewals on a device's link: the lost-renewal rows run on [rig]. */
+    public data class Supported(val rig: RenewalLossRig) : RenewalLoss
+
+    /**
+     * The harness cannot drop one kind of frame on a link that stays up, so the host's honouring of a
+     * pass it signed that never arrived is **unproven** on it. [trackingUrl] as [PassPlanting.Unsupported]'s.
+     */
+    public data class Unsupported(val trackingUrl: String) : RenewalLoss
+}
+
+/** The half of a [ReturnHarness] that makes [RenewalLosingDevice]s (#3745). */
+public fun interface RenewalLossRig {
+    /** A new device, as [ReturnHarness.newDevice] makes, whose link can lose its host's pass renewals. */
+    public suspend fun newDevice(): RenewalLosingDevice
+}
+
+/**
+ * A [ReturnDevice] whose link can lose the pass renewals its host sends, and that counts what it lost
+ * and what it carried (#3745).
+ *
+ * The two lists are what a row asserts its rig fired on: [lostRenewals] says the host signed a
+ * renewal and the device never got it, and [deliveredPasses] says which passes the device could hold
+ * at all. A row reads the newest delivered pass as the one the device holds, so a harness must count
+ * every pass its links carried to the device, on a `Welcome` or a renewal, from every process.
+ */
+public interface RenewalLosingDevice : ReturnDevice {
+
+    /**
+     * From now on, the link of the process [launch] started loses every
+     * [us.tractat.kuilt.session.admit.AdmitMessage.GrantRenewal] its host sends, after the host's send
+     * returned, and carries every other frame as before. The host sees nothing go wrong. A process
+     * launched later is not affected.
+     */
+    public fun loseRenewals()
+
+    /** Every renewal a link of this device lost, as its host signed it, oldest first. */
+    public val lostRenewals: List<Grant>
+
+    /** Every pass a link of this device carried to it, on a `Welcome` or a renewal, oldest first. */
+    public val deliveredPasses: List<Grant>
+}
+
+/**
  * The rig behind the return rows of [RoomConformanceSuite] (#3159, Task 1.9): one host, and as many
  * devices as a row asks for, each of which can lose its link and get it back.
  *
@@ -221,6 +277,8 @@ public class ReturnHarness(
     public val passPlanting: PassPlanting,
     /** Whether the harness can start a process under an id an earlier process of its device had: the superseded-id row. */
     public val reusedIdLaunch: ReusedIdLaunch,
+    /** Whether the harness can lose a pass renewal on a link that stays up: the lost-renewal rows. */
+    public val renewalLoss: RenewalLoss,
     private val device: suspend () -> ReturnDevice,
     private val hostTab: suspend () -> RoomFactory,
 ) {
