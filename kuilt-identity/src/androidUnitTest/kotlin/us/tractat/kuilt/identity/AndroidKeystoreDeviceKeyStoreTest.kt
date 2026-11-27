@@ -124,7 +124,7 @@ class AndroidKeystoreDeviceKeyStoreTest {
 
     /**
      * On Android 13 and later, the failures the Keystore calls its own keep the key: the transient ones,
-     * and `LOCKED`, which waits for the user. AOSP flags most transient codes a system error as well
+     * and `LOCKED`, which waits for the user. AOSP flags every transient code a system error as well
      * (`SECURE_HW_BUSY`), and `KM_ERROR_DEVICE_LOCKED` is a system error and a wait for the user both, so
      * these rows also pin that the transient and user arms are read first: the system-error flag alone
      * keeps nothing (#3761).

@@ -91,9 +91,10 @@ Assistant copy that folder to the next Mac, and the two Macs are then one device
 deletes its key file. On Android 8.0 and later, `DeviceKeyStore.platform("my-app", context)` keeps the key in the Android
 Keystore, which signs with it and never hands it to the app, and the grants in the app's no-backup
 folder, so neither moves to another phone with a backup. A key that no longer signs for its name,
-or that the Keystore blames, is replaced with a warning. A Keystore that cannot answer right now
-throws and keeps the key. When nothing says whose failure it is, as on every phone older than
-Android 13, the key is kept until the Keystore has been failing for an hour, and then replaced. In
+or that the Keystore blames, is replaced with a warning. A failure the Keystore says will pass,
+such as a busy chip or a locked phone, throws and keeps the key. Any other failure, a system error
+included and every failure on a phone older than Android 13, throws and keeps the key until the
+Keystore has been failing for an hour, and then the key is replaced. In
 a browser, `DeviceKeyStore.platform("my-app")` makes a WebCrypto key the page can sign with but never
 read out, and keeps it in the IndexedDB database `kuilt-identity-my-app` with the grants. Every tab of
 the site is the same device; clearing the site's data makes the next visit a new one. A damaged record

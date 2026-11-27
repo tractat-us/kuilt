@@ -55,7 +55,8 @@ internal sealed interface FailureVerdict {
     object Keep : FailureVerdict
 
     /**
-     * Nothing says whose failure it is: throw and keep the key, unless the Keystore has been failing for
+     * Nothing says the failure will pass, or whose it is — a system error included, since corrupt blob
+     * metadata answers one too: throw and keep the key, unless the Keystore has been failing for
      * [UNKNOWN_CAUSE_PATIENCE] with no successful read in between — then replace it (Decided 29).
      */
     object Unknown : FailureVerdict
@@ -96,9 +97,10 @@ private val KEY_SPECIFIC_CODES = setOf(6, 7)
  * - **Below 33:** no public API says whose failure it is, so everything else is [FailureVerdict.Unknown].
  *
  * The keep test reads `isTransientFailure()` and `requiresUserAuthentication()`, never `isSystemError()`
- * alone. AOSP flags most transient codes a system error too (`SECURE_HW_BUSY`,
- * `SECURE_HW_COMMUNICATION_FAILED`, `KEY_RATE_LIMIT_EXCEEDED`, `INVALID_OPERATION_HANDLE`), and
- * `KM_ERROR_DEVICE_LOCKED` is a system error that waits for the user; each of those still keeps.
+ * alone. AOSP flags every transient code a system error too (`SECURE_HW_BUSY`,
+ * `SECURE_HW_COMMUNICATION_FAILED`, `KEY_RATE_LIMIT_EXCEEDED`, `ATTESTATION_APPLICATION_ID_MISSING`,
+ * `INVALID_OPERATION_HANDLE` and four attestation codes), and `KM_ERROR_DEVICE_LOCKED` is a system
+ * error that waits for the user; each of those still keeps.
  *
  * The bound this leaves: [FailureVerdict.Keep] never replaces, so a key that fails forever with a
  * transient code, or waits forever for a user, throws on every launch until the app's data is cleared.

@@ -42,7 +42,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AndroidKeys
  * once, on a multi-threaded dispatcher; Keystore calls run on the caller's dispatcher, as a file
  * store's I/O does.
  *
- * ## Damage is replaced; a Keystore failing right now is not
+ * ## Damage is replaced; a Keystore failure that will pass is not
  *
  * The hard part is telling the two apart, because the Keystore's own API blurs them ([KeystoreBackend]
  * lists where). [judge] holds the rule, Decided 29:
@@ -382,10 +382,11 @@ internal class KeystoreDeviceKey(override val id: DidKey, private val signer: Ke
  * restored or replacement phone is therefore a new device, which is the point — a key on two phones
  * would make them one device.
  *
- * A damaged key is replaced with a warning and the app carries on as a new device; a Keystore that
- * cannot answer right now makes [DeviceKeyStore.deviceKey] throw and keeps the key. Where the Keystore
- * does not say whose failure it is — always below Android 13 — the key is kept until the Keystore has
- * been failing for an hour with no good read in between, and then replaced.
+ * A damaged key is replaced with a warning and the app carries on as a new device. A failure the
+ * Keystore says will pass — transient, or a wait for the user — makes [DeviceKeyStore.deviceKey] throw
+ * and keeps the key. Any other failure, a system error included and every failure below Android 13,
+ * throws and keeps it until the Keystore has been failing for an hour with no good read in between;
+ * then the key is replaced.
  *
  * Requires Android 8.0 (API 26): the grants are kept through `java.nio.file`.
  *
