@@ -50,12 +50,16 @@ import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.test.assertAll
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import kotlin.random.Random
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
+import kotlin.test.assertContains
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -91,11 +95,18 @@ class WebSocketDeadLinkConsequenceTest {
     private lateinit var httpClient: HttpClient
     private var port = 0
 
+    /**
+     * Records the server's life and every dial at it (#3783), so a handshake red here names the
+     * listener that answered. #3603 recorded a 404 from this test's dial.
+     */
+    private val forensics = HandshakeForensics(HUB_PATH)
+
     // Started here rather than in `runBlocking`, whose receiver would bind `embeddedServer` to the
     // `CoroutineScope` overload and parent the server to the blocking job.
     @BeforeTest
     fun startServer() {
         server = embeddedServer(Netty, port = 0, host = LOOPBACK_HOST) {
+            forensics.install(this)
             source = RecordingSource(KtorConnectionSource(this, HUB_PATH))
             routing {
                 webSocket(RAW_PATH) {
@@ -103,9 +114,12 @@ class WebSocketDeadLinkConsequenceTest {
                     closeReason.await()
                 }
             }
+            forensics.routeInstalled()
         }
         server.start(wait = false)
-        port = runBlocking { server.engine.resolvedConnectors().first().port }
+        val connector = runBlocking { server.engine.resolvedConnectors().first() }
+        forensics.serverStarted(connector)
+        port = connector.port
         httpClient = HttpClient(CIO) { install(ClientWebSockets) }
     }
 
@@ -120,12 +134,41 @@ class WebSocketDeadLinkConsequenceTest {
     private fun advertisement(sessionName: String) =
         WebSocketAdvertisement(url = "ws://$LOOPBACK_HOST:$port$HUB_PATH", serverPeerId = HUB, sessionName = sessionName)
 
-    private fun spokeLoom() = KtorMeshClientLoom(
-        httpClient = httpClient,
-        dispatcher = Dispatchers.Default,
-        selfPeerId = SPOKE,
-        random = Random(2),
-    )
+    /** The spoke's client loom, with every dial recorded by [forensics]. */
+    private fun spokeLoom(): Loom = ForensicLoom(
+        KtorMeshClientLoom(
+            httpClient = httpClient,
+            dispatcher = Dispatchers.Default,
+            selfPeerId = SPOKE,
+            random = Random(2),
+        ),
+        forensics,
+    ) { rendezvous -> "$rendezvous" }
+
+    /**
+     * The positive control for the forensics wiring: a dial this rig fails carries the record, in the
+     * printed trace a test-results XML shows. The spoke's own loom, at a path the server does not
+     * route, so the server sees the request and answers it 404.
+     */
+    @Test
+    fun aDialThisRigFailsCarriesTheForensicRecord() = realTime {
+        val wrongPath = WebSocketAdvertisement(
+            url = "ws://$LOOPBACK_HOST:$port/not-the-hub",
+            serverPeerId = HUB,
+            sessionName = "spoke",
+        )
+        val failure = assertFailsWith<Throwable> {
+            rigScope.async { spokeLoom().weave(Rendezvous.Existing(wrongPath)) }.await()
+        }
+        val printed = failure.stackTraceToString()
+        assertAll(
+            { assertEquals(1, failure.forensicReports().size, "the failed dial must carry exactly one forensic report:\n$printed") },
+            { assertContains(printed, "Suppressed: ${HandshakeForensicsReport::class.qualifiedName}: Handshake forensics") },
+            { assertContains(printed, "THIS server received 1 request(s) after the dial") },
+            { assertContains(printed, "server.started bound=$LOOPBACK_HOST:$port") },
+            { assertContains(printed, "server.response /not-the-hub") },
+        )
+    }
 
     /** One spoke admitted to a mesh on the held thread, with both ends past the handshake. */
     private suspend fun meshWithOneSpoke(): Pair<Mesh, Seam> {
@@ -253,7 +296,8 @@ class WebSocketDeadLinkConsequenceTest {
     @Test
     fun aClientSeamWhoseReadLoopIsStuckTearsDownWhenItsWriteLoopFindsTheSessionDead() = realTime {
         val clientEnd = rigScope.async {
-            httpClient.webSocketSession("ws://$LOOPBACK_HOST:$port$RAW_PATH")
+            val url = "ws://$LOOPBACK_HOST:$port$RAW_PATH"
+            forensics.dial(url) { httpClient.webSocketSession(url) }
         }.await()
         val serverEnd = rawSessions.receive()
         val seam = identified(

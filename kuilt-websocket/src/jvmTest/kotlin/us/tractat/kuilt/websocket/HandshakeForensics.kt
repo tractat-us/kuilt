@@ -10,6 +10,8 @@ import io.ktor.server.plugins.origin
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.uri
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Rendezvous
@@ -22,11 +24,13 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.TimeSource
 
 /**
  * The record of one test server's life and of every dial made at it, rendered into the failure only
- * when a dial fails, so a handshake red names its own race from a single test-results XML (#3754).
+ * when a dial fails or is cancelled, so a handshake red names its own race from a single test-results
+ * XML (#3754, #3783).
  *
  * A failed WebSocket dial says "expected 101 but was 404" or "the server prematurely closed the
  * connection" and nothing else. Neither says **which listener** answered. #2433 established that a
@@ -34,7 +38,8 @@ import kotlin.time.TimeSource
  * before the route is installed — so a 404 at a healthy rig means the request reached a *different*
  * application. This keeps the evidence to tell those apart:
  *
- *  - the instants the route was installed, the server started, and each dial began and failed;
+ *  - the instants the route was installed, the server started, and each dial began and failed or
+ *    was cancelled;
  *  - every request **this** server received, with the peer id it carried and the status it answered;
  *  - on failure only, the TCP listeners on the port, from `lsof`, beside this process's own pid.
  *
@@ -49,8 +54,11 @@ import kotlin.time.TimeSource
  *
  * The green path costs a few strings per test: the listener scan runs only from [failureReport].
  */
-internal class HandshakeForensics(private val path: String) {
-    private val origin = TimeSource.Monotonic.markNow()
+internal class HandshakeForensics(
+    private val path: String,
+    timeSource: TimeSource.WithComparableMarks = TimeSource.Monotonic,
+) {
+    private val origin = timeSource.markNow()
     private val wallOrigin = Instant.now()
     private val events = ConcurrentLinkedQueue<Event>()
 
@@ -60,13 +68,19 @@ internal class HandshakeForensics(private val path: String) {
     @Volatile
     private var boundHost: String? = null
 
-    private class Event(val atMillis: Long, val kind: Kind, val line: String)
+    /**
+     * The order events happened in. "After the dial" is decided by this rather than by [Event.atMillis]:
+     * a request that finished in the same millisecond the dial began, such as a route probe just
+     * before it, would otherwise count as the dial's.
+     */
+    private val sequence = AtomicLong()
+
+    private class Event(val seq: Long, val atMillis: Long, val kind: Kind, val line: String)
 
     private enum class Kind { SERVER_REQUEST, OTHER }
 
-    private fun record(kind: Kind, line: String) {
-        events += Event(origin.elapsedNow().inWholeMilliseconds, kind, line)
-    }
+    private fun record(kind: Kind, line: String): Event =
+        Event(sequence.getAndIncrement(), origin.elapsedNow().inWholeMilliseconds, kind, line).also { events += it }
 
     /**
      * Install the request recorder on [application]. Call it inside the `embeddedServer` module
@@ -84,7 +98,9 @@ internal class HandshakeForensics(private val path: String) {
     }
 
     /** Call in the module lambda once the route is mounted. */
-    fun routeInstalled() = record(Kind.OTHER, "server.route-installed path=$path")
+    fun routeInstalled() {
+        record(Kind.OTHER, "server.route-installed path=$path")
+    }
 
     /** Call once `start(wait = false)` has returned, with the connector the engine actually bound. */
     fun serverStarted(connector: EngineConnectorConfig) {
@@ -93,13 +109,26 @@ internal class HandshakeForensics(private val path: String) {
         record(Kind.OTHER, "server.started bound=${connector.host}:${connector.port}")
     }
 
-    /** Record a dial at [target], and on a failure attach [failureReport] to it as a suppressed exception. */
+    /**
+     * Record a dial at [target], and when it ends in anything but a seam, attach [failureReport] to
+     * what it threw as a suppressed exception.
+     *
+     * That includes a **cancellation** (#3783). A dial that hangs until a bound around it expires
+     * fails the test with that bound's `TimeoutCancellationException`, which is the one failure that
+     * would otherwise carry no record. The cancellation is rethrown untouched, so it reaches the
+     * caller as the cancellation it is and never as a failure. Whose it was decides only the record's
+     * wording, never the control flow. [currentCoroutineContext]'s `isActive` is the predicate
+     * `ensureActive()` throws on: inactive means the caller's job was cancelled while the dial was in progress; active
+     * means the dial threw a cancellation of its own, such as a bound inside it expiring.
+     */
     suspend fun <T> dial(target: String, block: suspend () -> T): T {
-        val dialAt = origin.elapsedNow().inWholeMilliseconds
-        record(Kind.OTHER, "client.dial target=$target")
+        val dialAt = record(Kind.OTHER, "client.dial target=$target")
         try {
             return block()
         } catch (cancelled: CancellationException) {
+            val outcome = if (currentCoroutineContext().isActive) Outcome.CANCELLED_BY_DIAL else Outcome.CANCELLED_BY_CALLER
+            record(Kind.OTHER, "client.dial-cancelled ${outcome.label} ${cancelled::class.simpleName}: ${cancelled.message}")
+            cancelled.rootCause().addSuppressed(HandshakeForensicsReport(failureReport(dialAt, outcome, cancelled.cause)))
             throw cancelled
         } catch (failure: Throwable) {
             record(Kind.OTHER, "client.dial-failed ${failure::class.simpleName}: ${failure.message}")
@@ -108,12 +137,21 @@ internal class HandshakeForensics(private val path: String) {
         }
     }
 
-    /** The whole record, a verdict on whether this server saw the dial, and the port's listeners. */
-    fun failureReport(dialAtMillis: Long): String {
-        val log = events.sortedBy { it.atMillis }
-        val seen = log.filter { it.kind == Kind.SERVER_REQUEST && it.atMillis >= dialAtMillis }
+    /** How a dial ended without a seam, which decides how the verdict opens. */
+    enum class Outcome(val label: String) {
+        FAILED("failed"),
+        CANCELLED_BY_CALLER("by its caller"),
+        CANCELLED_BY_DIAL("by the dial itself, its caller still live"),
+    }
+
+    /** The whole record, a verdict on whether this server saw [dial], and the port's listeners. */
+    private fun failureReport(dial: Event, outcome: Outcome = Outcome.FAILED, cancelCause: Throwable? = null): String {
+        val dialAtMillis = dial.atMillis
+        val log = events.sortedBy { it.seq }
+        val seen = log.filter { it.kind == Kind.SERVER_REQUEST && it.seq > dial.seq }
         val verdict =
             when {
+                outcome != Outcome.FAILED -> cancelledVerdict(outcome, dialAtMillis, seen.size, cancelCause)
                 seen.isNotEmpty() ->
                     "THIS server received ${seen.size} request(s) after the dial; its own answer is in the log."
                 boundHost in WILDCARD_HOSTS ->
@@ -134,6 +172,28 @@ internal class HandshakeForensics(private val path: String) {
             log.forEach { appendLine("  at=+${it.atMillis}ms ${it.line}") }
             appendLine(if (port == null) "listeners: the server never reported a bound port" else listenersOn(port))
         }
+    }
+
+    private fun cancelledVerdict(outcome: Outcome, dialAtMillis: Long, seen: Int, cancelCause: Throwable?): String {
+        val whose =
+            if (outcome == Outcome.CANCELLED_BY_CALLER) {
+                "The dial was still in progress when its caller's job was cancelled" +
+                    (cancelCause?.let { " (cause: ${it::class.simpleName}: ${it.message})" } ?: "") + "."
+            } else {
+                "The dial threw a cancellation of its own while its caller was still live, such as a bound " +
+                    "inside the dial expiring; a delegate minting one is itself a contract breach, since " +
+                    "Loom.weave must not."
+            }
+        val reached =
+            if (seen > 0) {
+                "THIS server received $seen request(s) after the dial at=+${dialAtMillis}ms, so the request " +
+                    "arrived and the handshake never completed; its side is in the log."
+            } else {
+                "THIS server received no request after the dial at=+${dialAtMillis}ms, so the connection or " +
+                    "the request never reached its application. Compare the dial target with server.started, " +
+                    "and see the listeners below."
+            }
+        return "$whose $reached"
     }
 }
 
