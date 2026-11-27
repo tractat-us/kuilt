@@ -50,8 +50,9 @@ import kotlin.uuid.Uuid
  * @param principalExtractor Derives a host-verified [Principal] from the accepting
  *   [ApplicationCall] (e.g. `call.principal<MyAuth>()?.let { Principal(it.id) }`). Runs in
  *   the WebSocket accept handler, where auth has already run, and the result rides the
- *   connection through to the admitted [us.tractat.kuilt.session.Member.principal] — no
- *   out-of-band `peer → principal` map. Defaults to no attestation.
+ *   connection through to the admitted [us.tractat.kuilt.session.Member.principal], and to the
+ *   [us.tractat.kuilt.session.admit.AdmissionRequest.principal] a host's policy decides a newcomer
+ *   on — no out-of-band `peer → principal` map. Defaults to no attestation.
  * @param connectivity Live device-reachability observer driving every accepted [Seam]'s
  *   [Seam.capability] (#1725). Defaults to [UnobservedConnectivity], under which a seam reports the
  *   honest [FabricAvailability.Unknown] floor exactly as before. A server loom runs on JVM or
