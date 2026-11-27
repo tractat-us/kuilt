@@ -127,6 +127,7 @@ class RoomConformanceGapDeclarationTest {
             { assertFailsWith<AssertionError> { suite.resumeWithinWindowFiresResumed() } },
             { assertFailsWith<AssertionError> { suite.differentKeyOnLiveIdIsRefused() } },
             { assertFailsWith<AssertionError> { suite.aDifferentKeyOnAPartitionedIdReleasesTheSeat() } },
+            { assertFailsWith<AssertionError> { suite.aPartitionedIdTakenUnderAnotherKeyRefusesTheMembersReturn() } },
             { assertFailsWith<AssertionError> { suite.processRebuiltInsideWindowRestores() } },
             { assertFailsWith<AssertionError> { suite.processRebuiltWithFreshIdRestores() } },
             { assertFailsWith<AssertionError> { suite.aSecondLiveProcessGetsAnAdditionalSeat() } },
@@ -172,6 +173,7 @@ class RoomConformanceGapDeclarationTest {
         suite.resumeWithinWindowFiresResumed()
         suite.differentKeyOnLiveIdIsRefused()
         suite.aDifferentKeyOnAPartitionedIdReleasesTheSeat()
+        suite.aPartitionedIdTakenUnderAnotherKeyRefusesTheMembersReturn()
         suite.processRebuiltInsideWindowRestores()
         suite.processRebuiltWithFreshIdRestores()
         suite.aSecondLiveProcessGetsAnAdditionalSeat()
