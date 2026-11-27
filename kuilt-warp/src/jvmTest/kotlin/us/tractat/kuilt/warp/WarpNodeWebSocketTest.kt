@@ -109,7 +109,7 @@ class WarpNodeWebSocketTest {
         // in parallel) another process can take the port in that window and Netty fails with
         // `BindException: Address already in use` (#1586). Binding 0 directly never has a window —
         // the port is ours from the moment it is allocated.
-        server = embeddedServer(Netty, port = 0) {
+        server = embeddedServer(Netty, port = 0, host = "127.0.0.1") {
             // Fix the server's PeerId to RELAY_ID so client seams use the canonical relay ID.
             serverLoom = KtorServerLoom(this, serverPath, selfPeerId = RELAY_ID)
         }
@@ -504,7 +504,7 @@ class WarpNodeWebSocketTest {
         val clientLoom = KtorClientLoom(httpClient = httpClient, selfPeerId = clientId)
         val clientSeam = clientLoom.join(
             WebSocketAdvertisement(
-                url = "ws://localhost:$port$serverPath",
+                url = "ws://127.0.0.1:$port$serverPath",
                 serverPeerId = RELAY_ID,
                 sessionName = clientId.value,
             ),

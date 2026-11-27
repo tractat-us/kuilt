@@ -65,7 +65,7 @@ class MDNSSelfDiscoveryFilterTest {
         // stop in tearDown — nothing leaks into the assertion's runBlocking below. (The port read
         // below has its own runBlocking, which completes: it awaits a resolved connector, not the
         // server's job.)
-        val server = embeddedServer(Netty, port = 0) { /* route mounted post-start, see below */ }
+        val server = embeddedServer(Netty, port = 0, host = "127.0.0.1") { /* route mounted post-start, see below */ }
             .also { servers += it }
         server.start(wait = false)
         // Bind 0 and read the port back off the *live* connector; probing a free port with a
@@ -87,7 +87,7 @@ class MDNSSelfDiscoveryFilterTest {
         // The device's own advertisement, as its browser would deliver it back to itself:
         // serverPeerId == this factory's selfPeerId, pointing at the factory's own live server.
         val ownAdvertisement = MDNSAdvertisement(
-            host = "localhost",
+            host = "127.0.0.1",
             port = port,
             serverPeerId = factory.selfPeerId,
             sessionName = "self",
@@ -116,7 +116,7 @@ class MDNSSelfDiscoveryFilterTest {
         // the top-level (GlobalScope-parented) overload; the server is a root job we stop in tearDown.
         // Port handling matches the sibling test: bind 0, read the port back off the live connector,
         // mount the host on the started Application (#1590, #1749).
-        val server = embeddedServer(Netty, port = 0) { /* route mounted post-start, see below */ }
+        val server = embeddedServer(Netty, port = 0, host = "127.0.0.1") { /* route mounted post-start, see below */ }
             .also { servers += it }
         server.start(wait = false)
         val port = runBlocking { server.engine.resolvedConnectors().first().port }
@@ -130,7 +130,7 @@ class MDNSSelfDiscoveryFilterTest {
         )
 
         fun advertisement() = WebSocketAdvertisement(
-            url = "ws://localhost:$port$wsPath",
+            url = "ws://127.0.0.1:$port$wsPath",
             serverPeerId = host.selfPeerId,
             sessionName = "joiner",
         )

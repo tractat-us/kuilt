@@ -123,7 +123,7 @@ class MDNSRoomKeySourcingTest {
      */
     private suspend fun advertiseMultiAccept(pattern: Pattern): ServiceInfo {
         val jmdns = CapturingJmDNS()
-        val server = embeddedServer(Netty, port = 0) { /* route mounted post-start, see KDoc */ }
+        val server = embeddedServer(Netty, port = 0, host = "127.0.0.1") { /* route mounted post-start, see KDoc */ }
             .also { servers += it }
         server.start(wait = false)
         val host = MDNSMultiAcceptHost(
@@ -150,7 +150,7 @@ class MDNSRoomKeySourcingTest {
     private suspend fun advertisePeerLink(pattern: Pattern): ServiceInfo {
         val jmdns = CapturingJmDNS()
         val wsPath = "/ws/room-source-link"
-        val server = embeddedServer(Netty, port = 0) { /* route mounted post-start, see KDoc */ }
+        val server = embeddedServer(Netty, port = 0, host = "127.0.0.1") { /* route mounted post-start, see KDoc */ }
             .also { servers += it }
         server.start(wait = false)
         val port = server.engine.resolvedConnectors().first().port
@@ -169,7 +169,7 @@ class MDNSRoomKeySourcingTest {
             val joinerClient = HttpClient(OkHttp) { install(ClientWebSockets) }.also { clients += it }
             val joinerSeam = KtorClientLoom(joinerClient).join(
                 WebSocketAdvertisement(
-                    url = "ws://localhost:$port$wsPath",
+                    url = "ws://127.0.0.1:$port$wsPath",
                     serverPeerId = factory.selfPeerId,
                     sessionName = "joiner",
                 ),

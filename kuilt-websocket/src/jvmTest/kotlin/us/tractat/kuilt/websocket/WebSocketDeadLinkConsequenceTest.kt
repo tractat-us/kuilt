@@ -95,7 +95,7 @@ class WebSocketDeadLinkConsequenceTest {
     // `CoroutineScope` overload and parent the server to the blocking job.
     @BeforeTest
     fun startServer() {
-        server = embeddedServer(Netty, port = 0) {
+        server = embeddedServer(Netty, port = 0, host = LOOPBACK_HOST) {
             source = RecordingSource(KtorConnectionSource(this, HUB_PATH))
             routing {
                 webSocket(RAW_PATH) {
@@ -118,7 +118,7 @@ class WebSocketDeadLinkConsequenceTest {
     }
 
     private fun advertisement(sessionName: String) =
-        WebSocketAdvertisement(url = "ws://127.0.0.1:$port$HUB_PATH", serverPeerId = HUB, sessionName = sessionName)
+        WebSocketAdvertisement(url = "ws://$LOOPBACK_HOST:$port$HUB_PATH", serverPeerId = HUB, sessionName = sessionName)
 
     private fun spokeLoom() = KtorMeshClientLoom(
         httpClient = httpClient,
@@ -253,7 +253,7 @@ class WebSocketDeadLinkConsequenceTest {
     @Test
     fun aClientSeamWhoseReadLoopIsStuckTearsDownWhenItsWriteLoopFindsTheSessionDead() = realTime {
         val clientEnd = rigScope.async {
-            httpClient.webSocketSession("ws://127.0.0.1:$port$RAW_PATH")
+            httpClient.webSocketSession("ws://$LOOPBACK_HOST:$port$RAW_PATH")
         }.await()
         val serverEnd = rawSessions.receive()
         val seam = identified(

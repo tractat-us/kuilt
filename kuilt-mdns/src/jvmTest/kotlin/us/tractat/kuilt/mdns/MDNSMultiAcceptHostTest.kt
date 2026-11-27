@@ -66,7 +66,7 @@ class MDNSMultiAcceptHostTest {
     @BeforeTest
     fun setUp() {
         jmdns = CapturingJmDNS()
-        server = embeddedServer(Netty, port = 0) { /* route mounted post-start, see KDoc */ }
+        server = embeddedServer(Netty, port = 0, host = "127.0.0.1") { /* route mounted post-start, see KDoc */ }
         server.start(wait = false)
         port = runBlocking { server.engine.resolvedConnectors().first().port }
         host = MDNSMultiAcceptHost(
@@ -105,7 +105,7 @@ class MDNSMultiAcceptHostTest {
             val client = HttpClient(OkHttp) { install(ClientWebSockets) }.also { clients += it }
             val clientSeam = KtorClientLoom(client, selfPeerId = id).join(
                 WebSocketAdvertisement(
-                    url = "ws://localhost:$port$wsPath",
+                    url = "ws://127.0.0.1:$port$wsPath",
                     serverPeerId = host.selfPeerId,
                     sessionName = "joiner",
                 ),

@@ -52,7 +52,7 @@ class OtlpHttpEdgeIntegrationTest {
     @Test
     fun drainRoundTripsAllSignalsThenIsIdempotent() = runBlocking {
         val bodies = mutableMapOf<String, MutableList<String>>()
-        val server = embeddedServer(Netty, port = 0) {
+        val server = embeddedServer(Netty, port = 0, host = "127.0.0.1") {
             routing {
                 post("/v1/{signal}") {
                     val sig = call.parameters["signal"] ?: "?"
@@ -70,7 +70,7 @@ class OtlpHttpEdgeIntegrationTest {
             telemetry.logs.export(LogRecord(recordId = b8(2), body = "hi"))
             telemetry.metrics.incrementSum(MetricKey("req", MetricKind.SUM), by = 1L)
 
-            val edge = OtlpHttpEdge(client, "http://localhost:$port", store)
+            val edge = OtlpHttpEdge(client, "http://127.0.0.1:$port", store)
             val bridge = WarpOtlpBridge(telemetry, clock)
             bridge.drain(edge)
             bridge.drain(edge) // idempotent — nothing new on the second pass
@@ -93,7 +93,7 @@ class OtlpHttpEdgeIntegrationTest {
     @Test
     fun failedPostLeavesSentSetForRetry() = runBlocking {
         var attempts = 0
-        val server = embeddedServer(Netty, port = 0) {
+        val server = embeddedServer(Netty, port = 0, host = "127.0.0.1") {
             routing {
                 post("/v1/traces") {
                     attempts++
@@ -112,7 +112,7 @@ class OtlpHttpEdgeIntegrationTest {
             val store = InMemoryDurableStore()
             val telemetry = WarpTelemetry(ReplicaId("p"), store)
             telemetry.spans.export(SpanRecord(b16(1), b8(1), null, "op", SpanKind.INTERNAL, 1L, 2L))
-            val edge = OtlpHttpEdge(client, "http://localhost:$port", store)
+            val edge = OtlpHttpEdge(client, "http://127.0.0.1:$port", store)
             val bridge = WarpOtlpBridge(telemetry, clock)
 
             bridge.drain(edge) // first POST 500s → sent-set untouched
@@ -146,7 +146,7 @@ class OtlpHttpEdgeIntegrationTest {
         val posts = AtomicInteger(0)
         val refusedBodies = CopyOnWriteArrayList<String>()
         val acceptedBodies = CopyOnWriteArrayList<String>()
-        val server = embeddedServer(Netty, port = 0) {
+        val server = embeddedServer(Netty, port = 0, host = "127.0.0.1") {
             routing {
                 post("/v1/metrics") {
                     val n = posts.incrementAndGet()
@@ -166,7 +166,7 @@ class OtlpHttpEdgeIntegrationTest {
         try {
             val store = InMemoryDurableStore()
             val telemetry = WarpTelemetry(ReplicaId("p"), store)
-            val edge = OtlpHttpEdge(client, "http://localhost:$port", store)
+            val edge = OtlpHttpEdge(client, "http://127.0.0.1:$port", store)
             val bridge = WarpOtlpBridge(telemetry, clock)
             val req = MetricKey("req", MetricKind.SUM)
             val err = MetricKey("err", MetricKind.SUM)

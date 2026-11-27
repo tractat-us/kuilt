@@ -29,21 +29,21 @@ class RouteLivenessTest {
 
     @Test
     fun acceptsALiveWebSocketRoute(): Unit = runBlocking {
-        awaitPathResolves(host = "localhost", port = startServer(), path = path)
+        awaitPathResolves(host = LOOPBACK_HOST, port = startServer(), path = path)
     }
 
     @Test
     fun refusesAPathThatIsNotRouted(): Unit = runBlocking {
         val port = startServer()
         val failure = assertFailsWith<AssertionError> {
-            awaitPathResolves(host = "localhost", port = port, path = "/no/such/route", timeout = 2.seconds)
+            awaitPathResolves(host = LOOPBACK_HOST, port = port, path = "/no/such/route", timeout = 2.seconds)
         }
         assertContains(failure.message.orEmpty(), "404")
     }
 
     /** Starts a Netty server carrying exactly one [KtorServerLoom] route at [path]. */
     private suspend fun startServer(): Int {
-        server = embeddedServer(Netty, port = 0) { KtorServerLoom(this, path) }
+        server = embeddedServer(Netty, port = 0, host = LOOPBACK_HOST) { KtorServerLoom(this, path) }
         server.start(wait = false)
         return server.engine.resolvedConnectors().first().port
     }

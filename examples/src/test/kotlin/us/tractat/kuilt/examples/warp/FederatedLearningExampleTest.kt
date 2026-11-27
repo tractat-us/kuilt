@@ -226,7 +226,7 @@ class FederatedLearningExampleTest {
         // throwaway `ServerSocket(0).use { it.localPort }` and re-binding the number is a TOCTOU:
         // the probe closes before Netty binds, so another process on a loaded box can take the port
         // in that window (`BindException: Address already in use` — #1590). Binding 0 has no window.
-        val server = embeddedServer(Netty, port = 0) {
+        val server = embeddedServer(Netty, port = 0, host = "127.0.0.1") {
             serverLoom = KtorServerLoom(this, path, selfPeerId = relayId)
         }
         server.start(wait = false)
@@ -240,7 +240,7 @@ class FederatedLearningExampleTest {
                 val (relaySeam, clientSeam) = coroutineScope {
                     val serverSeam = async { serverLoom.nextLink() }
                     val clientSeam = KtorClientLoom(httpClient = httpClient, selfPeerId = clientId).join(
-                        WebSocketAdvertisement(url = "ws://localhost:$port$path", serverPeerId = relayId, sessionName = "fl-client"),
+                        WebSocketAdvertisement(url = "ws://127.0.0.1:$port$path", serverPeerId = relayId, sessionName = "fl-client"),
                     )
                     serverSeam.await() to clientSeam
                 }

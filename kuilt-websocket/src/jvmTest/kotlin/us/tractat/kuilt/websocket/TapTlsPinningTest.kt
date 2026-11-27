@@ -57,7 +57,7 @@ class TapTlsPinningTest {
         lateinit var loom: KtorServerLoom
         val srv = embeddedServer(
             Netty,
-            configure = { tapTlsConnector(identity, port = 0) },
+            configure = { tapTlsConnector(identity, port = 0, host = LOOPBACK_HOST) },
         ) {
             loom = KtorServerLoom(this, path)
         }
@@ -115,7 +115,7 @@ class TapTlsPinningTest {
     ): Pair<Seam, Seam> = coroutineScope {
         val serverLinkDeferred = async { serverLoom.nextLink() }
         val advertisement = WebSocketAdvertisement(
-            url = "wss://localhost:$port$path",
+            url = "wss://$LOOPBACK_HOST:$port$path",
             serverPeerId = serverLoom.selfPeerId,
             sessionName = "tls-client",
         )

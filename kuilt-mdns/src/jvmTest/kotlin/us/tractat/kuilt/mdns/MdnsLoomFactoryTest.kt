@@ -194,7 +194,7 @@ class MdnsLoomFactoryTest {
         // extension parents Netty's SupervisorJob to that runBlocking, which then never completes
         // until the server stops, and the server cannot stop until the test returns — a structural
         // deadlock that surfaces as a task timeout, not a failure.
-        val server = embeddedServer(Netty, port = 0) { /* routes mounted post-start */ }
+        val server = embeddedServer(Netty, port = 0, host = "127.0.0.1") { /* routes mounted post-start */ }
             .also { servers += it }
         server.start(wait = false)
         val port = runBlocking { server.engine.resolvedConnectors().first().port }
@@ -246,7 +246,7 @@ class MdnsLoomFactoryTest {
             HttpClient(OkHttp) { install(ClientWebSockets) }.also { clients += it }
 
         fun advertisement(host: MDNSPeerLinkFactory, wsPath: String) = MDNSAdvertisement(
-            host = "localhost",
+            host = "127.0.0.1",
             port = port,
             serverPeerId = host.selfPeerId,
             sessionName = "mdns-loom-factory",
