@@ -106,7 +106,7 @@ class WebSocketVoterMeshFormationTimeoutTest {
         // throwaway `ServerSocket(0).use { it.localPort }` and re-binding the number is a TOCTOU:
         // the probe closes before Netty binds, so another process on a loaded box can take the port
         // in that window (`BindException: Address already in use` — #1590). Binding 0 has no window.
-        val srv = embeddedServer(Netty, port = 0) {
+        val srv = embeddedServer(Netty, port = 0, host = "127.0.0.1") {
             KtorConnectionSource(this, "/higher", pingPeriod = pingPeriod)
         }.also { server = it }
         srv.start(wait = false)
@@ -123,8 +123,8 @@ class WebSocketVoterMeshFormationTimeoutTest {
         val voters = listOf(
             // lower's own inbound route is never dialed (higher dials nothing), so a never-yielding
             // source here is harmless; lower still dials the higher below.
-            WebSocketVoter(lower, NeverYieldingConnectionSource(), "ws://localhost:$port/higher"),
-            WebSocketVoter(higher, higherSource, "ws://localhost:$port/higher"),
+            WebSocketVoter(lower, NeverYieldingConnectionSource(), "ws://127.0.0.1:$port/higher"),
+            WebSocketVoter(higher, higherSource, "ws://127.0.0.1:$port/higher"),
         )
 
         val scope = CoroutineScope(dispatcher + Job()).also { hostScope = it }

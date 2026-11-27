@@ -23,6 +23,7 @@ import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.websocket.KtorConnectionSource
+import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
@@ -269,13 +270,13 @@ class WebSocketVoterMeshReconnectionTest {
         // (SeverableTcpProxy below keeps its ServerSocket open for its whole life, so it is not the
         // same pattern — the port it reports is a port it still holds.)
         lateinit var sources: Map<NodeId, KtorConnectionSource>
-        val srv = embeddedServer(Netty, port = 0) {
+        val srv = embeddedServer(Netty, port = 0, host = "127.0.0.1") {
             sources = mountSources(this, specs)
         }.also { server = it }
         srv.start(wait = false)
         val port = srv.engine.resolvedConnectors().first().port
 
-        val proxyPort = SeverableTcpProxy(targetHost = "localhost", targetPort = port)
+        val proxyPort = SeverableTcpProxy(targetHost = "127.0.0.1", targetPort = port)
             .also { proxy = it }
             .port
 
@@ -284,7 +285,7 @@ class WebSocketVoterMeshReconnectionTest {
 
         val voters = specs.map { (nodeId, path) ->
             val hostPort = if (nodeId == proxiedNode) proxyPort else port
-            WebSocketVoter(nodeId, sources.getValue(nodeId), "ws://localhost:$hostPort$path")
+            WebSocketVoter(nodeId, sources.getValue(nodeId), "ws://127.0.0.1:$hostPort$path")
         }
 
         // The mesh lives on a dedicated scope (the extension receiver): voterMeshOverWebSockets derives
@@ -340,7 +341,9 @@ private class SeverableTcpProxy(
     private val targetHost: String,
     private val targetPort: Int,
 ) : AutoCloseable {
-    private val serverSocket = ServerSocket(0)
+    // Loopback, like the server behind it: a wildcard-bound proxy is as exposed as a wildcard-bound
+    // server to a socket on 127.0.0.1 taking its dials (#3754).
+    private val serverSocket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
     val port: Int get() = serverSocket.localPort
 
     @Volatile

@@ -99,6 +99,7 @@ class MDNSSelfDiscoveryMulticastTest {
         // (#1590, #1749). The port is an input to the factory (it is the advertised port this test
         // then discovers over real multicast), so the factory is built after start() — the module
         // lambda runs strictly before resolvedConnectors() can answer.
+        // ALLOW-wildcardBind: advertised over real multicast at this host's LAN addresses, which a loopback bind would not serve
         val server = embeddedServer(Netty, port = 0) { /* route mounted post-start, see above */ }
             .also { servers += it }
         server.start(wait = false)

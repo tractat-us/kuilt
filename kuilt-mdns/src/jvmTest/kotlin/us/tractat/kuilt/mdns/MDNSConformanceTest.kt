@@ -30,7 +30,7 @@ import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
  * over the **real localhost byte path**, skipping JmDNS multicast discovery.
  *
  * The host factory opens a real Netty WebSocket server; the joiner factory connects
- * via a directly-constructed [MDNSAdvertisement] at `localhost:<port>` — no mDNS
+ * via a directly-constructed [MDNSAdvertisement] at `127.0.0.1:<port>` — no mDNS
  * discovery, no multicast. JmDNS calls are absorbed by [CapturingJmDNS], which is
  * already present in this test source set.
  *
@@ -106,7 +106,7 @@ class MDNSConformanceTest : SeamConformanceSuite() {
      */
     @BeforeTest
     fun setUp() {
-        server = embeddedServer(Netty, port = 0) { /* routes mounted post-start, see KDoc */ }
+        server = embeddedServer(Netty, port = 0, host = "127.0.0.1") { /* routes mounted post-start, see KDoc */ }
         server.start(wait = false)
         port = runBlocking { server.engine.resolvedConnectors().first().port }
         hostFactory = MDNSPeerLinkFactory(
@@ -170,7 +170,7 @@ class MDNSConformanceTest : SeamConformanceSuite() {
      */
     override fun joinTag(): Tag =
         MDNSAdvertisement(
-            host = "localhost",
+            host = "127.0.0.1",
             port = port,
             serverPeerId = hostFactory.selfPeerId,
             sessionName = "host",
@@ -210,7 +210,7 @@ class MDNSConformanceTest : SeamConformanceSuite() {
     /** Drive [factory] to dial an advertisement carrying its own `selfPeerId`, and require the refusal. */
     private suspend fun refuseToDialItself(factory: MDNSPeerLinkFactory, wsPath: String) {
         val selfAdvertisement = MDNSAdvertisement(
-            host = "localhost",
+            host = "127.0.0.1",
             port = port,
             serverPeerId = factory.selfPeerId,
             sessionName = "self",

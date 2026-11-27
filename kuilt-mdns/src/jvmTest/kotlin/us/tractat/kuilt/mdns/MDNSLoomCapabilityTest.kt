@@ -28,7 +28,7 @@ class MDNSLoomCapabilityTest {
         // input to it, so it is built *after* start() — the module lambda runs during start(),
         // strictly before resolvedConnectors() can answer. capability() itself is a pure pre-connect
         // self-report; the server is stopped immediately.
-        val server = embeddedServer(Netty, port = 0) { /* wired post-start, see above */ }
+        val server = embeddedServer(Netty, port = 0, host = "127.0.0.1") { /* wired post-start, see above */ }
         server.start(wait = false)
         val port = runBlocking { server.engine.resolvedConnectors().first().port }
         val factory = MDNSPeerLinkFactory(
