@@ -3224,12 +3224,12 @@ its row in the same code PR.
   `Lane`, `ChildTemplate`, `TopologyEdit` and `Edited` with no type argument is
   a compile error, because Kotlin has no raw types. A construction such as
   `Lane("a")` has nothing to infer `P` from, and this module's tests and samples
-  have about 110 of them (counted, not compiled). Measured with
+  have at least 108 written with the qualified name (counted, not compiled). Measured with
   `updateKotlinAbi`: the JVM and Android dumps each lose 13 lines (every
   `serializer()` without arguments and every `$$serializer.INSTANCE`), and the
   klib dump loses 221, because a native or wasm signature records the type
   parameter. So every edit function and `Topology.from` stops linking for a
-  compiled consumer. ObjC export drops generics on the `Node` protocol. A sealed
+  compiled consumer. ObjC export keeps no generics on an interface, so Swift sees the `Node` protocol's payload as untyped (from the export rules, not measured). A sealed
   generic hierarchy also needs its subclasses' serializers to pass `P` through.
   That compiles, but nobody has run it (#3758).
 - `JsonElement?` as the payload. It ties a format-neutral module to JSON. It
