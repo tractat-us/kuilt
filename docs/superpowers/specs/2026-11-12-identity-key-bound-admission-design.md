@@ -177,11 +177,13 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     was made" marker beside the grants turns null-with-marker into a failure of unknown cause rather
     than a first launch. The Android store requires API 26 (`@RequiresApi(26)` on `platform`; its
     grants store uses `java.nio.file`). A replaced key is a new device returning through ordinary
-    admission. **Amended (Iain, 2026-11-27, #3761: "Why would we keep damaged metadata around — we
-    should replace it"):** `isSystemError()` no longer keeps. A system error is a failure of unknown
-    cause, kept for the hour and then replaced, because a corrupt blob-metadata row answers
+    admission. **Amended a third time (Iain, 2026-11-27, #3761: "Why would we keep damaged metadata
+    around — we should replace it"):** `isSystemError()` no longer keeps. A system error is a failure
+    of unknown cause, kept for the hour and then replaced, because a corrupt blob-metadata row answers
     `SYSTEM_ERROR` (measured in #3742) and damaged metadata is replaced, not kept. Transient codes and
-    `requiresUserAuthentication()` still keep, including those AOSP also flags a system error.
+    `requiresUserAuthentication()` still keep, including those AOSP also flags a system error. So a
+    Keystore outage answering `SYSTEM_ERROR` for over an hour now replaces the key, the cost the
+    2026-11-13 amendment avoided, accepted here.
 30. **One key may hold many seats; a connected seat is never superseded (Iain, 2026-11-16, #3257).**
     Every tab of one browser shares one IndexedDB key, and many admitted tabs are the point ("if it's
     browser tabs I don't mind having many many admitted tabs"). So a Proof under a new peer id with a
