@@ -130,8 +130,9 @@ class AdmissionRequestPrincipalTest {
      * principal is the one on the last request the policy admitted.
      *
      * The rig counts the hub's roster turning to Mallory, read off the hub seam the room was built on,
-     * and the policy is released only after it has, so a run in which the link never changed reds on
-     * the rig rather than passing.
+     * and the policy is released only after it has, so a run in which the link never changed waits out
+     * the wedge backstop instead of passing. With the room acting on the first answer, this reds on the
+     * member's principal alone: Mallory seated under the decision made for Ada.
      */
     @Test
     fun aPrincipalThatChangesWhileThePolicyDecidesIsNotAdmittedUnderTheOldDecision(): TestResult =
