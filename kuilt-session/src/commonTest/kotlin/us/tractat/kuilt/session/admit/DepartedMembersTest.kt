@@ -40,7 +40,8 @@ class DepartedMembersTest {
     /**
      * #3762: a pass that never expires but was issued before the device's revocation cutoff, and a
      * good one for an hour issued after it. The good one is kept whichever tab leaves first, and so
-     * whichever pass reaches the record last.
+     * whichever pass reaches the record last, and whether the revocation came before the departures
+     * or after them.
      */
     @Test
     fun aRevokedPassNeverDisplacesAGoodOne() = runTest {
@@ -57,10 +58,17 @@ class DepartedMembersTest {
             record(key, PeerId("good-tab"), good, now = 300)
         }
         val voidAlone = DepartedMembers(revocations).apply { record(key, PeerId("void-tab"), revoked, now = 200) }
+        val laterRevocations = RevocationList.inMemory()
+        val revokedLater = DepartedMembers(laterRevocations).apply {
+            record(key, PeerId("good-tab"), good, now = 200)
+            record(key, PeerId("void-tab"), revoked, now = 300)
+        }
+        laterRevocations.revoke(key, notBefore = 100)
         assertAll(
             { assertEquals(good, voidLast.pass(key, now = 400), "a void pass arriving last does not displace the good one") },
             { assertEquals(good, goodLast.pass(key, now = 400), "nor does one that was there first") },
             { assertEquals(0, voidAlone.size(now = 400), "and a void pass alone is not recorded") },
+            { assertEquals(good, revokedLater.pass(key, now = 400), "nor does a revocation made after both were recorded") },
         )
     }
 

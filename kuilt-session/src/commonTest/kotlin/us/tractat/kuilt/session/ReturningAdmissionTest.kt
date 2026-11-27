@@ -654,27 +654,42 @@ class ReturningAdmissionTest {
 
     /**
      * Two tabs of Bob's device leave, and the one that runs out later is void (#3762). Bob's first tab
-     * was given a pass that never expires; the host then revoked his key, and his second tab, vetted
-     * after the cutoff, was given a pass for an hour. Bob comes back presenting no pass of his own —
-     * the lost-renewal case Decided 34 is for — and the host lets him in on the good one it signed his
-     * second tab, unvetted. Keeping whichever pass ran out later would have kept the void one and
-     * thrown the good one away.
+     * was given a pass that never expires; his second tab, vetted a second later, a pass for an hour.
+     * The host's revocation cutoff falls between the two, so the first is void and the second good.
+     * Bob comes back presenting no pass of his own — the lost-renewal case Decided 34 is for — and the
+     * host lets him in on the good one it signed his second tab, unvetted. Keeping whichever pass ran
+     * out later would have kept the void one and thrown the good one away.
      */
     @Test
     fun aRevokedPassNeverDisplacesAGoodOneInTheDepartedRecord() = runTest {
+        twoTabsLeaveTheLongerVoid(revokeAfterLeaving = false)
+    }
+
+    /**
+     * As [aRevokedPassNeverDisplacesAGoodOneInTheDepartedRecord], but the host revokes Bob only after
+     * both tabs have left, from the second tab's pass on. Both passes were good when the record was
+     * written, so only keeping the pass issued last leaves the good one there.
+     */
+    @Test
+    fun aRevocationAfterBothTabsLeftStillLeavesTheGoodPass() = runTest {
+        twoTabsLeaveTheLongerVoid(revokeAfterLeaving = true)
+    }
+
+    private suspend fun TestScope.twoTabsLeaveTheLongerVoid(revokeAfterLeaving: Boolean) {
         var policyCalls = 0
         val counted = Counted { policyCalls++; if (policyCalls == 1) GrantTerms(Duration.INFINITE) else GrantTerms(1.hours) }
         val host = rawHost(joiners = setOf(bob, bobTab, bobAgain), admission = counted.admission)
         val room = host.room as SeamRoom
         host.admit(bob, bobKey, nonce = 1)
         val forever = host.passesTo(bob).single()
-        val cutoff = testScheduler.currentTime + 1
-        counted.revocations.revoke(bobKey.id, notBefore = cutoff)
+        val early = (testScheduler.currentTime + 1).takeUnless { revokeAfterLeaving }
+        early?.let { counted.revocations.revoke(bobKey.id, notBefore = it) }
         host.advanceKeeping(setOf(bob), 1.seconds)
         host.admit(bobTab, bobKey, nonce = 2)
         val hour = host.passesTo(bobTab).last()
         host.say(bobTab, AdmitMessage.Goodbye)
         host.say(bob, AdmitMessage.Goodbye)
+        val cutoff = early ?: hour.issuedAt.also { counted.revocations.revoke(bobKey.id, notBefore = it) }
         val recorded = room.departedRecordCountForTest()
         val vettedBefore = counted.keys()
 
@@ -686,8 +701,9 @@ class ReturningAdmissionTest {
             { assertTrue(forever.issuedAt < cutoff, "rig: and was issued before the cutoff, so it is void") },
             { assertTrue(hour.issuedAt >= cutoff, "rig: the second tab's pass was issued at or after it, so it is good") },
             { assertTrue(testScheduler.currentTime < hour.notAfter, "rig: and has not run out when Bob comes back") },
+            { assertEquals(cutoff, counted.revocations.notBefore(bobKey.id), "rig: the cutoff is in place when Bob comes back") },
             { assertEquals(listOf(bobKey.id, bobKey.id), vettedBefore, "rig: each tab was vetted once") },
-            { assertEquals(1, recorded, "rig: one record for Bob's key") },
+            { assertEquals(1, recorded, "one record for Bob's key, still there when he comes back") },
             { assertEquals(vettedBefore, counted.keys(), "Bob comes back on the good pass the host signed, unvetted") },
             {
                 assertEquals(
