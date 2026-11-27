@@ -2398,7 +2398,7 @@ internal class SeamRoom(
         vetted: AdmissionDecision?,
         decidedAtMs: Long,
     ): SeatOutcome = when (vetted) {
-        null -> if (current) SeatOutcome.Vet(newcomerRequest(newcomer, keyed, principal = null)) else SeatOutcome.Stale
+        null -> if (current) SeatOutcome.Vet(newcomerRequest(newcomer, keyed, attestedPrincipal(joinerPeerId))) else SeatOutcome.Stale
         is AdmissionDecision.Admit ->
             if (retire(joinerPeerId, generation)) admitNewMember(joinerPeerId, keyed, vetted.grant, decidedAtMs) else SeatOutcome.Stale
         is AdmissionDecision.Reject -> if (retire(joinerPeerId, generation)) {
@@ -2748,6 +2748,17 @@ internal class SeamRoom(
     }
 
     /**
+     * Who the fabric attested [peerId]'s link as, or null when nothing did: the one source for both the
+     * admitted [Member.principal] and the [AdmissionRequest.principal] the policy decides on (#3750),
+     * so the two cannot name different principals. The map-keyed roster comes first (hub path:
+     * `RoomHubSeam` / `Mesh` keys a principal per peer), then the single-value marker (2-peer relay
+     * path: `Seam.withPrincipal`).
+     */
+    private fun attestedPrincipal(peerId: PeerId): Principal? =
+        (seam as? PrincipalRoster)?.attestedPrincipals?.value?.get(peerId)
+            ?: (seam as? PrincipalAttested)?.principal
+
+    /**
      * **Under [lock].** Add [joinerPeerId] as a connected member with [identity] and [key], and enqueue
      * its roster `Welcome` on every other member's fan-out lane (#3630).
      *
@@ -2782,10 +2793,7 @@ internal class SeamRoom(
             identity = identity,
             key = key,
             liveness = Liveness.Connected,
-            // Prefer the map-keyed roster (hub path: RoomHubSeam / Mesh keys a principal per peer),
-            // falling back to the single-value marker (2-peer relay path: Seam.withPrincipal).
-            principal = (seam as? PrincipalRoster)?.attestedPrincipals?.value?.get(joinerPeerId)
-                ?: (seam as? PrincipalAttested)?.principal,
+            principal = attestedPrincipal(joinerPeerId),
         )
         val existing = admittedById.values.toList()
         addToRoster(member, returning)
