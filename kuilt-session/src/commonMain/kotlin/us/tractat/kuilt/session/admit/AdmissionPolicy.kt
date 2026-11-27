@@ -88,9 +88,12 @@ private class OpenPolicy(terms: GrantTerms) : AdmissionPolicy {
  * - [principal] is **attested by the transport**: who the link the joiner came in on was
  *   authenticated as, before kuilt read a frame from it (a Ktor server's `principalExtractor`, say).
  *   It is the value the admitted [us.tractat.kuilt.session.Member.principal] will carry, and `null`
- *   on a link nothing authenticated. Every field describes the one link the joiner said Hello on: if
- *   that id's link is attested as someone else while the policy decides, the room acts on no part of
- *   the answer and ends the attempt, and the joiner is asked about afresh when it says Hello again.
+ *   on a link nothing authenticated. Every field describes the one link the joiner said Hello on, as
+ *   the room found it when it took that Hello: the principal is read then and never again. The room
+ *   asks the policy, and acts on its answer, only while the id's link is still attested as that
+ *   principal. If it is attested as someone else first, the policy is not asked, or no part of its
+ *   answer is acted on, and the attempt ends with nothing sent; the joiner is asked about afresh when
+ *   it says Hello again.
  *   It vouches for the link, not the key: a policy that needs the two to agree, such as the key a
  *   gate checked before the upgrade and the key the joiner then proved, compares them itself.
  * - [deviceId] is **bound** to the key, since the joiner signed over it too, but it is still whatever
