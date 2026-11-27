@@ -467,13 +467,13 @@ internal fun sampleAppSettings() {
     check(running.topology.toDocument().children[0] == TopologyDocument.Group("ci", template = TopologyDocument.ChildTemplate("2")))
 
     // Nodes are matched by their names from the root, as changesTo matches them: main moved, so
-    // its rule is removed where it was and added where it is. A template's settings would come
-    // back at its group's path, at depth 1.
+    // its rule is removed where it was and added where it is. The list is in document order, ci's
+    // before hobby's. A template's settings would come back at its group's path, at depth 1.
     check(
         stored.appSettingsChangesTo(edited) == listOf(
+            AppSettingsChange.Removed(listOf(0, 0), listOf("pool", "ci", "main"), 0, "match", "branch:main"),
             AppSettingsChange.Added(listOf(1, 0), listOf("pool", "hobby", "main"), 0, "match", "branch:main"),
             AppSettingsChange.Added(listOf(1, 1), listOf("pool", "hobby", "nightly"), 0, "match", "cron"),
-            AppSettingsChange.Removed(listOf(0, 0), listOf("pool", "ci", "main"), 0, "match", "branch:main"),
         ),
     )
 }
