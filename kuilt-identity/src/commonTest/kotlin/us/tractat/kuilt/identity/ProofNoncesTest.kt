@@ -144,7 +144,7 @@ class ProofNoncesTest {
         rig.advance(1.milliseconds)
         val stillOverloaded = rig.nonces.spend(rig.fresh(overflow))
         // The first entry expires at the ttl, and its slot is free from then on: one slot, not three.
-        rig.advance(TTL - 2 * step - 1.milliseconds)
+        rig.advance(TTL - step * 2 - 1.milliseconds)
         val afterOne = rig.nonces.spend(rig.fresh(overflow))
         val fullAgain = rig.nonces.spend(rig.fresh(rig.nonces.issue()))
         assertAll(
@@ -203,9 +203,9 @@ class ProofNoncesTest {
         val rig = rig()
         val nonce = rig.nonces.issue()
         val first = rig.nonces.spend(rig.fresh(nonce))
-        rig.stepWall(10 * TTL)
+        rig.stepWall(TTL * 10)
         val forward = rig.nonces.check(nonce)
-        rig.stepWall(-10 * TTL)
+        rig.stepWall(-TTL * 10)
         val back = rig.nonces.check(nonce)
         assertAll(
             { assertEquals(NonceSpend.Spent, first, "precondition: spent once") },
@@ -220,7 +220,7 @@ class ProofNoncesTest {
         val unseen = rig()
         val unseenNonce = unseen.nonces.issue()
         val unseenChecked = unseen.fresh(unseenNonce)
-        unseen.stepWall(-2 * TTL)
+        unseen.stepWall(-TTL * 2)
         val unseenSpend = unseen.nonces.spend(unseenChecked)
         val unseenAfter = unseen.nonces.check(unseenNonce)
         // The new secret is already drawn, so the clocks agree again by the time of the spend:
@@ -228,7 +228,7 @@ class ProofNoncesTest {
         val drawn = rig()
         val drawnNonce = drawn.nonces.issue()
         val drawnChecked = drawn.fresh(drawnNonce)
-        drawn.stepWall(-2 * TTL)
+        drawn.stepWall(-TTL * 2)
         val issuedUnderNew = drawn.nonces.issue()
         val drawnSpend = drawn.nonces.spend(drawnChecked)
         val newSpend = drawn.nonces.spend(drawn.fresh(issuedUnderNew))
@@ -259,13 +259,14 @@ class ProofNoncesTest {
                 if (verdict == NonceSpend.Spent && !spentOnce.add(nonce.toHexString())) violations += "seed $seed step $step"
             }
             repeat(STEPS) { step ->
-                when (walk.nextInt(6)) {
-                    0 -> rig.advance(walk.nextLong(0, 600).milliseconds)
-                    1 -> rig.time += walk.nextLong(0, 600).milliseconds
-                    2 -> rig.stepWall(walk.nextLong(-3_000, 3_000).milliseconds)
-                    3 -> issued += rig.nonces.issue()
-                    4 -> if (issued.isNotEmpty()) {
-                        val nonce = issued[walk.nextInt(issued.size)]
+                when (walk.nextInt(16)) {
+                    0, 1, 2 -> rig.advance(walk.nextLong(0, 300).milliseconds)
+                    3 -> rig.time += walk.nextLong(0, 200).milliseconds
+                    4 -> rig.stepWall(walk.nextLong(-2_500, 2_500).milliseconds)
+                    5, 6, 7 -> issued += rig.nonces.issue()
+                    8, 9, 10, 11, 12 -> if (issued.isNotEmpty()) {
+                        // One of the last few issued, so most are still inside their ttl.
+                        val nonce = issued[issued.size - 1 - walk.nextInt(minOf(issued.size, RECENT))]
                         when (val checked = rig.nonces.check(nonce)) {
                             is NonceCheck.Fresh -> if (walk.nextBoolean()) spend(nonce, checked, step) else held += nonce to checked
                             else -> tally["check $checked"] = (tally["check $checked"] ?: 0) + 1
@@ -341,5 +342,6 @@ class ProofNoncesTest {
         val TTL = 1.seconds
         const val SEEDS = 8
         const val STEPS = 400
+        const val RECENT = 4
     }
 }
