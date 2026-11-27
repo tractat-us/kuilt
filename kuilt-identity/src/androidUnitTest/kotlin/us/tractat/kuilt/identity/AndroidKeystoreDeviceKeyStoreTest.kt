@@ -123,23 +123,61 @@ class AndroidKeystoreDeviceKeyStoreTest {
     // ── Decided 29: whose failure it is ──────────────────────────────────────
 
     /**
-     * On Android 13 and later, the failures the Keystore calls its own keep the key — including
-     * `SYSTEM_ERROR`, which `isTransientFailure()` calls *not* transient, the reason that predicate alone
-     * is not the rule — and `LOCKED`, which waits for the user.
+     * On Android 13 and later, the failures the Keystore calls its own keep the key: the transient ones,
+     * and `LOCKED`, which waits for the user. AOSP flags most transient codes a system error as well
+     * (`SECURE_HW_BUSY`), and `KM_ERROR_DEVICE_LOCKED` is a system error and a wait for the user both, so
+     * these rows also pin that the transient and user arms are read first: the system-error flag alone
+     * keeps nothing (#3761).
      */
     @Test
     fun onAndroid13WhatTheKeystoreCallsItsOwnTroubleKeepsTheKey() {
-        val systemError = AospKeystore.keystoreException(AospKeystore.SYSTEM_ERROR)
+        val busy = AospKeystore.keystoreException(AospKeystore.SECURE_HW_BUSY)
         val locked = AospKeystore.keystoreException(AospKeystore.LOCKED)
+        val deviceLocked = AospKeystore.keystoreException(AospKeystore.DEVICE_LOCKED)
         assertAll(
-            { assertFalse(systemError.isTransientFailure, "precondition: AOSP calls SYSTEM_ERROR not transient") },
-            { assertTrue(AospKeystore.keystoreException(AospKeystore.SECURE_HW_BUSY).isTransientFailure, "precondition: and SECURE_HW_BUSY transient") },
+            { assertTrue(busy.isTransientFailure && busy.isSystemError, "precondition: SECURE_HW_BUSY is transient and a system error") },
             { assertTrue(locked.requiresUserAuthentication() && !locked.isSystemError && !locked.isTransientFailure, "precondition: LOCKED only waits for the user") },
-            { assertIs<FailureVerdict.Keep>(judge(thrown(AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR)), 33), "SYSTEM_ERROR while loading") },
-            { assertIs<FailureVerdict.Keep>(judge(thrown(AospKeystore.signFailure(AospKeystore.SECURE_HW_BUSY)), 33), "SECURE_HW_BUSY while signing") },
-            { assertIs<FailureVerdict.Keep>(judge(thrown(AospKeystore.loadFailure(AospKeystore.LOCKED)), 33), "LOCKED while loading") },
             {
-                assertIs<FailureVerdict.Keep>(
+                assertTrue(
+                    deviceLocked.requiresUserAuthentication() && deviceLocked.isSystemError && !deviceLocked.isTransientFailure,
+                    "precondition: KM_ERROR_DEVICE_LOCKED waits for the user and is a system error",
+                )
+            },
+            { assertIs<FailureVerdict.Keep>(judge(thrown(AospKeystore.signFailure(AospKeystore.SECURE_HW_BUSY)), 33), "SECURE_HW_BUSY while signing") },
+            { assertIs<FailureVerdict.Keep>(judge(thrown(AospKeystore.loadFailure(AospKeystore.SECURE_HW_BUSY)), 33), "SECURE_HW_BUSY while loading") },
+            { assertIs<FailureVerdict.Keep>(judge(thrown(AospKeystore.loadFailure(AospKeystore.LOCKED)), 33), "LOCKED while loading") },
+            { assertIs<FailureVerdict.Keep>(judge(thrown(AospKeystore.signFailure(AospKeystore.DEVICE_LOCKED)), 33), "KM_ERROR_DEVICE_LOCKED while signing") },
+        )
+    }
+
+    /**
+     * On Android 13 and later a system error alone is of unknown cause (#3761). `isSystemError()` says the
+     * fault is the Keystore's rather than the key's, but keystore2 answers `SYSTEM_ERROR` for a corrupted
+     * blob-metadata row too (measured on Android 14, #3742), and damaged metadata should be replaced, not
+     * kept. So it waits out the hour like any failure of unknown cause. `isTransientFailure()` is `false`
+     * for both codes here, which is why that predicate is checked as a precondition rather than assumed.
+     */
+    @Test
+    fun onAndroid13ASystemErrorAloneIsOfUnknownCause() {
+        val systemError = AospKeystore.keystoreException(AospKeystore.SYSTEM_ERROR)
+        val unknownError = AospKeystore.keystoreException(AospKeystore.UNKNOWN_ERROR)
+        assertAll(
+            {
+                assertTrue(
+                    systemError.isSystemError && !systemError.isTransientFailure && !systemError.requiresUserAuthentication(),
+                    "precondition: SYSTEM_ERROR is a system error and nothing else",
+                )
+            },
+            {
+                assertTrue(
+                    unknownError.isSystemError && !unknownError.isTransientFailure && !unknownError.requiresUserAuthentication(),
+                    "precondition: KM_ERROR_UNKNOWN_ERROR is a system error and nothing else",
+                )
+            },
+            { assertIs<FailureVerdict.Unknown>(judge(thrown(AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR)), 33), "SYSTEM_ERROR while loading") },
+            { assertIs<FailureVerdict.Unknown>(judge(thrown(AospKeystore.signFailure(AospKeystore.SYSTEM_ERROR)), 33), "SYSTEM_ERROR while signing") },
+            {
+                assertIs<FailureVerdict.Unknown>(
                     judge(thrown(AospKeystore.signFailure(AospKeystore.UNKNOWN_ERROR)), 33),
                     "KM_ERROR_UNKNOWN_ERROR: code 10, flagged a system error",
                 )
@@ -308,12 +346,15 @@ class AndroidKeystoreDeviceKeyStoreTest {
         )
     }
 
-    /** On Android 13 and later a failure the Keystore calls its own never starts a run, however long it lasts. */
+    /**
+     * On Android 13 and later a failure the Keystore calls its own never starts a run, however long it
+     * lasts: `SECURE_HW_BUSY`, transient and a system error both.
+     */
     @Test
     fun onAndroid13AKeystoreFailureNeverReplacesTheKey() = runTest {
         val rig = Rig(sdk = 33)
         val held = rig.launch().deviceKey().id
-        rig.keystore.loadFault = { AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR) }
+        rig.keystore.loadFault = { AospKeystore.loadFailure(AospKeystore.SECURE_HW_BUSY) }
         val failures = List(3) {
             failureOf { rig.launch().deviceKey() }.also { rig.clock += HOUR }
         }
@@ -324,6 +365,31 @@ class AndroidKeystoreDeviceKeyStoreTest {
             { assertTrue(failures.all { it is IllegalStateException }, "three hours of failures throw: $failures") },
             { assertNull(since, "and start no run") },
             { assertEquals(held, after, "and the key is the same key") },
+        )
+    }
+
+    /**
+     * On Android 13 and later a system error that is neither transient nor a wait for the user — what a
+     * corrupted blob-metadata row answers — throws and keeps the key for the hour, then replaces it (#3761).
+     */
+    @Test
+    fun onAndroid13ASystemErrorWaitsTheHourThenReplaces() = runTest {
+        val rig = Rig(sdk = 33)
+        val held = rig.launch().deviceKey().id
+        rig.keystore.signFault = { AospKeystore.signFailure(AospKeystore.SYSTEM_ERROR) }
+        val early = failureOf { rig.launch().deviceKey() }
+        val since = rig.failingSince()
+        rig.clock += MINUTE * 59
+        val later = failureOf { rig.launch().deviceKey() }
+        val madeWithinTheHour = rig.keystore.generated
+        rig.clock += MINUTE
+        val replaced = rig.launch(clearSignFaultAfterJudging = true).deviceKey().id
+        assertAll(
+            { assertTrue(early is IllegalStateException && later is IllegalStateException, "within the hour both throw: $early, $later") },
+            { assertEquals(T, since, "the first failure starts a run") },
+            { assertEquals(1, madeWithinTheHour, "no key is made in 59 minutes") },
+            { assertNotEquals(held, replaced, "an hour on the key is replaced") },
+            { assertEquals(2, rig.keystore.generated, "with one new key") },
         )
     }
 
