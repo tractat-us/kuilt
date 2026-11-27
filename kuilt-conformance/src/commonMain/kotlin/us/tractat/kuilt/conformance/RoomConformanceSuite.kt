@@ -1695,6 +1695,7 @@ public abstract class RoomConformanceSuite {
                     host.awaitRoster("the later device has left") { roster -> roster.none { it.id == id } }
                     id
                 }.toSet()
+                runCurrent() // let the last departure's event reach the tape
                 val departuresAfter = hostTape.events().filterIsInstance<MembershipEvent.Left>()
                     .dropWhile { it.peerId != gone.oldId }.drop(1).count { it.peerId in later }
                 advanceTimeBy(gone.held.notAfter - testScheduler.currentTime)
