@@ -32,6 +32,9 @@ import kotlin.test.assertEquals
 class TopologyDocumentEditsPropertyTest {
 
     private val seeds = 3000
+
+    /** Seeds after [seeds] that each draw a move to an index, so every edit above keeps its own trajectory. */
+    private val moveAtSeeds = 1500
     private val names = listOf("a", "b", "c", "d")
     private val weightOf = mapOf("1" to Weight.ONE, "2" to Weight.of(2), "3/2" to Weight.of(3, 2), "6/4" to Weight.of(3, 2))
     private val weights = weightOf.keys.toList()
@@ -62,12 +65,12 @@ class TopologyDocumentEditsPropertyTest {
         var validTrees = 0
         var invalidTrees = 0
         var startedWithDuplicate = 0
-        for (seed in 0 until seeds) {
+        for (seed in 0 until seeds + moveAtSeeds) {
             val r = Random(seed)
             val model = M.root("root", randomChildren(r, depth = 0))
             if (r.nextInt(6) == 0 && plantDuplicate(model, r)) startedWithDuplicate++
             val before = model.toDocument()
-            val (label, actual, expected) = drawAndApply(before, model, r)
+            val (label, actual, expected) = if (seed < seeds) drawAndApply(before, model, r) else drawMoveAt(before, model, r)
             val outcome = if (expected is TopologyEdit.Edited) "$label:edited" else expected::class.simpleName ?: "?"
             outcomes[outcome] = (outcomes[outcome] ?: 0) + 1
             if ((label == "template" || label.startsWith("move at")) && expected !is TopologyEdit.Edited) outcomes["$label:$outcome"] = (outcomes["$label:$outcome"] ?: 0) + 1
@@ -156,18 +159,24 @@ class TopologyDocumentEditsPropertyTest {
             }
             else -> {
                 val target = drawPath(model, r)
-                if (r.nextBoolean()) {
-                    Drawn("move", before.move(path, target), model.expectMove(path, target) { end -> end })
-                } else {
-                    // From one before the first child to one past another parent's end, so both ends
-                    // are reached and refused, as is a reorder's end, the child count less one.
-                    val index = r.nextInt(-1, (model.at(target)?.children?.size ?: 0) + 2)
-                    val found = model.at(path) != null
-                    val expected = model.expectMove(path, target) { index }
-                    Drawn(moveAtLabel(before, found, target + index, expected), before.move(path, target, index), expected)
-                }
+                Drawn("move", before.move(path, target), model.expectMove(path, target) { end -> end })
             }
         }
+    }
+
+    /**
+     * Draws one move to an index, half the time into the parent the child already has so that
+     * reorders are reached, and applies it both ways.
+     */
+    private fun drawMoveAt(before: TopologyDocument, model: M, r: Random): Drawn {
+        val path = drawPath(model, r)
+        val target = if (path.isNotEmpty() && r.nextBoolean()) path.dropLast(1) else drawPath(model, r)
+        // From one before the first child to one past another parent's end, so both ends are
+        // reached and refused, as is the end of a reorder, which is the child count less one.
+        val index = r.nextInt(-1, (model.at(target)?.children?.size ?: 0) + 2)
+        val found = model.at(path) != null
+        val expected = model.expectMove(path, target) { index }
+        return Drawn(moveAtLabel(before, found, target + index, expected), before.move(path, target, index), expected)
     }
 
     /**
