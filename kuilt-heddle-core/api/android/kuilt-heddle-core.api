@@ -1261,6 +1261,8 @@ public final class us/tractat/kuilt/heddle/ServiceUnits$Companion {
 }
 
 public final class us/tractat/kuilt/heddle/ShareLine {
+	public final fun forgiven-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun had-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
 	public final fun lag-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
 	public final fun share-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
 }
