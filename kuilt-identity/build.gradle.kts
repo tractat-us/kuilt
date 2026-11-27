@@ -1,5 +1,7 @@
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
+import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
 import org.jetbrains.kotlin.gradle.targets.js.testing.KotlinJsTest
+import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest
 
 plugins {
     id("kuilt.kmp-library")
@@ -29,7 +31,33 @@ val assembleKarmaWebkitConfig = tasks.register<Sync>("assembleKarmaWebkitConfig"
     into(layout.buildDirectory.dir("karma-webkit.d"))
 }
 
+// The iOS Keychain store's TCK against the REAL Keychain (#3310), where the PR build runs it over
+// FakeKeychain. Two things the default `iosSimulatorArm64Test` cannot give it, both measured on
+// #3225: KGP's default `simctl spawn --standalone` has no Keychain at all (errSecNotAvailable,
+// -25291), and a booted simulator answers a binary without `keychain-access-groups`
+// errSecMissingEntitlement (-34018). So the run is a second test binary, linked with the
+// entitlements the way Xcode embeds them for a simulator build, spawned into a device the caller
+// has already booted. The binary, its test run and the task exist only under
+// -Pidentity.keychain.tests=true, with -Pidentity.keychain.device=<booted UDID>; without the flag
+// `:kuilt-identity:iosSimulatorArm64RealKeychainTest` is "task not found", never a green skip.
+// apple-nightly.yml boots the simulator and runs it.
+val runRealKeychainTests = providers.gradleProperty("identity.keychain.tests").orNull == "true"
+val realKeychainSuite = "us.tractat.kuilt.identity.RealKeychainDeviceKeyStoreConformanceTest"
+
 kotlin {
+    if (runRealKeychainTests) {
+        iosSimulatorArm64 {
+            binaries.test("realKeychain", listOf(NativeBuildType.DEBUG)) {
+                linkerOpts(
+                    "-sectcreate", "__TEXT", "__entitlements",
+                    layout.projectDirectory.file("real-keychain.entitlements").asFile.absolutePath,
+                )
+            }
+            testRuns.create("realKeychain") {
+                setExecutionSourceFrom(binaries.getTest("realKeychain", NativeBuildType.DEBUG))
+            }
+        }
+    }
     if (runWebkitTests) {
         @OptIn(ExperimentalWasmDsl::class)
         wasmJs { browser { testRuns.create("webkit") } }
@@ -181,6 +209,51 @@ if (runWebkitTests) {
             excludeTestsMatching("*CompressedPointProbeTest.compressedImportRoundTripsToTheSamePoint")
             excludeTestsMatching("*CompressedPointProbeTest.importedCompressedKeyVerifies")
             excludeTestsMatching("*CompressedPointProbeTest.knownCompressedPointDecodesOnEveryTarget")
+        }
+    }
+}
+
+// The real-Keychain suite needs a booted device and an entitled binary, so the default run, which
+// has neither, leaves it out. It still COMPILES there, in every PR build.
+tasks.named<KotlinNativeSimulatorTest>("iosSimulatorArm64Test") {
+    filter.excludeTestsMatching(realKeychainSuite)
+}
+
+if (runRealKeychainTests) {
+    val bootedDevice = providers.gradleProperty("identity.keychain.device").orNull?.takeIf { it.isNotBlank() }
+        ?: error("-Pidentity.keychain.tests=true needs -Pidentity.keychain.device=<UDID of a booted iOS simulator>")
+    tasks.named<KotlinNativeSimulatorTest>("iosSimulatorArm64RealKeychainTest") {
+        description = "Runs the iOS Keychain store's TCK against the real Keychain of a booted simulator (#3310)."
+        device.set(bootedDevice)
+        // `simctl spawn <udid>` into the booted device, not KGP's default `--standalone`, which has
+        // no Keychain.
+        standalone.set(false)
+        filter.includeTestsMatching(realKeychainSuite)
+        // The Keychain is state outside the build: the same inputs are no evidence that it still
+        // answers as it did, so the task never counts as up to date.
+        outputs.upToDateWhen { false }
+        // The receipt is the XML, not the green: a filter matching nothing, or a suite whose rows
+        // all came back skipped, exits 0. Count the suite's rows in this run's results, after
+        // clearing the last run's so a stale file cannot answer for this one.
+        val results = reports.junitXml.outputLocation.get().asFile
+        val suite = realKeychainSuite
+        doFirst { results.deleteRecursively() }
+        doLast {
+            val text = results.listFiles { file -> file.extension == "xml" }.orEmpty().joinToString("") { it.readText() }
+            // KGP prefixes the classname with the test run's task name
+            // (`iosSimulatorArm64RealKeychainTest.us.tractat…`), so match the suite as its suffix.
+            val rows = Regex(
+                """<testcase\b[^>]*\bclassname="(?:[^"]*\.)?${Regex.escape(suite)}"[^>]*?(?:/>|>.*?</testcase>)""",
+                RegexOption.DOT_MATCHES_ALL,
+            ).findAll(text).map { it.value }.toList()
+            val skipped = rows.count { "<skipped" in it }
+            if (rows.isEmpty() || skipped > 0) {
+                throw GradleException(
+                    "real-Keychain run: $suite reported ${rows.size} rows, $skipped of them skipped, in $results. " +
+                        "The suite did not run against the Keychain.",
+                )
+            }
+            logger.lifecycle("real-Keychain run: $suite executed ${rows.size} rows against the Keychain")
         }
     }
 }
