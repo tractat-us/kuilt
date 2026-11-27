@@ -3107,17 +3107,17 @@ The tree an admin edits often carries more than heddle reads. An app that
 routes each job to a lane keeps a match rule on every lane ("pushes to `main`
 go here") and, on a group that splits its share as work arrives, the key it
 splits by ("one child per repository"). Those belong to the app, and heddle
-never reads them. Today they cannot ride in the tree, so the app keeps them in a
-structure beside it, addressed by child-index paths, and every `remove` or
-`move` of an edit session silently shifts those paths onto the wrong nodes.
-This section is the design that lets the settings travel inside the node they
-belong to (#3758), as ruled on 2026-11-27.
+never reads them. Before 0.7.8 they could not ride in the tree, so the app
+kept them in a structure beside it, addressed by child-index paths, and every
+`remove` or `move` of an edit session silently shifted those paths onto the
+wrong nodes. This section is the design that lets the settings travel inside
+the node they belong to (#3758), as ruled on 2026-11-27, and built in #3785.
 
-#### As built: nothing carries them
+#### Before 0.7.8: nothing carried them
 
-`TopologyDocument.Group`, `Lane` and `ChildTemplate` hold heddle's fields and
-nothing else. An app keeps its own keys in one of two places, both outside the
-document:
+`TopologyDocument.Group`, `Lane` and `ChildTemplate` held heddle's fields and
+nothing else. An app kept its own keys in one of two places, both outside the
+document. Both still work, and both still have the flaws below:
 
 - **Its own mirror of the tree.** `sampleConsumerProblems` decodes a
   `PoolFile` whose nodes carry `rules`, converts it to a `TopologyDocument`, and
@@ -3130,12 +3130,15 @@ document:
   stale. The app has to re-derive the shift itself, and a nested template level
   has no child-index path at all, so its split key has nowhere to be keyed.
 
-#### Future: `appSettings`, a string map on each node (#3758)
+#### As built: `appSettings`, a string map on each node (#3758)
 
-Each of `TopologyDocument.Group`, `Lane` and `ChildTemplate` gains one
-trailing property, `@IntroducedAt("0.7.8") public val appSettings:
-Map<String, String> = emptyMap()`. heddle stores it and gives it no meaning. In
-JSON:
+Each of `TopologyDocument.Group`, `Lane` and `ChildTemplate` has one trailing
+property, `@IntroducedAt("0.7.8") @EncodeDefault(EncodeDefault.Mode.NEVER) val
+appSettings: Map<String, String> = emptyMap()`. The sealed `Node` interface
+declares it too, so code holding a `Node` reads it without a `when`; `Node`
+gained `maxConcurrent` in the 0.7.5 patch the same way, and a sealed interface
+has no implementer outside the module. heddle stores it and gives it no
+meaning. In JSON:
 
 ```json
 {"type": "group", "name": "ci", "appSettings": {"match": "repo:*"},
@@ -3155,7 +3158,7 @@ it took out, so the settings follow the node with no edit-specific code:
 | `remove` | gone, with the whole subtree's |
 | `addChild` | whatever the added child carries |
 | `setTemplate` | the group's are kept. The template's, nested levels included, are replaced with the template passed in, as every other template field is |
-| new: `setAppSettings(path, settings)` | replaced. Always `History.KEPT`. Refused with `AtRoot` for `[]` and `NoSuchNode` |
+| `setAppSettings(path, settings)` | replaced. Always `History.KEPT`. Refused with `AtRoot` for `[]` and `NoSuchNode` |
 
 A child the app attaches while running (`LocalHeddle.attach`) is not in the
 document, so it has no settings of its own. The app reads the settings of the
@@ -3182,73 +3185,94 @@ documents and returns a `List<AppSettingsChange>`, a new sealed type outside
   (both have it, with `before` and `after` values that differ). A key is in one
   map, the other, or both, so the three arms are the whole set and the type
   never needs a fourth.
-- **Addressed the way `changesTo` is.** `path` and `names` locate the node,
-  and `templateDepth` says whose settings they are: `0` for the node's own, `1`
-  for its template's, `2` for the template's template. Nodes are matched by
-  their names from the root down, as `changesTo` matches them, so a moved or
-  renamed node is not followed. Its settings come back `Removed` at the old
-  address and `Added` at the new one, the same story `changesTo` tells with a
-  `Removed` and an `Added`. A change is addressed in `after` whenever its node
-  is still there, so a key removed from a node that stays is addressed in
-  `after`. Only the settings of a node that is gone, with all beneath it, are
-  addressed in the receiver. A renamed root matches nothing, so every setting
-  comes back `Removed` and then `Added`.
+- **Addressed the way `changesTo` is: the arm names the document.** `path`
+  and `names` locate the node, and `templateDepth` says whose settings they
+  are: `0` for the node's own, `1` for its template's, `2` for the template's
+  template. A `Removed` is always addressed in the receiver, where its value
+  was, whether its node is gone or still there. An `Added` or a `Changed` is
+  always addressed in `after`. That is `TopologyChange`'s rule, where only
+  `Removed` is addressed in the tree before. A host therefore places every
+  marker by the arm alone. Nodes are matched by their names from the root down,
+  as `changesTo` matches them, so a moved or renamed node is not followed. Its
+  settings come back `Removed` at the old address and `Added` at the new one,
+  the same story `changesTo` tells with a `Removed` and an `Added`. A renamed
+  root matches nothing, so every setting comes back `Added` and then `Removed`.
 - **Total, as an edit is.** A document is unchecked, so two siblings may share
   a name. The n-th sibling of a name in `after` matches the n-th of that name
   in the receiver, which is the plain name rule for every tree `Topology.from`
   accepts. It never throws.
 - **In document order, keys sorted.** Walking `after` from the root down, a
-  node's own changes come first, depth by depth, then its children's, then
-  those of the children it no longer has. Within one map the keys come in
-  sorted order, so the list does not depend on which `Map` the app built.
+  node's own changes come first, then its template levels' by depth, then its
+  children's in the order written, then those of the children it no longer
+  has, in the receiver's order. Within one map the keys come in sorted order,
+  so the list does not depend on which `Map` the app built. The order is the
+  walk's, not the addresses': a key removed from a node that stays sits among
+  that node's changes, at its address in the receiver.
 
 **`toDocument()` writes no settings.** `Topology.from(t.toDocument()) == t`
 still holds. But a document that goes to `Topology` and back has lost its
-settings, so an editor starts from the stored document, not from the running
-`Topology`. `toDocument`'s KDoc, which calls it "the form an editor starts
-from", changes in the same PR.
+settings, so an editor whose app uses `appSettings` starts from the stored
+document, not from the running `Topology`, and keeps as `startedFrom` the
+topology `Topology.from(stored)` checks. On `ApplyOutcome.TreeChanged` it
+reloads the stored document the same way. `toDocument`'s KDoc says so in its
+first sentence, and the cookbook's minimal editor and the `kuilt-primitives`
+editor row say it at step 1.
 
-**Wire shape and compatibility.** Under the default `encodeDefaults = false` an
-empty map is left out, so a document with no settings encodes byte for byte as
-it does today, and an old document decodes with empty settings. A document
-that has settings is refused by an older kuilt decoding strictly, and loses its
-settings silently under `ignoreUnknownKeys`. That is the same hazard the
+**Wire shape and compatibility.** An empty map is never encoded, under any
+`encodeDefaults`, because `@EncodeDefault(EncodeDefault.Mode.NEVER)` overrides
+the format's setting. It is stable API in kotlinx-serialization 1.13.0 and
+needs no opt-in. So a document with no settings encodes byte for byte as it did
+in 0.7.7, and an old document decodes with empty settings. Under
+`Json { encodeDefaults = true }` without the annotation, a settings-free
+document would emit `"appSettings":{}`, and a strict 0.7.7 reader would refuse
+it. A document that has settings is refused by an older kuilt decoding
+strictly, and loses its settings silently under `ignoreUnknownKeys`. That is the same hazard the
 `template` migration note on `Group` already describes. `Map<String, String>`
 encodes in every kotlinx-serialization format, so the type keeps
 `TopologyDocument`'s promise to decode "in whatever format the consumer reads".
 
-**ABI, measured.** With the property added to all three classes,
-`updateKotlinAbi` adds 18 lines to each JVM and Android dump and 19 to the klib
-dump, and removes none. The old constructors and `copy` overloads stay. On the
+**ABI, measured.** Against `main`, `updateKotlinAbi` adds 90 lines to each
+JVM and Android dump and 112 to the klib dump, and removes none. That counts
+the three properties, `Node.appSettings`, `setAppSettings`,
+`appSettingsChangesTo` and `AppSettingsChange` with its three arms. The old constructors and `copy` overloads stay. On the
 JVM the retained `copy` passes the receiver's own `appSettings` through
 (`copy$default` with the new parameter's mask bit set), so an old compiled
 caller's `lane.copy(weight = "2")` does not wipe the settings. Adding the
 property is the same move as `Lane.maxConcurrent` in 0.7.5 and
 `ChildTemplate.template` in 0.7.7, so it fits the 0.7.8 patch.
-`setAppSettings` is a new function in the `TopologyDocumentEditsKt` facade,
-and `appSettingsChangesTo` and `AppSettingsChange` are new declarations, so
-they are additive too. The dump numbers above predate them; the code PR
-re-measures. `equals` and `hashCode` now count the settings, which
-is the point.
+`Node.appSettings` is a new abstract member of a sealed interface, whose only
+implementers are `Group` and `Lane`, so it is additive: their getters lose
+`final` in the dump, which links. `setAppSettings` is a new function in the
+`TopologyDocumentEditsKt` facade, and `appSettingsChangesTo` and
+`AppSettingsChange` are new declarations, so they are additive too. `equals`
+and `hashCode` now count the settings, which is the point.
 
-**Invariants the code PR adds:**
+**Invariants, and what enforces each:**
 
 1. Every edit keeps a node's `appSettings` unless it removes the node or is
-   `setAppSettings` or `setTemplate` on that very value. Enforcer: a property
-   in `TopologyDocumentEditsPropertyTest` that tags every node with a unique
-   setting, applies random edit sequences, and checks that each surviving
-   node's tag is its own.
-2. `appSettingsChangesTo` reports exactly the settings that differ: applying
-   its changes to the receiver's settings, node by matched node, gives
-   `after`'s, and two documents with equal settings give an empty list.
-   Enforcer: a property over the same generated edit sequences.
+   `setAppSettings` or `setTemplate` on that very value. Enforcer:
+   `TopologyDocumentAppSettingsPropertyTest`, which tags every node and
+   template level with a unique setting, applies seeded edit sequences, and
+   checks that each edit lost and gained exactly the tags it should.
+2. `appSettingsChangesTo` reports exactly the settings that differ, addressed
+   by arm and in document order, and two documents with equal settings give
+   an empty list. Enforcer: the same property, against an oracle that
+   flattens both documents, diffs them, and orders the differences by node
+   position. The report is compared with it unsorted, so reversing either the
+   kept-then-lost order of children or the own-then-children order of a node
+   goes red (both mutations measured). `TopologyDocumentAppSettingsTest`'s
+   `changesComeInDocumentOrder` pins the whole order as one exact list, and
+   `theArmSaysWhichDocumentAPathIsIn` pins the addressing.
 3. `Topology` never carries an app's settings. Enforcer: the type.
    `Topology.Node` and `Topology.ChildTemplate` have no such field, and
    `checked()` cannot copy one.
+4. A document with no settings has no `appSettings` key under any `Json`.
+   Enforcer: `emptySettingsAreLeftOutEvenWhenDefaultsAreEncoded`, a golden
+   under `encodeDefaults = true`, beside the 0.7.7 golden under the default.
 
-The user-facing half folds into `Writerside/topics/heddle-local.md`, beside
-"decode a `TopologyDocument`", and the `kuilt-primitives` heddle reference gets
-its row in the same code PR.
+The user-facing half is in `Writerside/topics/heddle-local.md`, beside
+"decode a `TopologyDocument`", and in the cookbook's "An app's own settings on
+each node", which the `kuilt-primitives` heddle reference routes to.
 
 #### Settled — don't reopen
 
@@ -3289,6 +3313,12 @@ its row in the same code PR.
 - Settings on the root. A document's root is a `String`, with no node to hold
   them, and app-wide keys belong in the app's own file wrapper (ruled
   2026-11-27, #3758).
+- A `Removed` addressed in `after` when its node stays. With a receiver
+  `[a, b]` and `after` `[b, c]`, it gave `Changed([0], [r, b])` and
+  `Removed([0], [r, a])`, and nothing said which document each `[0]` was in,
+  so a host marking against `after` put a's removal on b. Changing the rule
+  after 0.7.8 would be a behaviour break, so it was decided before it shipped
+  (ruled 2026-11-27, #3785).
 
 ---
 
