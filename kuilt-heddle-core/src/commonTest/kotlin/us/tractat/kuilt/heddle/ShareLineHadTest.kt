@@ -10,10 +10,11 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * What [ShareLine.had], [ShareLine.committed] and [ShareLine.forgiven] rest on (#3757): at one parent, a competing child's
- * position after the step a pick takes there is `p_s = c_s · G + F_s · G`, where `c_s` is its base
- * committed service on its current edge, `baseIssued − returned`, and `F_s · G` is what the
- * scheduler forgave it, its seat jump plus its wake offset.
+ * What [ShareLine.had], [ShareLine.committed] and [ShareLine.forgiven] rest on (#3757, #3794): at
+ * one parent, a competing child's position after the step a pick takes there is
+ * `p_s = c_s · G + F_s · G`, where `c_s` is its base committed service on its current edge,
+ * `baseIssued − returned`, and `F_s · G` is what the scheduler forgave it, its seat jump plus its
+ * wake offset.
  *
  * The histories are this file's own: random trees of depth up to three with fractional weights,
  * leases acquired, extended, completed under, at and over what they reserved, and cancelled, with
