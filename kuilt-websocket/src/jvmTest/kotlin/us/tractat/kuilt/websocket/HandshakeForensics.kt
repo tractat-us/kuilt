@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.TimeSource
 
 /**
@@ -51,8 +52,11 @@ import kotlin.time.TimeSource
  *
  * The green path costs a few strings per test: the listener scan runs only from [failureReport].
  */
-internal class HandshakeForensics(private val path: String) {
-    private val origin = TimeSource.Monotonic.markNow()
+internal class HandshakeForensics(
+    private val path: String,
+    timeSource: TimeSource.WithComparableMarks = TimeSource.Monotonic,
+) {
+    private val origin = timeSource.markNow()
     private val wallOrigin = Instant.now()
     private val events = ConcurrentLinkedQueue<Event>()
 
@@ -62,13 +66,19 @@ internal class HandshakeForensics(private val path: String) {
     @Volatile
     private var boundHost: String? = null
 
-    private class Event(val atMillis: Long, val kind: Kind, val line: String)
+    /**
+     * The order events happened in. "After the dial" is decided by this rather than by [Event.atMillis]:
+     * a request that finished in the same millisecond the dial began, such as a route probe just
+     * before it, would otherwise count as the dial's.
+     */
+    private val sequence = AtomicLong()
+
+    private class Event(val seq: Long, val atMillis: Long, val kind: Kind, val line: String)
 
     private enum class Kind { SERVER_REQUEST, OTHER }
 
-    private fun record(kind: Kind, line: String) {
-        events += Event(origin.elapsedNow().inWholeMilliseconds, kind, line)
-    }
+    private fun record(kind: Kind, line: String): Event =
+        Event(sequence.getAndIncrement(), origin.elapsedNow().inWholeMilliseconds, kind, line).also { events += it }
 
     /**
      * Install the request recorder on [application]. Call it inside the `embeddedServer` module
@@ -86,7 +96,9 @@ internal class HandshakeForensics(private val path: String) {
     }
 
     /** Call in the module lambda once the route is mounted. */
-    fun routeInstalled() = record(Kind.OTHER, "server.route-installed path=$path")
+    fun routeInstalled() {
+        record(Kind.OTHER, "server.route-installed path=$path")
+    }
 
     /** Call once `start(wait = false)` has returned, with the connector the engine actually bound. */
     fun serverStarted(connector: EngineConnectorConfig) {
@@ -108,8 +120,7 @@ internal class HandshakeForensics(private val path: String) {
      * means the dial threw a cancellation of its own, such as a bound inside it expiring.
      */
     suspend fun <T> dial(target: String, block: suspend () -> T): T {
-        val dialAt = origin.elapsedNow().inWholeMilliseconds
-        record(Kind.OTHER, "client.dial target=$target")
+        val dialAt = record(Kind.OTHER, "client.dial target=$target")
         try {
             return block()
         } catch (cancelled: CancellationException) {
@@ -131,10 +142,11 @@ internal class HandshakeForensics(private val path: String) {
         CANCELLED_BY_DIAL("by the dial itself, its caller still live"),
     }
 
-    /** The whole record, a verdict on whether this server saw the dial, and the port's listeners. */
-    fun failureReport(dialAtMillis: Long, outcome: Outcome = Outcome.FAILED): String {
-        val log = events.sortedBy { it.atMillis }
-        val seen = log.filter { it.kind == Kind.SERVER_REQUEST && it.atMillis >= dialAtMillis }
+    /** The whole record, a verdict on whether this server saw [dial], and the port's listeners. */
+    private fun failureReport(dial: Event, outcome: Outcome = Outcome.FAILED): String {
+        val dialAtMillis = dial.atMillis
+        val log = events.sortedBy { it.seq }
+        val seen = log.filter { it.kind == Kind.SERVER_REQUEST && it.seq > dial.seq }
         val verdict =
             when {
                 outcome != Outcome.FAILED -> cancelledVerdict(outcome, dialAtMillis, seen.size)

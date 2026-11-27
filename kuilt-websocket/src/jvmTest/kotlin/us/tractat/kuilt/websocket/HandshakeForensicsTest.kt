@@ -29,6 +29,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TestTimeSource
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 
 private typealias NettyServer = EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>
@@ -57,7 +58,7 @@ class HandshakeForensicsTest {
      * A rig server on port 0. The default is the wildcard, which the rigs bound before #3774 and the
      * steal arm needs. [host] = [LOOPBACK_HOST] is how the rigs bind now.
      */
-    private fun startRigServer(host: String = "0.0.0.0"): Int {
+    private fun startRigServer(host: String = "0.0.0.0", forensics: HandshakeForensics = this.forensics): Int {
         val server = embeddedServer(Netty, port = 0, host = host) {
             forensics.install(this)
             KtorServerLoom(this, path)
@@ -78,7 +79,7 @@ class HandshakeForensicsTest {
         return runBlocking { server.engine.resolvedConnectors().first().port }
     }
 
-    private suspend fun dialFailure(url: String): Throwable {
+    private suspend fun dialFailure(url: String, forensics: HandshakeForensics = this.forensics): Throwable {
         val loom = ForensicLoom(KtorClientLoom(httpClient), forensics) { url }
         val advertisement = WebSocketAdvertisement(url = url, serverPeerId = PeerId("forensics-server"), sessionName = "forensics")
         // Through `async`, as the suite's `connectedPair` dials: the await is a resumption, so the
@@ -141,6 +142,24 @@ class HandshakeForensicsTest {
             { assertContains(report, "server.request GET /ws/not-the-route?peer=") },
             { assertContains(report, "server.response /ws/not-the-route?peer=") },
             { assertContains(report, "404") },
+        )
+    }
+
+    /**
+     * A request that finished before the dial is not the dial's, even in the same millisecond. The
+     * clock here never moves, so every event lands at +0ms, and only the order they were recorded in
+     * can tell the route probe from the dial's own request. `WebSocketPingHalfOpenTest` probes the
+     * route just before it dials, which is how this was found.
+     */
+    @Test
+    fun aRequestBeforeTheDialIsNotCountedAsTheDials(): Unit = runBlocking {
+        val frozen = HandshakeForensics(path, TestTimeSource())
+        val rigPort = startRigServer(host = LOOPBACK_HOST, forensics = frozen)
+        awaitPathResolves(host = LOOPBACK_HOST, port = rigPort, path = path)
+        val report = dialFailure("ws://$LOOPBACK_HOST:$rigPort/ws/not-the-route", frozen).report()
+        assertAll(
+            { assertContains(report, "server.request GET $path from=") },
+            { assertContains(report, "THIS server received 1 request(s) after the dial") },
         )
     }
 
