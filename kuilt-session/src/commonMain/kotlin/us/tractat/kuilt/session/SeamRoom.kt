@@ -2742,10 +2742,15 @@ internal class SeamRoom(
      */
     private fun admitReturning(joinerPeerId: PeerId, keyed: KeyedHello, pass: ReturnPass, admittedAtMs: Long): SeatOutcome.Admitted {
         val previousId = departedMembers.take(keyed.key, admittedAtMs)
-        logger.info { "room.admit.returning peer=${joinerPeerId.value} previous=${previousId?.value} recorded=${pass.presented == null}" }
+        logger.info { "room.admit.returning peer=${joinerPeerId.value} previous=${previousId?.value} recorded=${pass.grant != pass.presented}" }
         return admitNewMember(joinerPeerId, keyed, GrantIssuer.termsOf(pass.grant), admittedAtMs, ReturningMark(previousId))
-            // The device holds the good pass it presented, if any (#3711): not one only the host kept.
-            .also { it.burst.membership.lastSentNotAfter = pass.presented?.notAfter }
+            .also {
+                // The device holds the good pass it presented, if any (#3711): not one only the host kept.
+                it.burst.membership.lastSentNotAfter = pass.presented?.notAfter
+                // And the host signed it [pass], so a departure before its Welcome's pass is signed
+                // still leaves that one in the record, as a takeover's does (#3745).
+                it.burst.membership.lastPass = pass.grant
+            }
     }
 
     /**
