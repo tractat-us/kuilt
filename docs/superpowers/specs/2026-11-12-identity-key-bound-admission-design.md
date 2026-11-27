@@ -306,6 +306,19 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
       v10 step, which after v0.7.7 refuses every v0.7.7 peer. That is the other reason it is
       rejected.
 
+35. **(Iain, 2026-11-27: every recommendation accepted) (#3749, #3751, PR #3767): a device proves its
+    key on one request, and a hub link proves it at the upgrade.** The design is § Proving a key
+    outside a room, and its six rulings are that section's § Rulings:
+    - a `kuilt/device-proof` statement, checked by `DeviceProofGate` in `:kuilt-identity`, with
+      nonces that need no state to issue and a bounded set to spend;
+    - a hub newcomer decided by a **required predicate** over the proven key, answering admit or
+      refuse and promising no pass, never by the `AdmissionPolicy`;
+    - keyed hub peer ids, `<did:key>/<label>`, with `LinkAdmission.keyed()`;
+    - a suspending `principalExtractor`, an accepted ABI break;
+    - one server process, with sticky routing behind a load balancer;
+    - a required `roomId` on the gate;
+    - landing after v0.7.7. Nothing changes on a room's wire, and `ProtocolVersion` stays 9.
+
 ## Goals
 
 - A device that drops and comes back — link heal or process restart — is restored to its held seat,
@@ -351,7 +364,7 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
 - **The key binds the handshake, not later frames.** On a `Mesh`, a link that later takes a
   member's peer id (#2387) sends frames under that member's `Member.key`. Deployments on
   `HostedOverlay` should use a binding `LinkAdmission` until #2387 lands. § Proving a key outside
-  a room proposes one, `LinkAdmission.keyed()`.
+  a room supplies one, `LinkAdmission.keyed()` (Decided 35).
 
 ---
 
@@ -620,8 +633,8 @@ Slices 1 and 2 get a spec-conformance review against this document as well as a 
 
 ## Proving a key outside a room (#3749, #3751)
 
-Status: **Proposed, awaiting Iain**, 2026-11-27. When ruled, the choices below become Decided 35
-and the rejected options move into it.
+Status: **Decided 35 (Iain, 2026-11-27)**, every recommendation accepted (PR #3767). § Rulings
+records each choice with the option it beat, and § Rejected the designs set aside along the way.
 
 A board server wants to know which device is knocking before the room's own exchange can start.
 The knock may be a plain HTTP request, or a WebSocket upgrade, which a browser sends with no
@@ -692,7 +705,7 @@ so fetching nonces costs a flood nothing but bandwidth.
   verifier's lock, and one of them wins.
 - **One process.** The secret and the spent set are per verifier, so a nonce from another instance
   is unknown here, which is safe. A deployment behind a load balancer needs sticky routing between
-  the nonce fetch and the dial. A shared store is not built (Open decision 4).
+  the nonce fetch and the dial. A shared store is not built (Ruling 4).
 
 The nonce is served by a plain `GET`, answered as `text/plain` base64url with `Cache-Control:
 no-store`. It needs no credential and carries nothing else: no host key, no audience.
@@ -764,12 +777,13 @@ The hub-link proof is the same proof, run at upgrade time. Its verdict becomes t
   dump records the change. `KtorDeviceProof.principal(gate, newcomer)` is an extractor that answers
   `Principal(key.value)` for a `Proven` key whose pass is `Valid`, or for a newcomer the app admits,
   and `null` for everything else.
-- **A newcomer is the app's call, by a required predicate** (Open decision 1). A hub link has no
+- **A newcomer is the app's call, by a required predicate** (Ruling 1). A hub link has no
   `Welcome` to carry a pass back. A browser cannot read an upgrade's response headers either. So an
   `AdmissionPolicy`, whose `Admit` promises a pass, cannot answer for a hub link without dropping
-  that promise. Instead the extractor takes `newcomer: suspend (DidKey) -> Boolean`, which bee
-  answers `{ false }`. The revocations are the room's own: the gate reads `HostAdmission.revocations`.
-- **A keyed hub's peer ids are the key's** (Open decision 2). A `KeyedPeerId` is
+  that promise. Instead the extractor takes a required `newcomer`, a suspending predicate over the
+  proven `DidKey` that answers admit or refuse and promises no pass. bee answers refuse every time.
+  The revocations are the room's own: the gate reads `HostAdmission.revocations`.
+- **A keyed hub's peer ids are the key's** (Ruling 2). A `KeyedPeerId` is
   `<did:key>/<label>`, where the label is any string a device chooses, one per tab.
   `LinkAdmission.keyed()` admits a link only when its principal is a key and the `MeshHello`'s
   `remoteId` sits under that key. A dial under another key cannot take a keyed id, so #2387's
@@ -808,7 +822,7 @@ an app passes the `LinkAdmission` to `hostedOverlay`.
 - **Checking the proof in a route plugin before the upgrade.** It refuses with a status a browser
   cannot read, and `KtorConnectionSource` builds its route node privately, so an app would have to
   find it. bee does that today, and it is the fragility this replaces.
-- **Asking `AdmissionPolicy` for a hub newcomer and dropping its terms.** See Open decision 1.
+- **Asking `AdmissionPolicy` for a hub newcomer and dropping its terms.** See Ruling 1.
 
 ### Slices
 
@@ -851,36 +865,40 @@ Slices 1 to 3 are a stack. Slice 4 needs 1. Slice 6 needs 3 and 5. Slice 7 needs
 end-to-end row, and none for its unit rows. Then bee's interim proof retires, first at the gate
 (after 6), then on the board socket (after 7).
 
-### Open decisions for Iain
+### Rulings (Iain, 2026-11-27)
 
-1. **A newcomer on a hub link.** *Recommended:* a required `newcomer: suspend (DidKey) -> Boolean`,
-   with the revocations taken from `HostAdmission`. *Instead:* ask `HostAdmission.policy` and drop
-   the `GrantTerms` its `Admit` carries, which keeps #3751's "ask a `HostAdmission`" literal while
-   breaking `Admit`'s promise of a pass. Either way #3751's "Done" should be amended to read "proves
-   a key at upgrade", since the in-band challenge is rejected above.
-2. **Keyed peer ids on a keyed hub.** *Recommended:* yes, as above, so a proven key also pins the
-   ids it may claim. *Instead:* prove the key and leave the binding to the app's own
-   `LinkAdmission`, as today. #2387's dispossession then stays open on a keyed hub.
-3. **The suspending extractor.** *Recommended:* change the type (slice 5), which breaks the ABI.
-   Pre-1.0 and a lambda literal still compiles, so the cost is one dump. *Instead:* add a second,
-   suspending parameter beside the first. That doubles a constructor and leaves two ways to attest.
-4. **More than one server instance.** *Recommended:* one process, stated, with sticky routing for
-   a deployment that needs more. bee hosts on one machine. *Instead:* a `NonceStore` interface over
-   a shared secret and a shared spent set, built when a consumer needs one.
-5. **The gate's `roomId`.** *Recommended:* required, naming the `Room` scope a pass must carry
-   here. bee passes its board id, and its passes are `AnyRoomOfIssuer` anyway (#3752).
-   *Instead:* accept `AnyRoomOfIssuer` passes only, which is simpler and refuses a `ThisRoom` pass
-   an app may expect to work.
-6. **Timing.** *Recommended:* after v0.7.7. No room frame changes and `ProtocolVersion` stays 9,
-   but slice 5 breaks the ABI, and bee's interim proof covers the gap. *Instead:* slices 1 to 3
-   before the tag, since they are additive.
+Each was the recommendation, and each beat the option named after it.
+
+1. **A newcomer on a hub link is decided by a required predicate** over the proven key. It answers
+   admit or refuse and promises no pass. It is not the `AdmissionPolicy`, and the revocations are
+   taken from `HostAdmission`. *Rejected:* asking `HostAdmission.policy` and dropping the
+   `GrantTerms` its `Admit` carries. That keeps #3751's "ask a `HostAdmission`" literal and breaks
+   `Admit`'s promise of a pass. #3751's Done is amended to read: a hub link proves its key with the
+   one-shot proof checked at upgrade time, and decides a newcomer by the required predicate.
+2. **A keyed hub's peer ids are the key's**, `<did:key>/<label>`, with `LinkAdmission.keyed()`, so
+   a proven key also pins the ids it may claim. *Rejected:* proving the key and leaving the binding
+   to the app's own `LinkAdmission`, as today. #2387's dispossession would then stay open on a
+   keyed hub.
+3. **The extractor's type changes to suspend** (slice 5), and the ABI break is accepted. It is
+   pre-1.0 and a lambda literal still compiles, so the cost is one dump. *Rejected:* a second,
+   suspending parameter beside the first, which doubles a constructor and leaves two ways to attest.
+4. **One server process**, stated, with sticky routing for a deployment behind a load balancer.
+   bee hosts on one machine. *Rejected for now:* a `NonceStore` interface over a shared secret and
+   a shared spent set. It is built when a consumer needs one.
+5. **The gate's `roomId` is required**, naming the `Room` scope a pass must carry here. bee passes
+   its board id, and its passes are `AnyRoomOfIssuer` anyway (#3752). *Rejected:* accepting
+   `AnyRoomOfIssuer` passes only. That is simpler, and it refuses a `ThisRoom` pass an app may expect
+   to work.
+6. **It lands after v0.7.7.** No room frame changes and `ProtocolVersion` stays 9, but slice 5
+   breaks the ABI, and bee's interim proof covers the gap. *Rejected:* slices 1 to 3 before the
+   tag, though they are additive.
 
 ## Deferred
 
 - **#2387** — mesh dedup sits below the session Hello; its fix is a proof in `MeshHello` behind a
   verifier interface `:kuilt-core` defines and `:kuilt-identity` implements. Its own spec. A hub
   that accepts only would not need it: § Proving a key outside a room proves the key at the upgrade
-  and pins keyed peer ids (proposed). A mesh that dials both ways still does.
+  and pins keyed peer ids (Decided 35). A mesh that dials both ways still does.
 - **`RoomAuthorizer` seeing the key** — same layering, same follow-on.
 - A `Pending` frame for slow vetting; personas and delegation.
 - **Channel binding** (Decided 33, #3696). It closes the active-relay row only, on
