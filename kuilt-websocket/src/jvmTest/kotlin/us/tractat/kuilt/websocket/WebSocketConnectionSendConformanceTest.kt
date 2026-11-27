@@ -24,6 +24,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
@@ -66,11 +67,15 @@ abstract class WebSocketConnectionSendConformanceRig(
     private lateinit var server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>
     private lateinit var httpClient: HttpClient
 
+    /** What the next handshake red needs to name its listener (#3754); rendered only on a failed dial. */
+    private val forensics = HandshakeForensics(PATH)
+
     // Started here rather than in `runBlocking`, whose receiver would bind `embeddedServer` to the
     // `CoroutineScope` overload and parent the server to the blocking job.
     @BeforeTest
     fun startServer() {
         server = embeddedServer(Netty, port = 0) {
+            forensics.install(this)
             install(WebSockets)
             routing {
                 webSocket(PATH) {
@@ -78,8 +83,10 @@ abstract class WebSocketConnectionSendConformanceRig(
                     closeReason.await()
                 }
             }
+            forensics.routeInstalled()
         }
         server.start(wait = false)
+        forensics.serverStarted(runBlocking { server.engine.resolvedConnectors().first() })
         httpClient = HttpClient(engine) { install(ClientWebSockets) }
     }
 
@@ -101,7 +108,8 @@ abstract class WebSocketConnectionSendConformanceRig(
 
     private suspend fun openSession(): Pair<DefaultWebSocketServerSession, DefaultClientWebSocketSession> {
         val port = server.engine.resolvedConnectors().first().port
-        val clientEnd = httpClient.webSocketSession("ws://127.0.0.1:$port$PATH")
+        val url = "ws://127.0.0.1:$port$PATH"
+        val clientEnd = forensics.dial(url) { httpClient.webSocketSession(url) }
         return withTimeout(SESSION_BOUND) { serverSessions.receive() } to clientEnd
     }
 
