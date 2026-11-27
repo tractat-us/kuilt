@@ -106,14 +106,33 @@ once it has signed a proof of its key (#3211). Its promise is the design's, quot
 words:
 
 > - **Protected:** a bystander in the room — who knows every peer id, the room id and every key —
->   cannot resume as, return as, or lock out another member. A captured proof cannot be replayed.
+>   cannot resume as or return as another member. A bystander presenting a **connected** member's id
+>   under its own key is refused `KeyConflict`, and that member keeps its seat. A captured proof
+>   cannot be replayed.
+> - **Not protected (Decided 32):** on a fabric with self-chosen peer ids, a bystander presenting a
+>   **partitioned** member's id under its own key releases that seat and is admitted under the id
+>   (Decided 18). When the member's link heals, its return meets a connected seat under another key
+>   and is refused `KeyConflict`. Every member knows who is partitioned, so this needs no guessing.
+>   An app must name a device by `Member.key`, never by its peer id: bystanders see
+>   `Left(id, PartitionExpired)` then `Joined(id)` under a different key. A channel binding would
+>   not close it, since the bystander binds its own link honestly. Only a change to rule 3, or peer
+>   ids a peer cannot choose, would close it (Decided 33, options B and C, not chosen).
 > - **Not protected:** an active relay sitting on the victim's own link over an unauthenticated
 >   fabric. Peer ids are self-chosen on WebSocket and star fabrics, so such a relay can forward a
->   challenge and its answer. Closing that needs channel binding (a TLS exporter from #3157, or
->   `kuilt-nw`'s PSK session); the proof layout reserves a field for it, empty in this slice.
+>   challenge and its answer. A channel binding would close this row, and only this row, on a fabric
+>   whose joiner can read one: WebSocket to a TLS-terminating host from a non-browser client, Nearby,
+>   and WebRTC. On `kuilt-nw` a relay that is a member holds the room key, so the PSK session binds
+>   nothing against it. Multipeer, TCP and a browser's WebSocket have nothing to bind. The proof
+>   layout reserves the field, empty, and the binding is deferred (Decided 33).
 > - **The key binds the handshake, not later frames.** On a `Mesh`, a link that later takes a
 >   member's peer id (#2387) sends frames under that member's `Member.key`. Deployments on
 >   `HostedOverlay` should use a binding `LinkAdmission` until #2387 lands.
+
+The partitioned-id gap is kept on purpose: the host cannot tell a bystander taking the id from a
+device whose key store was cleared and whose peer id survived, and Decided 18 lets that device keep
+working with no prompt. `:kuilt-conformance` pins it as a row,
+`RoomConformanceSuite.aPartitionedIdTakenUnderAnotherKeyRefusesTheMembersReturn`, which goes red
+if anyone closes the gap, so closing it is a design decision rather than a quiet change.
 
 Every store answers to one more line of the design: "A credential many hold never resumes; one a
 single device holds does." A key copied to a second device, by a synced keychain or a restored
