@@ -493,7 +493,23 @@ public class FairShareAllocator(
         val step = scopedTo(parent, ledger.activeChildren(parent).map { it.attachment })
         val cell = ValueCell(ledger)
         if (step.settleJoiners(parent, cell, waiting) == Landing.PastLimit) return Placement.Refused
-        return Placement.Placed(step.policyEdges(cell.current, parent, waiting).associate { it.record.id to HeddlePolicy.effectiveTicksWide(it) })
+        val edges = step.policyEdges(cell.current, parent, waiting)
+        return Placement.Placed(
+            positions = edges.associate { it.record.id to HeddlePolicy.effectiveTicksWide(it) },
+            forgiven = edges.associate { it.record.id to forgivenTicks(it) },
+        )
+    }
+
+    /**
+     * What the scheduler has forgiven [edge], in ticks of its own service: the seat jump its
+     * [Gauge] carries, `ticks − folded · G` (where its seat put it past the service it had), plus
+     * the wake offset this allocator holds for it (its clamps and its returns). An unseated edge has
+     * jumped nothing. Each part is non-negative, so the sum is: a seat writes `max(front, observed · G)`
+     * at the fold `observed`, and a checkpoint advances position and fold together.
+     */
+    private fun forgivenTicks(edge: PolicyEdge): Int128 {
+        val jump = edge.gauge?.let { it.ticks - it.folded.timesWide(TICKS_PER_UNIT) } ?: Int128.ZERO
+        return jump + edge.offsetTicks
     }
 
     /**
@@ -513,8 +529,12 @@ public class FairShareAllocator(
 
     /** What [place] found at a parent: each active child's position after the step, or that no step could be taken. */
     internal sealed interface Placement {
-        /** The step landed: each active child's effective position, by its edge, in ticks on its own grid. */
-        class Placed(val positions: Map<AttachmentId, Int128>) : Placement
+        /**
+         * The step landed: each active child's effective position, by its edge, in ticks on its own
+         * grid, and the part of it the scheduler [forgiven] ([forgivenTicks]). A position is the
+         * edge's base committed service, `(baseIssued − returned) · G`, plus what was forgiven it.
+         */
+        class Placed(val positions: Map<AttachmentId, Int128>, val forgiven: Map<AttachmentId, Int128>) : Placement
 
         /** The weights fail the budget, or the step would pass the [POSITION_LIMIT]. */
         data object Refused : Placement

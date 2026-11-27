@@ -75,3 +75,44 @@ internal fun sampleShareLineLag() {
     // Docs was idle all along. Queued now, it joins at the front: owed nothing, owing nothing.
     check(heddle.shareLine(setOf(web, mobile, docs)).lag(docs) == Rational.ZERO)
 }
+
+/**
+ * Show what each lane has had beside its siblings, and what the scheduler forgave it: a lane
+ * back from idle has had nothing, yet is owed nothing either, because the history it slept through
+ * is forgiven rather than owed.
+ */
+@Suppress("unused")
+internal fun sampleShareLineHad() {
+    val tree = draft("pool") {
+        lane("web")
+        lane("mobile")
+        lane("docs")
+    }
+    val web = tree.groupId("web")
+    val mobile = tree.groupId("mobile")
+    val docs = tree.groupId("docs")
+    val (heddle, booted) = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+    check(booted.refusals.isEmpty())
+    heddle.reconcileCapacity(totalSlots = 4L)
+    val both = setOf(web, mobile)
+
+    // Both wait, but three slots can run only web and one only mobile. The leases stay open: an
+    // open reservation counts as had.
+    repeat(3) { check(heddle.acquire(both, eligible = setOf(web), startedAt = 0L) is AcquireOutcome.Acquired) }
+    check(heddle.acquire(both, eligible = setOf(mobile), startedAt = 0L) is AcquireOutcome.Acquired)
+    val line = heddle.shareLine(both)
+    check(line.had(web) == Rational.of(3L, 4L) && line.had(mobile) == Rational.of(1L, 4L))
+    check(line.forgiven(web) == Rational.ZERO && line.forgiven(mobile) == Rational.ZERO)
+    // Nothing forgiven, so lag is the siblings' total times share less had: 4 × (1/2 − 3/4) = −1.
+    check(line.lag(web) == Rational.of(-1L))
+
+    // Docs queues after sitting out four units. It has had none of them, and the two units it would
+    // stand behind the front are forgiven, so it lands at the front rather than behind it.
+    val all = setOf(web, mobile, docs)
+    val joined = heddle.shareLine(all)
+    check(joined.had(docs) == Rational.ZERO && joined.forgiven(docs) == Rational.of(2L))
+    check(joined.lag(docs) == Rational.ZERO)
+    // The identity behind all three: lag = share_ℓ · (N + F) − c − forgiven, with N = 4 had and F = 2 forgiven.
+    val third = Rational.of(1L, 3L)
+    check(joined.lag(web) == third * Rational.of(4L + 2L) - Rational.of(3L) - Rational.ZERO)
+}

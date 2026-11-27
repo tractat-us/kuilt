@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -347,9 +348,9 @@ class ShareLineTest {
             root,
             parentOf = mapOf(x to root, y to root, z to x, zz to y),
             families = mapOf(
-                root to ShareLine.Family(mapOf(x to Weight.ONE, y to Weight.ONE), ShareLine.WeightSum.Fits(lcm = 1L, total = 4L), ShareLine.Front.Overflows),
-                x to ShareLine.Family(mapOf(z to Weight.ONE), ShareLine.WeightSum.Fits(lcm = 1L, total = 1L), ShareLine.Front.Overflows),
-                y to ShareLine.Family(mapOf(zz to Weight.ONE), ShareLine.WeightSum.Overflows, ShareLine.Front.Overflows),
+                root to ShareLine.Family(mapOf(x to Weight.ONE, y to Weight.ONE), ShareLine.WeightSum.Fits(lcm = 1L, total = 4L), mapOf(x to 0L, y to 0L), Int128.ZERO, ShareLine.Front.Overflows),
+                x to ShareLine.Family(mapOf(z to Weight.ONE), ShareLine.WeightSum.Fits(lcm = 1L, total = 1L), mapOf(z to 0L), Int128.ZERO, ShareLine.Front.Overflows),
+                y to ShareLine.Family(mapOf(zz to Weight.ONE), ShareLine.WeightSum.Overflows, mapOf(zz to 0L), Int128.ZERO, ShareLine.Front.Overflows),
             ),
         )
         assertAll(
