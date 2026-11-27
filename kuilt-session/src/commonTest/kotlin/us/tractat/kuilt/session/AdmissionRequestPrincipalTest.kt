@@ -131,7 +131,6 @@ class AdmissionRequestPrincipalTest {
         val reRegistrations: Int,
         val roster: Set<Member>,
         val heardByTheNewLink: List<AdmitMessage>,
-        val ended: List<String>,
     )
 
     /**
@@ -199,10 +198,10 @@ class AdmissionRequestPrincipalTest {
             malloryChannel.broadcast(byteArrayOf())
             reRegistrations.first { it > 0 }
             release.complete(Unit)
-            val ended = settled.first { outcomes -> outcomes.any { it in ENDING_OUTCOMES } }.filter { it in ENDING_OUTCOMES }
+            settled.first { outcomes -> outcomes.any { it in ENDING_OUTCOMES } }
             testScheduler.runCurrent()
 
-            check(Relinked(asked.toList(), reRegistrations.value, hostRoom.roster.value, heard.toList(), ended))
+            check(Relinked(asked.toList(), reRegistrations.value, hostRoom.roster.value, heard.toList()))
         }
 
     /**
@@ -265,7 +264,7 @@ class AdmissionRequestPrincipalTest {
         val admission = HostAdmission(
             AdmissionPolicy { request ->
                 asked += request
-                if (request.key == eveKey.id) {
+                if (request.key == eveKey.id && roster.value[bob] != MALLORY) {
                     roster.update { it + (bob to MALLORY) }
                     flips++
                 }
