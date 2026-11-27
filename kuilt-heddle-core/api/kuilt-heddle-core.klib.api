@@ -159,6 +159,95 @@ sealed interface us.tractat.kuilt.heddle/AllocationOutcome { // us.tractat.kuilt
     }
 }
 
+sealed interface us.tractat.kuilt.heddle/AppSettingsChange { // us.tractat.kuilt.heddle/AppSettingsChange|null[0]
+    abstract val key // us.tractat.kuilt.heddle/AppSettingsChange.key|{}key[0]
+        abstract fun <get-key>(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.key.<get-key>|<get-key>(){}[0]
+    abstract val names // us.tractat.kuilt.heddle/AppSettingsChange.names|{}names[0]
+        abstract fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/AppSettingsChange.names.<get-names>|<get-names>(){}[0]
+    abstract val path // us.tractat.kuilt.heddle/AppSettingsChange.path|{}path[0]
+        abstract fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/AppSettingsChange.path.<get-path>|<get-path>(){}[0]
+    abstract val templateDepth // us.tractat.kuilt.heddle/AppSettingsChange.templateDepth|{}templateDepth[0]
+        abstract fun <get-templateDepth>(): kotlin/Int // us.tractat.kuilt.heddle/AppSettingsChange.templateDepth.<get-templateDepth>|<get-templateDepth>(){}[0]
+
+    final class Added : us.tractat.kuilt.heddle/AppSettingsChange { // us.tractat.kuilt.heddle/AppSettingsChange.Added|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>, kotlin/Int, kotlin/String, kotlin/String) // us.tractat.kuilt.heddle/AppSettingsChange.Added.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;kotlin.Int;kotlin.String;kotlin.String){}[0]
+
+        final val key // us.tractat.kuilt.heddle/AppSettingsChange.Added.key|{}key[0]
+            final fun <get-key>(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Added.key.<get-key>|<get-key>(){}[0]
+        final val names // us.tractat.kuilt.heddle/AppSettingsChange.Added.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/AppSettingsChange.Added.names.<get-names>|<get-names>(){}[0]
+        final val path // us.tractat.kuilt.heddle/AppSettingsChange.Added.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/AppSettingsChange.Added.path.<get-path>|<get-path>(){}[0]
+        final val templateDepth // us.tractat.kuilt.heddle/AppSettingsChange.Added.templateDepth|{}templateDepth[0]
+            final fun <get-templateDepth>(): kotlin/Int // us.tractat.kuilt.heddle/AppSettingsChange.Added.templateDepth.<get-templateDepth>|<get-templateDepth>(){}[0]
+        final val value // us.tractat.kuilt.heddle/AppSettingsChange.Added.value|{}value[0]
+            final fun <get-value>(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Added.value.<get-value>|<get-value>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/AppSettingsChange.Added.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/AppSettingsChange.Added.component2|component2(){}[0]
+        final fun component3(): kotlin/Int // us.tractat.kuilt.heddle/AppSettingsChange.Added.component3|component3(){}[0]
+        final fun component4(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Added.component4|component4(){}[0]
+        final fun component5(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Added.component5|component5(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/String> = ..., kotlin/Int = ..., kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.heddle/AppSettingsChange.Added // us.tractat.kuilt.heddle/AppSettingsChange.Added.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;kotlin.Int;kotlin.String;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AppSettingsChange.Added.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AppSettingsChange.Added.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Added.toString|toString(){}[0]
+    }
+
+    final class Changed : us.tractat.kuilt.heddle/AppSettingsChange { // us.tractat.kuilt.heddle/AppSettingsChange.Changed|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>, kotlin/Int, kotlin/String, kotlin/String, kotlin/String) // us.tractat.kuilt.heddle/AppSettingsChange.Changed.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;kotlin.Int;kotlin.String;kotlin.String;kotlin.String){}[0]
+
+        final val after // us.tractat.kuilt.heddle/AppSettingsChange.Changed.after|{}after[0]
+            final fun <get-after>(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Changed.after.<get-after>|<get-after>(){}[0]
+        final val before // us.tractat.kuilt.heddle/AppSettingsChange.Changed.before|{}before[0]
+            final fun <get-before>(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Changed.before.<get-before>|<get-before>(){}[0]
+        final val key // us.tractat.kuilt.heddle/AppSettingsChange.Changed.key|{}key[0]
+            final fun <get-key>(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Changed.key.<get-key>|<get-key>(){}[0]
+        final val names // us.tractat.kuilt.heddle/AppSettingsChange.Changed.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/AppSettingsChange.Changed.names.<get-names>|<get-names>(){}[0]
+        final val path // us.tractat.kuilt.heddle/AppSettingsChange.Changed.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/AppSettingsChange.Changed.path.<get-path>|<get-path>(){}[0]
+        final val templateDepth // us.tractat.kuilt.heddle/AppSettingsChange.Changed.templateDepth|{}templateDepth[0]
+            final fun <get-templateDepth>(): kotlin/Int // us.tractat.kuilt.heddle/AppSettingsChange.Changed.templateDepth.<get-templateDepth>|<get-templateDepth>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/AppSettingsChange.Changed.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/AppSettingsChange.Changed.component2|component2(){}[0]
+        final fun component3(): kotlin/Int // us.tractat.kuilt.heddle/AppSettingsChange.Changed.component3|component3(){}[0]
+        final fun component4(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Changed.component4|component4(){}[0]
+        final fun component5(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Changed.component5|component5(){}[0]
+        final fun component6(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Changed.component6|component6(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/String> = ..., kotlin/Int = ..., kotlin/String = ..., kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.heddle/AppSettingsChange.Changed // us.tractat.kuilt.heddle/AppSettingsChange.Changed.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;kotlin.Int;kotlin.String;kotlin.String;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AppSettingsChange.Changed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AppSettingsChange.Changed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Changed.toString|toString(){}[0]
+    }
+
+    final class Removed : us.tractat.kuilt.heddle/AppSettingsChange { // us.tractat.kuilt.heddle/AppSettingsChange.Removed|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/String>, kotlin/Int, kotlin/String, kotlin/String) // us.tractat.kuilt.heddle/AppSettingsChange.Removed.<init>|<init>(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;kotlin.Int;kotlin.String;kotlin.String){}[0]
+
+        final val key // us.tractat.kuilt.heddle/AppSettingsChange.Removed.key|{}key[0]
+            final fun <get-key>(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Removed.key.<get-key>|<get-key>(){}[0]
+        final val names // us.tractat.kuilt.heddle/AppSettingsChange.Removed.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/AppSettingsChange.Removed.names.<get-names>|<get-names>(){}[0]
+        final val path // us.tractat.kuilt.heddle/AppSettingsChange.Removed.path|{}path[0]
+            final fun <get-path>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/AppSettingsChange.Removed.path.<get-path>|<get-path>(){}[0]
+        final val templateDepth // us.tractat.kuilt.heddle/AppSettingsChange.Removed.templateDepth|{}templateDepth[0]
+            final fun <get-templateDepth>(): kotlin/Int // us.tractat.kuilt.heddle/AppSettingsChange.Removed.templateDepth.<get-templateDepth>|<get-templateDepth>(){}[0]
+        final val value // us.tractat.kuilt.heddle/AppSettingsChange.Removed.value|{}value[0]
+            final fun <get-value>(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Removed.value.<get-value>|<get-value>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/AppSettingsChange.Removed.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/AppSettingsChange.Removed.component2|component2(){}[0]
+        final fun component3(): kotlin/Int // us.tractat.kuilt.heddle/AppSettingsChange.Removed.component3|component3(){}[0]
+        final fun component4(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Removed.component4|component4(){}[0]
+        final fun component5(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Removed.component5|component5(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Int> = ..., kotlin.collections/List<kotlin/String> = ..., kotlin/Int = ..., kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.heddle/AppSettingsChange.Removed // us.tractat.kuilt.heddle/AppSettingsChange.Removed.copy|copy(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.String>;kotlin.Int;kotlin.String;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AppSettingsChange.Removed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AppSettingsChange.Removed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AppSettingsChange.Removed.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.heddle/ApplyOutcome { // us.tractat.kuilt.heddle/ApplyOutcome|null[0]
     final class Applied : us.tractat.kuilt.heddle/ApplyOutcome { // us.tractat.kuilt.heddle/ApplyOutcome.Applied|null[0]
         constructor <init>(us.tractat.kuilt.heddle/ApplyResult) // us.tractat.kuilt.heddle/ApplyOutcome.Applied.<init>|<init>(us.tractat.kuilt.heddle.ApplyResult){}[0]
@@ -2084,7 +2173,10 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
     final class ChildTemplate { // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate|null[0]
         constructor <init>(kotlin/String = ..., kotlin/Long? = ...) // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.<init>|<init>(kotlin.String;kotlin.Long?){}[0]
         constructor <init>(kotlin/String = ..., kotlin/Long? = ..., us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? = ...) // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.<init>|<init>(kotlin.String;kotlin.Long?;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?){}[0]
+        constructor <init>(kotlin/String = ..., kotlin/Long? = ..., us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...) // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.<init>|<init>(kotlin.String;kotlin.Long?;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
 
+        final val appSettings // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.appSettings|{}appSettings[0]
+            final fun <get-appSettings>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.appSettings.<get-appSettings>|<get-appSettings>(){}[0]
         final val maxConcurrent // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.maxConcurrent|{}maxConcurrent[0]
             final fun <get-maxConcurrent>(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.maxConcurrent.<get-maxConcurrent>|<get-maxConcurrent>(){}[0]
         final val template // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.template|{}template[0]
@@ -2095,8 +2187,10 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
         final fun component1(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.component1|component1(){}[0]
         final fun component2(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.component2|component2(){}[0]
         final fun component3(): us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.component3|component3(){}[0]
+        final fun component4(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.component4|component4(){}[0]
         final fun copy(kotlin/String = ..., kotlin/Long? = ...): us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.copy|copy(kotlin.String;kotlin.Long?){}[0]
         final fun copy(kotlin/String = ..., kotlin/Long? = ..., us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? = ...): us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.copy|copy(kotlin.String;kotlin.Long?;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?){}[0]
+        final fun copy(kotlin/String = ..., kotlin/Long? = ..., us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...): us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.copy|copy(kotlin.String;kotlin.Long?;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.toString|toString(){}[0]
@@ -2111,13 +2205,18 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
         }
 
         final object Companion { // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.Companion|null[0]
+            final val $childSerializers // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.Companion.$childSerializers|{}$childSerializers[0]
+
             final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate> // us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate.Companion.serializer|serializer(){}[0]
         }
     }
 
     final class Group : us.tractat.kuilt.heddle/TopologyDocument.Node { // us.tractat.kuilt.heddle/TopologyDocument.Group|null[0]
         constructor <init>(kotlin/String, kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? = ..., kotlin/Long? = ...) // us.tractat.kuilt.heddle/TopologyDocument.Group.<init>|<init>(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?;kotlin.Long?){}[0]
+        constructor <init>(kotlin/String, kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? = ..., kotlin/Long? = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...) // us.tractat.kuilt.heddle/TopologyDocument.Group.<init>|<init>(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?;kotlin.Long?;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
 
+        final val appSettings // us.tractat.kuilt.heddle/TopologyDocument.Group.appSettings|{}appSettings[0]
+            final fun <get-appSettings>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.heddle/TopologyDocument.Group.appSettings.<get-appSettings>|<get-appSettings>(){}[0]
         final val children // us.tractat.kuilt.heddle/TopologyDocument.Group.children|{}children[0]
             final fun <get-children>(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> // us.tractat.kuilt.heddle/TopologyDocument.Group.children.<get-children>|<get-children>(){}[0]
         final val maxConcurrent // us.tractat.kuilt.heddle/TopologyDocument.Group.maxConcurrent|{}maxConcurrent[0]
@@ -2134,7 +2233,9 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
         final fun component3(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> // us.tractat.kuilt.heddle/TopologyDocument.Group.component3|component3(){}[0]
         final fun component4(): us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? // us.tractat.kuilt.heddle/TopologyDocument.Group.component4|component4(){}[0]
         final fun component5(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.Group.component5|component5(){}[0]
+        final fun component6(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.heddle/TopologyDocument.Group.component6|component6(){}[0]
         final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? = ..., kotlin/Long? = ...): us.tractat.kuilt.heddle/TopologyDocument.Group // us.tractat.kuilt.heddle/TopologyDocument.Group.copy|copy(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?;kotlin.Long?){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? = ..., kotlin/Long? = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...): us.tractat.kuilt.heddle/TopologyDocument.Group // us.tractat.kuilt.heddle/TopologyDocument.Group.copy|copy(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?;kotlin.Long?;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyDocument.Group.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyDocument.Group.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Group.toString|toString(){}[0]
@@ -2158,7 +2259,10 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
     final class Lane : us.tractat.kuilt.heddle/TopologyDocument.Node { // us.tractat.kuilt.heddle/TopologyDocument.Lane|null[0]
         constructor <init>(kotlin/String, kotlin/String = ...) // us.tractat.kuilt.heddle/TopologyDocument.Lane.<init>|<init>(kotlin.String;kotlin.String){}[0]
         constructor <init>(kotlin/String, kotlin/String = ..., kotlin/Long? = ...) // us.tractat.kuilt.heddle/TopologyDocument.Lane.<init>|<init>(kotlin.String;kotlin.String;kotlin.Long?){}[0]
+        constructor <init>(kotlin/String, kotlin/String = ..., kotlin/Long? = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...) // us.tractat.kuilt.heddle/TopologyDocument.Lane.<init>|<init>(kotlin.String;kotlin.String;kotlin.Long?;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
 
+        final val appSettings // us.tractat.kuilt.heddle/TopologyDocument.Lane.appSettings|{}appSettings[0]
+            final fun <get-appSettings>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.heddle/TopologyDocument.Lane.appSettings.<get-appSettings>|<get-appSettings>(){}[0]
         final val maxConcurrent // us.tractat.kuilt.heddle/TopologyDocument.Lane.maxConcurrent|{}maxConcurrent[0]
             final fun <get-maxConcurrent>(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.Lane.maxConcurrent.<get-maxConcurrent>|<get-maxConcurrent>(){}[0]
         final val name // us.tractat.kuilt.heddle/TopologyDocument.Lane.name|{}name[0]
@@ -2169,8 +2273,10 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
         final fun component1(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Lane.component1|component1(){}[0]
         final fun component2(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Lane.component2|component2(){}[0]
         final fun component3(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.Lane.component3|component3(){}[0]
+        final fun component4(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.heddle/TopologyDocument.Lane.component4|component4(){}[0]
         final fun copy(kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.heddle/TopologyDocument.Lane // us.tractat.kuilt.heddle/TopologyDocument.Lane.copy|copy(kotlin.String;kotlin.String){}[0]
         final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/Long? = ...): us.tractat.kuilt.heddle/TopologyDocument.Lane // us.tractat.kuilt.heddle/TopologyDocument.Lane.copy|copy(kotlin.String;kotlin.String;kotlin.Long?){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/Long? = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...): us.tractat.kuilt.heddle/TopologyDocument.Lane // us.tractat.kuilt.heddle/TopologyDocument.Lane.copy|copy(kotlin.String;kotlin.String;kotlin.Long?;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyDocument.Lane.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyDocument.Lane.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Lane.toString|toString(){}[0]
@@ -2185,6 +2291,8 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
         }
 
         final object Companion { // us.tractat.kuilt.heddle/TopologyDocument.Lane.Companion|null[0]
+            final val $childSerializers // us.tractat.kuilt.heddle/TopologyDocument.Lane.Companion.$childSerializers|{}$childSerializers[0]
+
             final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/TopologyDocument.Lane> // us.tractat.kuilt.heddle/TopologyDocument.Lane.Companion.serializer|serializer(){}[0]
         }
     }
@@ -2472,10 +2580,12 @@ final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/groupId(kot
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/lower(kotlin/Long = ...): kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentRecord> // us.tractat.kuilt.heddle/lower|lower@us.tractat.kuilt.heddle.Topology(kotlin.Long){}[0]
 final fun (us.tractat.kuilt.heddle/Topology.Companion).us.tractat.kuilt.heddle/diff(us.tractat.kuilt.heddle/Topology, us.tractat.kuilt.heddle/EntitlementLedger, kotlin/Long): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyStep> // us.tractat.kuilt.heddle/diff|diff@us.tractat.kuilt.heddle.Topology.Companion(us.tractat.kuilt.heddle.Topology;us.tractat.kuilt.heddle.EntitlementLedger;kotlin.Long){}[0]
 final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/addChild(kotlin.collections/List<kotlin/Int>, us.tractat.kuilt.heddle/TopologyDocument.Node): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/addChild|addChild@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;us.tractat.kuilt.heddle.TopologyDocument.Node){}[0]
+final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/appSettingsChangesTo(us.tractat.kuilt.heddle/TopologyDocument): kotlin.collections/List<us.tractat.kuilt.heddle/AppSettingsChange> // us.tractat.kuilt.heddle/appSettingsChangesTo|appSettingsChangesTo@us.tractat.kuilt.heddle.TopologyDocument(us.tractat.kuilt.heddle.TopologyDocument){}[0]
 final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/move(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/Int>): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/move|move@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.Int>){}[0]
 final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/move(kotlin.collections/List<kotlin/Int>, kotlin.collections/List<kotlin/Int>, kotlin/Int): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/move|move@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;kotlin.collections.List<kotlin.Int>;kotlin.Int){}[0]
 final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/remove(kotlin.collections/List<kotlin/Int>): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/remove|remove@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>){}[0]
 final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/rename(kotlin.collections/List<kotlin/Int>, kotlin/String): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/rename|rename@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;kotlin.String){}[0]
+final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/setAppSettings(kotlin.collections/List<kotlin/Int>, kotlin.collections/Map<kotlin/String, kotlin/String>): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/setAppSettings|setAppSettings@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
 final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/setMaxConcurrent(kotlin.collections/List<kotlin/Int>, kotlin/Long?): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/setMaxConcurrent|setMaxConcurrent@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;kotlin.Long?){}[0]
 final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/setTemplate(kotlin.collections/List<kotlin/Int>, us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate?): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/setTemplate|setTemplate@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?){}[0]
 final fun (us.tractat.kuilt.heddle/TopologyDocument).us.tractat.kuilt.heddle/setWeight(kotlin.collections/List<kotlin/Int>, kotlin/String): us.tractat.kuilt.heddle/TopologyEdit // us.tractat.kuilt.heddle/setWeight|setWeight@us.tractat.kuilt.heddle.TopologyDocument(kotlin.collections.List<kotlin.Int>;kotlin.String){}[0]
