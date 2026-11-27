@@ -290,6 +290,93 @@ class AdmissionRequestPrincipalTest {
         )
     }
 
+    /**
+     * The link changes before the policy is ever asked (#3773's third review). Ada says Hello on her
+     * link, and her proof is on its way when a second connection, authenticated as Mallory, takes her
+     * peer id over: on a hub, Mallory's frame can be handled after Ada's proof arrived and before the
+     * room acts on it, while it checks the proof, checks a pass, or asks the reconnect window.
+     * Baselined on a read made then, the first request would hold Ada's proven key and Mallory's
+     * principal, a policy that gates on the account would admit it, and Mallory's link would be
+     * seated under Ada's key.
+     *
+     * The exchange is about the link that said Hello, so it ends: the policy is never asked, nobody
+     * is seated, and nothing is sent to the link that holds the id now. The rig reads the roster at
+     * the exchange's first pass, so a run in which the flip landed too late to matter reds there.
+     */
+    @Test
+    fun aLinkTakenOverBeforeThePolicyIsAskedIsNeverAskedAbout() = runTest {
+        val joiner = PeerId("joiner-0")
+        val adaKey = fakeDeviceKey(1)
+        val roster = MutableStateFlow(mapOf(joiner to ADA))
+        val asked = mutableListOf<AdmissionRequest>()
+        val admission = HostAdmission(
+            AdmissionPolicy { request ->
+                asked += request
+                AdmissionDecision.Admit(GrantTerms(1.hours))
+            },
+            RevocationList.inMemory(),
+        )
+        val host = rawHost(joiners = setOf(joiner), admission = admission, adopted = { RosteredSeam(it, roster) })
+        val atFirstPass = mutableListOf<Principal?>()
+        assertNotNull(host.room as? SeamRoom, "rig: the host is a SeamRoom").seatSettledForTest = {
+            if (atFirstPass.isEmpty()) atFirstPass += roster.value[joiner]
+        }
+
+        host.say(joiner, host.hello("Ada", adaKey.id, nonce = 1))
+        val challenge = host.challengesTo(joiner).single()
+        val heardBefore = host.sentTo(joiner).size
+        host.seam.deliver(joiner, AdmitMessage.encode(host.proof(challenge, adaKey, joiner)))
+        roster.update { it + (joiner to MALLORY) }
+        testScheduler.runCurrent()
+        val heardAfter = host.sentTo(joiner).drop(heardBefore)
+
+        assertAll(
+            { assertEquals(listOf<Principal?>(MALLORY), atFirstPass, "rig: the id's link was Mallory's by the exchange's first pass") },
+            { assertEquals(emptyList(), asked.map { it.principal }, "the policy is never asked about the exchange") },
+            { assertNull(host.member(joiner), "nobody is seated under it") },
+            { assertEquals(emptyList(), heardAfter.filter { it is AdmitMessage.Welcome || it is AdmitMessage.Reject }, "the link that took the id over is sent nothing") },
+        )
+    }
+
+    /**
+     * A failure arm refuses only the link that said Hello. Bob comes back to his partitioned seat, and
+     * while the host asks the reconnect window, Bob's id is attested anew as Mallory; then the hold
+     * policy throws. Its refusal would carry Bob's nonce to Mallory's link, so nothing is sent, and
+     * Bob's seat stays held. A throwing hold policy with no relink refuses retryably
+     * (`ProvenRestoreTest.aThrowingHoldPolicyRefusesRetryablyAndKeepsTheSeat`), the control.
+     */
+    @Test
+    fun aWindowFailureAfterTheLinkWasTakenOverSendsNoRefusal() = runTest {
+        val bob = PeerId("bob")
+        val carol = PeerId("carol")
+        val bobKey = fakeDeviceKey(1)
+        val roster = MutableStateFlow(mapOf(bob to ADA))
+        val hold = ObservedHold(verdict = { error("the hold policy broke") })
+        val host = rawHost(joiners = setOf(bob, carol), hold = hold, adopted = { RosteredSeam(it, roster) })
+        host.admit(bob, bobKey, nonce = 1)
+        host.admit(carol, fakeDeviceKey(2), nonce = 2)
+        host.partition(bob, alive = setOf(carol))
+        var flips = 0
+        hold.beforeAnswer = {
+            roster.update { it + (bob to MALLORY) }
+            flips++
+        }
+
+        val heardBefore = host.sentTo(bob).size
+        val mark = host.events.mark()
+        host.admit(bob, bobKey, nonce = 3)
+        val seat = host.member(bob)
+
+        assertAll(
+            { assertEquals(1, flips, "rig: Bob's id was attested anew while the window was asked") },
+            { assertEquals(listOf(bob), hold.calls.map { it.peerId }, "rig: the window was asked about Bob's seat") },
+            { assertTrue(hold.verdicts.isEmpty(), "rig: and the hold policy threw instead of answering") },
+            { assertEquals(emptyList(), host.sentTo(bob).drop(heardBefore).filterIsInstance<AdmitMessage.Reject>(), "the link that took the id over hears no refusal") },
+            { assertEquals(emptyList(), host.events.edgesSince(mark).map { it.describe() }, "the seat is neither restored nor released") },
+            { assertIs<Liveness.Partitioned>(seat?.liveness, "Bob's seat is still held partitioned") },
+        )
+    }
+
     @Test
     fun anUnattestedLinksRequestCarriesNoPrincipal() = runTest {
         val mesh = InMemoryLoom()
