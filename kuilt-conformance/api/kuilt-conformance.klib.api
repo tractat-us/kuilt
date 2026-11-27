@@ -1282,6 +1282,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat() // us.tractat.kuilt.conformance/RoomConformanceSuite.aJoinerPresentingTheHostsKeyGetsAJoinerSeat|aJoinerPresentingTheHostsKeyGetsAJoinerSeat(){}[0]
 
     // Targets: [apple]
+    final fun aPartitionedIdTakenUnderAnotherKeyRefusesTheMembersReturn() // us.tractat.kuilt.conformance/RoomConformanceSuite.aPartitionedIdTakenUnderAnotherKeyRefusesTheMembersReturn|aPartitionedIdTakenUnderAnotherKeyRefusesTheMembersReturn(){}[0]
+
+    // Targets: [apple]
     final fun aPassTheHostDidNotSignIsIgnored() // us.tractat.kuilt.conformance/RoomConformanceSuite.aPassTheHostDidNotSignIsIgnored|aPassTheHostDidNotSignIsIgnored(){}[0]
 
     // Targets: [apple]
@@ -1436,6 +1439,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
 
     // Targets: [wasmJs]
     final fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aJoinerPresentingTheHostsKeyGetsAJoinerSeat|aJoinerPresentingTheHostsKeyGetsAJoinerSeat(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aPartitionedIdTakenUnderAnotherKeyRefusesTheMembersReturn(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aPartitionedIdTakenUnderAnotherKeyRefusesTheMembersReturn|aPartitionedIdTakenUnderAnotherKeyRefusesTheMembersReturn(){}[0]
 
     // Targets: [wasmJs]
     final fun aPassTheHostDidNotSignIsIgnored(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aPassTheHostDidNotSignIsIgnored|aPassTheHostDidNotSignIsIgnored(){}[0]
