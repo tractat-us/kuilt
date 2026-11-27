@@ -11,7 +11,7 @@ import kotlin.test.assertFailsWith
 import kotlin.time.Instant
 
 /**
- * Runs [RoomConformanceSuite]'s five fault-injection-gated obligations, and its twenty-one return rows, against a harness that
+ * Runs [RoomConformanceSuite]'s five fault-injection-gated obligations, and its twenty-six return rows, against a harness that
  * declares [RoomConformanceSuite.FaultInjection.Unsupported] — **the first time in this suite's
  * life that its skip path has been executed at all** (#2306).
  *
@@ -27,7 +27,7 @@ import kotlin.time.Instant
  *  - a **blank** tracking URL fails every gated obligation — this is the one runtime hole the sealed
  *    fixture leaves, since `Unsupported("")` is the only way left to write a declaration that
  *    declares nothing;
- *  - a **real** tracking URL lets all twenty-six skip cleanly, which is the survivability check above.
+ *  - a **real** tracking URL lets all thirty-one skip cleanly, which is the survivability check above.
  *
  * ## Why `jvmTest` and not `commonTest`
  *
@@ -144,17 +144,22 @@ class RoomConformanceGapDeclarationTest {
             { assertFailsWith<AssertionError> { suite.untrustedIssuerIsIgnored() } },
             { assertFailsWith<AssertionError> { suite.aPassTheHostDidNotSignIsIgnored() } },
             { assertFailsWith<AssertionError> { suite.aProcessUnderASupersededIdEndsSuperseded() } },
+            { assertFailsWith<AssertionError> { suite.aRenewalTheLinkLostStillLetsTheDeviceBackUnvetted() } },
+            { assertFailsWith<AssertionError> { suite.aLostRenewalPushedOutOfTheHostsRecordIsVetted() } },
+            { assertFailsWith<AssertionError> { suite.aLostRenewalRevokedSinceItWasSignedIsVetted() } },
+            { assertFailsWith<AssertionError> { suite.aReturnAfterTheLostRenewalRanOutIsVetted() } },
+            { assertFailsWith<AssertionError> { suite.anotherKeyUnderTheIdGainsNothingFromALostRenewal() } },
         )
     }
 
     // ── A declared gap skips cleanly — the survivability half ──
 
     /**
-     * All twenty-six gated obligations skip without throwing, without hanging and without leaking a
+     * All thirty-one gated obligations skip without throwing, without hanging and without leaking a
      * coroutine, so a harness that genuinely cannot partition its links can still subclass this
-     * suite. Deliberately **one** test over all twenty-six rather than twenty-six: what is under assertion is
+     * suite. Deliberately **one** test over all thirty-one rather than thirty-one: what is under assertion is
      * that the declared-gap path is survivable as a whole, and a per-obligation split would report
-     * twenty-six identical greens for one property.
+     * thirty-one identical greens for one property.
      *
      * Note what this cannot do: it cannot tell a harness that *truly* cannot fault-inject from one
      * that could and declared otherwise. Nothing at this layer can — the declaration is a claim
@@ -190,14 +195,20 @@ class RoomConformanceGapDeclarationTest {
         suite.untrustedIssuerIsIgnored()
         suite.aPassTheHostDidNotSignIsIgnored()
         suite.aProcessUnderASupersededIdEndsSuperseded()
+        suite.aRenewalTheLinkLostStillLetsTheDeviceBackUnvetted()
+        suite.aLostRenewalPushedOutOfTheHostsRecordIsVetted()
+        suite.aLostRenewalRevokedSinceItWasSignedIsVetted()
+        suite.aReturnAfterTheLostRenewalRanOutIsVetted()
+        suite.anotherKeyUnderTheIdGainsNothingFromALostRenewal()
     }
 
     // ── The forging hooks inside a supported return rig (#3710) ──
 
     /**
      * A suite whose return rig is the reference, so [ReturnFixture.Supported], but whose two forging
-     * hooks are declared gaps with [trackingUrl]: the shape of a harness over a real fabric that can
-     * drop and heal its links but cannot rewrite a Proof or choose a process's peer id.
+     * hooks and its renewal-losing hook are declared gaps with [trackingUrl]: the shape of a harness
+     * over a real fabric that can drop and heal its links but cannot rewrite a Proof, choose a
+     * process's peer id, or lose one kind of frame on a link that stays up.
      */
     private fun forgingUnsupported(trackingUrl: String): RoomConformanceSuite =
         object : RoomConformanceSuite() {
@@ -205,11 +216,12 @@ class RoomConformanceGapDeclarationTest {
                 scope.referenceReturnHarness(
                     passPlanting = { PassPlanting.Unsupported(trackingUrl) },
                     reusedIdLaunch = { ReusedIdLaunch.Unsupported(trackingUrl) },
+                    renewalLoss = { RenewalLoss.Unsupported(trackingUrl) },
                 ),
             )
         }
 
-    /** A blank declaration of either forging hook fails each row it gates, as a blank [ReturnFixture] does. */
+    /** A blank declaration of any of the three hooks fails each row it gates, as a blank [ReturnFixture] does. */
     @Test
     fun blankTrackingUrlFailsEveryForgingRow() {
         val suite = forgingUnsupported("")
@@ -220,11 +232,16 @@ class RoomConformanceGapDeclarationTest {
             { assertFailsWith<AssertionError> { suite.untrustedIssuerIsIgnored() } },
             { assertFailsWith<AssertionError> { suite.aPassTheHostDidNotSignIsIgnored() } },
             { assertFailsWith<AssertionError> { suite.aProcessUnderASupersededIdEndsSuperseded() } },
+            { assertFailsWith<AssertionError> { suite.aRenewalTheLinkLostStillLetsTheDeviceBackUnvetted() } },
+            { assertFailsWith<AssertionError> { suite.aLostRenewalPushedOutOfTheHostsRecordIsVetted() } },
+            { assertFailsWith<AssertionError> { suite.aLostRenewalRevokedSinceItWasSignedIsVetted() } },
+            { assertFailsWith<AssertionError> { suite.aReturnAfterTheLostRenewalRanOutIsVetted() } },
+            { assertFailsWith<AssertionError> { suite.anotherKeyUnderTheIdGainsNothingFromALostRenewal() } },
         )
     }
 
     /**
-     * A tracked declaration of both hooks skips the six rows they gate without throwing, hanging or
+     * A tracked declaration of all three hooks skips the eleven rows they gate without throwing, hanging or
      * leaking a coroutine, inside a return rig that is otherwise supported: the rows gate on the hook
      * before they build a room.
      */
@@ -237,6 +254,11 @@ class RoomConformanceGapDeclarationTest {
         suite.untrustedIssuerIsIgnored()
         suite.aPassTheHostDidNotSignIsIgnored()
         suite.aProcessUnderASupersededIdEndsSuperseded()
+        suite.aRenewalTheLinkLostStillLetsTheDeviceBackUnvetted()
+        suite.aLostRenewalPushedOutOfTheHostsRecordIsVetted()
+        suite.aLostRenewalRevokedSinceItWasSignedIsVetted()
+        suite.aReturnAfterTheLostRenewalRanOutIsVetted()
+        suite.anotherKeyUnderTheIdGainsNothingFromALostRenewal()
     }
 
     // ── The ungated obligations are unaffected by the declaration ──
