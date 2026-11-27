@@ -11,7 +11,7 @@ import kotlin.test.assertFailsWith
 import kotlin.time.Instant
 
 /**
- * Runs [RoomConformanceSuite]'s five fault-injection-gated obligations, and its nineteen return rows, against a harness that
+ * Runs [RoomConformanceSuite]'s five fault-injection-gated obligations, and its twenty-one return rows, against a harness that
  * declares [RoomConformanceSuite.FaultInjection.Unsupported] — **the first time in this suite's
  * life that its skip path has been executed at all** (#2306).
  *
@@ -27,7 +27,7 @@ import kotlin.time.Instant
  *  - a **blank** tracking URL fails every gated obligation — this is the one runtime hole the sealed
  *    fixture leaves, since `Unsupported("")` is the only way left to write a declaration that
  *    declares nothing;
- *  - a **real** tracking URL lets all twenty-five skip cleanly, which is the survivability check above.
+ *  - a **real** tracking URL lets all twenty-six skip cleanly, which is the survivability check above.
  *
  * ## Why `jvmTest` and not `commonTest`
  *
@@ -150,11 +150,11 @@ class RoomConformanceGapDeclarationTest {
     // ── A declared gap skips cleanly — the survivability half ──
 
     /**
-     * All twenty-five gated obligations skip without throwing, without hanging and without leaking a
+     * All twenty-six gated obligations skip without throwing, without hanging and without leaking a
      * coroutine, so a harness that genuinely cannot partition its links can still subclass this
-     * suite. Deliberately **one** test over all twenty-five rather than twenty-five: what is under assertion is
+     * suite. Deliberately **one** test over all twenty-six rather than twenty-six: what is under assertion is
      * that the declared-gap path is survivable as a whole, and a per-obligation split would report
-     * twenty-five identical greens for one property.
+     * twenty-six identical greens for one property.
      *
      * Note what this cannot do: it cannot tell a harness that *truly* cannot fault-inject from one
      * that could and declared otherwise. Nothing at this layer can — the declaration is a claim
