@@ -95,8 +95,8 @@ public sealed interface AppSettingsChange {
  * A moved or renamed node is not followed. Its settings, and those of everything beneath it, come
  * back [AppSettingsChange.Removed] at its old address and [AppSettingsChange.Added] at its new one,
  * the same story [Topology.changesTo] tells with a [TopologyChange.Removed] and a
- * [TopologyChange.Added]. A renamed root matches nothing, so every setting comes back removed and
- * then added.
+ * [TopologyChange.Added]. A renamed root matches nothing, so every setting comes back added under
+ * the new root and then removed under the old, as [Topology.changesTo] lists a [TopologyChange.RootRenamed].
  *
  * Template levels are matched by depth: the settings of a group's template are compared with those
  * of the same group's template in [after], level by level, and a level only one side has counts as
