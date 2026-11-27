@@ -59,6 +59,7 @@ import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.GrantScope
 import us.tractat.kuilt.identity.GrantTrust
 import us.tractat.kuilt.identity.GrantVerdict
+import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.session.admit.AdmissionDecision
 import us.tractat.kuilt.session.admit.AdmissionRequest
 import us.tractat.kuilt.session.admit.AdmitMessage
@@ -940,10 +941,12 @@ internal class SeamRoom(
      * **Host only.** The peer id each departed member's key last held and the last pass the host
      * signed that membership, kept while that pass is good (#3222, #3745): what a device returning on
      * a pass is announced with ([ReturningMark.previousId]), and a pass it may come back on though its
-     * link lost it (Decided 34). Guarded by [lock]; written by [detachMember], read by [returnPass],
-     * taken by [admitReturning], and cleared by [leave].
+     * link lost it (Decided 34). Good includes not voided by [HostAdmission.revocations], a revocation
+     * made after the departure included (#3762). Guarded by [lock]; written by [detachMember], read by
+     * [returnPass], taken by [admitReturning], and cleared by [leave]. A joiner records no departure, so
+     * the empty list it is given voids nothing.
      */
-    private val departedMembers = DepartedMembers()
+    private val departedMembers = DepartedMembers(admission?.revocations ?: RevocationList.inMemory())
 
     /**
      * **Host only.** How this host checks a pass a returning joiner presents: against its own device
