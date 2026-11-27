@@ -12,5 +12,6 @@ Rows pair `;`-separated groups in order.
 |a slot reserved at the longest job, holding a short job's slack until `complete`|`LocalHeddle.shrink(lease, amount)`|`heddle.md#handing-back-a-reservation-early`|
 |each group's share of the pool on a table, a team's share summed from its lanes' entitlements|`LocalHeddle.shareLine(waiting)` / `LocalHeddleView.shareLine` → `ShareLine.share(group)`|`heddle.md#each-groups-share-on-the-page`|
 |how far each group is from its share, owed or ahead, by subtracting `explain`'s front and service|`ShareLine.lag(group)`|`heddle.md#how-far-each-group-stands-from-its-share`|
+|a "had" column beside share and lag, summing lease costs per group; what idle history a waker or newborn was let off|`ShareLine.had(group)`, `ShareLine.forgiven(group)`|`heddle.md#what-each-group-has-had-and-what-it-was-forgiven`|
 |a negative group after a static reweight of a group with children, a hand-rolled patch moving spend off the retired edge|`HeddleNode.reconcileOwn(child)` → `ReconcileOwnOutcome` (`Repaired`, `CrossParent`, `TwoLiveEdges`), every peer for itself|`heddle.md#repairing-a-reweight-on-a-static-cluster`|
 |vetting a weight before proposing it; re-deriving whether a weight set leaves `Long` or is too fine for one lease|`weightFitsTheBudget`; `EntitlementLedger.activationFitsTheBudget`|`heddle.md#refusals-and-limits`|

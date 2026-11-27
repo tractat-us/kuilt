@@ -106,8 +106,8 @@ internal fun sampleShareLineHad() {
     // Nothing forgiven, so lag is the siblings' total times share less had: 4 × (1/2 − 3/4) = −1.
     check(line.lag(web) == Rational.of(-1L))
 
-    // Docs queues after sitting out four units. It has had none of them, and it is forgiven the
-    // two its weight would have owed it, so it lands at the front rather than two units behind.
+    // Docs queues after sitting out four units. It has had none of them, and the two units it would
+    // stand behind the front are forgiven, so it lands at the front rather than behind it.
     val all = setOf(web, mobile, docs)
     val joined = heddle.shareLine(all)
     check(joined.had(docs) == Rational.ZERO && joined.forgiven(docs) == Rational.of(2L))
