@@ -743,6 +743,33 @@ version it has not yet added support for, and that support lands some weeks
 behind each Kotlin release. That is a cost your app absorbs on its own schedule,
 which is another reason it belongs in your module rather than in kuilt's.
 
+## On Android and the JVM: seeing kuilt's log lines
+
+Your app doesn't have to set up logging for kuilt to run. Out of the box, kuilt's
+log lines on Android and the JVM go nowhere. Here is how to see them.
+
+kuilt logs through kotlin-logging, which on Android and the JVM hands each line to
+SLF4J. Every kuilt module that logs brings `slf4j-api` with it, so an app with no
+logging setup still runs. SLF4J then prints one warning and drops kuilt's lines.
+Pick one of these to keep them:
+
+- **Give SLF4J a provider.** It must be an SLF4J **2** provider: `slf4j-api` 2
+  ignores 1.7-era bindings. On the JVM that is Logback 1.3 or later; on Android,
+  `logback-android` 3.x. The older `slf4j-android` and `logback-android` 2.x are
+  1.7 bindings, and kuilt's lines would still go nowhere.
+- **On Android, send them to logcat.** Call
+  `System.setProperty("kotlin-logging-to-android-native", "true")` before anything
+  in the process creates its first kotlin-logging logger. kotlin-logging reads the
+  property once, the first time it is used. `Application.onCreate` is early enough
+  unless a `ContentProvider` or an androidx.startup initializer logs first. The
+  property is process-wide, which is why kuilt leaves it to the app. On the JVM,
+  `-Dkotlin-logging-to-jul` sends them to `java.util.logging` the same way.
+- **Record them on the device.** `:kuilt-otel-logging`'s `installLogCapture` routes
+  kotlin-logging into kuilt's own telemetry buffer, which you can read back later.
+
+kuilt once left this to the app, and an app with neither a provider nor the property
+crashed on the first kuilt class that logged (#3744).
+
 ## On iPhone and Mac: keeping the first error log cheap
 
 The first time your app logs an error with a stack trace attached, something has

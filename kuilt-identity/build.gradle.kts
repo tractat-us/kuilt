@@ -272,9 +272,11 @@ if (runRealKeychainTests) {
 
 // The device run (#3226): `./gradlew :kuilt-identity:connectedDebugAndroidTest` with a device or an
 // emulator attached. AndroidJUnitRunner runs the androidInstrumentedTest classes against the real
-// AndroidKeyStore provider.
+// AndroidKeyStore provider. The plain runner, with no SLF4J provider and no kotlin-logging system
+// property, so the run is an app that chose neither: the module's own slf4j-api is what keeps its
+// first logger from throwing NoClassDefFoundError (#3744).
 android {
-    defaultConfig { testInstrumentationRunner = "us.tractat.kuilt.identity.IdentityDeviceTestRunner" }
+    defaultConfig { testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
 }
 
 // The device classes run nowhere a PR builds, so `check` at least compiles them: lint reads their

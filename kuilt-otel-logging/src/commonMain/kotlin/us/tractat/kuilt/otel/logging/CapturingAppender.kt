@@ -189,9 +189,10 @@ internal class CapturingAppender(
      * ## Why the logger is built here, and why nothing escapes
      *
      * [KotlinLogging.logger] resolves the configured factory **eagerly**, and that
-     * resolution can fail — on the JVM the auto-detected default is the SLF4J
-     * factory, which throws `NoClassDefFoundError` when no `slf4j-api` is on the
-     * runtime classpath (kotlin-logging 8.x makes the binding optional). Held as a
+     * resolution can fail — on the JVM and Android the auto-detected default is the
+     * SLF4J factory, and kotlin-logging 8.x does not depend on `slf4j-api`. kuilt
+     * puts `slf4j-api` beside it (#3744), but a consumer's dependency exclusions or
+     * a custom `loggerFactory` can still make resolution throw. Held as a
      * file-level `val` it would run in the file facade's `<clinit>`, triggered by
      * the *first* [log] call — putting a throwing initializer on the appender's hot
      * path, and poisoning the facade class for the rest of the process once it

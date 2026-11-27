@@ -155,6 +155,67 @@ afterEvaluate {
     }
 }
 
+// An SLF4J API wherever kotlin-logging runs on the JVM or Android (#3744). kotlin-logging's
+// Android and JVM artifacts log through SLF4J unless a system property says otherwise, and declare
+// no dependency on it, so in an app that ships no SLF4J the first kuilt class that logs throws
+// `NoClassDefFoundError: org/slf4j/LoggerFactory` from its class initializer. Robolectric and JVM
+// tests never show it: their Logback brings slf4j-api along.
+//
+// So a module whose `androidMain` or `jvmMain` sees kotlin-logging, declared in that source set or
+// in one it depends on, gets slf4j-api beside it as `implementation`, and its published POM carries
+// it. With no SLF4J provider on the classpath, slf4j-api 2.x prints one warning to stderr and falls
+// back to a no-operation logger. An app that ships a provider gets kuilt's lines through it, and
+// Gradle settles on the higher slf4j-api. kotlin-logging 8 calls SLF4J 2's fluent API
+// (`Logger.atLevel`), so a 1.7 binding never worked with it.
+//
+// The edge is derived from the kotlin-logging declaration rather than listed per module, so a new
+// module that logs is covered the day it lands, and a module that does not log (`:kuilt-math`,
+// `:kuilt-base`) stays free of it. The hierarchy is read once every project is evaluated: at
+// afterEvaluate the default hierarchy template has not yet joined `androidMain` to `commonMain`
+// (measured on Kotlin 2.4.21). The `commonMain` check fails the build if a Kotlin Gradle plugin ever
+// finalizes it later still, rather than letting the edge quietly select nothing. The selector reads
+// kotlin-logging's coordinates from the catalog entry, so moving that entry moves the selector too.
+// `verifySlf4jBesideKotlinLogging`, in `check`, then reads the resolved runtime graphs and reds a
+// module whose edge selected nothing, whatever the cause.
+val slf4jModule = project
+val kotlinLoggingModule = libs.kotlin.logging.get().module
+val slf4jApiModule = libs.slf4j.api.get().module
+gradle.projectsEvaluated {
+    val configurations = slf4jModule.configurations
+    val isKotlinLogging = { dependency: Dependency ->
+        dependency.group == kotlinLoggingModule.group && dependency.name.startsWith(kotlinLoggingModule.name)
+    }
+    listOf("androidMain", "jvmMain").forEach { leafName ->
+        val leaf = kmpExtension.sourceSets.getByName(leafName)
+        val feeding = generateSequence(setOf(leaf)) { layer ->
+            layer.flatMap { it.dependsOn }.toSet().takeIf { it.isNotEmpty() }
+        }.flatten().toSet()
+        check(feeding.any { it.name == "commonMain" }) {
+            "${slf4jModule.path}: $leafName does not reach commonMain once projects are evaluated, so " +
+                "the slf4j-api edge (#3744) cannot see what it runs. Read the hierarchy later."
+        }
+        val runsKotlinLogging = feeding.any { sourceSet ->
+            listOf(
+                sourceSet.apiConfigurationName,
+                sourceSet.implementationConfigurationName,
+                sourceSet.runtimeOnlyConfigurationName,
+            ).any { configurations.getByName(it).dependencies.any(isKotlinLogging) }
+        }
+        if (runsKotlinLogging) leaf.dependencies { implementation(libs.slf4j.api) }
+    }
+}
+
+val verifySlf4jBesideKotlinLogging = tasks.register<VerifySlf4jBesideKotlinLogging>("verifySlf4jBesideKotlinLogging") {
+    group = "verification"
+    description = "Fails when a module depends on kotlin-logging on Android or the JVM without slf4j-api (#3744)."
+    kotlinLogging.set("${kotlinLoggingModule.group}:${kotlinLoggingModule.name}")
+    slf4jApi.set("${slf4jApiModule.group}:${slf4jApiModule.name}")
+    androidRuntime.set(configurations.named("releaseRuntimeClasspath").flatMap { it.incoming.resolutionResult.rootComponent })
+    jvmRuntime.set(configurations.named("jvmRuntimeClasspath").flatMap { it.incoming.resolutionResult.rootComponent })
+    marker.set(layout.buildDirectory.file("verification/verify-slf4j-beside-kotlin-logging.ok"))
+}
+tasks.named("check") { dependsOn(verifySlf4jBesideKotlinLogging) }
+
 // Generate the shared wasmJs Mocha/Karma timeout configuration into the build
 // directory so that every module gets an adequate per-test and socket budget by
 // default. The Gradle `useMocha { timeout }` DSL does NOT reach the wasmJs
