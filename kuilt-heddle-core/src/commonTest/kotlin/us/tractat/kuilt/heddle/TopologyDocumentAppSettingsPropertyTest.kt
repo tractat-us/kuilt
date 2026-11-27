@@ -25,9 +25,14 @@ import kotlin.test.assertEquals
  * [appSettingsChangesTo] is checked against an oracle that does not walk two trees side by side.
  * It flattens each document into one map from a setting's identity (the names from the root, each
  * with its occurrence among siblings of that name, the template depth and the key) to its value,
- * diffs the two maps, and addresses each difference in the document after unless its node is not
- * there. Both every single edit and the whole sequence, first document against last, are checked,
- * so a node moved twice or renamed and moved is compared too.
+ * diffs the two maps, and addresses each difference by its arm: a removal in the document before,
+ * an addition or a change in the document after. It then puts the differences in the documented
+ * order by giving each node a position, the list of its indices in the document after, or for a
+ * node only the document before has, its parent's position followed by its index before, counted
+ * past every index the document after can hold. The report is compared with that list as it
+ * stands, never sorted, so an order the KDoc does not promise is red. Both every single edit and
+ * the whole sequence, first document against last, are checked, so a node moved twice or renamed
+ * and moved is compared too.
  *
  * Some trees start with two siblings of one name, so the n-th-of-a-name matching is reached.
  * Every draw is from a `List` this file built, so a seed walks the same trajectory on every target,
@@ -187,31 +192,53 @@ class TopologyDocumentAppSettingsPropertyTest {
 
     private data class SettingKey(val node: NodeKey, val depth: Int, val key: String)
 
-    private class Flat(val values: Map<SettingKey, String>, val addresses: Map<NodeKey, String>, val duplicated: Boolean)
+    private class Flat(
+        val values: Map<SettingKey, String>,
+        val addresses: Map<NodeKey, String>,
+        val positions: Map<NodeKey, List<Int>>,
+        val duplicated: Boolean,
+    )
 
-    private fun TopologyDocument.flatten(): Flat {
+    /**
+     * Flattens the document. A node's position is its own path, unless [after] is given and holds
+     * the node's key: then it is that node's position there. A node [after] lacks is placed under
+     * its parent's position at [lost] past its index, so it follows every child [after] has.
+     */
+    private fun TopologyDocument.flatten(after: Flat? = null): Flat {
         val values = LinkedHashMap<SettingKey, String>()
         val addresses = LinkedHashMap<NodeKey, String>()
+        val positions = LinkedHashMap<NodeKey, List<Int>>()
         var duplicated = false
-        fun walk(nodes: List<Node>, key: List<Pair<String, Int>>, path: List<Int>, names: List<String>) {
+        fun walk(nodes: List<Node>, key: List<Pair<String, Int>>, path: List<Int>, names: List<String>, position: List<Int>) {
             nodes.forEachIndexed { index, node ->
                 val occurrence = nodes.subList(0, index).count { it.name == node.name }
                 if (occurrence > 0) duplicated = true
                 val here = NodeKey(key + (node.name to occurrence))
+                val at = if (after == null) position + index else after.positions[here] ?: (position + (lost + index))
                 addresses[here] = "${path + index} ${names + node.name}"
+                positions[here] = at
                 node.levels().forEachIndexed { depth, settings -> settings.forEach { (k, v) -> values[SettingKey(here, depth, k)] = v } }
-                walk((node as? Group)?.children.orEmpty(), here.steps, path + index, names + node.name)
+                walk((node as? Group)?.children.orEmpty(), here.steps, path + index, names + node.name, at)
             }
         }
-        walk(children, listOf(root to 0), emptyList(), listOf(root))
-        return Flat(values, addresses, duplicated)
+        walk(children, listOf(root to 0), emptyList(), listOf(root), emptyList())
+        return Flat(values, addresses, positions, duplicated)
+    }
+
+    /** Past any index a generated document holds, so a lost child follows every child it had. */
+    private val lost = 1_000_000
+
+    /** By node position, a node before its children; then by template depth; then by key. */
+    private fun documentOrder(position: (NodeKey) -> List<Int>): Comparator<SettingKey> = Comparator { a, b ->
+        val pa = position(a.node)
+        val pb = position(b.node)
+        val byPosition = pa.zip(pb).firstOrNull { (x, y) -> x != y }?.let { (x, y) -> x.compareTo(y) } ?: pa.size.compareTo(pb.size)
+        if (byPosition != 0) byPosition else compareValuesBy(a, b, { it.depth }, { it.key })
     }
 
     /** The node's own settings, then each template level's. */
-    private fun Node.levels(): List<Map<String, String>> = when (this) {
-        is Lane -> listOf(appSettings)
-        is Group -> listOf(appSettings) + generateSequence(template) { it.template }.map { it.appSettings }
-    }
+    private fun Node.levels(): List<Map<String, String>> =
+        listOf(appSettings) + generateSequence((this as? Group)?.template) { it.template }.map { it.appSettings }
 
     private fun AppSettingsChange.rendered(): String = when (this) {
         is AppSettingsChange.Added -> "Added $path $names $templateDepth $key=$value"
@@ -219,28 +246,19 @@ class TopologyDocumentAppSettingsPropertyTest {
         is AppSettingsChange.Changed -> "Changed $path $names $templateDepth $key=$before->$after"
     }
 
-    /**
-     * What is wrong with `before.appSettingsChangesTo(after)` against the flattened diff, or `null`.
-     * Compared as sorted lists, so the order is checked on its own: within one node and depth the
-     * keys come sorted. Only two changes addressed in the same document are compared, since a
-     * gone node's [AppSettingsChange.Removed] may share its path and names with a node of the
-     * document after: with two siblings named `a`, renaming the first leaves the second matched to
-     * the first's settings at the same address as its own, which are removed.
-     */
+    /** What is wrong with `before.appSettingsChangesTo(after)` against the flattened diff, or `null`. */
     private fun checkReport(before: TopologyDocument, after: TopologyDocument, count: (String) -> Unit): String? {
-        val was = before.flatten()
         val now = after.flatten()
-        val goneValues = HashSet<String>()
-        val expected = (was.values.keys + now.values.keys).mapNotNull { setting ->
+        val was = before.flatten(after = now)
+        val position = { node: NodeKey -> now.positions[node] ?: was.positions.getValue(node) }
+        val expected = (was.values.keys + now.values.keys).sortedWith(documentOrder(position)).mapNotNull { setting ->
             val old = was.values[setting]
             val new = now.values[setting]
             when {
                 old == null -> "Added ${now.addresses[setting.node]} ${setting.depth} ${setting.key}=$new"
                 new == null -> {
-                    val stays = now.addresses[setting.node]
-                    count(if (stays == null) "report Removed of a gone node" else "report Removed of a node that stays")
-                    if (stays == null) goneValues += old
-                    "Removed ${stays ?: was.addresses[setting.node]} ${setting.depth} ${setting.key}=$old"
+                    count(if (now.addresses[setting.node] == null) "report Removed of a gone node" else "report Removed of a node that stays")
+                    "Removed ${was.addresses[setting.node]} ${setting.depth} ${setting.key}=$old"
                 }
                 old != new -> {
                     count("report Changed")
@@ -249,21 +267,14 @@ class TopologyDocumentAppSettingsPropertyTest {
                 }
                 else -> null
             }
-        }.sorted()
+        }
         val changes = before.appSettingsChangesTo(after)
         changes.forEach { if (it is AppSettingsChange.Added) count("report Added") }
         if (changes.isEmpty()) count("report empty")
         if (changes.isNotEmpty() && before.root != after.root) count("report across a renamed root")
         if (changes.isNotEmpty() && (was.duplicated || now.duplicated)) count("report between duplicate siblings")
-        // Every value is a unique tag, so a value says which removal is of a gone node.
-        val gone = changes.filter { it is AppSettingsChange.Removed && it.value in goneValues }.toSet()
-        val actual = changes.map { it.rendered() }.sorted()
-        if (actual != expected) return "listed $actual, expected $expected"
-        val unsorted = changes.zipWithNext().firstOrNull { (a, b) ->
-            val sameDocument = (a in gone) == (b in gone)
-            sameDocument && a.path == b.path && a.names == b.names && a.templateDepth == b.templateDepth && a.key >= b.key
-        }
-        return unsorted?.let { "keys out of order: $it" }
+        val actual = changes.map { it.rendered() }
+        return if (actual == expected) null else "listed $actual, expected $expected"
     }
 
     // ── documents ───────────────────────────────────────────────────────────────────────────────
@@ -329,10 +340,7 @@ class TopologyDocumentAppSettingsPropertyTest {
 
     private fun Node.tags(): List<String> = own() + templateTags() + ((this as? Group)?.children.orEmpty()).flatMap { it.tags() }
 
-    private fun Node.own(): List<String> = when (this) {
-        is Group -> appSettings.values.toList()
-        is Lane -> appSettings.values.toList()
-    }
+    private fun Node.own(): List<String> = appSettings.values.toList()
 
     private fun Node.templateTags(): List<String> = (this as? Group)?.template.chainTags()
 
