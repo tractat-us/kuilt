@@ -669,6 +669,34 @@ internal suspend fun sampleDeviceKeySigns() {
 }
 ```
 
+**Proving the key to a server, before any room:** `DeviceProof`. Do not hand-roll a signed query parameter, a "sign this challenge" endpoint, or a proof under a `signApp` context of your own for a request that carries only a URL, such as a browser's WebSocket upgrade. A proof under an app context is one any app's own `signApp` call could mint; a `DeviceProof` is a kuilt statement, tagged `kuilt/device-proof`, so it never decodes as a room's admission proof, a challenge or a grant, nor they as it. `DeviceProof.sign(device, audience, resource, nonce)` signs the device's own key, the `audience` (the origin being dialled, `scheme://host[:port]` with `ws` as `http` and `wss` as `https`), the `resource` (the request path, no query) and the server's `nonce`. Take the audience from the URL you dial, never from anything the server sends: a hostile server relaying a real server's nonce then gets a proof made out to itself. `wire` travels in the query, base64url; the server reads it with `DeviceProof.decode`, `null` on anything malformed, and `isSignedBySubject()` checks the signature under the `subject` it names and no other key. That proves the device holds the key, and nothing more: whether the server knows that key is a pass's question (`GrantTrust`, below). Fetch a fresh nonce for every dial; checking that a nonce is the server's own and spending it once is not this statement's job.
+
+<!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleDeviceProof -->
+```kotlin
+internal suspend fun sampleDeviceProof() {
+    // The device, about to dial wss://boards.example/board. It fetched a fresh nonce from the server first.
+    val device = DeviceKey.generate()
+    val nonce = "a nonce the server served".encodeToByteArray()
+
+    // The audience comes from the URL being dialled, wss mapped to https, never from the server's answer.
+    val proof = DeviceProof.sign(device, audience = "https://boards.example", resource = "/board", nonce = nonce)
+    val sent: ByteArray = proof.wire // base64url, in the query
+
+    // The server reads it back, and checks the origin and path it answers on, and its own nonce.
+    val received = checkNotNull(DeviceProof.decode(sent))
+    check(received.audience == "https://boards.example" && received.resource == "/board")
+    check(received.nonce.contentEquals(nonce))
+
+    // It proves the device holds the key it names, and nothing more: whether the server knows that
+    // key is a pass's question.
+    check(received.subject == device.id && received.isSignedBySubject())
+
+    // Change one byte of the signature, and it no longer proves the key.
+    val edited = sent.copyOf().also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }
+    check(DeviceProof.decode(edited)?.isSignedBySubject() == false)
+}
+```
+
 **A pass to come back:** `Grant`. Do not hand-roll a "remember this device" cookie or a signed blob that lets an *already-admitted* device back in. A grant is not an invite: it names the key of a device the host has already let in once, so a newcomer has nothing to put in it. `Grant.issue(host, subject, scope, issuedAt, notAfter)` is the host's signed statement that the device with key `subject` may return to `GrantScope.Room(roomId)`, or to `GrantScope.AnyRoomOfIssuer`, until `notAfter` (`Grant.NO_EXPIRY` for never). Times are epoch milliseconds you pass in; a grant never reads a clock. `wire` is what the device keeps and presents, and `Grant.decode(wire)` reads it back, `null` on anything malformed. A grant is not a secret, since it is useless without the subject's key. `isSignedByIssuer` checks the signature and nothing else: whether the issuer, subject, room and expiry are right for this room now is `GrantTrust`'s job, below.
 
 <!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleIssueGrant -->
