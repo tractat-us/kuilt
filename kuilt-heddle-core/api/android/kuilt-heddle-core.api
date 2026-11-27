@@ -1850,6 +1850,7 @@ public final class us/tractat/kuilt/heddle/TopologyDocument$Node$Companion {
 public final class us/tractat/kuilt/heddle/TopologyDocumentEditsKt {
 	public static final fun addChild (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$Node;)Lus/tractat/kuilt/heddle/TopologyEdit;
 	public static final fun move (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Ljava/util/List;)Lus/tractat/kuilt/heddle/TopologyEdit;
+	public static final fun move (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Ljava/util/List;I)Lus/tractat/kuilt/heddle/TopologyEdit;
 	public static final fun remove (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;)Lus/tractat/kuilt/heddle/TopologyEdit;
 	public static final fun rename (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyEdit;
 	public static final fun setMaxConcurrent (Lus/tractat/kuilt/heddle/TopologyDocument;Ljava/util/List;Ljava/lang/Long;)Lus/tractat/kuilt/heddle/TopologyEdit;
