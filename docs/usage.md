@@ -743,6 +743,20 @@ version it has not yet added support for, and that support lands some weeks
 behind each Kotlin release. That is a cost your app absorbs on its own schedule,
 which is another reason it belongs in your module rather than in kuilt's.
 
+## On Android and the JVM: where kuilt's log lines go
+
+kuilt logs through kotlin-logging, which on Android and the JVM hands each line to
+SLF4J. Every kuilt module that logs brings `slf4j-api` with it, so an app that
+ships nothing else still runs. Its lines are just dropped: SLF4J prints one
+warning, then logs nowhere.
+
+To read them, give SLF4J a provider (Logback on the JVM, or an Android one such as
+`logback-android`). On Android you can send them to logcat instead with
+`System.setProperty("kotlin-logging-to-android-native", "true")`, set in
+`Application.onCreate` before the first kuilt call. That property is process-wide,
+which is why kuilt leaves it to the app. Through 0.7.7, an app with neither
+crashed on the first kuilt class that logged (#3744).
+
 ## On iPhone and Mac: keeping the first error log cheap
 
 The first time your app logs an error with a stack trace attached, something has
