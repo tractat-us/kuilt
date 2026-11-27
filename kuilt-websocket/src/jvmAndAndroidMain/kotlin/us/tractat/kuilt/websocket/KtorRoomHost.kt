@@ -38,6 +38,17 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.websocket.KtorRoomHost"
  * dispatching each to `onRoom` in a child coroutine so concurrent connections
  * don't serialize.
  *
+ * **Nothing a device held in one connection's room brings it back over the next.** Each room is
+ * built with a fresh [us.tractat.kuilt.session.Room.roomId], and a client that reconnects arrives on
+ * a new connection, so in a new room. The seat its old room holds for it is held where nothing can
+ * reach it again, and ends when its hold does. A pass on [us.tractat.kuilt.session.admit.GrantReach.ThisRoom]
+ * names the old room's id, so the new room calls it `WrongScope` and asks the [HostAdmission] policy
+ * about the device as a newcomer. A device that must come back without being asked needs a pass on
+ * [us.tractat.kuilt.session.admit.GrantReach.AnyRoomOfIssuer], which every room this host accepts
+ * trusts, since they share one device key. Even then the new room has no record of the old one: the
+ * return's [us.tractat.kuilt.session.ReturningMark.previousId] is null, and a renewal the old link
+ * lost is not honoured, so the device comes back on the pass it holds.
+ *
  * **One device key for every room.** Every room this host accepts is hosted by the same server, so
  * they all share the one [DeviceKeyStore] it is given. A process that runs several servers — a
  * cluster test, say — gives each its own store, because each server is its own device.
