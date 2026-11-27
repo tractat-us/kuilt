@@ -84,11 +84,7 @@ internal class DepartedMembers(private val capacity: Int = DEFAULT_CAPACITY) {
 
         private fun Grant.hasRunOutAt(now: Long): Boolean = notAfter != Grant.NO_EXPIRY && notAfter <= now
 
-        /** Of two passes, the one that runs out later; [first] on a tie. */
-        private fun laterEnding(first: Grant, second: Grant): Grant = when {
-            first.notAfter == Grant.NO_EXPIRY -> first
-            second.notAfter == Grant.NO_EXPIRY -> second
-            else -> if (second.notAfter > first.notAfter) second else first
-        }
+        /** Of two passes, the one that runs out later ([Grant.NO_EXPIRY] is the largest `Long`); [first] on a tie. */
+        private fun laterEnding(first: Grant, second: Grant): Grant = if (second.notAfter > first.notAfter) second else first
     }
 }

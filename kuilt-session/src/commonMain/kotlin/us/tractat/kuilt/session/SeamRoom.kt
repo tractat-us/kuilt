@@ -3171,10 +3171,10 @@ internal class SeamRoom(
             }
             return
         }
-        val pass = when (val presented = presentedPass(sender, msg.grants, pending.keyed.key)) {
-            is PresentedPass.Good -> presented.grant
-            PresentedPass.None -> null
-            PresentedPass.CheckFailed -> {
+        val pass = when (val checked = returnPass(sender, msg.grants, pending.keyed.key)) {
+            is PassCheck.Good -> checked.pass
+            PassCheck.None -> null
+            PassCheck.CheckFailed -> {
                 if (pendingChallenges.retire(sender, pending.generation)) {
                     val reject = AdmitMessage.Reject("host-failed: the host could not check a pass", RejectCode.HostFailed, pending.keyed.joinerNonce)
                     runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
@@ -3185,17 +3185,77 @@ internal class SeamRoom(
         seatProvenJoiner(sender, pending.keyed, pending.generation, pending.deadline, pass)
     }
 
-    /** What [presentedPass] made of the passes a Proof presented. */
-    private sealed interface PresentedPass {
-        /** [grant] is good here and now: the device may come back on it unvetted. */
-        class Good(val grant: Grant) : PresentedPass
+    /**
+     * The pass a proven joiner may come back on when its key holds no seat (#3222, #3745). [grant]
+     * decides, and its terms are carried forward. [presented] is the good pass the joiner presented
+     * itself, if it presented one: the pass the device is known to hold. When [grant] is not
+     * [presented], the host is letting the device in on the last pass it signed that key, which its
+     * departed record kept and the device may never have got (Decided 34).
+     */
+    private class ReturnPass(val grant: Grant, val presented: Grant?)
 
-        /** None is good, or none was presented: the device is decided as if it had none. */
-        data object None : PresentedPass
+    /** What [returnPass] made of a Proof's passes and the host's own record of the key. */
+    private sealed interface PassCheck {
+        /** [pass] is good here and now: the device may come back on it unvetted. */
+        class Good(val pass: ReturnPass) : PassCheck
+
+        /** None is good, or there is none: the device is decided as if it had none. */
+        data object None : PassCheck
 
         /** A check could not run on this platform: the host failed, and says so. */
-        data object CheckFailed : PresentedPass
+        data object CheckFailed : PassCheck
     }
+
+    /**
+     * **Host only.** The pass [subject]'s joiner may come back on without vetting (#3222, #3745): the
+     * best good one of those it presented ([presentedPass]), or the last pass this host signed
+     * [subject] while a membership of it was here, which its departed record keeps ([departedMembers],
+     * Decided 34). That one is checked by [grantTrust] exactly as a presented one is, revocation and
+     * expiry included, and only for [subject], the key the Proof just proved: the record is no use to
+     * anyone without that key, and it never lengthens a pass, since the host signed it already. When
+     * both are good, the more generous wins ([GrantIssuer.mostGenerous]), and on a tie the one that
+     * runs out later. A check that throws is the host's failure ([PassCheck.CheckFailed]), as for a
+     * presented pass.
+     *
+     * The record is read under [lock] and checked outside it: the check suspends, and the pass read is
+     * an immutable value, so another exchange taking the record meanwhile changes nothing it decides.
+     * The seat decision reads its revocation and end again under the lock that decides.
+     */
+    private suspend fun returnPass(sender: PeerId, grants: List<ByteArray>, subject: DidKey): PassCheck {
+        val presented = when (val checked = presentedPass(sender, grants, subject)) {
+            is PassCheck.Good -> checked.pass.grant
+            PassCheck.None -> null
+            PassCheck.CheckFailed -> return PassCheck.CheckFailed
+        }
+        val trust = checkNotNull(grantTrust) { "only a host checks a pass" }
+        val now = clock().toEpochMilliseconds()
+        val recorded = lock.withLock { departedMembers.pass(subject, now) }
+        val recordedGood = recorded != null && when (val verdict = verifyOrNull(sender, trust, recorded, subject, now) ?: return PassCheck.CheckFailed) {
+            GrantVerdict.Valid -> true
+            else -> {
+                logger.info { "room.pass.recorded-ignored peer=${sender.value} verdict=$verdict" }
+                false
+            }
+        }
+        val grant = when {
+            !recordedGood -> presented
+            presented == null -> recorded
+            recorded.notAfter >= presented.notAfter -> GrantIssuer.mostGenerous(recorded, presented)
+            else -> GrantIssuer.mostGenerous(presented, recorded)
+        } ?: return PassCheck.None
+        if (grant !== presented) logger.info { "room.pass.recorded peer=${sender.value}: back on the last pass this host signed it" }
+        return PassCheck.Good(ReturnPass(grant, presented))
+    }
+
+    /** [GrantTrust.verify], or null when the check could not run on this platform, logged. */
+    private suspend fun verifyOrNull(sender: PeerId, trust: GrantTrust, grant: Grant, subject: DidKey, now: Long): GrantVerdict? =
+        try {
+            trust.verify(grant, subject, signedRoomId(), now)
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            logger.warn(failure) { "room.pass.check-failed peer=${sender.value}" }
+            null
+        }
 
     /**
      * **Host only.** The pass [subject]'s joiner presented in its Proof that lets it back in without
@@ -3210,13 +3270,13 @@ internal class SeamRoom(
      * send a Proof. An honest joiner presents two at most ([passesFrom]), and the cap never reaches
      * either; a Proof crowded with passes for other rooms still has its good pass found.
      *
-     * **A check that throws is the host's failure** ([PresentedPass.CheckFailed]): the platform's
+     * **A check that throws is the host's failure** ([PassCheck.CheckFailed]): the platform's
      * provider could not run, which says nothing of the pass. The caller refuses the joiner with a
      * retryable `HostFailed`, as it does a proof it cannot check, rather than send a device inside its
      * pass to the policy. Every other defect is a verdict, and the pass is ignored.
      */
-    private suspend fun presentedPass(sender: PeerId, grants: List<ByteArray>, subject: DidKey): PresentedPass {
-        if (grants.isEmpty()) return PresentedPass.None
+    private suspend fun presentedPass(sender: PeerId, grants: List<ByteArray>, subject: DidKey): PassCheck {
+        if (grants.isEmpty()) return PassCheck.None
         val trust = checkNotNull(grantTrust) { "only a host checks a presented pass" }
         val now = clock().toEpochMilliseconds()
         val roomId = signedRoomId()
@@ -3229,20 +3289,14 @@ internal class SeamRoom(
         }
         var chosen: Grant? = null
         for (grant in candidates.take(MAX_PRESENTED_PASSES)) {
-            val verdict = try {
-                trust.verify(grant, subject, roomId, now)
-            } catch (failure: Throwable) {
-                currentCoroutineContext().ensureActive()
-                logger.warn(failure) { "room.pass.check-failed peer=${sender.value}" }
-                return PresentedPass.CheckFailed
-            }
+            val verdict = verifyOrNull(sender, trust, grant, subject, now) ?: return PassCheck.CheckFailed
             if (verdict == GrantVerdict.Valid) {
                 chosen = chosen?.let { GrantIssuer.mostGenerous(it, grant) } ?: grant
             } else {
                 logger.info { "room.pass.ignored peer=${sender.value} verdict=$verdict" }
             }
         }
-        return chosen?.let(PresentedPass::Good) ?: PresentedPass.None
+        return chosen?.let { PassCheck.Good(ReturnPass(it, presented = it)) } ?: PassCheck.None
     }
 
     /**
