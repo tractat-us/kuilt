@@ -3111,7 +3111,7 @@ never reads them. Today they cannot ride in the tree, so the app keeps them in a
 structure beside it, addressed by child-index paths, and every `remove` or
 `move` of an edit session silently shifts those paths onto the wrong nodes.
 This section is the design that lets the settings travel inside the node they
-belong to (#3758).
+belong to (#3758), as ruled on 2026-11-27.
 
 #### As built: nothing carries them
 
@@ -3167,12 +3167,40 @@ therefore `LocalHeddleSnapshot` format 1 do not carry them, so an engine's
 durable state never holds app data. The app checks its own settings and
 reports them as `TopologyProblem.Kind.CONSUMER`, which exists for this.
 
-**`changesTo` does not report them.** `changesTo` compares two `Topology`
-values, which hold no settings, so it cannot see a change to them without
-putting the settings back into `Topology`. It would also be the one change
-whose `saveEffect` is never about the ledger, and a new arm of the sealed
-`TopologyChange` breaks every exhaustive `when` a consumer has written. An app
-that shows "match rule changed" compares the two documents itself.
+**A change report of their own: `appSettingsChangesTo`.** `changesTo`
+compares two `Topology` values, which hold no settings, so it cannot see a
+change to them without putting the settings back into `Topology`. A settings
+change would also be the one change whose `saveEffect` is never about the
+ledger, and a new arm of the sealed `TopologyChange` breaks every exhaustive
+`when` a consumer has written. So heddle reports settings changes beside it,
+not inside it: `TopologyDocument.appSettingsChangesTo(after)` compares two
+documents and returns a `List<AppSettingsChange>`, a new sealed type outside
+`TopologyChange`. An app that shows "match rule changed" reads that list.
+
+- **One change per key.** `AppSettingsChange` is `Added` (a key only `after`
+  has, with its `value`), `Removed` (a key only the receiver has) or `Changed`
+  (both have it, with `before` and `after` values that differ). A key is in one
+  map, the other, or both, so the three arms are the whole set and the type
+  never needs a fourth.
+- **Addressed the way `changesTo` is.** `path` and `names` locate the node,
+  and `templateDepth` says whose settings they are: `0` for the node's own, `1`
+  for its template's, `2` for the template's template. Nodes are matched by
+  their names from the root down, as `changesTo` matches them, so a moved or
+  renamed node is not followed. Its settings come back `Removed` at the old
+  address and `Added` at the new one, the same story `changesTo` tells with a
+  `Removed` and an `Added`. A change is addressed in `after` whenever its node
+  is still there, so a key removed from a node that stays is addressed in
+  `after`. Only the settings of a node that is gone, with all beneath it, are
+  addressed in the receiver. A renamed root matches nothing, so every setting
+  comes back `Removed` and then `Added`.
+- **Total, as an edit is.** A document is unchecked, so two siblings may share
+  a name. The n-th sibling of a name in `after` matches the n-th of that name
+  in the receiver, which is the plain name rule for every tree `Topology.from`
+  accepts. It never throws.
+- **In document order, keys sorted.** Walking `after` from the root down, a
+  node's own changes come first, depth by depth, then its children's, then
+  those of the children it no longer has. Within one map the keys come in
+  sorted order, so the list does not depend on which `Map` the app built.
 
 **`toDocument()` writes no settings.** `Topology.from(t.toDocument()) == t`
 still holds. But a document that goes to `Topology` and back has lost its
@@ -3198,7 +3226,9 @@ caller's `lane.copy(weight = "2")` does not wipe the settings. Adding the
 property is the same move as `Lane.maxConcurrent` in 0.7.5 and
 `ChildTemplate.template` in 0.7.7, so it fits the 0.7.8 patch.
 `setAppSettings` is a new function in the `TopologyDocumentEditsKt` facade,
-which is also additive. `equals` and `hashCode` now count the settings, which
+and `appSettingsChangesTo` and `AppSettingsChange` are new declarations, so
+they are additive too. The dump numbers above predate them; the code PR
+re-measures. `equals` and `hashCode` now count the settings, which
 is the point.
 
 **Invariants the code PR adds:**
@@ -3208,7 +3238,11 @@ is the point.
    in `TopologyDocumentEditsPropertyTest` that tags every node with a unique
    setting, applies random edit sequences, and checks that each surviving
    node's tag is its own.
-2. `Topology` never carries an app's settings. Enforcer: the type.
+2. `appSettingsChangesTo` reports exactly the settings that differ: applying
+   its changes to the receiver's settings, node by matched node, gives
+   `after`'s, and two documents with equal settings give an empty list.
+   Enforcer: a property over the same generated edit sequences.
+3. `Topology` never carries an app's settings. Enforcer: the type.
    `Topology.Node` and `Topology.ChildTemplate` have no such field, and
    `checked()` cannot copy one.
 
@@ -3246,13 +3280,15 @@ its row in the same code PR.
   additive, but the app must remember to call the right one after every edit.
   That is an optional primitive policed by nothing, and a nested template level
   still has no path (#3758).
-- A `TopologyChange` arm for a settings change. See `changesTo` above (#3758).
-
-#### Open
-
-- Whether the root needs settings too. A document's root is a `String`, with
-  no node to hold them. The proposal leaves app-wide keys to the app's own file
-  wrapper (#3758).
+- A `TopologyChange` arm for a settings change. heddle reports settings
+  changes through `appSettingsChangesTo`, outside the sealed hierarchy. See
+  above (#3758).
+- No change report from heddle, leaving the app to compare two documents'
+  settings itself. Every app that shows a settings change would write the same
+  walk, and match nodes across an edit its own way (ruled 2026-11-27, #3758).
+- Settings on the root. A document's root is a `String`, with no node to hold
+  them, and app-wide keys belong in the app's own file wrapper (ruled
+  2026-11-27, #3758).
 
 ---
 
