@@ -173,12 +173,17 @@ afterEvaluate {
 // `:kuilt-base`) stays free of it. The hierarchy is read once every project is evaluated: at
 // afterEvaluate the default hierarchy template has not yet joined `androidMain` to `commonMain`
 // (measured on Kotlin 2.4.21). The `commonMain` check fails the build if a Kotlin Gradle plugin ever
-// finalizes it later still, rather than letting the edge quietly select nothing.
+// finalizes it later still, rather than letting the edge quietly select nothing. The selector reads
+// kotlin-logging's coordinates from the catalog entry, so moving that entry moves the selector too.
+// `verifySlf4jBesideKotlinLogging`, in `check`, then reads the resolved runtime graphs and reds a
+// module whose edge selected nothing, whatever the cause.
 val slf4jModule = project
+val kotlinLoggingModule = libs.kotlin.logging.get().module
+val slf4jApiModule = libs.slf4j.api.get().module
 gradle.projectsEvaluated {
     val configurations = slf4jModule.configurations
     val isKotlinLogging = { dependency: Dependency ->
-        dependency.group == "io.github.oshai" && dependency.name.startsWith("kotlin-logging")
+        dependency.group == kotlinLoggingModule.group && dependency.name.startsWith(kotlinLoggingModule.name)
     }
     listOf("androidMain", "jvmMain").forEach { leafName ->
         val leaf = kmpExtension.sourceSets.getByName(leafName)
@@ -199,6 +204,17 @@ gradle.projectsEvaluated {
         if (runsKotlinLogging) leaf.dependencies { implementation(libs.slf4j.api) }
     }
 }
+
+val verifySlf4jBesideKotlinLogging = tasks.register<VerifySlf4jBesideKotlinLogging>("verifySlf4jBesideKotlinLogging") {
+    group = "verification"
+    description = "Fails when a module depends on kotlin-logging on Android or the JVM without slf4j-api (#3744)."
+    kotlinLogging.set("${kotlinLoggingModule.group}:${kotlinLoggingModule.name}")
+    slf4jApi.set("${slf4jApiModule.group}:${slf4jApiModule.name}")
+    androidRuntime.set(configurations.named("releaseRuntimeClasspath").flatMap { it.incoming.resolutionResult.rootComponent })
+    jvmRuntime.set(configurations.named("jvmRuntimeClasspath").flatMap { it.incoming.resolutionResult.rootComponent })
+    marker.set(layout.buildDirectory.file("verification/verify-slf4j-beside-kotlin-logging.ok"))
+}
+tasks.named("check") { dependsOn(verifySlf4jBesideKotlinLogging) }
 
 // Generate the shared wasmJs Mocha/Karma timeout configuration into the build
 // directory so that every module gets an adequate per-test and socket budget by
