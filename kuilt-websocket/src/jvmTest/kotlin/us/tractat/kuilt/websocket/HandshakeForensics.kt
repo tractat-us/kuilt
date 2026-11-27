@@ -29,7 +29,8 @@ import kotlin.time.TimeSource
 
 /**
  * The record of one test server's life and of every dial made at it, rendered into the failure only
- * when a dial fails, so a handshake red names its own race from a single test-results XML (#3754).
+ * when a dial fails or is cancelled, so a handshake red names its own race from a single test-results
+ * XML (#3754, #3783).
  *
  * A failed WebSocket dial says "expected 101 but was 404" or "the server prematurely closed the
  * connection" and nothing else. Neither says **which listener** answered. #2433 established that a
@@ -37,7 +38,8 @@ import kotlin.time.TimeSource
  * before the route is installed — so a 404 at a healthy rig means the request reached a *different*
  * application. This keeps the evidence to tell those apart:
  *
- *  - the instants the route was installed, the server started, and each dial began and failed;
+ *  - the instants the route was installed, the server started, and each dial began and failed or
+ *    was cancelled;
  *  - every request **this** server received, with the peer id it carried and the status it answered;
  *  - on failure only, the TCP listeners on the port, from `lsof`, beside this process's own pid.
  *
