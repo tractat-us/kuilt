@@ -323,19 +323,18 @@ public final class us/tractat/kuilt/identity/NonceSpend$Spent : us/tractat/kuilt
 public final class us/tractat/kuilt/identity/ProofNonces {
 	public static final field Companion Lus/tractat/kuilt/identity/ProofNonces$Companion;
 	public static final field DEFAULT_CAPACITY I
-	public static final field MAX_NOW J
 	public static final field NONCE_SIZE I
-	public final fun check ([BJLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun check ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getCapacity ()I
 	public final fun getTtl-UwyO8pc ()J
-	public final fun issue (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun spend (Lus/tractat/kuilt/identity/NonceCheck$Fresh;J)Lus/tractat/kuilt/identity/NonceSpend;
+	public final fun issue (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun spend (Lus/tractat/kuilt/identity/NonceCheck$Fresh;)Lus/tractat/kuilt/identity/NonceSpend;
 	public fun toString ()Ljava/lang/String;
 }
 
 public final class us/tractat/kuilt/identity/ProofNonces$Companion {
-	public final fun create-KLykuaI (JILkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun create-KLykuaI$default (Lus/tractat/kuilt/identity/ProofNonces$Companion;JILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun create-gRj5Bb8 (JILkotlin/time/TimeSource;Lkotlin/time/Clock;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun create-gRj5Bb8$default (Lus/tractat/kuilt/identity/ProofNonces$Companion;JILkotlin/time/TimeSource;Lkotlin/time/Clock;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun getDEFAULT_TTL-UwyO8pc ()J
 	public final fun getMAX_TTL-UwyO8pc ()J
 }

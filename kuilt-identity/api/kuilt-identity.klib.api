@@ -311,16 +311,14 @@ final class us.tractat.kuilt.identity/ProofNonces { // us.tractat.kuilt.identity
     final val ttl // us.tractat.kuilt.identity/ProofNonces.ttl|{}ttl[0]
         final fun <get-ttl>(): kotlin.time/Duration // us.tractat.kuilt.identity/ProofNonces.ttl.<get-ttl>|<get-ttl>(){}[0]
 
-    final fun spend(us.tractat.kuilt.identity/NonceCheck.Fresh, kotlin/Long): us.tractat.kuilt.identity/NonceSpend // us.tractat.kuilt.identity/ProofNonces.spend|spend(us.tractat.kuilt.identity.NonceCheck.Fresh;kotlin.Long){}[0]
+    final fun spend(us.tractat.kuilt.identity/NonceCheck.Fresh): us.tractat.kuilt.identity/NonceSpend // us.tractat.kuilt.identity/ProofNonces.spend|spend(us.tractat.kuilt.identity.NonceCheck.Fresh){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.identity/ProofNonces.toString|toString(){}[0]
-    final suspend fun check(kotlin/ByteArray, kotlin/Long): us.tractat.kuilt.identity/NonceCheck // us.tractat.kuilt.identity/ProofNonces.check|check(kotlin.ByteArray;kotlin.Long){}[0]
-    final suspend fun issue(kotlin/Long): kotlin/ByteArray // us.tractat.kuilt.identity/ProofNonces.issue|issue(kotlin.Long){}[0]
+    final suspend fun check(kotlin/ByteArray): us.tractat.kuilt.identity/NonceCheck // us.tractat.kuilt.identity/ProofNonces.check|check(kotlin.ByteArray){}[0]
+    final suspend fun issue(): kotlin/ByteArray // us.tractat.kuilt.identity/ProofNonces.issue|issue(){}[0]
 
     final object Companion { // us.tractat.kuilt.identity/ProofNonces.Companion|null[0]
         final const val DEFAULT_CAPACITY // us.tractat.kuilt.identity/ProofNonces.Companion.DEFAULT_CAPACITY|{}DEFAULT_CAPACITY[0]
             final fun <get-DEFAULT_CAPACITY>(): kotlin/Int // us.tractat.kuilt.identity/ProofNonces.Companion.DEFAULT_CAPACITY.<get-DEFAULT_CAPACITY>|<get-DEFAULT_CAPACITY>(){}[0]
-        final const val MAX_NOW // us.tractat.kuilt.identity/ProofNonces.Companion.MAX_NOW|{}MAX_NOW[0]
-            final fun <get-MAX_NOW>(): kotlin/Long // us.tractat.kuilt.identity/ProofNonces.Companion.MAX_NOW.<get-MAX_NOW>|<get-MAX_NOW>(){}[0]
         final const val NONCE_SIZE // us.tractat.kuilt.identity/ProofNonces.Companion.NONCE_SIZE|{}NONCE_SIZE[0]
             final fun <get-NONCE_SIZE>(): kotlin/Int // us.tractat.kuilt.identity/ProofNonces.Companion.NONCE_SIZE.<get-NONCE_SIZE>|<get-NONCE_SIZE>(){}[0]
 
@@ -329,7 +327,7 @@ final class us.tractat.kuilt.identity/ProofNonces { // us.tractat.kuilt.identity
         final val MAX_TTL // us.tractat.kuilt.identity/ProofNonces.Companion.MAX_TTL|{}MAX_TTL[0]
             final fun <get-MAX_TTL>(): kotlin.time/Duration // us.tractat.kuilt.identity/ProofNonces.Companion.MAX_TTL.<get-MAX_TTL>|<get-MAX_TTL>(){}[0]
 
-        final suspend fun create(kotlin.time/Duration = ..., kotlin/Int = ...): us.tractat.kuilt.identity/ProofNonces // us.tractat.kuilt.identity/ProofNonces.Companion.create|create(kotlin.time.Duration;kotlin.Int){}[0]
+        final suspend fun create(kotlin.time/Duration = ..., kotlin/Int = ..., kotlin.time/TimeSource = ..., kotlin.time/Clock = ...): us.tractat.kuilt.identity/ProofNonces // us.tractat.kuilt.identity/ProofNonces.Companion.create|create(kotlin.time.Duration;kotlin.Int;kotlin.time.TimeSource;kotlin.time.Clock){}[0]
     }
 }
 
