@@ -350,7 +350,8 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
   layout reserves the field, empty, and the binding is deferred (Decided 33).
 - **The key binds the handshake, not later frames.** On a `Mesh`, a link that later takes a
   member's peer id (#2387) sends frames under that member's `Member.key`. Deployments on
-  `HostedOverlay` should use a binding `LinkAdmission` until #2387 lands.
+  `HostedOverlay` should use a binding `LinkAdmission` until #2387 lands. § Proving a key outside
+  a room proposes one, `LinkAdmission.keyed()`.
 
 ---
 
@@ -617,10 +618,269 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
 
 Slices 1 and 2 get a spec-conformance review against this document as well as a code review.
 
+## Proving a key outside a room (#3749, #3751)
+
+Status: **Proposed, awaiting Iain**, 2026-11-27. When ruled, the choices below become Decided 35
+and the rejected options move into it.
+
+A board server wants to know which device is knocking before the room's own exchange can start.
+The knock may be a plain HTTP request, or a WebSocket upgrade, which a browser sends with no
+headers of its own. So the device proves its key in one request: it fetches a fresh number from
+the server, signs it with its key, and dials with the signature and its pass in the query. The
+server checks the signature, spends the number so it cannot be used twice, and checks the pass as
+a room would.
+
+bee needs this at its gate (bee#281, `access.md` § The gate). Its hub links need the same proof,
+so that a `hostedOverlay` can refuse a link before it joins the mesh (#3751, #1261).
+
+### The statement
+
+A new kuilt statement, signed with the device's key, beside the three in § Signed statements:
+
+| Statement | Tag | Fields |
+|---|---|---|
+| Device proof | `kuilt/device-proof` v1 | subject `DidKey`, audience (UTF-8), resource (UTF-8), server nonce (as served), channel binding (reserved, empty) |
+
+- **It is a kuilt statement, not a `signApp` context.** `signApp` refuses every `kuilt` context by
+  design, so kuilt cannot reserve one for itself there, and a proof under an app context such as
+  bee's interim `"bee/socket"` is one any app's own `signApp` call could mint. The `kuilt/` tag
+  keeps the proof's domain kuilt's. `Layout.decode` checks the tag exactly, so a device proof never
+  decodes as an `admit-proof`, a `challenge` or a `grant`, nor they as it. A `signApp` signature
+  never meets any of them: its third byte is `a`, theirs `k`.
+- **The subject key is signed.** The admission proof leaves the joiner's key to the Hello. Here the
+  key rides beside the signature in the same query, and an ECDSA signature also verifies under a
+  second key anyone can compute from it. Nobody holds that key's private half, and no pass names
+  it, so it gains its builder nothing. Signing the key still rules it out, for 33 bytes.
+- **The audience is the origin the client dials**, serialised as `scheme://host[:port]`, with `ws`
+  mapped to `http` and `wss` to `https`. The client takes it from its own target URL, **never from
+  anything the server sends**. That is what defeats a hostile server relaying a nonce from the real
+  one: the victim signs the hostile origin, which the real server refuses. The server compares the
+  audience with a **configured, non-empty set** of the origins it answers on. It never derives the
+  set from the `Host` header, which the relaying server writes. A LAN host lists every address it
+  prints a link for.
+- **The resource is the request path**, with no query, such as `/board`, so a proof made for one
+  endpoint cannot be spent on another.
+- **The channel-binding field is reserved and empty**, and `decode` refuses a proof where it is
+  not, as with `kuilt/admit-proof`. If it is ever filled, it would stop only an active relay passing
+  an unspent proof over a different TLS connection, and a browser could never fill it. It closes no
+  other gap: the takeover of a partitioned id (Decided 18, 32 and 33) is a property of the room's
+  seat table, which this proof never reaches.
+
+The wire form is the layout, then the 64-byte signature, as for every statement. It travels in the
+query as `kuilt-proof=<base64url(wire)>`, with the pass, if any, as `kuilt-pass=<base64url(grant.wire)>`.
+Both are base64url without padding, and both stay well under 1 KiB. The grant is not secret
+(§ Key storage). A proxy that logs URLs logs a proof the server has already spent.
+
+### Nonces: no state to issue, bounded state to spend
+
+The server must spend each nonce once, within a minute. It keeps no table of nonces it handed out,
+so fetching nonces costs a flood nothing but bandwidth.
+
+- **Issue.** A nonce is `0x01 ‖ issuedAt (u64, epoch ms) ‖ 16 random bytes ‖ the first 16 bytes of
+  HMAC-SHA-256(secret, the 25 bytes before it)`, 41 bytes. The 32-byte secret is drawn from the
+  CSPRNG when the verifier is built and is never stored. A restart turns every outstanding nonce
+  into an unknown one, which the client recovers from by fetching another. The slice's first task
+  confirms cryptography-kotlin's HMAC on every target, as slice 0 confirmed compressed keys.
+- **Spend.** The verifier keeps the random part of each spent nonce until `issuedAt + ttl`, with a
+  default `ttl` of 60 s. A nonce is accepted while `now` lies in `[issuedAt − ttl, issuedAt + ttl)`
+  and its random part is not in the spent set. Acceptance and retention end at the same instant, so
+  a clock set back or forward cannot reopen a spent nonce. The set is capped, 65 536 entries by
+  default, and swept of expired entries on each insert. A full set of live entries refuses with
+  `Overloaded`, failing closed, rather than evicting a live entry.
+- **Only a good signature spends.** Someone who sees a nonce in flight cannot burn it with a garbage
+  signature. Two concurrent presentations of one good proof meet at one atomic insert, under the
+  verifier's lock, and one of them wins.
+- **One process.** The secret and the spent set are per verifier, so a nonce from another instance
+  is unknown here, which is safe. A deployment behind a load balancer needs sticky routing between
+  the nonce fetch and the dial. A shared store is not built (Open decision 4).
+
+The nonce is served by a plain `GET`, answered as `text/plain` base64url with `Cache-Control:
+no-store`. It needs no credential and carries nothing else: no host key, no audience.
+
+### The check, and what each failure gets
+
+`DeviceProofGate.verify(proof, pass, resource, now)` runs these checks in this order. The cheap
+checks come first, and nothing before the signature check touches the spent set:
+
+| Check | Verdict | HTTP | Upgrade | Client |
+|---|---|---|---|---|
+| decodes, binding field empty | `Malformed` | 400 | no principal | a bug: no retry |
+| audience in the set, resource is this path | `WrongAudience` | 401 | no principal | configuration: no retry |
+| nonce's MAC is this verifier's | `UnknownNonce` | 401 | no principal | fetch a nonce, retry once |
+| nonce inside its window | `ExpiredNonce` | 401 | no principal | fetch a nonce, retry once |
+| signature under the subject key | `BadSignature` | 401 | no principal | no retry; the nonce is not spent |
+| spent-set insert | `Replayed`, or `Overloaded` when full | 401, or 503 | no principal | fetch a nonce and retry, or back off |
+| `GrantTrust.verify(pass, subject, roomId, now)` | `Proven(key, pass)` with `pass` the `GrantVerdict`, or none | to the app | see § Hub links | — |
+
+- **A replayed proof is refused.** Its nonce is already spent, whoever spends it second. A client
+  that reconnects to the URL it used last replays itself, so a dialer fetches a fresh nonce for
+  every dial. `KtorClientLoom`'s `weft` already runs per dial and suspends, so it can fetch and
+  sign there.
+- **An expired proof** gets `ExpiredNonce`, and the client fetches another.
+- **A revoked device proves its key and is no longer known.** The proof is good, so the verdict is
+  `Proven`, with a pass verdict of `Revoked`. Revoking voids passes and is not a ban (Decided 27),
+  so the app treats it as a newcomer: bee's gate finds no `Keyed` verdict and wants another
+  credential. A missing pass, `Expired`, `UntrustedIssuer` and the rest take the same path. Only
+  `GrantVerdict.Valid` means the host knows the device.
+- **`Proven`'s constructor is `internal`**, so only the gate builds one. That is the rule bee's
+  `Admitted` wants, as a type, where bee needs a guard test.
+
+The gate takes the server's `DeviceKeyStore`, never a bare host key (Decided 17), and checks
+signatures in that store's `keyScheme`, so a test on wasmJs stays on virtual time. It also takes the
+`RevocationList` the server's rooms use, a required `roomId` naming the `Room` scope a pass must
+carry here (`AnyRoomOfIssuer` covers every gate), the audiences and the clock.
+
+The client side, `DeviceProofDialer`, takes the device's `DeviceKeyStore` and the issuer whose pass
+to present. It never learns the issuer from the server, so a hostile server cannot fish for passes.
+An app knows the issuer from the pass it was given. `dialContext(url)` fetches a nonce, signs, and
+answers the `WebSocketDialContext` a `weft` returns. `KtorMeshClientLoom` gains the `weft` that
+`KtorClientLoom` already has.
+
+### Next to the room's challenge
+
+The two prove the same thing in different shapes, so they share the machinery and not the
+statement:
+
+- **Shared:** `Layout`, `StatementCodec`, `KeyScheme`, and `GrantTrust` exactly, with its order of
+  checks and the skew allowance.
+- **Not shared: `AdmissionProof`.** Its fields, the host's and joiner's peer ids and the `deviceId`,
+  mean nothing at a gate, and its tag is what keeps a gate proof from being presented to a room as
+  an admission. It also stays `@IdentityInternalApi`, a room's own, while the device proof is
+  public, since an app's server calls it.
+- **Not shared: the nonce.** A room's host nonce is in-band, one pending challenge per fabric sender
+  (§ One exchange). The gate's is out of band, with no state until it is spent.
+- **The claims room still runs its own challenge.** It binds the room id, both peer ids and the
+  `deviceId` on every fabric, and a gate proves none of those. Once #3750 puts the link's principal
+  on `AdmissionRequest`, a policy can refuse a Proof under a key other than the one the gate proved.
+
+### Hub links (#3751)
+
+The hub-link proof is the same proof, run at upgrade time. Its verdict becomes the link's
+`Principal`, which `LinkAdmission` reads before the link reaches the dedup tiebreak.
+
+- **The extractor suspends.** `principalExtractor` is `(ApplicationCall) -> Principal?` on
+  `KtorConnectionSource`, `KtorServerLoom` and `KtorRoomHost`, and checking a signature suspends.
+  It becomes `suspend (ApplicationCall) -> Principal?`. A lambda literal still compiles, and the ABI
+  dump records the change. `KtorDeviceProof.principal(gate, newcomer)` is an extractor that answers
+  `Principal(key.value)` for a `Proven` key whose pass is `Valid`, or for a newcomer the app admits,
+  and `null` for everything else.
+- **A newcomer is the app's call, by a required predicate** (Open decision 1). A hub link has no
+  `Welcome` to carry a pass back. A browser cannot read an upgrade's response headers either. So an
+  `AdmissionPolicy`, whose `Admit` promises a pass, cannot answer for a hub link without dropping
+  that promise. Instead the extractor takes `newcomer: suspend (DidKey) -> Boolean`, which bee
+  answers `{ false }`. The revocations are the room's own: the gate reads `HostAdmission.revocations`.
+- **A keyed hub's peer ids are the key's** (Open decision 2). A `KeyedPeerId` is
+  `<did:key>/<label>`, where the label is any string a device chooses, one per tab.
+  `LinkAdmission.keyed()` admits a link only when its principal is a key and the `MeshHello`'s
+  `remoteId` sits under that key. A dial under another key cannot take a keyed id, so #2387's
+  dispossession cannot happen on a keyed hub, and two tabs on one key (Decided 30) keep distinct
+  ids. These are ids a peer cannot choose for another key, the remedy Decided 33 names. They cover
+  hub links only. A room's peer ids stay self-chosen, and its gap is unchanged.
+- **Revocation is read at the upgrade.** A link that is up when its key is revoked stays up, as a
+  room's member does (Decided 12). Closing it is the app's call.
+
+### Where each piece lives
+
+| Piece | Module | Why there |
+|---|---|---|
+| `DeviceProof`, `ProofNonces`, `DeviceProofGate`, `DeviceProofVerdict` | `:kuilt-identity` | Pure statements and checks over its own types. It depends on `:kuilt-store` alone, and gains nothing |
+| `DeviceProofDialer`, `KeyedPeerId`, `LinkAdmission.keyed()` | `:kuilt-websocket` `commonMain` | They need `:kuilt-core`'s `PeerId`, `Principal` and `LinkAdmission` beside identity types. `commonMain` takes `api(:kuilt-identity)`, which it reaches today through `:kuilt-session` |
+| The nonce route, `ApplicationCall.deviceProof(gate)`, `KtorDeviceProof.principal`, the suspending extractor | `:kuilt-websocket` `jvmAndAndroidMain` | Ktor server, where `KtorConnectionSource` lives |
+
+`:kuilt-core` does not change, and no arrow points into it. `:kuilt-gossip` does not change either:
+an app passes the `LinkAdmission` to `hostedOverlay`.
+
+### Rejected
+
+- **Signing under a `signApp` context.** kuilt cannot reserve one, and an app context is mintable by
+  any app.
+- **Reusing `AdmissionProof` and its tag.** A gate proof would then pass as a room admission, and
+  half its fields would be empty.
+- **Running the room's in-band challenge on a hub link,** as #3751's wording asks. It needs a
+  challenge step between `MeshHello` and publication, so `:kuilt-core` would define a verifier
+  interface and every hub client would answer it. That is #2387's own deferred design, and it buys
+  a hub link nothing the upgrade proof does not.
+- **A table of issued nonces.** It is state an anonymous flood can fill. Evicting from it would let
+  the flood starve real clients, and refusing when full would let the flood shut everyone out.
+- **A timestamp nonce with no spent set.** A proof could be replayed within its window, against
+  "spent once".
+- **Deriving the audience from `Host`.** The relaying server writes that header.
+- **Checking the proof in a route plugin before the upgrade.** It refuses with a status a browser
+  cannot read, and `KtorConnectionSource` builds its route node privately, so an app would have to
+  find it. bee does that today, and it is the fragility this replaces.
+- **Asking `AdmissionPolicy` for a hub newcomer and dropping its terms.** See Open decision 1.
+
+### Slices
+
+Each is one PR and one behaviour move, and carries its `kuilt-primitives` route, cookbook entry
+and ABI dump. None is filed.
+
+1. **`DeviceProof`** (`:kuilt-identity`): layout, `sign`, `decode`, `isSignedBy`. Tests: golden
+   vector, bytes fixed; decode refuses a non-empty binding field, a wrong tag or version, and each
+   malformed field; cross-decode, where none of `admit-proof`, `challenge`, `grant` or a `signApp`
+   output decodes as a device proof, nor the reverse; a signature by another key, and a substituted
+   subject, both refused.
+2. **`ProofNonces`** (`:kuilt-identity`): issue and spend, with the clock and CSPRNG injected. Its
+   first task is the HMAC probe on every target. Tests: spend once, then `Replayed`; two concurrent
+   spends on a multi-threaded dispatcher, one winner, with the iteration count asserted;
+   `ExpiredNonce` at `issuedAt + ttl` and not one millisecond before; another instance's nonce is
+   `UnknownNonce`; a full set answers `Overloaded`, then frees space once its entries expire; the
+   clock set back and forward never reopens a spent nonce.
+3. **`DeviceProofGate`** (`:kuilt-identity`): the ordered check and `DeviceProofVerdict`. Tests:
+   one row per verdict, each asserting its rig fired; a bad signature leaves the nonce spendable by
+   its holder; a wrong audience is refused before the nonce is touched; revoked, expired, untrusted
+   and absent passes each give `Proven` with that pass verdict; on a fake key store it runs on
+   wasmJs in virtual time.
+4. **The dialer** (`:kuilt-websocket` `commonMain`): `DeviceProofDialer`, and `weft` on
+   `KtorMeshClientLoom`. Tests: two dials fetch two nonces; the audience comes from the dial URL
+   whatever the nonce response says; only the named issuer's pass is presented.
+5. **The suspending extractor** (`:kuilt-websocket`, breaking): the type change on the three server
+   classes, with no behaviour change. Tests: the existing attestation tests, unchanged, plus one
+   that suspends inside the extractor.
+6. **Ktor glue** (`:kuilt-websocket` `jvmAndAndroidMain`): the nonce route,
+   `ApplicationCall.deviceProof`, `KtorDeviceProof.principal`. Tests, on `testApplication`: a good
+   upgrade puts `Principal(did)` on the hub's roster; the same URL dialled twice gets no principal
+   the second time; an HTTP call answers each status in the table; a revoked key's dial gets no
+   principal unless `newcomer` admits it.
+7. **Keyed hub ids** (`:kuilt-websocket` `commonMain`): `KeyedPeerId` and `LinkAdmission.keyed()`.
+   Tests, beside `MeshAdmissionTest`: a dial under another key claiming a keyed id is refused before
+   the dedup tiebreak, the mirror of `controlSpoofedLinkWinsDedupLotteryUnderAcceptAll`; two labels
+   under one key both join; an unattested link claiming a keyed id is refused.
+
+Slices 1 to 3 are a stack. Slice 4 needs 1. Slice 6 needs 3 and 5. Slice 7 needs 6 for its
+end-to-end row, and none for its unit rows. Then bee's interim proof retires, first at the gate
+(after 6), then on the board socket (after 7).
+
+### Open decisions for Iain
+
+1. **A newcomer on a hub link.** *Recommended:* a required `newcomer: suspend (DidKey) -> Boolean`,
+   with the revocations taken from `HostAdmission`. *Instead:* ask `HostAdmission.policy` and drop
+   the `GrantTerms` its `Admit` carries, which keeps #3751's "ask a `HostAdmission`" literal while
+   breaking `Admit`'s promise of a pass. Either way #3751's "Done" should be amended to read "proves
+   a key at upgrade", since the in-band challenge is rejected above.
+2. **Keyed peer ids on a keyed hub.** *Recommended:* yes, as above, so a proven key also pins the
+   ids it may claim. *Instead:* prove the key and leave the binding to the app's own
+   `LinkAdmission`, as today. #2387's dispossession then stays open on a keyed hub.
+3. **The suspending extractor.** *Recommended:* change the type (slice 5), which breaks the ABI.
+   Pre-1.0 and a lambda literal still compiles, so the cost is one dump. *Instead:* add a second,
+   suspending parameter beside the first. That doubles a constructor and leaves two ways to attest.
+4. **More than one server instance.** *Recommended:* one process, stated, with sticky routing for
+   a deployment that needs more. bee hosts on one machine. *Instead:* a `NonceStore` interface over
+   a shared secret and a shared spent set, built when a consumer needs one.
+5. **The gate's `roomId`.** *Recommended:* required, naming the `Room` scope a pass must carry
+   here. bee passes its board id, and its passes are `AnyRoomOfIssuer` anyway (#3752).
+   *Instead:* accept `AnyRoomOfIssuer` passes only, which is simpler and refuses a `ThisRoom` pass
+   an app may expect to work.
+6. **Timing.** *Recommended:* after v0.7.7. No room frame changes and `ProtocolVersion` stays 9,
+   but slice 5 breaks the ABI, and bee's interim proof covers the gap. *Instead:* slices 1 to 3
+   before the tag, since they are additive.
+
 ## Deferred
 
 - **#2387** — mesh dedup sits below the session Hello; its fix is a proof in `MeshHello` behind a
-  verifier interface `:kuilt-core` defines and `:kuilt-identity` implements. Its own spec.
+  verifier interface `:kuilt-core` defines and `:kuilt-identity` implements. Its own spec. A hub
+  that accepts only would not need it: § Proving a key outside a room proves the key at the upgrade
+  and pins keyed peer ids (proposed). A mesh that dials both ways still does.
 - **`RoomAuthorizer` seeing the key** — same layering, same follow-on.
 - A `Pending` frame for slow vetting; personas and delegation.
 - **Channel binding** (Decided 33, #3696). It closes the active-relay row only, on
