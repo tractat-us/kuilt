@@ -45,6 +45,10 @@ The server's nonces. `ProofNonces` hands them out and spends each once. A nonce 
 time and a MAC under a secret only this server process holds, so handing one out keeps no record
 and a flood of requests for them costs nothing. Spending one keeps it in a capped set until it runs
 out, a minute after it was issued, so the same proof presented twice is refused the second time.
+That minute is timed on a clock that only runs forward, so setting the wall clock back or forward
+cannot let a spent nonce in again. If the wall clock and that clock come to disagree by more than
+the minute, as after a clock change or a long sleep, the server draws a new secret, and every
+nonce outstanding is unknown: the device fetches another.
 
 The check. When a device shows a grant, `GrantTrust` decides whether it is good in this room now:
 issued and signed by this host's own key, naming the device that proved it holds that key, for this
