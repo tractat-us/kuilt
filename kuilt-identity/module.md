@@ -33,6 +33,14 @@ any room that host runs, until a time the host picks, or for good. The device ke
 when it returns, and `isSignedByIssuer` checks the host really signed it. It is not a secret,
 because it names the device's key and is useless without it.
 
+The proof to a server. A `DeviceProof` lets a device show a server it holds its key before any room
+has started, on a request that carries nothing but a URL, such as a browser's WebSocket upgrade. The
+device fetches a fresh nonce from the server and signs its own key, the origin and path it is
+dialling, and that nonce; `isSignedBySubject` checks the signature under the key the proof names.
+The device takes the origin from the URL it dials, never from the server, so a proof a hostile
+server relays to another is made out to the wrong place. It is a kuilt statement, not an app
+signature, so it is never mistaken for a room's own proof or a grant, nor they for it.
+
 The check. When a device shows a grant, `GrantTrust` decides whether it is good in this room now:
 issued and signed by this host's own key, naming the device that proved it holds that key, for this
 room, not revoked, not dated more than five minutes ahead of the host's clock, not run out. The

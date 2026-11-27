@@ -73,6 +73,24 @@ public final class us/tractat/kuilt/identity/DeviceKeyStore$DefaultImpls {
 	public static fun keepFreshGrant (Lus/tractat/kuilt/identity/DeviceKeyStore;Lus/tractat/kuilt/identity/Grant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
+public final class us/tractat/kuilt/identity/DeviceProof {
+	public static final field Companion Lus/tractat/kuilt/identity/DeviceProof$Companion;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAudience ()Ljava/lang/String;
+	public final fun getNonce ()[B
+	public final fun getResource ()Ljava/lang/String;
+	public final fun getSubject-UjzFoJQ ()Ljava/lang/String;
+	public final fun getWire ()[B
+	public fun hashCode ()I
+	public final fun isSignedBySubject (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/DeviceProof$Companion {
+	public final fun decode ([B)Lus/tractat/kuilt/identity/DeviceProof;
+	public final fun sign (Lus/tractat/kuilt/identity/DeviceKey;Ljava/lang/String;Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public final class us/tractat/kuilt/identity/DidKey {
 	public static final field Companion Lus/tractat/kuilt/identity/DidKey$Companion;
 	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/identity/DidKey;

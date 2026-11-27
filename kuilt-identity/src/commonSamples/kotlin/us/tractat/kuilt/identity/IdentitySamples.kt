@@ -154,3 +154,27 @@ internal suspend fun sampleDeviceKeyStoreRemembers(openAtLaunch: suspend () -> D
     check(tomorrow.deviceKey().id == me.id)
     check(tomorrow.grants() == listOf(pass))
 }
+
+/** @suppress — sample only */
+internal suspend fun sampleDeviceProof() {
+    // The device, about to dial wss://boards.example/board. It fetched a fresh nonce from the server first.
+    val device = DeviceKey.generate()
+    val nonce = "a nonce the server served".encodeToByteArray()
+
+    // The audience comes from the URL being dialled, wss mapped to https, never from the server's answer.
+    val proof = DeviceProof.sign(device, audience = "https://boards.example", resource = "/board", nonce = nonce)
+    val sent: ByteArray = proof.wire // base64url, in the query
+
+    // The server reads it back, and checks the origin and path it answers on, and its own nonce.
+    val received = checkNotNull(DeviceProof.decode(sent))
+    check(received.audience == "https://boards.example" && received.resource == "/board")
+    check(received.nonce.contentEquals(nonce))
+
+    // It proves the device holds the key it names, and nothing more: whether the server knows that
+    // key is a pass's question.
+    check(received.subject == device.id && received.isSignedBySubject())
+
+    // Change one byte of the signature, and it no longer proves the key.
+    val edited = sent.copyOf().also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }
+    check(DeviceProof.decode(edited)?.isSignedBySubject() == false)
+}
