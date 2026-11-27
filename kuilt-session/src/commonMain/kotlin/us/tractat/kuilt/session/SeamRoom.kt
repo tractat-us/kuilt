@@ -1922,7 +1922,8 @@ internal class SeamRoom(
      *   gave, or a `Reject` with its code (#3220). The policy is asked at most once per exchange.
      * - [SeatDecision.Returning] — the seat is gone and [pass] is good — admits a new member without
      *   asking, marked as the same device returning ([admitReturning], #3222). [pass] is checked once,
-     *   when the Proof is ([presentedPass]), and its revocation and end again in every pass that decides.
+     *   when the Proof is ([returnPass]), and its revocation and end again in every pass that decides. It
+     *   is a pass the joiner presented, or the last one this host signed its key (Decided 34, #3745).
      *
      * **Revocation is checked once per key, before any restore verdict is trusted** (Decided 14,
      * [decideUnderRevocation]). A seat of the proven key admitted before the key's revocation cutoff is
@@ -2321,8 +2322,8 @@ internal class SeamRoom(
      * key and its own id asks for it back. Checked per key, so once for every seat that key holds, before any restore
      * verdict is trusted.
      *
-     * [pass] is the pass the joiner presented that [GrantTrust] found good when its Proof was checked
-     * ([presentedPass], #3222). It decides [SeatDecision.Returning] only where no seat does (rules 6–7),
+     * [pass] is the pass [GrantTrust] found good when the joiner's Proof was checked ([returnPass]): one
+     * it presented (#3222), or the last one this host signed its key (Decided 34, #3745). It decides [SeatDecision.Returning] only where no seat does (rules 6–7),
      * and only while it is still good at [nowMs]: its revocation and its end are read again here, under
      * the lock that decides, so a device revoked, or a pass run out, while its exchange was asking about
      * a seat is not let in unvetted. Revocation is by the pass's own date (Decided 27): a pass issued
@@ -3229,16 +3230,17 @@ internal class SeamRoom(
         }
         val trust = checkNotNull(grantTrust) { "only a host checks a pass" }
         val now = clock().toEpochMilliseconds()
-        val recorded = lock.withLock { departedMembers.pass(subject, now) }
-        val recordedGood = recorded != null && when (val verdict = verifyOrNull(sender, trust, recorded, subject, now) ?: return PassCheck.CheckFailed) {
-            GrantVerdict.Valid -> true
-            else -> {
-                logger.info { "room.pass.recorded-ignored peer=${sender.value} verdict=$verdict" }
-                false
+        val recorded = lock.withLock { departedMembers.pass(subject, now) }?.let { kept ->
+            when (val verdict = verifyOrNull(sender, trust, kept, subject, now) ?: return PassCheck.CheckFailed) {
+                GrantVerdict.Valid -> kept
+                else -> {
+                    logger.info { "room.pass.recorded-ignored peer=${sender.value} verdict=$verdict" }
+                    null
+                }
             }
         }
         val grant = when {
-            !recordedGood -> presented
+            recorded == null -> presented
             presented == null -> recorded
             recorded.notAfter >= presented.notAfter -> GrantIssuer.mostGenerous(recorded, presented)
             else -> GrantIssuer.mostGenerous(presented, recorded)
