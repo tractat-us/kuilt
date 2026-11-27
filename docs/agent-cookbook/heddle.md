@@ -726,8 +726,8 @@ carries the app's own `appSettings` with the node; see
 routes work to a lane or the key a group's attached children are split by, and wants them to stay
 on the right node through every remove, move and rename, instead of in a side map keyed by
 child-index paths that shift.
-**Primitive:** `appSettings`, a `Map<String, String>` on `TopologyDocument.Group`, `Lane` and
-`ChildTemplate` (`:kuilt-heddle-core`), set with `setAppSettings(path, settings)`, and
+**Primitive:** `appSettings`, a `Map<String, String>` on every `TopologyDocument.Node` (a `Group`
+or a `Lane`) and on `ChildTemplate` (`:kuilt-heddle-core`), set with `setAppSettings(path, settings)`, and
 `TopologyDocument.appSettingsChangesTo(after)` → `AppSettingsChange` (`Added`, `Removed`,
 `Changed`) to show what an edit did to them.
 
@@ -774,12 +774,16 @@ child-index paths that shift.
   `TopologyProblem.Kind.CONSUMER` (see [Loading the tree from a config file](#loading-the-tree-from-a-config-file)).
 - **The report is one change per key, outside `TopologyChange`.** Nodes are matched by their
   names from the root down, as `changesTo` matches them, so a moved or renamed node's settings
-  come back `Removed` at the old address and `Added` at the new one. A change is addressed in the
-  document after unless its node is gone. `templateDepth` is `0` for a node's own settings, `1`
-  for its template's and so on. Two siblings of one name match in order, so it never throws.
-- **An empty map is not written.** A document with no settings encodes byte for byte as before. A
-  document that has some is refused by an older kuilt decoding strictly, and loses them silently
-  under `ignoreUnknownKeys`.
+  come back `Removed` at the old address and `Added` at the new one. The arm says which document
+  a path is in: a `Removed` is always addressed in the document before, even when its node stays,
+  and an `Added` or a `Changed` in the document after. So the page marks removals on the old tree
+  and the rest on the new. `templateDepth` is `0` for a node's own settings, `1` for its
+  template's and so on. Two siblings of one name match in order, so it never throws.
+- **In document order.** Walking the new document, a node's own changes come first, then its
+  template levels', then its children's in the order written, then those of the children it lost.
+- **An empty map is never written**, even under `Json { encodeDefaults = true }`, so a document
+  with no settings encodes byte for byte as before. A document that has some is refused by an
+  older kuilt decoding strictly, and loses them silently under `ignoreUnknownKeys`.
 
 ## Changing the tree while work runs
 
