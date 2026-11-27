@@ -720,27 +720,39 @@ class ReturningAdmissionTest {
     /**
      * A record whose pass the host revokes after Bob left is dropped then, not kept until capacity
      * pushes it out (#3762): a revocation made after the record was written voids it as surely as one
-     * made before.
+     * made before. What shows it is the mark: Bob comes back on a good pass the host signed him after
+     * the cutoff, one good in any of its rooms, and the host no longer names the id his revoked
+     * membership held.
      */
     @Test
     fun aDepartedRecordIsDroppedWhenItsPassIsRevokedLater() = runTest {
         val counted = Counted()
         val host = rawHost(joiners = setOf(bob, bobAgain), admission = counted.admission)
-        val room = host.room as SeamRoom
         host.admit(bob, bobKey, nonce = 1)
-        val pass = host.passesTo(bob).last()
+        val revoked = host.passesTo(bob).last()
         host.say(bob, AdmitMessage.Goodbye)
-        val beforeRevoking = room.departedRecordCountForTest()
-        counted.revocations.revoke(bobKey.id, notBefore = testScheduler.currentTime + 1)
-        val afterRevoking = room.departedRecordCountForTest()
+        val cutoff = testScheduler.currentTime + 1
+        counted.revocations.revoke(bobKey.id, notBefore = cutoff)
+        testScheduler.advanceTimeBy(1.seconds)
+        val now = testScheduler.currentTime
+        val fresh = Grant.issue(fakeDeviceKey(HOST_DEVICE), bobKey.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 1.hours.inWholeMilliseconds)
         val vettedBefore = counted.keys()
-        host.admit(bobAgain, bobKey, nonce = 2)
+
+        val mark = host.events.mark()
+        host.admit(bobAgain, bobKey, nonce = 2, grants = listOf(fresh))
 
         assertAll(
-            { assertTrue(testScheduler.currentTime < pass.notAfter, "rig: Bob's pass has not run out") },
-            { assertEquals(1, beforeRevoking, "rig: Bob's departure was recorded") },
-            { assertEquals(0, afterRevoking, "the revocation drops the record") },
-            { assertEquals(vettedBefore + bobKey.id, counted.keys(), "and Bob, presenting nothing, is vetted") },
+            { assertTrue(testScheduler.currentTime < revoked.notAfter, "rig: Bob's recorded pass has not run out") },
+            { assertTrue(revoked.issuedAt < cutoff, "rig: but was issued before the cutoff, so it is void") },
+            { assertTrue(fresh.issuedAt >= cutoff, "rig: the pass Bob presents was issued at or after it") },
+            { assertEquals(vettedBefore, counted.keys(), "rig: Bob comes back on that pass, unvetted") },
+            {
+                assertEquals(
+                    listOf(ReturningMark(previousId = null)),
+                    host.events.since(mark).joins().map { it.returning },
+                    "the revoked record is gone: the return names no previous id",
+                )
+            },
         )
         host.room.leave()
     }

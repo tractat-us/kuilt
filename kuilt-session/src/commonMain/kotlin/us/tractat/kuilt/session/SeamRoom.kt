@@ -59,7 +59,6 @@ import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.GrantScope
 import us.tractat.kuilt.identity.GrantTrust
 import us.tractat.kuilt.identity.GrantVerdict
-import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.session.admit.AdmissionDecision
 import us.tractat.kuilt.session.admit.AdmissionRequest
 import us.tractat.kuilt.session.admit.AdmitMessage
@@ -80,6 +79,7 @@ import us.tractat.kuilt.session.admit.SeatLiveness
 import us.tractat.kuilt.session.admit.SupersededIds
 import us.tractat.kuilt.session.admit.decideSeat
 import us.tractat.kuilt.session.admit.newcomerRequest
+import us.tractat.kuilt.session.admit.stillGood
 import us.tractat.kuilt.session.election.ElectionLobby
 import us.tractat.kuilt.session.election.LobbyMessage
 import us.tractat.kuilt.session.election.SeamElectionLobby
@@ -943,10 +943,9 @@ internal class SeamRoom(
      * a pass is announced with ([ReturningMark.previousId]), and a pass it may come back on though its
      * link lost it (Decided 34). Good includes not voided by [HostAdmission.revocations], a revocation
      * made after the departure included (#3762). Guarded by [lock]; written by [detachMember], read by
-     * [returnPass], taken by [admitReturning], and cleared by [leave]. A joiner records no departure, so
-     * the empty list it is given voids nothing.
+     * [returnPass], taken by [admitReturning], and cleared by [leave]. Null on a joiner.
      */
-    private val departedMembers = DepartedMembers(admission?.revocations ?: RevocationList.inMemory())
+    private val departedMembers: DepartedMembers? = admission?.let { DepartedMembers(it.revocations) }
 
     /**
      * **Host only.** How this host checks a pass a returning joiner presents: against its own device
@@ -2347,14 +2346,6 @@ internal class SeamRoom(
     }
 
     /**
-     * Whether a pass [GrantTrust] has already found good still is, at [nowMs], against its subject's
-     * revocation [cutoff]: the two checks of its verdict that can change after it was given. Issuer,
-     * signature, subject and scope cannot.
-     */
-    private fun Grant.stillGood(cutoff: Long?, nowMs: Long): Boolean =
-        (cutoff == null || issuedAt >= cutoff) && (notAfter == Grant.NO_EXPIRY || nowMs < notAfter)
-
-    /**
      * **Under [lock].** [SeatDecision.ReleaseAndAdmit]: the claimed id's seat [released] is to be given
      * up — held partitioned under another key (Decided 18), or held under this key and revoked since
      * its admission (Decided 14) — and the key decided again without it.
@@ -2744,7 +2735,7 @@ internal class SeamRoom(
      * the host remembers it ([departedMembers]).
      */
     private fun admitReturning(joinerPeerId: PeerId, keyed: KeyedHello, pass: ReturnPass, admittedAtMs: Long): SeatOutcome.Admitted {
-        val previousId = departedMembers.take(keyed.key, admittedAtMs)
+        val previousId = checkNotNull(departedMembers) { "only a host admits a return" }.take(keyed.key, admittedAtMs)
         logger.info { "room.admit.returning peer=${joinerPeerId.value} previous=${previousId?.value} recorded=${pass.grant != pass.presented}" }
         return admitNewMember(joinerPeerId, keyed, GrantIssuer.termsOf(pass.grant), admittedAtMs, ReturningMark(previousId))
             .also {
@@ -3241,7 +3232,8 @@ internal class SeamRoom(
         val trust = checkNotNull(grantTrust) { "only a host checks a pass" }
         val now = clock().toEpochMilliseconds()
         // The same pass the joiner presented is checked already, and costs no second signature check.
-        val recorded = lock.withLock { departedMembers.pass(subject, now) }?.takeIf { it != presented }?.let { kept ->
+        val departed = checkNotNull(departedMembers) { "only a host checks a pass" }
+        val recorded = lock.withLock { departed.pass(subject, now) }?.takeIf { it != presented }?.let { kept ->
             when (val verdict = verifyOrNull(sender, trust, kept, subject, now) ?: return PassCheck.CheckFailed) {
                 GrantVerdict.Valid -> kept
                 else -> {
@@ -5748,7 +5740,7 @@ internal class SeamRoom(
         val membership = memberships.remove(peerId)
         val lastPass = membership?.lastPass
         if (lastPass != null && reason !is LeaveReason.Superseded) {
-            departedMembers.record(leaving.key, peerId, lastPass, clock().toEpochMilliseconds())
+            checkNotNull(departedMembers) { "only a host signs a pass" }.record(leaving.key, peerId, lastPass, clock().toEpochMilliseconds())
         }
         // A joiner's count of who the host named is cleared only by a new Hello, and a room that never
         // reconnects never says one, so it is pruned here too (#3615). It changes no rebuild: on a
@@ -5795,7 +5787,7 @@ internal class SeamRoom(
     internal fun renewsPassForTest(peerId: PeerId): Boolean = lock.withLock { grantRenewals[peerId]?.isActive == true }
 
     /** Test-visibility: how many departed members this host still remembers (#3222). */
-    internal fun departedRecordCountForTest(): Int = lock.withLock { departedMembers.size(clock().toEpochMilliseconds()) }
+    internal fun departedRecordCountForTest(): Int = lock.withLock { checkNotNull(departedMembers) { "only a host records departures" }.size(clock().toEpochMilliseconds()) }
 
     /** Test-visibility: how many membership ids this host holds — one per current member (#3215). */
     internal fun heldMembershipCount(): Int = lock.withLock { memberships.size }
@@ -6215,7 +6207,7 @@ internal class SeamRoom(
             grantRenewals.values.forEach { it.cancel() }
             grantRenewals.clear()
             supersededIds.clear()
-            departedMembers.clear()
+            departedMembers?.clear()
             _roster.value = emptySet()
             _rosterPeers.value = setOf(selfId)
             memberInboxes.values.toList().also { memberInboxes.clear() }

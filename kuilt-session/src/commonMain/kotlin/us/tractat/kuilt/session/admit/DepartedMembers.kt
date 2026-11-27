@@ -27,8 +27,11 @@ import us.tractat.kuilt.identity.RevocationList
  *   host issued last (by [Grant.issuedAt], then the later-ending on a tie), the pass the device's own
  *   store would keep. A revocation voids a device's passes issued before one cutoff, so it can void
  *   the kept pass only by voiding every other one too: a voided pass never displaces a good one, at
- *   the departure or later. The cost: an earlier pass that runs out later than the kept one is not
- *   kept.
+ *   the departure or later. One exception to "issued last": a pass dated more than
+ *   [GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS] ahead when the record is written, which
+ *   [GrantTrust.verify] would refuse as `NotYetValid`, gives way to one that is not, as the device's
+ *   store gives up a post-dated pass for a fresh one. The cost: an earlier pass that runs out later
+ *   than the kept one is not kept.
  * - **Taken on return** ([take]): a key back in the room is a member again, and its next departure
  *   writes a new record.
  * - **Bounded.** A pass that never expires would keep its record for the host's life, so at most
@@ -53,12 +56,12 @@ internal class DepartedMembers(
     /**
      * The membership [key] held under [previousId] has left at [now]; [pass] is the last the host
      * signed it. Of [pass] and the one an earlier departure of [key] left, the record keeps the good
-     * one issued last, and is dropped if neither is good.
+     * one issued last, preferring one not post-dated at [now], and is dropped if neither is good.
      */
     fun record(key: DidKey, previousId: PeerId, pass: Grant, now: Long) {
         prune(now)
         val earlier = records.remove(key)?.pass
-        val kept = listOfNotNull(earlier, pass).filter { it.isGoodAt(now) }.maxWithOrNull(LATER_ISSUED) ?: return
+        val kept = listOfNotNull(earlier, pass).filter { it.isGoodAt(now) }.maxWithOrNull(preferredAt(now)) ?: return
         records[key] = Record(previousId, kept)
         while (records.size > capacity) records.remove(records.keys.first())
     }
@@ -90,18 +93,17 @@ internal class DepartedMembers(
     }
 
     /** Not run out at [now], and not issued before its subject's revocation cutoff, as [GrantTrust] reads both. */
-    private fun Grant.isGoodAt(now: Long): Boolean {
-        val cutoff = revocations.notBefore(subject)
-        return !hasRunOutAt(now) && (cutoff == null || issuedAt >= cutoff)
-    }
+    private fun Grant.isGoodAt(now: Long): Boolean = stillGood(revocations.notBefore(subject), now)
 
     companion object {
         /** Past this, a host forgets the oldest departure first. */
         const val DEFAULT_CAPACITY: Int = 256
 
-        private fun Grant.hasRunOutAt(now: Long): Boolean = notAfter != Grant.NO_EXPIRY && notAfter <= now
-
-        /** The pass issued later, then the one that runs out later ([Grant.NO_EXPIRY] is the largest `Long`). */
-        private val LATER_ISSUED: Comparator<Grant> = compareBy<Grant>({ it.issuedAt }, { it.notAfter })
+        /**
+         * The pass not post-dated at [now], then the one issued later, then the one that runs out later
+         * ([Grant.NO_EXPIRY] is the largest `Long`): greatest first under `maxWith`.
+         */
+        private fun preferredAt(now: Long): Comparator<Grant> =
+            compareBy<Grant>({ !it.isPostDatedAt(now) }, { it.issuedAt }, { it.notAfter })
     }
 }

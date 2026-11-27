@@ -7,6 +7,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.GrantScope
+import us.tractat.kuilt.identity.GrantTrust
 import us.tractat.kuilt.identity.RevocationList
 import us.tractat.kuilt.identity.test.fakeDeviceKey
 import us.tractat.kuilt.identity.test.fakeDidKey
@@ -22,18 +23,51 @@ class DepartedMembersTest {
     private suspend fun pass(subject: DidKey, issuedAt: Long, notAfter: Long): Grant =
         Grant.issue(fakeDeviceKey(0), subject, GrantScope.Room("room"), issuedAt, notAfter)
 
+    /**
+     * Two tabs leave in either order: the pass issued earlier runs out later. The record keeps the one
+     * issued last whichever reaches it first, and names the id that left last.
+     */
     @Test
     fun severalTabsKeepTheLatestIdAndTheLastIssuedPass() = runTest {
-        val departed = DepartedMembers(RevocationList.inMemory())
         val earlier = pass(key, issuedAt = 0, notAfter = 900)
         val later = pass(key, issuedAt = 100, notAfter = 600)
-        departed.record(key, PeerId("tab-2"), later, now = 200)
-        departed.record(key, PeerId("tab-1"), earlier, now = 300)
-        val kept = departed.pass(key, now = 400)
-        val id = departed.take(key, now = 400)
+        val earlierFirst = DepartedMembers(RevocationList.inMemory()).apply {
+            record(key, PeerId("tab-1"), earlier, now = 200)
+            record(key, PeerId("tab-2"), later, now = 300)
+        }
+        val laterFirst = DepartedMembers(RevocationList.inMemory()).apply {
+            record(key, PeerId("tab-2"), later, now = 200)
+            record(key, PeerId("tab-1"), earlier, now = 300)
+        }
         assertAll(
-            { assertEquals(later, kept, "the pass the host issued last, as the device's own store keeps, whichever tab left last") },
-            { assertEquals(PeerId("tab-1"), id, "and the record names the id that left last") },
+            { assertEquals(later, earlierFirst.pass(key, now = 400), "the pass the host issued last, arriving last, displaces one that runs out later") },
+            { assertEquals(later, laterFirst.pass(key, now = 400), "and arriving first, is not displaced by it") },
+            { assertEquals(PeerId("tab-2"), earlierFirst.take(key, now = 400), "the record names the id that left last") },
+            { assertEquals(PeerId("tab-1"), laterFirst.take(key, now = 400), "whichever that is") },
+        )
+    }
+
+    /**
+     * #3762's review: a pass issued last but dated more than the clock-skew allowance ahead when the
+     * record is written, which the host would refuse as not yet valid, gives way to an earlier good
+     * one. Dated exactly at the allowance, it is accepted, so it is still the one issued last.
+     */
+    @Test
+    fun aPostDatedPassGivesWayToAnEarlierGoodOne() = runTest {
+        val now = 1_000L
+        val allowance = GrantTrust.CLOCK_SKEW_ALLOWANCE_MILLIS
+        val good = pass(key, issuedAt = 0, notAfter = Grant.NO_EXPIRY)
+        val postDated = pass(key, issuedAt = now + allowance + 1, notAfter = now + allowance + 10_000)
+        val atTheAllowance = pass(key, issuedAt = now + allowance, notAfter = now + allowance + 10_000)
+        fun kept(second: Grant, goodFirst: Boolean): Grant? = DepartedMembers(RevocationList.inMemory()).run {
+            if (goodFirst) record(key, PeerId("good-tab"), good, now) else record(key, PeerId("ahead-tab"), second, now)
+            if (goodFirst) record(key, PeerId("ahead-tab"), second, now) else record(key, PeerId("good-tab"), good, now)
+            pass(key, now)
+        }
+        assertAll(
+            { assertEquals(good, kept(postDated, goodFirst = true), "a post-dated pass arriving last does not displace a good one") },
+            { assertEquals(good, kept(postDated, goodFirst = false), "nor does one that was there first") },
+            { assertEquals(atTheAllowance, kept(atTheAllowance, goodFirst = true), "control: one dated at the allowance is accepted, and issued last") },
         )
     }
 
