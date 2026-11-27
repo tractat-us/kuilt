@@ -497,6 +497,7 @@ public class FairShareAllocator(
         return Placement.Placed(
             positions = edges.associate { it.record.id to HeddlePolicy.effectiveTicksWide(it) },
             forgiven = edges.associate { it.record.id to forgivenTicks(it) },
+            committed = edges.associate { it.record.id to checkedSub(it.baseIssued, it.summary.returned) },
         )
     }
 
@@ -531,10 +532,16 @@ public class FairShareAllocator(
     internal sealed interface Placement {
         /**
          * The step landed: each active child's effective position, by its edge, in ticks on its own
-         * grid, and the part of it the scheduler [forgiven] ([forgivenTicks]). A position is the
-         * edge's base committed service, `(baseIssued − returned) · G`, plus what was forgiven it.
+         * grid, the part of it the scheduler [forgiven] ([forgivenTicks]), and the edge's base
+         * [committed] service in units, `baseIssued − returned`. A position is `committed · G` plus
+         * what was forgiven it. All three come from the one set of [PolicyEdge]s the step left, so
+         * a reader of the three never mixes two reads of the ledger.
          */
-        class Placed(val positions: Map<AttachmentId, Int128>, val forgiven: Map<AttachmentId, Int128>) : Placement
+        class Placed(
+            val positions: Map<AttachmentId, Int128>,
+            val forgiven: Map<AttachmentId, Int128>,
+            val committed: Map<AttachmentId, Long>,
+        ) : Placement
 
         /** The weights fail the budget, or the step would pass the [POSITION_LIMIT]. */
         data object Refused : Placement
