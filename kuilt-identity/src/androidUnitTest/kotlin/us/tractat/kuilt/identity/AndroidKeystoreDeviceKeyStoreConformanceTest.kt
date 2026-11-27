@@ -53,8 +53,8 @@ import java.util.UUID
  * - **cleared key:** the alias deleted;
  * - **corrupt grants:** three bytes that are not a grants record, through the grant store itself;
  * - **unreadable key** (`Rigged`): `getKey` throws `UnrecoverableKeyException` caused by a
- *   `KeyStoreException` carrying `SYSTEM_ERROR` — the Keystore failing, not the key — while
- *   `getCertificate` answers `null`, as keystore2's does on an error;
+ *   `KeyStoreException` carrying `SYSTEM_ERROR` — of unknown cause, so kept for the hour, and the clock
+ *   here never moves — while `getCertificate` answers `null`, as keystore2's does on an error;
  * - **interrupted write** (`AtomicMedium`): for the reason the hook gives;
  * - **unreadable grants:** every permission taken off the grants record, so opening it fails with
  *   `EACCES` while the directory still takes a new file; the rig checks it took and says at restore
@@ -131,7 +131,11 @@ class AndroidKeystoreDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSu
     private companion object {
         const val SDK = 33
 
-        /** No property here waits on the clock: no rig's failure is of unknown cause. */
+        /**
+         * No property here waits on the clock. The unreadable-key rig's `SYSTEM_ERROR` is of unknown cause,
+         * so the store keeps the key only for the hour; a clock that never moves never reaches it.
+         * `AndroidKeystoreDeviceKeyStoreTest` covers the hour.
+         */
         const val NOW = 1_700_000_000_000L
 
         /** A record beside the grants, written only by the unreadable-grants rig's write probe. */

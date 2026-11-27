@@ -119,7 +119,10 @@ internal class FakeKeystore : KeystoreBackend {
  * typed in, so a renumbered constant fails here rather than silently testing another code.
  */
 internal object AospKeystore {
-    /** `ResponseCode.SYSTEM_ERROR`: what a Keystore that is merely failing right now answers. */
+    /**
+     * `ResponseCode.SYSTEM_ERROR`: what a Keystore that is merely failing right now answers, and what
+     * keystore2 answers for a corrupted blob-metadata row as well, so it is of unknown cause.
+     */
     val SYSTEM_ERROR: Int get() = constant(RESPONSE_CODE, "SYSTEM_ERROR")
 
     /** `ResponseCode.LOCKED`: the Keystore waits for the user. */
@@ -140,8 +143,11 @@ internal object AospKeystore {
     /** `KM_ERROR_UNKNOWN_ERROR`: the same public code as a bad blob, flagged a system error. */
     val UNKNOWN_ERROR: Int get() = constant("android.security.keymaster.KeymasterDefs", "KM_ERROR_UNKNOWN_ERROR")
 
-    /** `KM_ERROR_SECURE_HW_BUSY`: one of the nine codes the platform calls transient. */
+    /** `KM_ERROR_SECURE_HW_BUSY`: one of the nine codes the platform calls transient, and a system error too. */
     val SECURE_HW_BUSY: Int get() = constant("android.security.keymaster.KeymasterDefs", "KM_ERROR_SECURE_HW_BUSY")
+
+    /** `KM_ERROR_DEVICE_LOCKED`: a wait for the user that AOSP flags a system error as well. */
+    val DEVICE_LOCKED: Int get() = constant("android.security.keymaster.KeymasterDefs", "KM_ERROR_DEVICE_LOCKED")
 
     fun keystoreException(code: Int): android.security.KeyStoreException =
         android.security.KeyStoreException::class.java

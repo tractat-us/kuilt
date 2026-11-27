@@ -73,26 +73,38 @@ class KeystoreFaultDeviceTest {
 
     /**
      * A key whose blob metadata row in keystore2's database does not decode. Measured on Android 14,
-     * keystore2 answers the signature with `SYSTEM_ERROR`, which [judge] reads as the Keystore's own
-     * trouble ([FailureVerdict.Keep]): the store throws on every launch and never replaces the key,
-     * however long it lasts. That is the bound Decided 29 states for "a key that fails forever with a
-     * flagged code"; this row pins that real damage reaches it. If Decided 29 changes, this row changes.
+     * keystore2 answers the signature with `SYSTEM_ERROR`, which [judge] reads as a failure of unknown
+     * cause ([FailureVerdict.Unknown], #3761): the store throws and keeps the key until the Keystore has
+     * been failing for the hour, then replaces it, since damaged metadata should be replaced, not kept.
      */
     @Test
-    fun aCorruptBlobMetadataRowIsKeptAsTheKeystoresOwnTrouble() = runTest {
+    fun aCorruptBlobMetadataRowIsKeptForTheHourThenReplaced() = runTest {
         assumeTrue("needs KeyStoreException's flags, Android 13 and later", Build.VERSION.SDK_INT >= KEYSTORE_EXCEPTION_API)
-        store().deviceKey()
+        val original = store().deviceKey().id
         KeystoreFaults.corruptBlobMetadata(alias)
         val failure = assertNotNull(backendFailure(), "rig: the key still answers as present")
         val verdict = judge(failure, Build.VERSION.SDK_INT)
-        clock += 61.minutes.inWholeMilliseconds
-        var made = 0
-        val anHourOn = outcomeOf { store { made++ }.deviceKey().id }
-        record("corrupt blob metadata", "failure=${failure.description} cause=${failure.cause.describeChain()} verdict=${verdict.name} anHourOn=${anHourOn.describe()}")
+        var madeAtOnce = 0
+        val atOnce = outcomeOf { store { madeAtOnce++ }.deviceKey().id }
+        clock += 59.minutes.inWholeMilliseconds
+        val withinTheHour = outcomeOf { store { madeAtOnce++ }.deviceKey().id }
+        clock += 2.minutes.inWholeMilliseconds
+        var madeAnHourOn = 0
+        val anHourOn = outcomeOf { store { madeAnHourOn++ }.deviceKey().id }
+        record(
+            "corrupt blob metadata",
+            "failure=${failure.description} cause=${failure.cause.describeChain()} verdict=${verdict.name} " +
+                "atOnce=${atOnce.describe()} withinTheHour=${withinTheHour.describe()} anHourOn=${anHourOn.describe()}",
+        )
+        val replacement = (anHourOn as? Outcome.Returned)?.value
         assertAll(
-            { assertIs<FailureVerdict.Keep>(verdict, "SYSTEM_ERROR reads as the Keystore's own trouble: ${failure.cause.describeChain()}") },
-            { assertIs<Outcome.Threw>(anHourOn, "so the store still throws an hour on") },
-            { assertEquals(0, made, "and makes no key") },
+            { assertIs<FailureVerdict.Unknown>(verdict, "SYSTEM_ERROR is of unknown cause: ${failure.cause.describeChain()}") },
+            { assertIs<Outcome.Threw>(atOnce, "the store throws at once") },
+            { assertIs<Outcome.Threw>(withinTheHour, "and 59 minutes on") },
+            { assertEquals(0, madeAtOnce, "making no key within the hour") },
+            { assertNotNull(replacement, "an hour on the device has a key again: ${anHourOn.describe()}") },
+            { assertEquals(1, madeAnHourOn, "one new key") },
+            { assertNotEquals(original, replacement, "and it is a new key") },
         )
     }
 
