@@ -48,7 +48,10 @@ internal sealed interface FailureVerdict {
     /** The key is damaged for good: delete it and make a new one. */
     class Replace(val why: String) : FailureVerdict
 
-    /** The Keystore says the failure is its own, not the key's: throw and keep the key, however long it lasts. */
+    /**
+     * The Keystore says the failure is its own and will pass — transient, or waiting for the user: throw
+     * and keep the key, however long it lasts.
+     */
     object Keep : FailureVerdict
 
     /**
@@ -78,24 +81,29 @@ private val KEY_SPECIFIC_CODES = setOf(6, 7)
  * emulators (#3226). A key blob of random bytes signs into code 10, `INVALID_KEY_BLOB`, so it waits out
  * the hour; deleting a key's metadata rows answers code 7; a stopped keystore2 throws a bare
  * `NullPointerException`, of unknown cause. A corrupted blob-metadata row answers `SYSTEM_ERROR`
- * ("Failed to load key blob"), which is [FailureVerdict.Keep] — damage that this rule reads as the
- * Keystore's own trouble, so a key damaged that way is never replaced.
+ * ("Failed to load key blob"), the same code a Keystore that is merely failing right now answers. So
+ * a system error is of unknown cause: the key is kept for the hour, then replaced, since damaged
+ * metadata should be replaced rather than kept (#3761).
  *
  * - **`KeyPermanentlyInvalidatedException`, on any version:** the Keystore's verdict that the key will
  *   never sign again. [FailureVerdict.Replace].
  * - **Android 13 and later ([sdkInt] ≥ 33):** the `android.security.KeyStoreException` in the cause chain
- *   decides. Transient, a system error, or a wait for the user is the Keystore's own trouble:
- *   [FailureVerdict.Keep]. A code that blames the key ([KEY_SPECIFIC_CODES]) replaces. With no such
- *   cause, an `UnrecoverableKeyException` is a verdict on the stored key (a permanently invalidated key at
- *   load, an EC key with no certificate) and replaces. Everything else is [FailureVerdict.Unknown].
+ *   decides. Transient, or a wait for the user, is the Keystore's own trouble: [FailureVerdict.Keep].
+ *   A code that blames the key ([KEY_SPECIFIC_CODES]) replaces. With no such cause, an
+ *   `UnrecoverableKeyException` is a verdict on the stored key (a permanently invalidated key at load, an
+ *   EC key with no certificate) and replaces. Everything else is [FailureVerdict.Unknown], a system
+ *   error included.
  * - **Below 33:** no public API says whose failure it is, so everything else is [FailureVerdict.Unknown].
  *
- * `isTransientFailure()` alone is not the keep test: it is `false` for `SYSTEM_ERROR`, the code a
- * Keystore that is merely failing right now answers with.
+ * The keep test reads `isTransientFailure()` and `requiresUserAuthentication()`, never `isSystemError()`
+ * alone. AOSP flags most transient codes a system error too (`SECURE_HW_BUSY`,
+ * `SECURE_HW_COMMUNICATION_FAILED`, `KEY_RATE_LIMIT_EXCEEDED`, `INVALID_OPERATION_HANDLE`), and
+ * `KM_ERROR_DEVICE_LOCKED` is a system error that waits for the user; each of those still keeps.
  *
  * The bound this leaves: [FailureVerdict.Keep] never replaces, so a key that fails forever with a
- * system-error code throws on every launch until the app's data is cleared; and an outage over an hour
- * long whose codes carry no flag (`BACKEND_BUSY`, a dead keystore2 binder) replaces the key.
+ * transient code, or waits forever for a user, throws on every launch until the app's data is cleared.
+ * And an outage over an hour long that answers a system error or a code with no flag (`SYSTEM_ERROR`,
+ * `BACKEND_BUSY`, a dead keystore2 binder) replaces the key.
  */
 @SuppressLint("NewApi") // Every KeyStoreException call is behind sdkInt >= KEYSTORE_EXCEPTION_API, which lint cannot see.
 internal fun judge(failure: KeystoreFailure, sdkInt: Int): FailureVerdict {
@@ -109,7 +117,7 @@ internal fun judge(failure: KeystoreFailure, sdkInt: Int): FailureVerdict {
         keystore == null && error is UnrecoverableKeyException ->
             FailureVerdict.Replace("the Keystore cannot recover it (UnrecoverableKeyException)")
         keystore == null -> FailureVerdict.Unknown
-        keystore.isTransientFailure || keystore.isSystemError || keystore.requiresUserAuthentication() -> FailureVerdict.Keep
+        keystore.isTransientFailure || keystore.requiresUserAuthentication() -> FailureVerdict.Keep
         keystore.numericErrorCode in KEY_SPECIFIC_CODES ->
             FailureVerdict.Replace("the Keystore reports it damaged (KeyStoreException code ${keystore.numericErrorCode})")
         else -> FailureVerdict.Unknown

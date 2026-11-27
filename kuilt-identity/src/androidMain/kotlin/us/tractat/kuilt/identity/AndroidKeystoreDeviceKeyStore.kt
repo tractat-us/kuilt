@@ -52,13 +52,13 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AndroidKeys
  *   invalidated; and, on Android 13 and later, a failure whose `KeyStoreException` blames the key
  *   (not found, permanently invalidated, corrupted) or an `UnrecoverableKeyException` with no Keystore
  *   cause.
- * - **Thrown, key kept:** on Android 13 and later, a failure the Keystore calls transient, a system
- *   error or a wait for the user, however long it lasts. And on every version, the software provider
- *   failing while it verifies the self-test, which is not the Keystore at all.
- * - **Thrown, key kept for an hour:** a failure of unknown cause — every other failure, which below
- *   Android 13 is all of them. The store keeps one timestamp beside the grants, the start of the current
- *   run of failures; any successful read clears it. A failure of unknown cause once that run is an hour
- *   old replaces the key. Which process failed, and how often, does not matter.
+ * - **Thrown, key kept:** on Android 13 and later, a failure the Keystore calls transient or a wait for
+ *   the user, however long it lasts. And on every version, the software provider failing while it
+ *   verifies the self-test, which is not the Keystore at all.
+ * - **Thrown, key kept for an hour:** a failure of unknown cause — every other failure, a system error
+ *   included, which below Android 13 is all of them. The store keeps one timestamp beside the grants,
+ *   the start of the current run of failures; any successful read clears it. A failure of unknown cause
+ *   once that run is an hour old replaces the key. Which process failed, and how often, does not matter.
 
  * Unlike the desktop file store, a replaced key cannot be kept aside: the Keystore will not copy a key.
  *
