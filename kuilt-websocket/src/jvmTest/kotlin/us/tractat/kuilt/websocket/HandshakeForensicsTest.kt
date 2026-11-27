@@ -8,13 +8,18 @@ import io.ktor.server.engine.connector
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assume
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.test.assertAll
+import java.net.InetAddress
+import java.net.ServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -22,6 +27,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 
 private typealias NettyServer = EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>
@@ -37,9 +44,11 @@ class HandshakeForensicsTest {
     private val forensics = HandshakeForensics(path)
     private val servers = mutableListOf<NettyServer>()
     private val httpClient = HttpClient(CIO) { install(ClientWebSockets) }
+    private val silentListeners = mutableListOf<ServerSocket>()
 
     @AfterTest
     fun tearDown() {
+        silentListeners.forEach { it.close() }
         httpClient.close()
         servers.forEach { it.stop(gracePeriodMillis = 0, timeoutMillis = 500) }
     }
@@ -157,7 +166,60 @@ class HandshakeForensicsTest {
         )
     }
 
+    /**
+     * A dial that hangs until a bound around it expires (#3783). The listener accepts the connection
+     * in the kernel and never reads it, so the handshake waits for an answer that never comes. The
+     * cancellation must reach the caller as the cancellation it is, carrying the record.
+     */
+    @Test
+    fun aDialThatHangsUntilItsCallerGivesUpCarriesTheRecord(): Unit = runBlocking {
+        startRigServer(host = LOOPBACK_HOST)
+        val silentPort = startSilentListener()
+        val url = "ws://$LOOPBACK_HOST:$silentPort$path"
+        val loom = ForensicLoom(KtorClientLoom(httpClient), forensics) { url }
+        val advertisement = WebSocketAdvertisement(url = url, serverPeerId = PeerId("forensics-server"), sessionName = "forensics")
+        val hung = assertFailsWith<TimeoutCancellationException> {
+            withTimeout(HANG_BOUND) { loom.weave(Rendezvous.Existing(advertisement)) }
+        }
+        val report = hung.report()
+        assertAll(
+            { assertContains(report, "client.dial-cancelled by its caller") },
+            { assertContains(report, "The dial was still waiting when its caller cancelled it") },
+            { assertContains(report, "THIS server received no request after the dial") },
+            { assertContains(report, "client.dial target=$url") },
+            { assertContains(report, "listeners on :") },
+        )
+    }
+
+    /**
+     * A cancellation the dial throws while its caller is live, such as a bound inside the dial
+     * expiring. It is rethrown untouched, still a cancellation, and the record says whose it was.
+     */
+    @Test
+    fun aCancellationTheDialThrowsItselfIsRethrownWithTheRecord(): Unit = runBlocking {
+        startRigServer(host = LOOPBACK_HOST)
+        val minted = assertFailsWith<TimeoutCancellationException> {
+            forensics.dial("ws://$LOOPBACK_HOST:1$path") { withTimeout(1.milliseconds) { awaitCancellation() } }
+        }
+        val report = minted.report()
+        assertAll(
+            { assertContains(report, "client.dial-cancelled by the dial itself, its caller still live") },
+            { assertContains(report, "The dial threw a cancellation of its own while its caller was still live") },
+        )
+    }
+
+    /** A loopback listener that never accepts: a dial at it connects, sends, and waits forever. */
+    private fun startSilentListener(): Int {
+        val listener = ServerSocket(0, 1, InetAddress.getByName(LOOPBACK_HOST))
+        silentListeners += listener
+        return listener.localPort
+    }
+
     private fun isMacOs(): Boolean = System.getProperty("os.name").orEmpty().startsWith("Mac")
+
+    private companion object {
+        val HANG_BOUND = 1.seconds
+    }
 }
 
 private fun Application.noRoutes() = Unit
