@@ -56,6 +56,11 @@ public sealed interface TopologyEdit {
     /**
      * No node is at [path]: an index is negative or past the last child, or the path runs on
      * below a lane.
+     *
+     * From the `move` that takes an index, [path] can also be the place the child was to land,
+     * the parent's address plus that index, when the index is negative or past the end. No node is
+     * there either, but the converse does not hold: the end itself, one past the last child once
+     * the moved one is out, is where an append lands, and is not refused.
      */
     public data class NoSuchNode(override val path: List<Int>) : Refused
 
@@ -249,9 +254,45 @@ public fun TopologyDocument.rename(path: List<Int>, name: String): TopologyEdit 
  * [TopologyEdit.NotAGroup] when [parent] is a lane, or [TopologyEdit.DuplicateName] naming the
  * child of [parent] that already has the moved child's name.
  *
+ * To put the child somewhere other than last, as a tree editor does when siblings are reordered by
+ * dragging, use the `move` that also takes an index.
+ *
  * @sample us.tractat.kuilt.heddle.sampleTopologyDocumentEdits
  */
-public fun TopologyDocument.move(path: List<Int>, parent: List<Int>): TopologyEdit {
+public fun TopologyDocument.move(path: List<Int>, parent: List<Int>): TopologyEdit = moveTo(path, parent) { end -> end }
+
+/**
+ * Moves the child at [path], with everything beneath it, to sit at [index] among the children of
+ * the group at [parent]; `[]` is the root. [parent] is an address in this document, before the
+ * move, and [TopologyEdit.Edited.path] is where the child lands after it: [parent]'s address once
+ * the child is out, plus [index].
+ *
+ * **[index] counts the children of [parent] with the moved child taken out.** For a move within
+ * one parent that is not the same as its index before the move: of `[a, b, c]`, moving `a` to
+ * index `1` gives `[b, a, c]`, and index `2` puts it last. So the indices that land somewhere run
+ * from `0` to the number of children [parent] has once the child is out, and that last one is
+ * the end, where the two-argument `move` puts it.
+ *
+ * History as for the two-argument `move`: [TopologyEdit.History.REPLACED] for another parent, and
+ * [TopologyEdit.History.KEPT] for the parent the child already has, at any index, since sibling
+ * order is not fairness history.
+ *
+ * Refused, checked in this order, with [TopologyEdit.AtRoot] for a [path] of `[]`,
+ * [TopologyEdit.NoSuchNode] for [path], [TopologyEdit.NoSuchNode] for [parent],
+ * [TopologyEdit.IntoItself] when [parent] is the child or lies beneath it,
+ * [TopologyEdit.NotAGroup] when [parent] is a lane, [TopologyEdit.NoSuchNode] for `parent + index`
+ * when [index] is negative or past the end, or [TopologyEdit.DuplicateName] naming the child of
+ * [parent] that already has the moved child's name.
+ *
+ * @sample us.tractat.kuilt.heddle.sampleTopologyDocumentEdits
+ */
+public fun TopologyDocument.move(path: List<Int>, parent: List<Int>, index: Int): TopologyEdit = moveTo(path, parent) { index }
+
+/**
+ * The one move both `move`s are: [at] is given the index of the end, the number of [parent]'s
+ * children once the moved one is out, and answers where among them to put it.
+ */
+private fun TopologyDocument.moveTo(path: List<Int>, parent: List<Int>, at: (end: Int) -> Int): TopologyEdit {
     if (path.isEmpty()) return TopologyEdit.AtRoot
     val node = nodeAt(path) ?: return TopologyEdit.NoSuchNode(path)
     if (parent.size >= path.size && parent.subList(0, path.size) == path) {
@@ -264,13 +305,15 @@ public fun TopologyDocument.move(path: List<Int>, parent: List<Int>): TopologyEd
         is Siblings.Refused -> return found.refusal
     }
     val sameParent = parent == path.dropLast(1)
+    val end = if (sameParent) targets.size - 1 else targets.size
+    val index = at(end)
+    if (index !in 0..end) return TopologyEdit.NoSuchNode(parent + index)
     siblingNamed(parent, targets, node.name, except = if (sameParent) path.last() else null)?.let { return it }
 
     val removed = without(path)
     val landed = parent.shiftedPast(path)
-    val index = removed.resolvedChildrenOf(landed).size
     val history = if (sameParent) TopologyEdit.History.KEPT else TopologyEdit.History.REPLACED
-    return TopologyEdit.Edited(removed.withChildren(landed) { it + node }, landed + index, history)
+    return TopologyEdit.Edited(removed.withChildren(landed) { it.take(index) + node + it.drop(index) }, landed + index, history)
 }
 
 /**
