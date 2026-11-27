@@ -639,9 +639,10 @@ private class DetachedMember(private val inbox: MemberInbox?) {
  * - [terms] are the ones every pass it is issued carries (#3221): what the host's policy admitted it
  *   on, or, for a device let back in on its pass, the terms that pass carried (#3222), so a friend's
  *   no-expiry pass is not cut back to the room's default by its own return. A takeover inherits them.
- * - [lastPassNotAfter] is when the latest pass issued to it runs out, null before the first. Written
- *   under the room lock once a pass is signed; read when the membership leaves, to keep its departed
- *   record ([us.tractat.kuilt.session.admit.DepartedMembers]) exactly as long as that pass is good.
+ * - [lastPass] is the latest pass the host signed it, null before the first, whether or not it reached
+ *   the device. Written under the room lock once a pass is signed; read when the membership leaves,
+ *   for its departed record ([us.tractat.kuilt.session.admit.DepartedMembers]), which keeps it while it
+ *   is good and lets the device back in on it (Decided 34, #3745). A takeover inherits it.
  * - [lastSentNotAfter] is when the latest pass the device is known to hold runs out (#3711): the last
  *   one the host sent it without the send throwing, under the room lock. A restore keeps it with the
  *   membership, a takeover inherits it, and a return on a pass starts from the pass presented, so a
@@ -650,7 +651,7 @@ private class DetachedMember(private val inbox: MemberInbox?) {
  */
 private class Membership(val id: String, val admittedAtMs: Long, val terms: GrantTerms) {
     /** Guarded by the room's lock. */
-    var lastPassNotAfter: Long? = null
+    var lastPass: Grant? = null
 
     /** Guarded by the room's lock. */
     var lastSentNotAfter: Long? = null
@@ -1958,7 +1959,7 @@ internal class SeamRoom(
      * controller is asked again only about a partition episode it was not asked about before, and a
      * wait ends when another exchange's pass does.
      */
-    private suspend fun seatProvenJoiner(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long, deadline: Instant, pass: Grant?) {
+    private suspend fun seatProvenJoiner(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long, deadline: Instant, pass: ReturnPass?) {
         val exchange = SeatExchange()
         try {
             seatProvenJoiner(joinerPeerId, keyed, generation, deadline, pass, exchange)
@@ -1983,7 +1984,7 @@ internal class SeamRoom(
         keyed: KeyedHello,
         generation: Long,
         deadline: Instant,
-        pass: Grant?,
+        pass: ReturnPass?,
         exchange: SeatExchange,
     ) {
         var asked: AskedWindow? = null
@@ -2269,7 +2270,7 @@ internal class SeamRoom(
         joinerPeerId: PeerId,
         keyed: KeyedHello,
         generation: Long,
-        pass: Grant?,
+        pass: ReturnPass?,
         asked: AskedWindow?,
         released: PeerId?,
         vetted: AdmissionDecision?,
@@ -2327,10 +2328,10 @@ internal class SeamRoom(
      * a seat is not let in unvetted. Revocation is by the pass's own date (Decided 27): a pass issued
      * after the cutoff is good, so a revoked device that was admitted again comes back on its new pass.
      */
-    private fun decideUnderRevocation(claimedId: PeerId, key: DidKey, pass: Grant?, nowMs: Long, without: PeerId? = null): SeatDecision {
+    private fun decideUnderRevocation(claimedId: PeerId, key: DidKey, pass: ReturnPass?, nowMs: Long, without: PeerId? = null): SeatDecision {
         val held = if (without == null) heldSeats() else heldSeats() - without
         val cutoff = checkNotNull(admission) { "only a host decides seats" }.revocations.notBefore(key)
-        val holdsValidGrant = pass != null && pass.stillGood(cutoff, nowMs)
+        val holdsValidGrant = pass != null && pass.grant.stillGood(cutoff, nowMs)
         if (cutoff == null) return decideSeat(claimedId, key, held, holdsValidGrant)
         val revoked = held.filter { (id, seat) -> seat.key == key && membershipOf(id).admittedAtMs < cutoff }.keys
         if (claimedId in revoked) {
@@ -2370,7 +2371,7 @@ internal class SeamRoom(
         generation: Long,
         current: Boolean,
         released: PeerId,
-        pass: Grant?,
+        pass: ReturnPass?,
         vetted: AdmissionDecision?,
         decidedAtMs: Long,
     ): SeatOutcome {
@@ -2640,8 +2641,9 @@ internal class SeamRoom(
         supersededIds.record(previous, held.key, successor = joinerPeerId)
         logger.info { "room.seat.superseded peer=${previous.value} by=${joinerPeerId.value}" }
         val admitted = admitMember(joinerPeerId, held.identity, held.key, inherited.admittedAtMs, inherited.terms)
-        // The device holds the pass it had under its old id (#3711).
+        // The device holds the pass it had under its old id (#3711), and the host the last it signed (#3745).
         admitted.burst.membership.lastSentNotAfter = inherited.lastSentNotAfter
+        admitted.burst.membership.lastPass = inherited.lastPass
         return SeatOutcome.Superseded(previous, detached, admitted.burst, decidedAtMs)
     }
 
@@ -2736,12 +2738,12 @@ internal class SeamRoom(
      * host and every member present hear it as [ReturningMark], naming the id the key last held while
      * the host remembers it ([departedMembers]).
      */
-    private fun admitReturning(joinerPeerId: PeerId, keyed: KeyedHello, pass: Grant, admittedAtMs: Long): SeatOutcome.Admitted {
+    private fun admitReturning(joinerPeerId: PeerId, keyed: KeyedHello, pass: ReturnPass, admittedAtMs: Long): SeatOutcome.Admitted {
         val previousId = departedMembers.take(keyed.key, admittedAtMs)
-        logger.info { "room.admit.returning peer=${joinerPeerId.value} previous=${previousId?.value}" }
-        return admitNewMember(joinerPeerId, keyed, GrantIssuer.termsOf(pass), admittedAtMs, ReturningMark(previousId))
-            // The device holds the pass it presented (#3711).
-            .also { it.burst.membership.lastSentNotAfter = pass.notAfter }
+        logger.info { "room.admit.returning peer=${joinerPeerId.value} previous=${previousId?.value} recorded=${pass.presented == null}" }
+        return admitNewMember(joinerPeerId, keyed, GrantIssuer.termsOf(pass.grant), admittedAtMs, ReturningMark(previousId))
+            // The device holds the good pass it presented, if any (#3711): not one only the host kept.
+            .also { it.burst.membership.lastSentNotAfter = pass.presented?.notAfter }
     }
 
     /**
@@ -2940,10 +2942,11 @@ internal class SeamRoom(
             logger.warn(failure) { "room.grant.issue-failed peer=${peerId.value}" }
             return PassIssue.Failed
         }
-        // Before it is sent, so a departure after the send finds it (#3222). A departure between the
-        // signing and this write keeps the previous pass's end, which is earlier: the record is
-        // forgotten sooner than it might be, never kept past a pass.
-        lock.withLock { membership.lastPassNotAfter = grant.notAfter }
+        // Before it is sent, so a departure after the send finds it (#3222), and a send the link then
+        // loses leaves the host holding the pass the device never got (Decided 34, #3745). A departure
+        // between the signing and this write keeps the previous pass, which ends earlier: the record is
+        // forgotten sooner than it might be, never kept past a pass the host signed.
+        lock.withLock { membership.lastPass = grant }
         return PassIssue.Issued(grant)
     }
 
@@ -5672,12 +5675,13 @@ internal class SeamRoom(
         episodeDetectedAtMs.remove(peerId)
         windowOpenedEpisodeMs.remove(peerId)
         // Pruned with the member, keeping `memberships.keys == admittedById.keys` (#3215). Its departure
-        // is remembered while its last pass is good (#3222), so its device's return on that pass is
-        // announced under this id. A takeover is not a departure: the device holds the seat still.
+        // is remembered with the last pass the host signed it, while that pass is good (#3222, #3745):
+        // its device's return is announced under this id, and is let in on that pass even if it never
+        // arrived. A takeover is not a departure: the device holds the seat still.
         val membership = memberships.remove(peerId)
-        val passEnd = membership?.lastPassNotAfter
-        if (passEnd != null && reason !is LeaveReason.Superseded) {
-            departedMembers.record(leaving.key, peerId, passEnd, clock().toEpochMilliseconds())
+        val lastPass = membership?.lastPass
+        if (lastPass != null && reason !is LeaveReason.Superseded) {
+            departedMembers.record(leaving.key, peerId, lastPass, clock().toEpochMilliseconds())
         }
         // A joiner's count of who the host named is cleared only by a new Hello, and a room that never
         // reconnects never says one, so it is pruned here too (#3615). It changes no rebuild: on a
