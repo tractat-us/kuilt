@@ -338,6 +338,12 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     - a required `roomId` on the gate;
     - landing after v0.7.7. Nothing changes on a room's wire, and `ProtocolVersion` stays 9.
 
+    **Amended (Iain, 2026-11-27, #3776: "iii — … drawing a new secret after any long backward step
+    to invalidate seems very practical"):** nonces are timed on the verifier's own monotonic time
+    source, and a new secret is drawn when the wall clock disagrees with it by more than the ttl.
+    The sweep sentence this replaced was false: a clock stepped forward swept a spent entry, and
+    stepped back again accepted the nonce a second time. § Nonces records the model.
+
 ## Goals
 
 - A device that drops and comes back — link heal or process restart — is restored to its held seat,
@@ -708,17 +714,31 @@ Both are base64url without padding, and both stay well under 1 KiB. The grant is
 The server must spend each nonce once, within a minute. It keeps no table of nonces it handed out,
 so fetching nonces costs a flood nothing but bandwidth.
 
-- **Issue.** A nonce is `0x01 ‖ issuedAt (u64, epoch ms) ‖ 16 random bytes ‖ the first 16 bytes of
+- **Issue.** A nonce is `0x01 ‖ issuedAt (u64) ‖ 16 random bytes ‖ the first 16 bytes of
   HMAC-SHA-256(secret, the 25 bytes before it)`, 41 bytes. The 32-byte secret is drawn from the
   CSPRNG when the verifier is built and is never stored. A restart turns every outstanding nonce
   into an unknown one, which the client recovers from by fetching another. The slice's first task
   confirms cryptography-kotlin's HMAC on every target, as slice 0 confirmed compressed keys.
-- **Spend.** The verifier keeps the random part of each spent nonce until `issuedAt + ttl`, with a
-  default `ttl` of 60 s. A nonce is accepted while `now` lies in `[issuedAt − ttl, issuedAt + ttl)`
-  and its random part is not in the spent set. Acceptance and retention end at the same instant, so
-  a clock set back or forward cannot reopen a spent nonce. The set is capped, 65 536 entries by
-  default, and swept of expired entries on each insert. A full set of live entries refuses with
-  `Overloaded`, failing closed, rather than evicting a live entry.
+- **Time.** `issuedAt` is not a date. It is the milliseconds the verifier's monotonic time source
+  had counted since the verifier was built, and only that verifier reads it (amended 2026-11-27,
+  Decided 35). The gate's `now` is still the wall clock, and is used only for `GrantTrust`.
+- **Spend.** The verifier keeps the random part of each spent nonce until `issuedAt + ttl` on its
+  time source, with a default `ttl` of 60 s. A nonce is accepted while that time is before
+  `issuedAt + ttl` and its random part is not in the spent set. Acceptance and retention end at the
+  same instant on a source that cannot step back, so no clock step, one way or there and back,
+  reopens a spent nonce. The set is capped, 65 536 entries by default. Expired entries are swept
+  when the set is full, not on each insert, and no verdict can tell the two apart. A full set of
+  live entries refuses with `Overloaded`, failing closed, rather than evicting a live entry.
+- **A new secret when the clocks disagree.** The verifier also reads the wall clock. When the two
+  disagree by more than the ttl about the time since the secret was drawn, it draws a new secret
+  and starts an empty spent set. A wall clock stepped either way does this. So does a long sleep on
+  a platform whose monotonic time stops while the machine sleeps. Every outstanding nonce
+  is then unknown, which the client recovers from. A check made under the old secret is not spent
+  under the new one. So a nonce is good for the ttl on the time source and for under three ttls of
+  wall-clock time, however long the machine sleeps.
+- **No lower bound.** The window has no `issuedAt − ttl` side, because no nonce a verifier issued is
+  from its own future. That holds only because the time is the verifier's own (Ruling 4): a shared
+  nonce store, which would compare times stamped by different processes, must restore it.
 - **Only a good signature spends.** Someone who sees a nonce in flight cannot burn it with a garbage
   signature. Two concurrent presentations of one good proof meet at one atomic insert, under the
   verifier's lock, and one of them wins.
@@ -858,7 +878,9 @@ and ABI dump. Each is a standalone issue, labelled `ready`.
    spends on a multi-threaded dispatcher, one winner, with the iteration count asserted;
    `ExpiredNonce` at `issuedAt + ttl` and not one millisecond before; another instance's nonce is
    `UnknownNonce`; a full set answers `Overloaded`, then frees space once its entries expire; the
-   clock set back and forward never reopens a spent nonce.
+   time source and the wall clock moved every way never reopen a spent nonce; a wall step longer
+   than the ttl draws a new secret, and one shorter does not; a check made under the old secret is
+   not spent under the new one.
 3. **`DeviceProofGate`**, #3777 (`:kuilt-identity`): the ordered check and `DeviceProofVerdict`. Tests:
    one row per verdict, each asserting its rig fired; a bad signature leaves the nonce spendable by
    its holder; a wrong audience is refused before the nonce is touched; revoked, expired, untrusted
