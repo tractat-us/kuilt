@@ -937,10 +937,11 @@ internal class SeamRoom(
     private val supersededIds = SupersededIds()
 
     /**
-     * **Host only.** The peer id each departed member's key last held, kept while the last pass that
-     * membership was given is good (#3222): what a device returning on its pass is announced with
-     * ([ReturningMark.previousId]). Guarded by [lock]; written by [detachMember], taken by
-     * [admitReturning], and cleared by [leave].
+     * **Host only.** The peer id each departed member's key last held and the last pass the host
+     * signed that membership, kept while that pass is good (#3222, #3745): what a device returning on
+     * a pass is announced with ([ReturningMark.previousId]), and a pass it may come back on though its
+     * link lost it (Decided 34). Guarded by [lock]; written by [detachMember], read by [returnPass],
+     * taken by [admitReturning], and cleared by [leave].
      */
     private val departedMembers = DepartedMembers()
 
