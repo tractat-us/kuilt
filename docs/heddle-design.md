@@ -3101,6 +3101,159 @@ position-ceiling refusal, landed in #3352.
 - A view over `LocalHeddleState`: it lacks the capacity and the last applied
   topology (#3321).
 
+### 11.4 An app's own settings on a node
+
+The tree an admin edits often carries more than heddle reads. An app that
+routes each job to a lane keeps a match rule on every lane ("pushes to `main`
+go here") and, on a group that splits its share as work arrives, the key it
+splits by ("one child per repository"). Those belong to the app, and heddle
+never reads them. Today they cannot ride in the tree, so the app keeps them in a
+structure beside it, addressed by child-index paths, and every `remove` or
+`move` of an edit session silently shifts those paths onto the wrong nodes.
+This section is the design that lets the settings travel inside the node they
+belong to (#3758).
+
+#### As built: nothing carries them
+
+`TopologyDocument.Group`, `Lane` and `ChildTemplate` hold heddle's fields and
+nothing else. An app keeps its own keys in one of two places, both outside the
+document:
+
+- **Its own mirror of the tree.** `sampleConsumerProblems` decodes a
+  `PoolFile` whose nodes carry `rules`, converts it to a `TopologyDocument`, and
+  reports its own problems as `TopologyProblem.Kind.CONSUMER` at the same
+  paths. That works for one decode. It does not survive an edit: the edit
+  functions take and return a `TopologyDocument`, so the mirror is left behind
+  after the first edit.
+- **A side map keyed by path.** `TopologyEdit` says that an index names a place,
+  not a node, so after `remove` or `move` every key past the removed child is
+  stale. The app has to re-derive the shift itself, and a nested template level
+  has no child-index path at all, so its split key has nowhere to be keyed.
+
+#### Future: `appSettings`, a string map on each node (#3758)
+
+Each of `TopologyDocument.Group`, `Lane` and `ChildTemplate` gains one
+trailing property, `@IntroducedAt("0.7.8") public val appSettings:
+Map<String, String> = emptyMap()`. heddle stores it and gives it no meaning. In
+JSON:
+
+```json
+{"type": "group", "name": "ci", "appSettings": {"match": "repo:*"},
+ "template": {"weight": "2", "appSettings": {"split": "repository"},
+              "template": {"weight": "1", "appSettings": {"split": "author"}}}}
+```
+
+**What each edit does with it.** Every edit already rebuilds a node by `copy`
+(`Node.with`, `group.copy(template = …)`), and `move` re-adds the node object
+it took out, so the settings follow the node with no edit-specific code:
+
+| Edit | The node's `appSettings` |
+|---|---|
+| `setWeight`, `setMaxConcurrent` | kept |
+| `rename` | kept. heddle treats the renamed child as new (`History.REPLACED`), but the settings follow the node the admin renamed |
+| `move` | kept, with the whole subtree's |
+| `remove` | gone, with the whole subtree's |
+| `addChild` | whatever the added child carries |
+| `setTemplate` | the group's are kept. The template's, nested levels included, are replaced with the template passed in, as every other template field is |
+| new: `setAppSettings(path, settings)` | replaced. Always `History.KEPT`. Refused with `AtRoot` for `[]` and `NoSuchNode` |
+
+A child the app attaches while running (`LocalHeddle.attach`) is not in the
+document, so it has no settings of its own. The app reads the settings of the
+template level it is attaching under, which is where a split key sits.
+
+**What heddle reads: nothing.** `Topology.from` ignores the settings and
+reports no problem about them. `Topology`, `Topology.ChildTemplate` and
+therefore `LocalHeddleSnapshot` format 1 do not carry them, so an engine's
+durable state never holds app data. The app checks its own settings and
+reports them as `TopologyProblem.Kind.CONSUMER`, which exists for this.
+
+**`changesTo` does not report them.** `changesTo` compares two `Topology`
+values, which hold no settings, so it cannot see a change to them without
+putting the settings back into `Topology`. It would also be the one change
+whose `saveEffect` is never about the ledger, and a new arm of the sealed
+`TopologyChange` breaks every exhaustive `when` a consumer has written. An app
+that shows "match rule changed" compares the two documents itself.
+
+**`toDocument()` writes no settings.** `Topology.from(t.toDocument()) == t`
+still holds. But a document that goes to `Topology` and back has lost its
+settings, so an editor starts from the stored document, not from the running
+`Topology`. `toDocument`'s KDoc, which calls it "the form an editor starts
+from", changes in the same PR.
+
+**Wire shape and compatibility.** Under the default `encodeDefaults = false` an
+empty map is left out, so a document with no settings encodes byte for byte as
+it does today, and an old document decodes with empty settings. A document
+that has settings is refused by an older kuilt decoding strictly, and loses its
+settings silently under `ignoreUnknownKeys`. That is the same hazard the
+`template` migration note on `Group` already describes. `Map<String, String>`
+encodes in every kotlinx-serialization format, so the type keeps
+`TopologyDocument`'s promise to decode "in whatever format the consumer reads".
+
+**ABI, measured.** With the property added to all three classes,
+`updateKotlinAbi` adds 18 lines to each JVM and Android dump and 19 to the klib
+dump, and removes none. The old constructors and `copy` overloads stay. On the
+JVM the retained `copy` passes the receiver's own `appSettings` through
+(`copy$default` with the new parameter's mask bit set), so an old compiled
+caller's `lane.copy(weight = "2")` does not wipe the settings. Adding the
+property is the same move as `Lane.maxConcurrent` in 0.7.5 and
+`ChildTemplate.template` in 0.7.7, so it fits the 0.7.8 patch.
+`setAppSettings` is a new function in the `TopologyDocumentEditsKt` facade,
+which is also additive. `equals` and `hashCode` now count the settings, which
+is the point.
+
+**Invariants the code PR adds:**
+
+1. Every edit keeps a node's `appSettings` unless it removes the node or is
+   `setAppSettings` or `setTemplate` on that very value. Enforcer: a property
+   in `TopologyDocumentEditsPropertyTest` that tags every node with a unique
+   setting, applies random edit sequences, and checks that each surviving
+   node's tag is its own.
+2. `Topology` never carries an app's settings. Enforcer: the type.
+   `Topology.Node` and `Topology.ChildTemplate` have no such field, and
+   `checked()` cannot copy one.
+
+The user-facing half folds into `Writerside/topics/heddle-local.md`, beside
+"decode a `TopologyDocument`", and the `kuilt-primitives` heddle reference gets
+its row in the same code PR.
+
+#### Settled — don't reopen
+
+- A generic `TopologyDocument<out P>`. It would give the app a typed payload
+  with any serializer, and `out P` keeps star projections cheap. But it breaks
+  far past a patch. Every mention of `TopologyDocument`, `Node`, `Group`,
+  `Lane`, `ChildTemplate`, `TopologyEdit` and `Edited` with no type argument is
+  a compile error, because Kotlin has no raw types. A construction such as
+  `Lane("a")` has nothing to infer `P` from, and this module's tests and samples
+  have about 110 of them (counted, not compiled). Measured with
+  `updateKotlinAbi`: the JVM and Android dumps each lose 13 lines (every
+  `serializer()` without arguments and every `$$serializer.INSTANCE`), and the
+  klib dump loses 221, because a native or wasm signature records the type
+  parameter. So every edit function and `Topology.from` stops linking for a
+  compiled consumer. ObjC export drops generics on the `Node` protocol. A sealed
+  generic hierarchy also needs its subclasses' serializers to pass `P` through.
+  That compiles, but nobody has run it (#3758).
+- `JsonElement?` as the payload. It ties a format-neutral module to JSON. It
+  would add `kotlinx-serialization-json` to the main classpath as `api`, which
+  `verifyHeddleCoreDependencies` does not forbid and would not flag. And
+  `JsonElement`'s serializer throws for any encoder that is not JSON, so a
+  document with a non-null payload fails under CBOR or YAML, while one with a
+  null payload passes (#3758).
+- Stable node ids with the app's settings kept in a side map keyed by id. The
+  ABI cost is the same as the map, but "remove drops it" becomes the app's
+  pruning job. It also needs an id-uniqueness check, which is a new
+  `TopologyProblem.Kind` and so breaks an exhaustive `when` (#3758).
+- Public path-relocation helpers for after a `remove` or `move`. They are
+  additive, but the app must remember to call the right one after every edit.
+  That is an optional primitive policed by nothing, and a nested template level
+  still has no path (#3758).
+- A `TopologyChange` arm for a settings change. See `changesTo` above (#3758).
+
+#### Open
+
+- Whether the root needs settings too. A document's root is a `String`, with
+  no node to hold them. The proposal leaves app-wide keys to the app's own file
+  wrapper (#3758).
+
 ---
 
 ## 12. What was dropped from the source, and what is genuinely new
