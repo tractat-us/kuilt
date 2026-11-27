@@ -77,9 +77,9 @@ internal fun sampleShareLineLag() {
 }
 
 /**
- * Show what each lane has had beside its siblings, and what the scheduler forgave it: a lane
- * back from idle has had nothing, yet is owed nothing either, because the history it slept through
- * is forgiven rather than owed.
+ * Show what each lane holds and has had beside its siblings, and what the scheduler forgave it: a
+ * lane back from idle has had nothing, yet is owed nothing either, because the history it slept
+ * through is forgiven rather than owed.
  */
 @Suppress("unused")
 internal fun sampleShareLineHad() {
@@ -101,6 +101,7 @@ internal fun sampleShareLineHad() {
     repeat(3) { check(heddle.acquire(both, eligible = setOf(web), startedAt = 0L) is AcquireOutcome.Acquired) }
     check(heddle.acquire(both, eligible = setOf(mobile), startedAt = 0L) is AcquireOutcome.Acquired)
     val line = heddle.shareLine(both)
+    check(line.committed(web) == Rational.of(3L) && line.committed(mobile) == Rational.ONE)
     check(line.had(web) == Rational.of(3L, 4L) && line.had(mobile) == Rational.of(1L, 4L))
     check(line.forgiven(web) == Rational.ZERO && line.forgiven(mobile) == Rational.ZERO)
     // Nothing forgiven, so lag is the siblings' total times share less had: 4 × (1/2 − 3/4) = −1.
@@ -112,7 +113,13 @@ internal fun sampleShareLineHad() {
     val joined = heddle.shareLine(all)
     check(joined.had(docs) == Rational.ZERO && joined.forgiven(docs) == Rational.of(2L))
     check(joined.lag(docs) == Rational.ZERO)
-    // The identity behind all three: lag = share_ℓ · (N + F) − c − forgiven, with N = 4 had and F = 2 forgiven.
-    val third = Rational.of(1L, 3L)
-    check(joined.lag(web) == third * Rational.of(4L + 2L) - Rational.of(3L) - Rational.ZERO)
+    // The identity behind them all, lag = share_ℓ · (N + F) − c − forgiven, from the line's own
+    // reads: c is committed, N its sum over the lanes (4), and F their forgiven summed (2).
+    val committed = all.map { checkNotNull(joined.committed(it)) }
+    val forgiven = all.map { checkNotNull(joined.forgiven(it)) }
+    val n = committed.fold(Rational.ZERO, Rational::plus)
+    val f = forgiven.fold(Rational.ZERO, Rational::plus)
+    check(n == Rational.of(4L) && f == Rational.of(2L))
+    check(joined.had(web) == checkNotNull(joined.committed(web)) / n)
+    check(joined.lag(web) == joined.share(web) * (n + f) - checkNotNull(joined.committed(web)) - checkNotNull(joined.forgiven(web)))
 }

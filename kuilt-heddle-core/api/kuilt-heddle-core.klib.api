@@ -1922,6 +1922,7 @@ final class us.tractat.kuilt.heddle/Rational : kotlin/Comparable<us.tractat.kuil
 }
 
 final class us.tractat.kuilt.heddle/ShareLine { // us.tractat.kuilt.heddle/ShareLine|null[0]
+    final fun committed(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/ShareLine.committed|committed(us.tractat.kuilt.heddle.GroupId){}[0]
     final fun forgiven(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/ShareLine.forgiven|forgiven(us.tractat.kuilt.heddle.GroupId){}[0]
     final fun had(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/ShareLine.had|had(us.tractat.kuilt.heddle.GroupId){}[0]
     final fun lag(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/ShareLine.lag|lag(us.tractat.kuilt.heddle.GroupId){}[0]
