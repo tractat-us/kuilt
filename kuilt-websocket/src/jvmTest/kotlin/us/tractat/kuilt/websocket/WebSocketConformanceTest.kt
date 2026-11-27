@@ -17,6 +17,7 @@ import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 import kotlin.test.AfterTest
@@ -60,6 +61,9 @@ open class WebSocketConformanceTest : SeamConformanceSuite() {
     private lateinit var httpClient: HttpClient
     private var port: Int = 0
 
+    /** What the next handshake red needs to name its listener (#3754); rendered only on a failed dial. */
+    private val forensics = HandshakeForensics(serverPath)
+
     @BeforeTest
     fun setUp() {
         // Bind 0 and read the port back from the *live* connector. Probing a free port with a
@@ -71,10 +75,14 @@ open class WebSocketConformanceTest : SeamConformanceSuite() {
             // `wovenSeamCapabilityIsHonest` reads the **host** seam — which is this server loom's —
             // so wiring only the client leaves the awaited transition unreachable and the test
             // hangs to the wall-clock backstop instead of failing (measured: 60 s, no assertion).
+            forensics.install(this)
             serverLoom = KtorServerLoom(this, serverPath, connectivity = connectivity)
+            forensics.routeInstalled()
         }
         server.start(wait = false)
-        port = runBlocking { server.engine.resolvedConnectors().first().port }
+        val connector = runBlocking { server.engine.resolvedConnectors().first() }
+        forensics.serverStarted(connector)
+        port = connector.port
         httpClient = HttpClient(clientEngine) { install(ClientWebSockets) }
     }
 
@@ -110,7 +118,9 @@ open class WebSocketConformanceTest : SeamConformanceSuite() {
     private val connectivity = FakeConnectivityObserver(NetworkReachability.Reachable)
 
     override fun newLoomPair(): Pair<Loom, Loom> =
-        serverLoom to KtorClientLoom(httpClient, connectivity = connectivity)
+        serverLoom to ForensicLoom(KtorClientLoom(httpClient, connectivity = connectivity), forensics) { rendezvous ->
+            (rendezvous as? Rendezvous.Existing)?.tag?.let { (it as? WebSocketAdvertisement)?.url } ?: "$rendezvous"
+        }
 
     override fun flushFixture(): FlushFixture = FlushFixture.JoinerUnsupported(
         "OkHttp's session ignores what WebSocket.send returns, so a frame past its 16 MiB queue is dropped " +
