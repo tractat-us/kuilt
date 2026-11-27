@@ -58,13 +58,19 @@ public data class Topology(public val root: String, public val children: List<No
     }
 
     /**
-     * This tree written back out as a document: the form an editor starts from when an admin
-     * changes the tree that is running.
+     * This tree written back out as a document, with no app settings in it: the form an editor
+     * starts from when its app keeps nothing in `appSettings`. An app that uses `appSettings` starts
+     * from the document it stored instead, and keeps as `startedFrom` the topology
+     * `Topology.from(stored)` checks.
      *
      * The two forms are exact inverses on a valid tree: `Topology.from(t.toDocument())` is
      * [TopologyParse.Valid] with a topology equal to `t`. Every weight is written as the text
      * [from] reads — `"3"` for a whole number, `"3/2"` for a ratio, always in lowest terms — and
      * every child, template and ceiling is kept, in the order written.
+     *
+     * **It writes no app settings.** A [Topology] never holds a document's `appSettings`
+     * ([Topology.from] ignores them), so a document that goes to a [Topology] and back has lost
+     * them. That is why such an app does not start from this one.
      *
      * @sample us.tractat.kuilt.heddle.sampleTopologyToDocument
      */

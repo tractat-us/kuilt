@@ -475,6 +475,10 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
 1. **Load** the running tree with `LocalHeddle.topology`, and write it out with `toDocument()`.
    Keep the loaded tree as `startedFrom`; see
    [Showing an admin what an edit changes](#showing-an-admin-what-an-edit-changes).
+   `toDocument()` writes no `appSettings`, so an app that uses them loads its stored document
+   instead and keeps `startedFrom` as the topology `Topology.from(stored)` checks. A save that
+   comes back `TreeChanged` then reloads the stored document too; see
+   [An app's own settings on each node](#an-apps-own-settings-on-each-node).
 2. **Edit by path** with `setWeight`, `addChild`, `rename` and the rest, each returning a
    `TopologyEdit`. A `Refused` names the node to blame; see
    [Editing the tree as a document](#editing-the-tree-as-a-document).
@@ -493,7 +497,9 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
 ```kotlin
     val (heddle, _) = LocalHeddle.fromTopology(twoLanes(), LocalPolicy(defaultReservation = 3L), epoch = 0L)
 
-    // Load: the editor opens on the running tree, written out as a document.
+    // Load: the editor opens on the running tree, written out as a document. toDocument writes no
+    // appSettings, so an app that keeps any opens its stored document instead, and takes
+    // startedFrom from Topology.from of that document.
     var startedFrom = heddle.topology
     var document = startedFrom.toDocument()
 
@@ -530,6 +536,7 @@ hand-rolling a tree copier, a validator, a diff or a "has someone else saved" ch
     check(refused is ApplyOutcome.TreeChanged && refused.current == theirs)
 
     // So the page reloads from the running tree, the admin makes the edit again, and the save keeps theirs.
+    // An app that keeps appSettings reloads the document the other admin stored, as it loaded.
     startedFrom = refused.current
     document = (startedFrom.toDocument().rename(listOf(1), "interactive") as TopologyEdit.Edited).document
     document = (document.addChild(emptyList(), TopologyDocument.Lane("batch")) as TopologyEdit.Edited).document
@@ -757,7 +764,74 @@ blame. None throws, and the document it was asked of is unchanged.
 
 These edits are one step of an admin page's loop. Listing what the edit changes, previewing it and
 saving it only if nobody else saved first are in
-[Showing an admin what an edit changes](#showing-an-admin-what-an-edit-changes).
+[Showing an admin what an edit changes](#showing-an-admin-what-an-edit-changes). Every edit
+carries the app's own `appSettings` with the node; see
+[An app's own settings on each node](#an-apps-own-settings-on-each-node).
+
+## An app's own settings on each node
+
+**Intent:** a host attaches its own keys to each node of the tree it edits, such as the rule that
+routes work to a lane or the key a group's attached children are split by, and wants them to stay
+on the right node through every remove, move and rename, instead of in a side map keyed by
+child-index paths that shift.
+**Primitive:** `appSettings`, a `Map<String, String>` on every `TopologyDocument.Node` (a `Group`
+or a `Lane`) and on `ChildTemplate` (`:kuilt-heddle-core`), set with `setAppSettings(path, settings)`, and
+`TopologyDocument.appSettingsChangesTo(after)` → `AppSettingsChange` (`Added`, `Removed`,
+`Changed`) to show what an edit did to them.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleAppSettings -->
+```kotlin
+    // A move takes main's match rule along, and a new rule is one more edit that costs no history.
+    val moved = stored.move(listOf(0, 0), listOf(1), 0)
+    check(moved is TopologyEdit.Edited)
+    val ruled = moved.document.setAppSettings(listOf(1, 1), mapOf("match" to "cron"))
+    check(ruled is TopologyEdit.Edited && ruled.history == TopologyEdit.History.KEPT)
+    val edited = ruled.document
+    check((edited.children[1] as TopologyDocument.Group).children[0] == TopologyDocument.Lane("main", appSettings = mapOf("match" to "branch:main")))
+
+    // heddle reads none of it: the checked tree holds no settings, so toDocument writes none.
+    // An editor starts from the document it stored.
+    val running = Topology.from(edited)
+    check(running is TopologyParse.Valid)
+    check(running.topology.toDocument().children[0] == TopologyDocument.Group("ci", template = TopologyDocument.ChildTemplate("2")))
+
+    // Nodes are matched by their names from the root, as changesTo matches them: main moved, so
+    // its rule is removed where it was and added where it is. The list is in document order, ci's
+    // before hobby's. A template's settings would come back at its group's path, at depth 1.
+    check(
+        stored.appSettingsChangesTo(edited) == listOf(
+            AppSettingsChange.Removed(listOf(0, 0), listOf("pool", "ci", "main"), 0, "match", "branch:main"),
+            AppSettingsChange.Added(listOf(1, 0), listOf("pool", "hobby", "main"), 0, "match", "branch:main"),
+            AppSettingsChange.Added(listOf(1, 1), listOf("pool", "hobby", "nightly"), 0, "match", "cron"),
+        ),
+    )
+```
+
+- **The settings follow the node.** Every edit rebuilds a node as a copy of itself, so a new
+  weight or ceiling, a rename and both `move`s keep them, `remove` takes them away with the node,
+  and `addChild` adds whatever the child carries. `setTemplate` keeps the group's own and
+  replaces the template's, nested levels included. `setAppSettings` replaces a node's own, always
+  `KEPT`, and is refused with `AtRoot` and `NoSuchNode`. The root has none; keep tree-wide keys in
+  the host's own file around the document.
+- **A template level is where a split key sits.** An attached child is not in the document, so
+  the host reads the settings of the template level it attaches under. Set them with
+  `setTemplate(path, template.copy(appSettings = …))`.
+- **heddle never reads them.** `Topology.from` ignores them, `Topology` does not hold them, and
+  `toDocument()` writes none, so an editor starts from the document it stored, not from the
+  running tree. The host checks its own settings and reports them as
+  `TopologyProblem.Kind.CONSUMER` (see [Loading the tree from a config file](#loading-the-tree-from-a-config-file)).
+- **The report is one change per key, outside `TopologyChange`.** Nodes are matched by their
+  names from the root down, as `changesTo` matches them, so a moved or renamed node's settings
+  come back `Removed` at the old address and `Added` at the new one. The arm says which document
+  a path is in: a `Removed` is always addressed in the document before, even when its node stays,
+  and an `Added` or a `Changed` in the document after. So the page marks removals on the old tree
+  and the rest on the new. `templateDepth` is `0` for a node's own settings, `1` for its
+  template's and so on. Two siblings of one name match in order, so it never throws.
+- **In document order.** Walking the new document, a node's own changes come first, then its
+  template levels', then its children's in the order written, then those of the children it lost.
+- **An empty map is never written**, even under `Json { encodeDefaults = true }`, so a document
+  with no settings encodes byte for byte as before. A document that has some is refused by an
+  older kuilt decoding strictly, and loses them silently under `ignoreUnknownKeys`.
 
 ## Changing the tree while work runs
 

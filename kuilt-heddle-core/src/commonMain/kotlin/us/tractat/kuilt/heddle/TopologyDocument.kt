@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.heddle
 
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -22,9 +23,23 @@ import kotlinx.serialization.Serializable
  * (`"weigth"`) both throw before [Topology.from] runs. In JSON, quote weights, or decode with
  * `Json { isLenient = true }`, which reads a bare `3` as the text `"3"`.
  *
+ * **An app's own settings ride along.** [Group], [Lane] and [ChildTemplate] each carry
+ * `appSettings`, a string map that heddle stores and never reads: the place for whatever the app
+ * keeps per node, such as the rule that routes work to a lane or the key a template splits by. The
+ * edits carry it with the node ([setAppSettings] sets it), [Topology.from] ignores it, and
+ * [appSettingsChangesTo] lists what changed in it between two documents. The root has none; keep
+ * tree-wide keys in the app's own file around the document.
+ *
+ * An empty map is never encoded, even under `encodeDefaults = true`, so a document with no settings
+ * reads and writes exactly as it did before they existed. A non-empty one does not reach an older
+ * kuilt intact: a strict decode refuses the unknown `appSettings` key, and one with
+ * `ignoreUnknownKeys` drops the settings silently, so a document written back from there has lost
+ * them.
+ *
  * @property root the name of the group at the top of the tree.
  * @property children the root's children, in the order written.
  * @sample us.tractat.kuilt.heddle.sampleTopologyFromDocument
+ * @sample us.tractat.kuilt.heddle.sampleAppSettings
  */
 @Serializable
 public data class TopologyDocument(public val root: String, public val children: List<Node>) {
@@ -40,6 +55,9 @@ public data class TopologyDocument(public val root: String, public val children:
 
         /** The most leases open beneath this child at once, or `null` for no ceiling; see [Topology.Node.maxConcurrent]. */
         public val maxConcurrent: Long?
+
+        /** The app's own settings for this child, which heddle never reads; empty for none. See [TopologyDocument]. */
+        public val appSettings: Map<String, String>
     }
 
     /**
@@ -53,6 +71,8 @@ public data class TopologyDocument(public val root: String, public val children:
      *   and a group that also declares children then loses its attached children without a
      *   problem, so decode strictly.
      * @property maxConcurrent the group's ceiling, over all its children together; `null` for none.
+     * @property appSettings the app's own settings for this group, which heddle never reads. See
+     *   [TopologyDocument].
      * @sample us.tractat.kuilt.heddle.sampleChildTemplateDocument
      */
     @Serializable
@@ -63,6 +83,7 @@ public data class TopologyDocument(public val root: String, public val children:
         public val children: List<Node> = emptyList(),
         public val template: ChildTemplate? = null,
         override val maxConcurrent: Long? = null,
+        @IntroducedAt("0.7.8") @EncodeDefault(EncodeDefault.Mode.NEVER) override val appSettings: Map<String, String> = emptyMap(),
     ) : Node
 
     /**
@@ -75,18 +96,24 @@ public data class TopologyDocument(public val root: String, public val children:
      *   every attached child is a leaf: `template: { weight: "2", template: { weight: "1" } }`
      *   attaches repositories at weight 2 and authors beneath each at weight 1. A problem in it is
      *   reported at the group's path, as one in this template is. See [Topology.ChildTemplate.template].
+     * @property appSettings the app's own settings for each child attached at this level, which
+     *   heddle never reads: where a split key sits, since an attached child is not in the document.
+     *   [appSettingsChangesTo] reports a change here at the group's path, at this level's depth.
      */
     @Serializable
     public data class ChildTemplate(
         public val weight: String = "1",
         public val maxConcurrent: Long? = null,
         @IntroducedAt("0.7.7") public val template: ChildTemplate? = null,
+        @IntroducedAt("0.7.8") @EncodeDefault(EncodeDefault.Mode.NEVER) public val appSettings: Map<String, String> = emptyMap(),
     )
 
     /**
      * A leaf of the tree: work is charged here.
      *
      * @property maxConcurrent the lane's ceiling; `null` for none.
+     * @property appSettings the app's own settings for this lane, which heddle never reads. See
+     *   [TopologyDocument].
      */
     @Serializable
     @SerialName("lane")
@@ -94,5 +121,6 @@ public data class TopologyDocument(public val root: String, public val children:
         override val name: String,
         override val weight: String = "1",
         @IntroducedAt("0.7.5") override val maxConcurrent: Long? = null,
+        @IntroducedAt("0.7.8") @EncodeDefault(EncodeDefault.Mode.NEVER) override val appSettings: Map<String, String> = emptyMap(),
     ) : Node
 }

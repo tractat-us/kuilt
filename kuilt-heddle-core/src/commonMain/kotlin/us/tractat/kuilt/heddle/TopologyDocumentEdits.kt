@@ -19,6 +19,11 @@ import us.tractat.kuilt.heddle.TopologyDocument.Node
  * node it takes out. [Edited.path] says where the edited node is in the new document; read paths
  * afresh from the new document, or from a new [Topology.from], after every edit.
  *
+ * **An app's settings follow the node.** Every edit rebuilds a node as a copy of itself, so a
+ * node's `appSettings` stay with it through a new weight or ceiling, a rename and a move, and go
+ * with it when it is removed. [setTemplate] replaces the template's settings with the template
+ * passed in and keeps the group's own, and [setAppSettings] is the one edit that changes a node's.
+ *
  * Edits check the tree's shape, never its values. A weight that is not a weight, an empty name,
  * a negative ceiling or a group left with no children all go into the document, as they would
  * from a file, and [Topology.from] reports them. The one value an edit refuses is a name a sibling
@@ -173,6 +178,22 @@ public fun TopologyDocument.setMaxConcurrent(path: List<Int>, maxConcurrent: Lon
     editChild(path) { node -> node.with(maxConcurrent = maxConcurrent) to TopologyEdit.History.KEPT }
 
 /**
+ * Sets the app's own settings on the child at [path] to [settings], replacing every key it had;
+ * an empty map clears them. heddle never reads them (see [TopologyDocument]), and nothing beneath
+ * the child or in its template changes. A template's settings are set with [setTemplate], passing
+ * a `copy` of the group's template.
+ *
+ * Always [TopologyEdit.History.KEPT]: settings are the app's, and cost nobody any history.
+ *
+ * Refused with [TopologyEdit.AtRoot] for `[]`, since a document's root carries no settings, or
+ * [TopologyEdit.NoSuchNode].
+ *
+ * @sample us.tractat.kuilt.heddle.sampleAppSettings
+ */
+public fun TopologyDocument.setAppSettings(path: List<Int>, settings: Map<String, String>): TopologyEdit =
+    editChild(path) { node -> node.with(appSettings = settings) to TopologyEdit.History.KEPT }
+
+/**
  * Adds [child], a [TopologyDocument.Group] with anything beneath it or a [TopologyDocument.Lane],
  * as the last child of the group at [parent]; `[]` adds it to the root. Every existing address is
  * unchanged, and [TopologyEdit.Edited.path] is the new child's.
@@ -318,7 +339,8 @@ private fun TopologyDocument.moveTo(path: List<Int>, parent: List<Int>, at: (end
 
 /**
  * Sets the template of the group at [path] to [template], replacing the whole of the old one,
- * nested templates included; `null` removes it. A template is what lets the app attach children to
+ * nested templates and their `appSettings` included; `null` removes it. The group's own
+ * `appSettings` are kept. A template is what lets the app attach children to
  * the group while it runs, and says what each one gets (see [TopologyDocument.ChildTemplate]). To
  * change one field, pass a `copy` of the group's own. Nothing in [template] is checked here;
  * [Topology.from] reports a bad weight or a negative ceiling at the group's path.
@@ -454,8 +476,13 @@ private fun templateHistory(before: TopologyDocument.ChildTemplate?, after: Topo
     }
 }
 
-private fun Node.with(name: String = this.name, weight: String = this.weight, maxConcurrent: Long? = this.maxConcurrent): Node =
+private fun Node.with(
+    name: String = this.name,
+    weight: String = this.weight,
+    maxConcurrent: Long? = this.maxConcurrent,
+    appSettings: Map<String, String> = this.appSettings,
+): Node =
     when (this) {
-        is Group -> copy(name = name, weight = weight, maxConcurrent = maxConcurrent)
-        is Lane -> copy(name = name, weight = weight, maxConcurrent = maxConcurrent)
+        is Group -> copy(name = name, weight = weight, maxConcurrent = maxConcurrent, appSettings = appSettings)
+        is Lane -> copy(name = name, weight = weight, maxConcurrent = maxConcurrent, appSettings = appSettings)
     }
