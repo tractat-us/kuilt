@@ -220,7 +220,7 @@ tasks.named<KotlinNativeSimulatorTest>("iosSimulatorArm64Test") {
 }
 
 if (runRealKeychainTests) {
-    val bootedDevice = providers.gradleProperty("identity.keychain.device").orNull
+    val bootedDevice = providers.gradleProperty("identity.keychain.device").orNull?.takeIf { it.isNotBlank() }
         ?: error("-Pidentity.keychain.tests=true needs -Pidentity.keychain.device=<UDID of a booted iOS simulator>")
     tasks.named<KotlinNativeSimulatorTest>("iosSimulatorArm64RealKeychainTest") {
         description = "Runs the iOS Keychain store's TCK against the real Keychain of a booted simulator (#3310)."

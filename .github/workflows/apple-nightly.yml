@@ -202,7 +202,11 @@ jobs:
         id: keychain-sim
         if: ${{ !cancelled() && matrix.target == 'iosSimulatorArm64' }}
         timeout-minutes: 10
-        run: echo "udid=$(.github/scripts/boot-ios-simulator.sh kuilt-keychain)" >> "$GITHUB_OUTPUT"
+        # The assignment on its own line, so a failed boot fails this step. Inside `echo`'s argument it
+        # would not: `echo` exits 0 whatever the substitution did.
+        run: |
+          udid=$(.github/scripts/boot-ios-simulator.sh kuilt-keychain)
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
 
       - name: :kuilt-identity TCK against the real Keychain (iosSimulatorArm64)
         if: ${{ !cancelled() && matrix.target == 'iosSimulatorArm64' }}

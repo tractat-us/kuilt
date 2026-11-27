@@ -33,6 +33,12 @@ print(best["identifier"], phones[0])
 
 echo "boot-ios-simulator: creating $name ($devtype on $runtime)" >&2
 udid=$(xcrun simctl create "$name" "$devtype" "$runtime")
+# From here a failure, or the step's timeout, would strand a device the caller never learns the UDID
+# of, so this script deletes it itself.
+discard() { xcrun simctl delete "$udid" >/dev/null 2>&1 || true; }
+trap discard ERR
+trap 'discard; exit 143' TERM INT
 xcrun simctl boot "$udid"
 xcrun simctl bootstatus "$udid" -b >/dev/null
+trap - ERR TERM INT
 echo "$udid"
