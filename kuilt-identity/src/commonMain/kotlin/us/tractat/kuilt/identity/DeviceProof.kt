@@ -84,8 +84,7 @@ public class DeviceProof internal constructor(
      * [isSignedBySubject], checked in [scheme] rather than always in [KeyScheme.P256]. A server
      * passes its own [DeviceKeyStore.keyScheme], so a test on a fake scheme stays on virtual time.
      */
-    @IdentityInternalApi
-    public suspend fun isSignedBySubject(scheme: KeyScheme): Boolean = StatementCodec.isSignedBy(wireBytes, subject, scheme)
+    internal suspend fun isSignedBySubject(scheme: KeyScheme): Boolean = StatementCodec.isSignedBy(wireBytes, subject, scheme)
 
     override fun equals(other: Any?): Boolean = other is DeviceProof && wireBytes.contentEquals(other.wireBytes)
 
