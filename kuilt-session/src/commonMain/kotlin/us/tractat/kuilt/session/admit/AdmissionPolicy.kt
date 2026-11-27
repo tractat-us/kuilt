@@ -53,9 +53,10 @@ public fun interface AdmissionPolicy {
          * [GrantReach.ThisRoom]: a device away up to [readmitFor] after its last contact always gets
          * back in on its pass, and up to one and a half times it, depending on when it dropped. With
          * the default hour that is 60 to 90 minutes: the pass lasts 90 minutes and is renewed every 30
-         * while the device stays connected. That floor holds provided the last renewal reached the
-         * device: one that fails to sign or to send is tried again, more often as the device's pass
-         * nears its end (#3711), but one the link took and then lost is not known to be lost.
+         * while the device stays connected. A renewal that fails to sign or to send is tried again,
+         * more often as the device's pass nears its end (#3711). One the link took and then lost
+         * costs nothing either: the host lets the device back in on the last pass it signed it
+         * (#3745), unless the host restarted since or 256 later departures pushed that record out.
          *
          * [readmitFor] is checked here, so a bad value throws when the host is configured rather than
          * on some joiner's admission.
@@ -184,9 +185,11 @@ public enum class GrantReach {
  * on its pass, and up to one and a half times it, depending on when it dropped, however long ago it
  * first joined. The pass itself lasts one and a half times [readmitFor] ([notAfter]), and the room
  * issues a fresh one every half of [readmitFor] while the member stays connected, so the pass a device
- * holds when it drops has at least [readmitFor] left. That floor holds provided the last renewal
- * reached the device: one that fails to sign or to send is tried again, more often as the device's
- * pass nears its end (#3711), but one the link took and then lost is not known to be lost.
+ * holds when it drops has at least [readmitFor] left. A renewal that fails to sign or to send is tried
+ * again, more often as the device's pass nears its end (#3711). One the link took and then lost costs
+ * nothing either: the host lets a device whose seat is gone back in on the last pass it signed it, as
+ * on one the device presents (#3745). Only a host restart, or 256 later departures pushing that record
+ * out, leaves the device with the pass before it.
  * [Duration.INFINITE] means the pass never runs out.
  *
  * A grant is dated in whole epoch milliseconds and must end after it starts, so [readmitFor] is at

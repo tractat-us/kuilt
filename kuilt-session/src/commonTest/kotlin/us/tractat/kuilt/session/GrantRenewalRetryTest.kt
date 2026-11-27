@@ -26,6 +26,7 @@ import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.GrantIssuer
 import us.tractat.kuilt.session.admit.GrantTerms
 import us.tractat.kuilt.session.admit.HostAdmission
+import us.tractat.kuilt.session.admit.ReturnKind
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -354,6 +355,47 @@ class GrantRenewalRetryTest {
         ).adopt(link, AdoptRole.Host(admitting(), roomId = KEY_SEAT_ROOM), memberName = "Host")
         testScheduler.runCurrent()
         return room
+    }
+
+    /**
+     * Bob comes back on the pass the host recorded for him, presenting none, and the pass his new
+     * Welcome should carry fails to sign; he leaves before any retry goes (#3745). The host signed
+     * him a pass that is still good, so his next return is unvetted too: the membership he returned
+     * as carries the recorded pass into its own departure record, as a takeover carries its seat's.
+     */
+    @Test
+    fun aReturnWhosePassFailsToSignStillLeavesTheRecordedPass() = runTest {
+        val store = flaky { it >= 1 }
+        val asked = mutableListOf<DidKey>()
+        val admission = HostAdmission(
+            AdmissionPolicy { request ->
+                asked += request.key
+                AdmissionDecision.Admit(GrantTerms(term))
+            },
+            RevocationList.inMemory(),
+        )
+        val host = rawHost(joiners = setOf(bob, bobAgain, bobTab), store = store, admission = admission)
+        host.admit(bob, bobKey, nonce = 1)
+        val signed = host.passesTo(bob).single()
+        host.say(bob, AdmitMessage.Goodbye)
+
+        host.admit(bobAgain, bobKey, nonce = 2)
+        val again = host.sentTo(bobAgain).filterIsInstance<AdmitMessage.Welcome>().single { it.assignedPeerId == bobAgain.value && it.membership != null }
+        host.say(bobAgain, AdmitMessage.Goodbye)
+        val refusedBeforeLast = store.refused
+
+        host.admit(bobTab, bobKey, nonce = 3)
+        val last = host.sentTo(bobTab).filterIsInstance<AdmitMessage.Welcome>().single { it.assignedPeerId == bobTab.value && it.membership != null }
+
+        assertAll(
+            { assertTrue(testScheduler.currentTime < signed.notAfter, "rig: the pass the host signed Bob is still good") },
+            { assertEquals(ReturnKind.Returning, again.returnKind, "rig: Bob came back on the recorded pass, presenting none") },
+            { assertEquals(null, again.grant, "rig: and that Welcome's pass failed to sign") },
+            { assertEquals(1, refusedBeforeLast, "rig: the one refusal before he left again, and no retry went") },
+            { assertEquals(listOf(bobKey.id), asked, "the policy vetted Bob once, when he first joined") },
+            { assertEquals(ReturnKind.Returning, last.returnKind, "his next return is on the pass the host signed him") },
+        )
+        host.room.leave()
     }
 
     /**

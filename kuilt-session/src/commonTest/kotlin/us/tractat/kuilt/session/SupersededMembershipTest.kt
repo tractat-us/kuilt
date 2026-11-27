@@ -633,7 +633,9 @@ class SupersededMembershipTest {
      * the new id's challenge goes stale before the room acts on the answer: the new tab says Goodbye.
      * Nobody can restore the seat now, and no expiry is left to end it, so it is released in the pass
      * that finds the answer stale. Carol, a star bystander, hears the expired `Farewell` then, and is
-     * left with no ghost. A later Hello from the same tab is an ordinary admission.
+     * left with no ghost. A later Hello from the same tab is a new membership, not a restore: it comes
+     * back on the last pass the host signed the released seat, which the tab never presents (Decided 34,
+     * #3745).
      */
     @Test
     fun aStaleSuccessReleasesTheOldSeatAndTellsTheBystanders() = runTest {
@@ -670,7 +672,7 @@ class SupersededMembershipTest {
             { assertEquals(0, welcomedSecond, "the stale exchange seated nobody") },
             { assertEquals(1, hold.calls.size, "the later Hello asks no window: the seat is gone") },
             { assertEquals(second, (readmitted.singleOrNull() as? MembershipEvent.Joined)?.member?.id, readmitted.render()) },
-            { assertEquals(null, raw.sentTo(second).welcomesFor(second).lastOrNull()?.returnKind, "an ordinary admission") },
+            { assertEquals(ReturnKind.Returning, raw.sentTo(second).welcomesFor(second).lastOrNull()?.returnKind, "a new membership, on the pass the host signed the released seat") },
         )
     }
 

@@ -502,8 +502,9 @@ public sealed interface AdmitMessage {
      * that time while the member stays connected, so a member that drops off holds a pass good for at
      * most that time after its last contact and, provided the last renewal reached it, at least two
      * thirds of it, its term, however long ago it joined. A renewal that fails to sign or to send is
-     * tried again, more often as the member's pass nears its end (#3711); one the link took and then
-     * lost is not known to be lost. A member the host holds as partitioned is sent nothing, and a
+     * tried again, more often as the member's pass nears its end (#3711). One the link took and then
+     * lost is never resent, and need not be: the host lets the device back in on the last pass it
+     * signed it while it remembers the departure (#3745). A member the host holds as partitioned is sent nothing, and a
      * pass that never expires is never renewed. Nor is the pass of a member whose device the host
      * revoked after admitting it (Decided 14).
      *

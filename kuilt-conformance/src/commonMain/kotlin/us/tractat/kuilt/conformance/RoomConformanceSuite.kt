@@ -1614,6 +1614,226 @@ public abstract class RoomConformanceSuite {
             }
         }
 
+    // ── (0b′) A renewal the link lost: the pass the host signed last (#3745, Decided 34) ─
+    //
+    // The host renews a connected member's pass every half of its term. A renewal the link takes and
+    // then loses leaves the device holding the pass before it, which runs out half a term sooner. The
+    // host keeps the last pass it signed a departed membership in its record of that departure, and a
+    // device whose seat is gone comes back on it as on a pass it presented: checked the same way,
+    // revocation and expiry included, and only for the key the device proves. So the loss costs the
+    // device nothing while the host remembers the departure, and once it forgets — the pass ran out,
+    // or later departures pushed the record out — the device is decided on what it holds.
+    //
+    // A link through [ReturnDevice] alone carries a frame or tears, so these rows lose the renewal
+    // through [ReturnHarness.renewalLoss]. Each asserts its rig fired: exactly one renewal lost, the
+    // device delivered only the pass its `Welcome` carried, and the lost one signed after it and
+    // running out later.
+
+    /**
+     * The headline (#3745): the link loses the device's renewal, the device is killed and its seat let
+     * go, and it comes back after the pass it holds ran out but inside the one its link lost. The host
+     * signed that one, so it lets the device back without asking the admission policy, and marks it as
+     * the device returning.
+     */
+    @Test
+    public fun aRenewalTheLinkLostStillLetsTheDeviceBackUnvetted(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val obligation = "a renewal the link lost still lets the device back unvetted"
+            val h = returnHarnessOrDeclaredGap(obligation) ?: return@runTest
+            val rig = h.renewalLoss.rigOrDeclaredGap(obligation) ?: return@runTest
+            val term = lostRenewalTerm(h)
+            val vetting = VettingCount(readmitFor = term)
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
+            val app = AppCalls()
+            var live: Room? = null
+            try {
+                val hostTape = EventTape(host, backgroundScope)
+                val gone = loseARenewalAndGo(h, rig, host, app, vetting, term)
+                advanceTimeBy(gone.held.notAfter - testScheduler.currentTime)
+                runCurrent()
+                val back = comeBack(h, host, app, gone).also { live = it.room }
+                assertAll(
+                    *gone.rigFired(),
+                    *back.insideTheLostPass(gone),
+                    { assertEquals(gone.vettedAtLoss, vetting.keys(), "the pass the host signed last lets the device back unvetted, delivered or not") },
+                    { assertEquals(ReturningMark(previousId = gone.oldId), back.markIn(hostTape), "and marks it as the device returning, naming the id its seat had") },
+                    { assertEquals(listOf("join", "join"), app.snapshot(), "each launch's join is the app's only call") },
+                )
+            } finally {
+                live?.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * As [aRenewalTheLinkLostStillLetsTheDeviceBackUnvetted], but [HOST_DEPARTURES_KEPT] other
+     * devices leave after the device's seat went, which pushes its record out (spec *Membership and
+     * the wire*: at most that many, oldest out first). The host no longer holds the pass it signed,
+     * the device holds only the one that ran out, and the policy is asked once, about its key.
+     */
+    @Test
+    public fun aLostRenewalPushedOutOfTheHostsRecordIsVetted(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val obligation = "a lost renewal pushed out of the host's record is vetted"
+            val h = returnHarnessOrDeclaredGap(obligation) ?: return@runTest
+            val rig = h.renewalLoss.rigOrDeclaredGap(obligation) ?: return@runTest
+            // Long enough that every later departure fits inside the lost pass, with room to spare.
+            val term = 60.seconds
+            val vetting = VettingCount(readmitFor = term)
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
+            val app = AppCalls()
+            var live: Room? = null
+            try {
+                val hostTape = EventTape(host, backgroundScope)
+                val gone = loseARenewalAndGo(h, rig, host, app, vetting, term)
+                val later = List(HOST_DEPARTURES_KEPT) {
+                    val other = h.newDevice().launch().join(h.joinTag)
+                    val id = other.selfId
+                    host.awaitRoster("a later device is admitted") { roster -> roster.any { it.id == id } }
+                    awaitPassKept(other)
+                    other.leave()
+                    host.awaitRoster("the later device has left") { roster -> roster.none { it.id == id } }
+                    id
+                }.toSet()
+                runCurrent() // let the last departure's event reach the tape
+                val departuresAfter = hostTape.events().filterIsInstance<MembershipEvent.Left>()
+                    .dropWhile { it.peerId != gone.oldId }.drop(1).count { it.peerId in later }
+                advanceTimeBy(gone.held.notAfter - testScheduler.currentTime)
+                runCurrent()
+                val vettedBeforeReturn = vetting.keys()
+                val back = comeBack(h, host, app, gone).also { live = it.room }
+                assertAll(
+                    *gone.rigFired(),
+                    *back.insideTheLostPass(gone),
+                    { assertEquals(HOST_DEPARTURES_KEPT, departuresAfter, "rig: $HOST_DEPARTURES_KEPT other devices left after the device's seat went") },
+                    { assertEquals(vettedBeforeReturn + gone.key, vetting.keys(), "a record pushed out is no pass: the policy is asked once, about the device's key") },
+                    { assertEquals(null, back.markIn(hostTape), "an ordinary admission, not marked as a return") },
+                )
+            } finally {
+                live?.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * As [aRenewalTheLinkLostStillLetsTheDeviceBackUnvetted], but the host revokes the device from
+     * just after it signed the lost renewal. The pass it kept is void like any other issued before the
+     * cutoff (Decided 14, 27), so the policy is asked once, about the device's key.
+     */
+    @Test
+    public fun aLostRenewalRevokedSinceItWasSignedIsVetted(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val obligation = "a lost renewal revoked since it was signed is vetted"
+            val h = returnHarnessOrDeclaredGap(obligation) ?: return@runTest
+            val rig = h.renewalLoss.rigOrDeclaredGap(obligation) ?: return@runTest
+            val term = lostRenewalTerm(h)
+            val vetting = VettingCount(readmitFor = term)
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
+            val app = AppCalls()
+            var live: Room? = null
+            try {
+                val hostTape = EventTape(host, backgroundScope)
+                val gone = loseARenewalAndGo(h, rig, host, app, vetting, term)
+                val cutoff = gone.lost.issuedAt + 1
+                vetting.revocations.revoke(gone.key, notBefore = cutoff)
+                advanceTimeBy(gone.held.notAfter - testScheduler.currentTime)
+                runCurrent()
+                val back = comeBack(h, host, app, gone).also { live = it.room }
+                assertAll(
+                    *gone.rigFired(),
+                    *back.insideTheLostPass(gone),
+                    { assertEquals(cutoff, vetting.revocations.notBefore(gone.key), "rig: the device is revoked from just after the lost renewal was signed") },
+                    { assertEquals(gone.vettedAtLoss + gone.key, vetting.keys(), "the pass the host kept is void too: the policy is asked once, about the device's key") },
+                    { assertEquals(null, back.markIn(hostTape), "an ordinary admission, not marked as a return") },
+                )
+            } finally {
+                live?.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * As [aRenewalTheLinkLostStillLetsTheDeviceBackUnvetted], but the device comes back after the lost
+     * renewal ran out too. The host never lengthens a pass it signed, so the policy is asked once,
+     * about the device's key.
+     */
+    @Test
+    public fun aReturnAfterTheLostRenewalRanOutIsVetted(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val obligation = "a return after the lost renewal ran out is vetted"
+            val h = returnHarnessOrDeclaredGap(obligation) ?: return@runTest
+            val rig = h.renewalLoss.rigOrDeclaredGap(obligation) ?: return@runTest
+            val term = lostRenewalTerm(h)
+            val vetting = VettingCount(readmitFor = term)
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
+            val app = AppCalls()
+            var live: Room? = null
+            try {
+                val hostTape = EventTape(host, backgroundScope)
+                val gone = loseARenewalAndGo(h, rig, host, app, vetting, term)
+                advanceTimeBy(gone.lost.notAfter - testScheduler.currentTime)
+                runCurrent()
+                val back = comeBack(h, host, app, gone).also { live = it.room }
+                assertAll(
+                    *gone.rigFired(),
+                    { assertEquals(emptyList(), back.seatsAtReturn, "rig: the key held no seat when the device came back") },
+                    { assertTrue(back.returnedAt >= gone.lost.notAfter, "rig: the device came back after the pass its link lost ran out") },
+                    { assertEquals(gone.vettedAtLoss + gone.key, vetting.keys(), "past every pass the host signed it, the policy is asked once, about the device's key") },
+                    { assertEquals(null, back.markIn(hostTape), "an ordinary admission, not marked as a return") },
+                )
+            } finally {
+                live?.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * After the device's seat went, a different key comes in under the device's old id: a device whose
+     * key store was cleared while its peer id persisted (Decided 18). The host's record of the lost
+     * pass names the device's key, so it is no pass for this one: the policy is asked about it, and it
+     * is not marked as a return. The record is still the device's, which comes back on it unvetted.
+     */
+    @Test
+    public fun anotherKeyUnderTheIdGainsNothingFromALostRenewal(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val obligation = "another key under the id gains nothing from a lost renewal"
+            val h = returnHarnessOrDeclaredGap(obligation) ?: return@runTest
+            val rig = h.renewalLoss.rigOrDeclaredGap(obligation) ?: return@runTest
+            val term = lostRenewalTerm(h)
+            val vetting = VettingCount(readmitFor = term)
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
+            val app = AppCalls()
+            var live: Room? = null
+            var taker: Room? = null
+            try {
+                val hostTape = EventTape(host, backgroundScope)
+                val gone = loseARenewalAndGo(h, rig, host, app, vetting, term)
+                val other = gone.device.impostor().join(h.joinTag).also { taker = it }
+                val otherKey = host.awaitRoster("another key holds the device's old id") { roster ->
+                    roster.any { it.id == gone.oldId && it.key != gone.key && it.liveness == Liveness.Connected }
+                }.single { it.id == gone.oldId }.key
+                runCurrent() // let the event that announces the taker reach the tape
+                val takerMark = hostTape.events().filterIsInstance<MembershipEvent.Joined>().last { it.member.id == other.selfId }.returning
+                val vettedAfterTaker = vetting.keys()
+                advanceTimeBy(gone.held.notAfter - testScheduler.currentTime)
+                runCurrent()
+                val back = comeBack(h, host, app, gone).also { live = it.room }
+                assertAll(
+                    *gone.rigFired(),
+                    *back.insideTheLostPass(gone),
+                    { assertEquals(gone.oldId, other.selfId, "rig: the other key presents the device's old id") },
+                    { assertEquals(gone.vettedAtLoss + otherKey, vettedAfterTaker, "the other key is a newcomer: the policy is asked once, about it") },
+                    { assertEquals(null, takerMark, "and it is not marked as a return") },
+                    { assertEquals(vettedAfterTaker, vetting.keys(), "the record is still the device's: it comes back unvetted") },
+                    { assertEquals(ReturningMark(previousId = gone.oldId), back.markIn(hostTape), "marked as returning") },
+                )
+            } finally {
+                live?.leave()
+                taker?.leave()
+                host.leave()
+            }
+        }
+
     // ── (0c) What no honest device sends: the harness's forging hooks (#3710) ─
     //
     // The host ignores a pass for another room, for another device's key, from an issuer it does not
@@ -3139,6 +3359,117 @@ public abstract class RoomConformanceSuite {
             }
         }
 
+    /** The renewal-losing rig for one row, or `null` after asserting the harness's declared gap names an issue (#3745). */
+    private fun RenewalLoss.rigOrDeclaredGap(obligation: String): RenewalLossRig? =
+        when (this) {
+            is RenewalLoss.Supported -> rig
+            is RenewalLoss.Unsupported -> {
+                assertTrue(
+                    trackingUrl.isNotBlank(),
+                    "RoomConformanceSuite: \"$obligation\" is unproven on this harness, and an unproven " +
+                        "obligation must be tracked — RenewalLoss.Unsupported was declared with a blank " +
+                        "trackingUrl. Point it at the issue that would have to close for this harness to " +
+                        "return RenewalLoss.Supported, or return Supported and prove the obligation.",
+                )
+                null
+            }
+        }
+
+    /**
+     * The term the lost-renewal rows admit on (#3745): long enough that the host lets the killed
+     * device's seat go well before the pass it holds runs out, short against a test, as
+     * [expiredGrantIsVetted]'s.
+     */
+    private fun lostRenewalTerm(h: ReturnHarness): Duration = h.hostHeartbeat.timeout + h.hostHeartbeat.reconnectWindow + 4.seconds
+
+    /**
+     * A device whose link lost its pass renewal before it was killed, with its seat let go (#3745):
+     * what [loseARenewalAndGo] left. [deliveredAll] is every pass its link delivered, [lostAll] every renewal
+     * it lost, both read at the kill; [vettedAtLoss] is what the policy had been asked by then.
+     */
+    private class LostRenewal(
+        val device: RenewalLosingDevice,
+        val key: DidKey,
+        val oldId: PeerId,
+        val deliveredAll: List<Grant>,
+        val lostAll: List<Grant>,
+        val vettedAtLoss: List<DidKey>,
+    ) {
+        /** The pass the device holds: the newest its link delivered. */
+        val held: Grant get() = deliveredAll.last()
+
+        /** The renewal its link lost. */
+        val lost: Grant get() = lostAll.last()
+
+        /** That the rig fired: one renewal lost, after the one pass the `Welcome` carried, and running out later. */
+        fun rigFired(): Array<() -> Unit> = arrayOf(
+            { assertEquals(1, lostAll.size, "rig: the link lost exactly one renewal before the kill: $lostAll") },
+            { assertEquals(1, deliveredAll.size, "rig: it delivered only the pass the Welcome carried: $deliveredAll") },
+            { assertEquals(listOf(key, key), (deliveredAll + lostAll).map { it.subject }, "rig: both passes name the device's key") },
+            { assertTrue(lost.issuedAt > held.issuedAt, "rig: the lost renewal was signed after the pass the device holds") },
+            { assertTrue(lost.notAfter > held.notAfter, "rig: and runs out after it") },
+            { assertEquals(listOf(key), vettedAtLoss, "rig: the policy vetted the device once, when it first joined") },
+        )
+    }
+
+    /** A device back after [LostRenewal]: its new [room], when it came back, and what the host held of its key then. */
+    private class LostRenewalReturn(val room: Room, val returnedAt: Long, val seatsAtReturn: List<Member>) {
+        /** That the device came back with its seat gone, after the pass it holds ran out and inside the lost one. */
+        fun insideTheLostPass(gone: LostRenewal): Array<() -> Unit> = arrayOf(
+            { assertEquals(emptyList(), seatsAtReturn, "rig: the key held no seat when the device came back") },
+            { assertTrue(returnedAt >= gone.held.notAfter, "rig: the device came back after the pass it holds ran out") },
+            { assertTrue(returnedAt < gone.lost.notAfter, "rig: and inside the pass its link lost") },
+        )
+
+        /** The [ReturningMark] [hostTape] heard this room's membership joined with; null for an ordinary admission. */
+        fun markIn(hostTape: EventTape): ReturningMark? =
+            hostTape.events().filterIsInstance<MembershipEvent.Joined>().single { it.member.id == room.selfId }.returning
+    }
+
+    /**
+     * Admit a fresh renewal-losing device on [term], have its link lose the next renewal its host
+     * sends, then kill it and wait for the host to let its seat go (#3745). The host renews a
+     * connected member's pass inside its term, so the wait is bounded by the term and steps by the
+     * host's heartbeat, keeping the device connected throughout.
+     */
+    private suspend fun TestScope.loseARenewalAndGo(
+        h: ReturnHarness,
+        rig: RenewalLossRig,
+        host: Room,
+        app: AppCalls,
+        vetting: VettingCount,
+        term: Duration,
+    ): LostRenewal {
+        val device = rig.newDevice()
+        val first = app.factory(device.launch()).join(h.joinTag)
+        val id = first.selfId
+        val key = host.awaitRoster("the device is admitted") { roster -> roster.any { it.id == id } }.single { it.id == id }.key
+        awaitPassKept(first)
+        device.loseRenewals()
+        val deadline = testScheduler.currentTime + term.inWholeMilliseconds
+        while (device.lostRenewals.isEmpty() && testScheduler.currentTime < deadline) {
+            advanceTimeBy(h.hostHeartbeat.interval)
+            runCurrent()
+        }
+        val delivered = device.deliveredPasses
+        val lost = device.lostRenewals
+        val vetted = vetting.keys()
+        device.kill()
+        host.awaitRoster("the host lets the device's seat go") { roster -> roster.none { it.id == id } }
+        return LostRenewal(device, key, id, delivered, lost, vetted)
+    }
+
+    /** Relaunch [gone]'s device under a fresh id and wait until the host holds its new seat. */
+    private suspend fun TestScope.comeBack(h: ReturnHarness, host: Room, app: AppCalls, gone: LostRenewal): LostRenewalReturn {
+        val returnedAt = testScheduler.currentTime
+        val seats = host.roster.value.filter { it.key == gone.key }
+        val room = app.factory(gone.device.launch()).join(h.joinTag)
+        val fresh = room.selfId
+        host.awaitRoster("the device holds a seat again") { roster -> roster.any { it.id == fresh && it.liveness == Liveness.Connected } }
+        runCurrent() // let the event that announces the admission reach the tape
+        return LostRenewalReturn(room, returnedAt, seats)
+    }
+
     /** What one fresh planting device's first admission came to (#3710). */
     private class PlantedOutcome(
         val hostKey: DidKey,
@@ -3581,6 +3912,12 @@ public abstract class RoomConformanceSuite {
 
         /** A second channel, first minted after the leave, so its view cannot pre-date it. */
         const val TERMINAL_STATE_CHANNEL_AFTER = "terminal-state-after-leave"
+
+        /**
+         * How many departures a host remembers, oldest out first (spec *Membership and the wire*):
+         * past this, the oldest departure's record, and the pass it kept, is forgotten (#3745).
+         */
+        const val HOST_DEPARTURES_KEPT = 256
 
         /** The room [grantForAnotherRoomIsIgnored]'s planted pass names: never a room the host opens. */
         const val ANOTHER_ROOM = "another-room"

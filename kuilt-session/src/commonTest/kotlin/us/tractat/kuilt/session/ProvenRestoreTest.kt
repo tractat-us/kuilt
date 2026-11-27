@@ -729,7 +729,8 @@ class ProvenRestoreTest {
     /**
      * The window expires **between** the Challenge and the Proof. Read at Challenge time, the seat
      * would still be held and the host would ask the controller to restore it; read at Proof time,
-     * under the lock, there is no seat and the joiner is admitted as a new member.
+     * under the lock, there is no seat and the joiner is admitted as a new member: a return on the last
+     * pass the host signed the expired seat, which the joiner never presents (Decided 34, #3745).
      */
     @Test
     fun seatChecksRunUnderTheLockAtProofTime() = runTest {
@@ -761,7 +762,7 @@ class ProvenRestoreTest {
             { assertTrue(host.hold.calls.isEmpty(), "no seat at Proof time, so nothing to ask the controller") },
             { assertEquals(listOf(bob), edges.filterIsInstance<MembershipEvent.Joined>().map { it.member.id }, edges.render()) },
             { assertTrue(edges.none { it is MembershipEvent.Resumed }) },
-            { assertEquals(listOf<ReturnKind?>(null), host.sentTo(bob).drop(toBob).welcomesFor(bob).map { it.returnKind }) },
+            { assertEquals(listOf<ReturnKind?>(ReturnKind.Returning), host.sentTo(bob).drop(toBob).welcomesFor(bob).map { it.returnKind }, "a new membership, never a restore") },
             { assertEquals(Liveness.Connected, host.member(bob)?.liveness) },
         )
         host.room.leave()

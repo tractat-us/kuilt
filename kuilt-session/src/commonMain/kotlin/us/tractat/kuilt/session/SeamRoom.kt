@@ -639,9 +639,10 @@ private class DetachedMember(private val inbox: MemberInbox?) {
  * - [terms] are the ones every pass it is issued carries (#3221): what the host's policy admitted it
  *   on, or, for a device let back in on its pass, the terms that pass carried (#3222), so a friend's
  *   no-expiry pass is not cut back to the room's default by its own return. A takeover inherits them.
- * - [lastPassNotAfter] is when the latest pass issued to it runs out, null before the first. Written
- *   under the room lock once a pass is signed; read when the membership leaves, to keep its departed
- *   record ([us.tractat.kuilt.session.admit.DepartedMembers]) exactly as long as that pass is good.
+ * - [lastPass] is the latest pass the host signed it, null before the first, whether or not it reached
+ *   the device. Written under the room lock once a pass is signed; read when the membership leaves,
+ *   for its departed record ([us.tractat.kuilt.session.admit.DepartedMembers]), which keeps it while it
+ *   is good and lets the device back in on it (Decided 34, #3745). A takeover inherits it.
  * - [lastSentNotAfter] is when the latest pass the device is known to hold runs out (#3711): the last
  *   one the host sent it without the send throwing, under the room lock. A restore keeps it with the
  *   membership, a takeover inherits it, and a return on a pass starts from the pass presented, so a
@@ -650,7 +651,7 @@ private class DetachedMember(private val inbox: MemberInbox?) {
  */
 private class Membership(val id: String, val admittedAtMs: Long, val terms: GrantTerms) {
     /** Guarded by the room's lock. */
-    var lastPassNotAfter: Long? = null
+    var lastPass: Grant? = null
 
     /** Guarded by the room's lock. */
     var lastSentNotAfter: Long? = null
@@ -936,10 +937,11 @@ internal class SeamRoom(
     private val supersededIds = SupersededIds()
 
     /**
-     * **Host only.** The peer id each departed member's key last held, kept while the last pass that
-     * membership was given is good (#3222): what a device returning on its pass is announced with
-     * ([ReturningMark.previousId]). Guarded by [lock]; written by [detachMember], taken by
-     * [admitReturning], and cleared by [leave].
+     * **Host only.** The peer id each departed member's key last held and the last pass the host
+     * signed that membership, kept while that pass is good (#3222, #3745): what a device returning on
+     * a pass is announced with ([ReturningMark.previousId]), and a pass it may come back on though its
+     * link lost it (Decided 34). Guarded by [lock]; written by [detachMember], read by [returnPass],
+     * taken by [admitReturning], and cleared by [leave].
      */
     private val departedMembers = DepartedMembers()
 
@@ -1921,7 +1923,8 @@ internal class SeamRoom(
      *   gave, or a `Reject` with its code (#3220). The policy is asked at most once per exchange.
      * - [SeatDecision.Returning] — the seat is gone and [pass] is good — admits a new member without
      *   asking, marked as the same device returning ([admitReturning], #3222). [pass] is checked once,
-     *   when the Proof is ([presentedPass]), and its revocation and end again in every pass that decides.
+     *   when the Proof is ([returnPass]), and its revocation and end again in every pass that decides. It
+     *   is a pass the joiner presented, or the last one this host signed its key (Decided 34, #3745).
      *
      * **Revocation is checked once per key, before any restore verdict is trusted** (Decided 14,
      * [decideUnderRevocation]). A seat of the proven key admitted before the key's revocation cutoff is
@@ -1958,7 +1961,7 @@ internal class SeamRoom(
      * controller is asked again only about a partition episode it was not asked about before, and a
      * wait ends when another exchange's pass does.
      */
-    private suspend fun seatProvenJoiner(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long, deadline: Instant, pass: Grant?) {
+    private suspend fun seatProvenJoiner(joinerPeerId: PeerId, keyed: KeyedHello, generation: Long, deadline: Instant, pass: ReturnPass?) {
         val exchange = SeatExchange()
         try {
             seatProvenJoiner(joinerPeerId, keyed, generation, deadline, pass, exchange)
@@ -1983,7 +1986,7 @@ internal class SeamRoom(
         keyed: KeyedHello,
         generation: Long,
         deadline: Instant,
-        pass: Grant?,
+        pass: ReturnPass?,
         exchange: SeatExchange,
     ) {
         var asked: AskedWindow? = null
@@ -2269,7 +2272,7 @@ internal class SeamRoom(
         joinerPeerId: PeerId,
         keyed: KeyedHello,
         generation: Long,
-        pass: Grant?,
+        pass: ReturnPass?,
         asked: AskedWindow?,
         released: PeerId?,
         vetted: AdmissionDecision?,
@@ -2320,17 +2323,17 @@ internal class SeamRoom(
      * key and its own id asks for it back. Checked per key, so once for every seat that key holds, before any restore
      * verdict is trusted.
      *
-     * [pass] is the pass the joiner presented that [GrantTrust] found good when its Proof was checked
-     * ([presentedPass], #3222). It decides [SeatDecision.Returning] only where no seat does (rules 6–7),
+     * [pass] is the pass [GrantTrust] found good when the joiner's Proof was checked ([returnPass]): one
+     * it presented (#3222), or the last one this host signed its key (Decided 34, #3745). It decides [SeatDecision.Returning] only where no seat does (rules 6–7),
      * and only while it is still good at [nowMs]: its revocation and its end are read again here, under
      * the lock that decides, so a device revoked, or a pass run out, while its exchange was asking about
      * a seat is not let in unvetted. Revocation is by the pass's own date (Decided 27): a pass issued
      * after the cutoff is good, so a revoked device that was admitted again comes back on its new pass.
      */
-    private fun decideUnderRevocation(claimedId: PeerId, key: DidKey, pass: Grant?, nowMs: Long, without: PeerId? = null): SeatDecision {
+    private fun decideUnderRevocation(claimedId: PeerId, key: DidKey, pass: ReturnPass?, nowMs: Long, without: PeerId? = null): SeatDecision {
         val held = if (without == null) heldSeats() else heldSeats() - without
         val cutoff = checkNotNull(admission) { "only a host decides seats" }.revocations.notBefore(key)
-        val holdsValidGrant = pass != null && pass.stillGood(cutoff, nowMs)
+        val holdsValidGrant = pass != null && pass.grant.stillGood(cutoff, nowMs)
         if (cutoff == null) return decideSeat(claimedId, key, held, holdsValidGrant)
         val revoked = held.filter { (id, seat) -> seat.key == key && membershipOf(id).admittedAtMs < cutoff }.keys
         if (claimedId in revoked) {
@@ -2370,7 +2373,7 @@ internal class SeamRoom(
         generation: Long,
         current: Boolean,
         released: PeerId,
-        pass: Grant?,
+        pass: ReturnPass?,
         vetted: AdmissionDecision?,
         decidedAtMs: Long,
     ): SeatOutcome {
@@ -2640,8 +2643,9 @@ internal class SeamRoom(
         supersededIds.record(previous, held.key, successor = joinerPeerId)
         logger.info { "room.seat.superseded peer=${previous.value} by=${joinerPeerId.value}" }
         val admitted = admitMember(joinerPeerId, held.identity, held.key, inherited.admittedAtMs, inherited.terms)
-        // The device holds the pass it had under its old id (#3711).
+        // The device holds the pass it had under its old id (#3711), and the host the last it signed (#3745).
         admitted.burst.membership.lastSentNotAfter = inherited.lastSentNotAfter
+        admitted.burst.membership.lastPass = inherited.lastPass
         return SeatOutcome.Superseded(previous, detached, admitted.burst, decidedAtMs)
     }
 
@@ -2736,12 +2740,17 @@ internal class SeamRoom(
      * host and every member present hear it as [ReturningMark], naming the id the key last held while
      * the host remembers it ([departedMembers]).
      */
-    private fun admitReturning(joinerPeerId: PeerId, keyed: KeyedHello, pass: Grant, admittedAtMs: Long): SeatOutcome.Admitted {
+    private fun admitReturning(joinerPeerId: PeerId, keyed: KeyedHello, pass: ReturnPass, admittedAtMs: Long): SeatOutcome.Admitted {
         val previousId = departedMembers.take(keyed.key, admittedAtMs)
-        logger.info { "room.admit.returning peer=${joinerPeerId.value} previous=${previousId?.value}" }
-        return admitNewMember(joinerPeerId, keyed, GrantIssuer.termsOf(pass), admittedAtMs, ReturningMark(previousId))
-            // The device holds the pass it presented (#3711).
-            .also { it.burst.membership.lastSentNotAfter = pass.notAfter }
+        logger.info { "room.admit.returning peer=${joinerPeerId.value} previous=${previousId?.value} recorded=${pass.grant != pass.presented}" }
+        return admitNewMember(joinerPeerId, keyed, GrantIssuer.termsOf(pass.grant), admittedAtMs, ReturningMark(previousId))
+            .also {
+                // The device holds the good pass it presented, if any (#3711): not one only the host kept.
+                it.burst.membership.lastSentNotAfter = pass.presented?.notAfter
+                // And the host signed it [pass], so a departure before its Welcome's pass is signed
+                // still leaves that one in the record, as a takeover's does (#3745).
+                it.burst.membership.lastPass = pass.grant
+            }
     }
 
     /**
@@ -2940,10 +2949,11 @@ internal class SeamRoom(
             logger.warn(failure) { "room.grant.issue-failed peer=${peerId.value}" }
             return PassIssue.Failed
         }
-        // Before it is sent, so a departure after the send finds it (#3222). A departure between the
-        // signing and this write keeps the previous pass's end, which is earlier: the record is
-        // forgotten sooner than it might be, never kept past a pass.
-        lock.withLock { membership.lastPassNotAfter = grant.notAfter }
+        // Before it is sent, so a departure after the send finds it (#3222), and a send the link then
+        // loses leaves the host holding the pass the device never got (Decided 34, #3745). A departure
+        // between the signing and this write keeps the previous pass, which ends earlier: the record is
+        // forgotten sooner than it might be, never kept past a pass the host signed.
+        lock.withLock { membership.lastPass = grant }
         return PassIssue.Issued(grant)
     }
 
@@ -2979,13 +2989,14 @@ internal class SeamRoom(
      *
      * A renewal that falls due while the host holds the member as partitioned waits for the member's
      * next contact and goes then, so the member gets nothing while it is away. The pass it holds runs
-     * out at most one and a half terms after its last contact and, provided the last renewal reached
-     * it, at least a whole term after. A renewal that fails to sign or to send is tried again
+     * out at most one and a half terms after its last contact and, if the last renewal reached it, at
+     * least a whole term after. A renewal that fails to sign or to send is tried again
      * ([GrantIssuer.retryDelayMillis], #3711): first a second later, the wait doubling up to the
      * period, and never more than a quarter of the time left on the pass the device is known to hold
      * ([Membership.lastSentNotAfter]), though not under a quarter second, so the tries close up as
-     * that pass nears its end. A renewal whose frame was sent but lost on the
-     * link is not known to be lost, and is not tried again. One loop per membership, so one chain of
+     * that pass nears its end. A renewal whose frame was sent but lost on the link is not tried again:
+     * the host signed it, so [detachMember] keeps it when the membership leaves and [returnPass] lets
+     * the device back in on it (Decided 34, #3745), and the floor holds while the host remembers that. One loop per membership, so one chain of
      * retries per member. It stops for good when the membership ends — [detachMember] cancels it,
      * including when a partitioned seat's hold runs out — and when the device is revoked after this
      * membership's admission (Decided 14, R2(i)): a revoked present member keeps its seat (Decided 12)
@@ -3168,10 +3179,10 @@ internal class SeamRoom(
             }
             return
         }
-        val pass = when (val presented = presentedPass(sender, msg.grants, pending.keyed.key)) {
-            is PresentedPass.Good -> presented.grant
-            PresentedPass.None -> null
-            PresentedPass.CheckFailed -> {
+        val pass = when (val checked = returnPass(sender, msg.grants, pending.keyed.key)) {
+            is PassCheck.Good -> checked.pass
+            PassCheck.None -> null
+            PassCheck.CheckFailed -> {
                 if (pendingChallenges.retire(sender, pending.generation)) {
                     val reject = AdmitMessage.Reject("host-failed: the host could not check a pass", RejectCode.HostFailed, pending.keyed.joinerNonce)
                     runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
@@ -3182,17 +3193,79 @@ internal class SeamRoom(
         seatProvenJoiner(sender, pending.keyed, pending.generation, pending.deadline, pass)
     }
 
-    /** What [presentedPass] made of the passes a Proof presented. */
-    private sealed interface PresentedPass {
-        /** [grant] is good here and now: the device may come back on it unvetted. */
-        class Good(val grant: Grant) : PresentedPass
+    /**
+     * The pass a proven joiner may come back on when its key holds no seat (#3222, #3745). [grant]
+     * decides, and its terms are carried forward. [presented] is the good pass the joiner presented
+     * itself, if it presented one: the pass the device is known to hold. When [grant] is not
+     * [presented], the host is letting the device in on the last pass it signed that key, which its
+     * departed record kept and the device may never have got (Decided 34).
+     */
+    private class ReturnPass(val grant: Grant, val presented: Grant?)
 
-        /** None is good, or none was presented: the device is decided as if it had none. */
-        data object None : PresentedPass
+    /** What [returnPass] made of a Proof's passes and the host's own record of the key. */
+    private sealed interface PassCheck {
+        /** [pass] is good here and now: the device may come back on it unvetted. */
+        class Good(val pass: ReturnPass) : PassCheck
+
+        /** None is good, or there is none: the device is decided as if it had none. */
+        data object None : PassCheck
 
         /** A check could not run on this platform: the host failed, and says so. */
-        data object CheckFailed : PresentedPass
+        data object CheckFailed : PassCheck
     }
+
+    /**
+     * **Host only.** The pass [subject]'s joiner may come back on without vetting (#3222, #3745): the
+     * best good one of those it presented ([presentedPass]), or the last pass this host signed
+     * [subject] while a membership of it was here, which its departed record keeps ([departedMembers],
+     * Decided 34). That one is checked by [grantTrust] exactly as a presented one is, revocation and
+     * expiry included, and only for [subject], the key the Proof just proved: the record is no use to
+     * anyone without that key, and it never lengthens a pass, since the host signed it already. When
+     * both are good, the more generous wins ([GrantIssuer.mostGenerous]), and on a tie the one that
+     * runs out later. A check that throws is the host's failure ([PassCheck.CheckFailed]), as for a
+     * presented pass.
+     *
+     * The record is read under [lock] and checked outside it: the check suspends, and the pass read is
+     * an immutable value, so another exchange taking the record meanwhile changes nothing it decides.
+     * The seat decision reads its revocation and end again under the lock that decides.
+     */
+    private suspend fun returnPass(sender: PeerId, grants: List<ByteArray>, subject: DidKey): PassCheck {
+        val presented = when (val checked = presentedPass(sender, grants, subject)) {
+            is PassCheck.Good -> checked.pass.grant
+            PassCheck.None -> null
+            PassCheck.CheckFailed -> return PassCheck.CheckFailed
+        }
+        val trust = checkNotNull(grantTrust) { "only a host checks a pass" }
+        val now = clock().toEpochMilliseconds()
+        // The same pass the joiner presented is checked already, and costs no second signature check.
+        val recorded = lock.withLock { departedMembers.pass(subject, now) }?.takeIf { it != presented }?.let { kept ->
+            when (val verdict = verifyOrNull(sender, trust, kept, subject, now) ?: return PassCheck.CheckFailed) {
+                GrantVerdict.Valid -> kept
+                else -> {
+                    logger.info { "room.pass.recorded-ignored peer=${sender.value} verdict=$verdict" }
+                    null
+                }
+            }
+        }
+        val grant = when {
+            recorded == null -> presented
+            presented == null -> recorded
+            recorded.notAfter >= presented.notAfter -> GrantIssuer.mostGenerous(recorded, presented)
+            else -> GrantIssuer.mostGenerous(presented, recorded)
+        } ?: return PassCheck.None
+        if (grant !== presented) logger.info { "room.pass.recorded peer=${sender.value}: back on the last pass this host signed it" }
+        return PassCheck.Good(ReturnPass(grant, presented))
+    }
+
+    /** [GrantTrust.verify], or null when the check could not run on this platform, logged. */
+    private suspend fun verifyOrNull(sender: PeerId, trust: GrantTrust, grant: Grant, subject: DidKey, now: Long): GrantVerdict? =
+        try {
+            trust.verify(grant, subject, signedRoomId(), now)
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            logger.warn(failure) { "room.pass.check-failed peer=${sender.value}" }
+            null
+        }
 
     /**
      * **Host only.** The pass [subject]'s joiner presented in its Proof that lets it back in without
@@ -3207,13 +3280,13 @@ internal class SeamRoom(
      * send a Proof. An honest joiner presents two at most ([passesFrom]), and the cap never reaches
      * either; a Proof crowded with passes for other rooms still has its good pass found.
      *
-     * **A check that throws is the host's failure** ([PresentedPass.CheckFailed]): the platform's
+     * **A check that throws is the host's failure** ([PassCheck.CheckFailed]): the platform's
      * provider could not run, which says nothing of the pass. The caller refuses the joiner with a
      * retryable `HostFailed`, as it does a proof it cannot check, rather than send a device inside its
      * pass to the policy. Every other defect is a verdict, and the pass is ignored.
      */
-    private suspend fun presentedPass(sender: PeerId, grants: List<ByteArray>, subject: DidKey): PresentedPass {
-        if (grants.isEmpty()) return PresentedPass.None
+    private suspend fun presentedPass(sender: PeerId, grants: List<ByteArray>, subject: DidKey): PassCheck {
+        if (grants.isEmpty()) return PassCheck.None
         val trust = checkNotNull(grantTrust) { "only a host checks a presented pass" }
         val now = clock().toEpochMilliseconds()
         val roomId = signedRoomId()
@@ -3226,20 +3299,14 @@ internal class SeamRoom(
         }
         var chosen: Grant? = null
         for (grant in candidates.take(MAX_PRESENTED_PASSES)) {
-            val verdict = try {
-                trust.verify(grant, subject, roomId, now)
-            } catch (failure: Throwable) {
-                currentCoroutineContext().ensureActive()
-                logger.warn(failure) { "room.pass.check-failed peer=${sender.value}" }
-                return PresentedPass.CheckFailed
-            }
+            val verdict = verifyOrNull(sender, trust, grant, subject, now) ?: return PassCheck.CheckFailed
             if (verdict == GrantVerdict.Valid) {
                 chosen = chosen?.let { GrantIssuer.mostGenerous(it, grant) } ?: grant
             } else {
                 logger.info { "room.pass.ignored peer=${sender.value} verdict=$verdict" }
             }
         }
-        return chosen?.let(PresentedPass::Good) ?: PresentedPass.None
+        return chosen?.let { PassCheck.Good(ReturnPass(it, presented = it)) } ?: PassCheck.None
     }
 
     /**
@@ -5672,12 +5739,13 @@ internal class SeamRoom(
         episodeDetectedAtMs.remove(peerId)
         windowOpenedEpisodeMs.remove(peerId)
         // Pruned with the member, keeping `memberships.keys == admittedById.keys` (#3215). Its departure
-        // is remembered while its last pass is good (#3222), so its device's return on that pass is
-        // announced under this id. A takeover is not a departure: the device holds the seat still.
+        // is remembered with the last pass the host signed it, while that pass is good (#3222, #3745):
+        // its device's return is announced under this id, and is let in on that pass even if it never
+        // arrived. A takeover is not a departure: the device holds the seat still.
         val membership = memberships.remove(peerId)
-        val passEnd = membership?.lastPassNotAfter
-        if (passEnd != null && reason !is LeaveReason.Superseded) {
-            departedMembers.record(leaving.key, peerId, passEnd, clock().toEpochMilliseconds())
+        val lastPass = membership?.lastPass
+        if (lastPass != null && reason !is LeaveReason.Superseded) {
+            departedMembers.record(leaving.key, peerId, lastPass, clock().toEpochMilliseconds())
         }
         // A joiner's count of who the host named is cleared only by a new Hello, and a room that never
         // reconnects never says one, so it is pruned here too (#3615). It changes no rebuild: on a

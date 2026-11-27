@@ -22,8 +22,9 @@ coming back is recognised by the key it proves, never by a name or a token it wa
 - **Back after the seat was let go, but inside its pass:** the host gave it a pass when it was let
   in, and renewed the pass while it stayed connected. A device away up to the pass's term after its
   last contact always gets back in on it, and up to one and a half times the term, depending on when
-  it dropped (an hour by default: 60 to 90 minutes), provided the last renewal reached it. On that
-  pass it is let back in as a new
+  it dropped (an hour by default: 60 to 90 minutes). A renewal the link lost changes nothing: the
+  host lets the device back in on the last pass it signed it, until the host restarts or 256 later
+  departures push that out. On that pass it is let back in as a new
   membership without the host's `AdmissionPolicy` being asked, and everyone in the room hears a
   `MembershipEvent.Joined` carrying a `ReturningMark`, so they know it is the same device.
 - **Back after the pass ran out, or after its host revoked it:** the policy decides it like any

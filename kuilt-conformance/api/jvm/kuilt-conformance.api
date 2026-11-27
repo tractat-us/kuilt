@@ -538,6 +538,41 @@ public abstract class us/tractat/kuilt/conformance/RaftStorageConformanceSuite {
 	public final fun truncateFrom_removesTailEntries ()V
 }
 
+public abstract interface class us/tractat/kuilt/conformance/RenewalLosingDevice : us/tractat/kuilt/conformance/ReturnDevice {
+	public abstract fun getDeliveredPasses ()Ljava/util/List;
+	public abstract fun getLostRenewals ()Ljava/util/List;
+	public abstract fun loseRenewals ()V
+}
+
+public abstract interface class us/tractat/kuilt/conformance/RenewalLoss {
+}
+
+public final class us/tractat/kuilt/conformance/RenewalLoss$Supported : us/tractat/kuilt/conformance/RenewalLoss {
+	public fun <init> (Lus/tractat/kuilt/conformance/RenewalLossRig;)V
+	public final fun component1 ()Lus/tractat/kuilt/conformance/RenewalLossRig;
+	public final fun copy (Lus/tractat/kuilt/conformance/RenewalLossRig;)Lus/tractat/kuilt/conformance/RenewalLoss$Supported;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/RenewalLoss$Supported;Lus/tractat/kuilt/conformance/RenewalLossRig;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/RenewalLoss$Supported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRig ()Lus/tractat/kuilt/conformance/RenewalLossRig;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/RenewalLoss$Unsupported : us/tractat/kuilt/conformance/RenewalLoss {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/RenewalLoss$Unsupported;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/RenewalLoss$Unsupported;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/RenewalLoss$Unsupported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTrackingUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/RenewalLossRig {
+	public abstract fun newDevice (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public abstract interface class us/tractat/kuilt/conformance/RestartFixture {
 	public abstract fun getStore ()Lus/tractat/kuilt/store/DurableStore;
 }
@@ -604,13 +639,14 @@ public final class us/tractat/kuilt/conformance/ReturnFixture$Unsupported : us/t
 }
 
 public final class us/tractat/kuilt/conformance/ReturnHarness {
-	public fun <init> (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/core/Tag;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/conformance/PassPlanting;Lus/tractat/kuilt/conformance/ReusedIdLaunch;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)V
+	public fun <init> (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/core/Tag;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/conformance/PassPlanting;Lus/tractat/kuilt/conformance/ReusedIdLaunch;Lus/tractat/kuilt/conformance/RenewalLoss;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)V
 	public final fun getHostFactory ()Lus/tractat/kuilt/session/RoomFactory;
 	public final fun getHostHeartbeat ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
 	public final fun getHostPattern ()Lus/tractat/kuilt/core/Pattern;
 	public final fun getJoinTag ()Lus/tractat/kuilt/core/Tag;
 	public final fun getJoinerHeartbeat ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
 	public final fun getPassPlanting ()Lus/tractat/kuilt/conformance/PassPlanting;
+	public final fun getRenewalLoss ()Lus/tractat/kuilt/conformance/RenewalLoss;
 	public final fun getReusedIdLaunch ()Lus/tractat/kuilt/conformance/ReusedIdLaunch;
 	public final fun hostTab (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun newDevice (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -653,14 +689,19 @@ public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public fun <init> ()V
 	public final fun aDifferentKeyOnAPartitionedIdReleasesTheSeat ()V
 	public final fun aJoinerPresentingTheHostsKeyGetsAJoinerSeat ()V
+	public final fun aLostRenewalPushedOutOfTheHostsRecordIsVetted ()V
+	public final fun aLostRenewalRevokedSinceItWasSignedIsVetted ()V
 	public final fun aPartitionedIdTakenUnderAnotherKeyRefusesTheMembersReturn ()V
 	public final fun aPassTheHostDidNotSignIsIgnored ()V
 	public final fun aPlantedGoodPassLetsTheDeviceInUnvetted ()V
 	public final fun aProcessUnderASupersededIdEndsSuperseded ()V
 	public final fun aReadmittedJoinerDropsAPeerWhoLeftDuringTheOutage ()V
+	public final fun aRenewalTheLinkLostStillLetsTheDeviceBackUnvetted ()V
+	public final fun aReturnAfterTheLostRenewalRanOutIsVetted ()V
 	public final fun aReturnAfterTheSeatWentIsReadmitted ()V
 	public final fun aSecondLiveProcessGetsAnAdditionalSeat ()V
 	public final fun anAwayJoinerHearsASupersedeThroughItsRosterRebuild ()V
+	public final fun anotherKeyUnderTheIdGainsNothingFromALostRenewal ()V
 	public final fun broadcastDeliversRoomFrameTaggedWithSender ()V
 	public final fun channelStateTornAfterLeave ()V
 	public final fun differentKeyOnLiveIdIsRefused ()V

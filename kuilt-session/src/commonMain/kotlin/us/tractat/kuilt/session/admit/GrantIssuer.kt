@@ -31,9 +31,10 @@ internal object GrantIssuer {
      * device away up to it always gets back in on its pass. It may get back in later, up to the whole
      * life of the pass, depending on when it dropped. At 3, with [AdmissionPolicy.open]'s hour: a pass
      * lives 90 minutes, is renewed every 30, and a device gets back in on it 60 to 90 minutes after its
-     * last contact. The floor holds provided the last renewal reached the member: one that fails to
-     * sign or to send is tried again ([retryDelayMillis], #3711), but one the link took and then lost
-     * is not known to be lost, and leaves the member on the pass before it.
+     * last contact. A renewal that fails to sign or to send is tried again ([retryDelayMillis], #3711).
+     * One the link took and then lost leaves the member holding the pass before it, but the host keeps
+     * the one it signed in its record of the departure (`DepartedMembers`, #3745) and lets the device
+     * back in on that, so the floor holds until the host restarts or forgets the departure.
      *
      * What it costs: one signature and one [AdmitMessage.GrantRenewal] per connected member per
      * period, and a pass that outlives the promise by up to `r/(N−1)`. A larger value brings the
