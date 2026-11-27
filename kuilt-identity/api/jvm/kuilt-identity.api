@@ -83,7 +83,6 @@ public final class us/tractat/kuilt/identity/DeviceProof {
 	public final fun getWire ()[B
 	public fun hashCode ()I
 	public final fun isSignedBySubject (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun isSignedBySubject (Lus/tractat/kuilt/identity/KeyScheme;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun toString ()Ljava/lang/String;
 }
 

@@ -190,7 +190,6 @@ final class us.tractat.kuilt.identity/DeviceProof { // us.tractat.kuilt.identity
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/DeviceProof.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.identity/DeviceProof.toString|toString(){}[0]
     final suspend fun isSignedBySubject(): kotlin/Boolean // us.tractat.kuilt.identity/DeviceProof.isSignedBySubject|isSignedBySubject(){}[0]
-    final suspend fun isSignedBySubject(us.tractat.kuilt.identity/KeyScheme): kotlin/Boolean // us.tractat.kuilt.identity/DeviceProof.isSignedBySubject|isSignedBySubject(us.tractat.kuilt.identity.KeyScheme){}[0]
 
     final object Companion { // us.tractat.kuilt.identity/DeviceProof.Companion|null[0]
         final fun decode(kotlin/ByteArray): us.tractat.kuilt.identity/DeviceProof? // us.tractat.kuilt.identity/DeviceProof.Companion.decode|decode(kotlin.ByteArray){}[0]
