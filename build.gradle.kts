@@ -982,6 +982,233 @@ val forbidPortProbeRebind by tasks.registering {
     }
 }
 
+// Guard: forbid a test server that binds the wildcard by default and is dialled over loopback
+// (#3783; the mechanism is #3754, the first two sites were fixed by #3774).
+//
+//     embeddedServer(Netty, port = 0) { … }        // Ktor's default host is "0.0.0.0"
+//     …dial ws://localhost:$port/…                  // or 127.0.0.1
+//
+// On macOS a second socket may bind `127.0.0.1:P` while this server holds `*:P`: Java sets
+// `SO_REUSEADDR`, and BSD then lets the more specific address share the port. That socket takes
+// every loopback dial to `P`, `localhost` included, and the test's handshake gets a 404 or sees the
+// connection close, with nothing in either error naming the listener that answered. Binding
+// `127.0.0.1` holds the exact address the thief needs, so the thief's bind fails instead
+// (`assertLoopbackThiefRefused` in `:kuilt-websocket`'s jvmTest is the receipt).
+//
+// WHAT IT FLAGS: a test-source `embeddedServer(` whose OWN argument list (up to its matching `)`,
+// so a `configure = { … }` block counts and the trailing module lambda does not) says `port = 0`
+// and names no `host =`. `configure = { tapTlsConnector(identity, port = 0) }` is caught, because
+// that connector's `host` defaults to the wildcard too; `connector { this.host = h; this.port = 0 }`
+// is cleared by its `host =`.
+//
+// WHY LEXICAL, per AGENTS.md § Remedy shape. The default that causes the exposure lives in a
+// third-party signature (Ktor's `embeddedServer(…, host: String = "0.0.0.0", …)`), so no kuilt type
+// can change it. A type was considered and rejected: a test-support `loopbackServer(…)` wrapper
+// would need a JVM test-fixture module shared by six modules (`:kuilt-websocket`, `:kuilt-mdns`,
+// `:kuilt-cluster`, `:kuilt-otel-otlp`, `:kuilt-warp`, `:examples`), and its signature would have
+// to carry everything the sites pass through today (TLS connectors, post-start route mounting). It
+// still would not be enforced: nothing stops a test calling `embeddedServer(` directly, so the
+// wrapper needs this same lexical ban on the raw call. It moves the scan without removing it. A
+// type-resolving linter could check the resolved `host` argument, but there is none (#2540).
+//
+// THE ESCAPE HATCH is a line-tight marker with a MANDATORY reason, on the `embeddedServer(` line or
+// the line above, for a server that must be reachable off loopback:
+//
+//     // ALLOW-wildcardBind: advertised over real multicast at the host's LAN address
+//
+// An EMPTY reason is itself a violation.
+//
+// THE POSITIVE CONTROL is `WildcardBindScanner.selfTestFailures()`, run on every execution before
+// the tree is scanned. Its arms red the shapes above and clear the near misses, so a scanner that
+// stops matching fails loudly rather than going green by absence.
+//
+// KNOWN COVERAGE EDGES, stated rather than found later:
+//   * An explicit `host =` of ANY value clears the site, the wildcard included
+//     (`HandshakeForensicsTest`'s steal arm passes `host = host`, whose default is "0.0.0.0", on
+//     purpose). The guard catches the DEFAULT, the bind nobody chose; a spelled-out wildcard is a
+//     choice a reviewer can see.
+//   * A positional port (`embeddedServer(Netty, 0)`) and a port held in a variable are not seen.
+//   * Other listeners are not seen: a raw `ServerSocket(0)` (the loopback proxies bind one), a
+//     Ktor `aSocket(…).bind()`, and production servers a test starts through a kuilt API
+//     (`KtorRoomHost`, `ServerCluster`).
+//   * Production `*Main` sources are not scanned: a relay that binds the wildcard is correct there.
+//   * `:spike`, `build-logic/` and `*.kts` are unscanned, as with every sibling guard.
+object WildcardBindScanner {
+    /** One flagged call: its 1-based [line], and its marker's reason (`null` with no marker, `""` blank). */
+    data class Site(val line: Int, val reason: String?)
+
+    private val call = Regex("""\bembeddedServer\s*\(""")
+    private val portZero = Regex("""\bport\s*=\s*0(?![\w.])""")
+    private val hostArg = Regex("""\bhost\s*=(?!=)""")
+    private val marker = Regex("""//\s*ALLOW-wildcardBind:(.*)""")
+
+    /** Every `embeddedServer(` in [raw] whose own argument list says `port = 0` and names no `host`. */
+    fun sites(raw: String): List<Site> {
+        val code = KotlinCodeScanner.stripNonCode(raw)
+        val rawLines = raw.lines()
+        return call.findAll(code).mapNotNull { match ->
+            val open = match.range.last
+            val args = code.substring(open + 1, closingParen(code, open))
+            if (!portZero.containsMatchIn(args) || hostArg.containsMatchIn(args)) return@mapNotNull null
+            // `stripNonCode` keeps newlines, so a line in the stripped text is the same line in the
+            // raw text, where the marker (a comment) still is.
+            val line = code.take(match.range.first).count { it == '\n' } + 1
+            val reasons = listOfNotNull(rawLines.getOrNull(line - 1), rawLines.getOrNull(line - 2))
+                .mapNotNull { marker.find(it)?.groupValues?.get(1)?.trim() }
+            Site(line, reasons.firstOrNull { it.isNotEmpty() } ?: reasons.firstOrNull())
+        }.toList()
+    }
+
+    private fun closingParen(code: String, open: Int): Int {
+        var depth = 0
+        for (k in open until code.length) {
+            when (code[k]) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> if (--depth == 0) return k
+            }
+        }
+        return code.length
+    }
+
+    // Each arm: a source, and the sites it must yield as (line, reason).
+    private val cases: List<Triple<String, String, List<Pair<Int, String?>>>> = listOf(
+        Triple("the default wildcard", "val s = embeddedServer(Netty, port = 0) { }\n", listOf(1 to null)),
+        Triple(
+            "a multi-line call",
+            "val s = embeddedServer(\n    Netty,\n    port = 0,\n) { }\n",
+            listOf(1 to null),
+        ),
+        Triple(
+            "a TLS connector whose host defaults to the wildcard",
+            "val s = embeddedServer(Netty, configure = { tapTlsConnector(id, port = 0) }) { }\n",
+            listOf(1 to null),
+        ),
+        Triple("an explicit host", "val s = embeddedServer(Netty, port = 0, host = \"127.0.0.1\") { }\n", emptyList()),
+        Triple(
+            "a connector that sets its host",
+            "val s = embeddedServer(Netty, configure = { connector { this.host = h; this.port = 0 } }) { }\n",
+            emptyList(),
+        ),
+        Triple(
+            "a host in the module lambda does not clear the bind",
+            "val s = embeddedServer(Netty, port = 0) { val host = \"x\" }\n",
+            listOf(1 to null),
+        ),
+        Triple(
+            "a port 0 in the module lambda is not the bind",
+            "val s = embeddedServer(Netty, port = 8080) { val port = 0 }\n",
+            emptyList(),
+        ),
+        Triple("a fixed port", "val s = embeddedServer(Netty, port = 8080) { }\n", emptyList()),
+        Triple(
+            "a comparison is not a host argument",
+            "val s = embeddedServer(Netty, port = 0, watchPaths = listOf(if (host == a) \"x\" else \"y\")) { }\n",
+            listOf(1 to null),
+        ),
+        Triple(
+            "a marker with a reason, on the line above",
+            "// ALLOW-wildcardBind: advertised over multicast\nval s = embeddedServer(Netty, port = 0) { }\n",
+            listOf(2 to "advertised over multicast"),
+        ),
+        Triple(
+            "a trailing marker with a reason",
+            "val s = embeddedServer(Netty, port = 0) { } // ALLOW-wildcardBind: LAN peers dial it\n",
+            listOf(1 to "LAN peers dial it"),
+        ),
+        Triple(
+            "a reasonless marker",
+            "// ALLOW-wildcardBind:\nval s = embeddedServer(Netty, port = 0) { }\n",
+            listOf(2 to ""),
+        ),
+        Triple(
+            "a marker two lines up is not line-tight",
+            "// ALLOW-wildcardBind: too far away\n\nval s = embeddedServer(Netty, port = 0) { }\n",
+            listOf(3 to null),
+        ),
+        Triple("KDoc naming the call", "/** `embeddedServer(Netty, port = 0)` binds the wildcard. */\nval n = 1\n", emptyList()),
+        Triple("a string naming the call", "val s = \"embeddedServer(Netty, port = 0)\"\n", emptyList()),
+    )
+
+    fun selfTestFailures(): List<String> = cases.mapNotNull { (name, source, expected) ->
+        val actual = sites(source).map { it.line to it.reason }
+        if (actual == expected) null else "$name — expected $expected, got $actual"
+    }
+
+    val arms: Int get() = cases.size
+}
+
+val forbidWildcardBoundTestServer by tasks.registering {
+    group = "verification"
+    description = "Fails if a test embeddedServer binds port 0 on Ktor's default wildcard host without an ALLOW-wildcardBind marker (#3783)."
+    // Both test-source layouts: the KMP `src/<target>Test/` and the plain-JVM `src/test/` (`:examples`).
+    val sources = kotlinSourcesIn(
+        subprojects.map { it.projectDir.resolve("src") },
+        listOf("*Test/**/*.kt", "test/**/*.kt"),
+    )
+    inputs.files(sources).withPropertyName("kotlinTestSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict is
+    // a pure function of file contents (the markers live in the sources), so a RELATIVE fingerprint
+    // hit genuinely means "this exact source was verified".
+    val stamp = layout.buildDirectory.file("verification/forbid-wildcard-bound-test-server.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        val selfTest = WildcardBindScanner.selfTestFailures()
+        if (selfTest.isNotEmpty()) {
+            error(
+                "The wildcard-bind scanner does not agree with its own positive control, so this " +
+                    "guard's verdict, in EITHER direction, means nothing:\n  " + selfTest.joinToString("\n  "),
+            )
+        }
+        val unmarked = mutableListOf<String>()
+        val reasonless = mutableListOf<String>()
+        var marked = 0
+        sources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val raw = file.readText()
+            if ("embeddedServer" !in raw) return@forEach
+            val rawLines = raw.lines()
+            WildcardBindScanner.sites(raw).forEach { site ->
+                val where = "${file.relativeTo(rootPath)}:${site.line}  " +
+                    rawLines.getOrElse(site.line - 1) { "" }.trim()
+                when {
+                    site.reason == null -> unmarked += where
+                    site.reason.isEmpty() -> reasonless += where
+                    else -> marked++
+                }
+            }
+        }
+        if (unmarked.isNotEmpty() || reasonless.isNotEmpty()) {
+            val detail = buildString {
+                if (unmarked.isNotEmpty()) append("\n  ").append(unmarked.joinToString("\n  "))
+                if (reasonless.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-wildcardBind:` marker with an EMPTY reason is itself a ")
+                    append("violation. Say why this server must be reachable off loopback:\n  ")
+                    append(reasonless.joinToString("\n  "))
+                }
+            }
+            error(
+                "A test server binds port 0 on Ktor's default host, the wildcard (#3783). On macOS a " +
+                    "socket bound to 127.0.0.1 on the same port then takes every loopback dial, and the " +
+                    "test's handshake gets a 404 or a closed connection from a listener it never named " +
+                    "(#3754). Bind loopback and dial that same address:\n" +
+                    "      embeddedServer(Netty, port = 0, host = \"127.0.0.1\") { … }   // dial ws://127.0.0.1:\$port/…\n" +
+                    "  If the server must be reachable off loopback (a LAN or multicast advertisement), " +
+                    "say so on this line or the line above:\n" +
+                    "      // ALLOW-wildcardBind: <why a peer dials it at a non-loopback address>" +
+                    detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${sources.files.size} Kotlin test sources scanned, $marked marked wildcard bind(s); " +
+                "positive control agreed on all ${WildcardBindScanner.arms} arms\n",
+        )
+    }
+}
+
 // Guard: forbid declaring a KMP target you have no source for (#1014).
 //
 // A module that applies `kuilt.kmp-library` gets the full target set (jvm, android,
@@ -8971,6 +9198,7 @@ tasks.register("rootGuards") {
     dependsOn("forbidCleanGateMeasurementSkew")
     dependsOn("forbidSourcelessKmpTarget")
     dependsOn("forbidPortProbeRebind")
+    dependsOn("forbidWildcardBoundTestServer")
     dependsOn("verifyDocCitations")
     dependsOn("forbidUncitedDocCodeBlock")
     dependsOn("verifyModuleDocLinks")
