@@ -10,6 +10,8 @@ import io.ktor.server.plugins.origin
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.uri
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Rendezvous
@@ -93,13 +95,27 @@ internal class HandshakeForensics(private val path: String) {
         record(Kind.OTHER, "server.started bound=${connector.host}:${connector.port}")
     }
 
-    /** Record a dial at [target], and on a failure attach [failureReport] to it as a suppressed exception. */
+    /**
+     * Record a dial at [target], and when it ends in anything but a seam, attach [failureReport] to
+     * what it threw as a suppressed exception.
+     *
+     * That includes a **cancellation** (#3783). A dial that hangs until a bound around it expires
+     * fails the test with that bound's `TimeoutCancellationException`, which is the one failure that
+     * would otherwise carry no record. The cancellation is rethrown untouched, so it reaches the
+     * caller as the cancellation it is and never as a failure. Whose it was decides only the record's
+     * wording, never the control flow. [currentCoroutineContext]'s `isActive` is the predicate
+     * `ensureActive()` throws on: inactive means the caller cancelled a dial still waiting; active
+     * means the dial threw a cancellation of its own, such as a bound inside it expiring.
+     */
     suspend fun <T> dial(target: String, block: suspend () -> T): T {
         val dialAt = origin.elapsedNow().inWholeMilliseconds
         record(Kind.OTHER, "client.dial target=$target")
         try {
             return block()
         } catch (cancelled: CancellationException) {
+            val outcome = if (currentCoroutineContext().isActive) Outcome.CANCELLED_BY_DIAL else Outcome.CANCELLED_BY_CALLER
+            record(Kind.OTHER, "client.dial-cancelled ${outcome.label} ${cancelled::class.simpleName}: ${cancelled.message}")
+            cancelled.rootCause().addSuppressed(HandshakeForensicsReport(failureReport(dialAt, outcome)))
             throw cancelled
         } catch (failure: Throwable) {
             record(Kind.OTHER, "client.dial-failed ${failure::class.simpleName}: ${failure.message}")
@@ -108,12 +124,20 @@ internal class HandshakeForensics(private val path: String) {
         }
     }
 
+    /** How a dial ended without a seam, which decides how the verdict opens. */
+    enum class Outcome(val label: String) {
+        FAILED("failed"),
+        CANCELLED_BY_CALLER("by its caller"),
+        CANCELLED_BY_DIAL("by the dial itself, its caller still live"),
+    }
+
     /** The whole record, a verdict on whether this server saw the dial, and the port's listeners. */
-    fun failureReport(dialAtMillis: Long): String {
+    fun failureReport(dialAtMillis: Long, outcome: Outcome = Outcome.FAILED): String {
         val log = events.sortedBy { it.atMillis }
         val seen = log.filter { it.kind == Kind.SERVER_REQUEST && it.atMillis >= dialAtMillis }
         val verdict =
             when {
+                outcome != Outcome.FAILED -> cancelledVerdict(outcome, dialAtMillis, seen.size)
                 seen.isNotEmpty() ->
                     "THIS server received ${seen.size} request(s) after the dial; its own answer is in the log."
                 boundHost in WILDCARD_HOSTS ->
@@ -134,6 +158,26 @@ internal class HandshakeForensics(private val path: String) {
             log.forEach { appendLine("  at=+${it.atMillis}ms ${it.line}") }
             appendLine(if (port == null) "listeners: the server never reported a bound port" else listenersOn(port))
         }
+    }
+
+    private fun cancelledVerdict(outcome: Outcome, dialAtMillis: Long, seen: Int): String {
+        val whose =
+            if (outcome == Outcome.CANCELLED_BY_CALLER) {
+                "The dial was still waiting when its caller cancelled it: it hung, and nothing answered it."
+            } else {
+                "The dial threw a cancellation of its own while its caller was still live, such as a bound " +
+                    "inside the dial expiring."
+            }
+        val reached =
+            if (seen > 0) {
+                "THIS server received $seen request(s) after the dial at=+${dialAtMillis}ms, so the request " +
+                    "arrived and the handshake never completed; its side is in the log."
+            } else {
+                "THIS server received no request after the dial at=+${dialAtMillis}ms, so the connection or " +
+                    "the request never reached its application. Compare the dial target with server.started, " +
+                    "and see the listeners below."
+            }
+        return "$whose $reached"
     }
 }
 
