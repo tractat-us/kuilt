@@ -1,6 +1,7 @@
 package us.tractat.kuilt.session.test
 
 import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.session.Principal
 import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.AdmissionRequest
 
@@ -47,6 +48,8 @@ public annotation class AdmissionTestApi
  * @param displayName The name the newcomer asked to be shown under: its member name, or its peer id.
  *   Unverified in production too.
  * @param deviceId The app's own device id, or `null` when the joiner sent none.
+ * @param principal Who the newcomer's link was authenticated as, or `null` for a link nothing
+ *   authenticated, which is what a room hands the policy when the fabric attests nothing.
  * @sample us.tractat.kuilt.session.test.admissionPolicyTestSample
  */
 @AdmissionTestApi
@@ -54,4 +57,5 @@ public fun admissionRequest(
     key: DidKey,
     displayName: String,
     deviceId: String? = null,
-): AdmissionRequest = AdmissionRequest(key, displayName, deviceId)
+    principal: Principal? = null,
+): AdmissionRequest = AdmissionRequest(key, displayName, deviceId, principal)

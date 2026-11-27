@@ -3,6 +3,7 @@ package us.tractat.kuilt.session.admit
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.RevocationList
+import us.tractat.kuilt.session.Principal
 import us.tractat.kuilt.session.SessionInternalApi
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
@@ -81,9 +82,15 @@ private class OpenPolicy(terms: GrantTerms) : AdmissionPolicy {
  *
  * Only the room builds one in production, after the joiner has proved it holds [key]; that is why
  * the constructor is gated by [SessionInternalApi]. To test your own policy without a room, build one
- * with `admissionRequest` from `:kuilt-session-test`. The three fields are not equally trustworthy:
+ * with `admissionRequest` from `:kuilt-session-test`. The four fields are not equally trustworthy:
  *
  * - [key] is **proved**: the joiner signed the host's fresh challenge with it. Key a decision on this.
+ * - [principal] is **attested by the transport**: who the link the joiner came in on was
+ *   authenticated as, before kuilt read a frame from it (a Ktor server's `principalExtractor`, say).
+ *   It is the value the admitted [us.tractat.kuilt.session.Member.principal] will carry, and `null`
+ *   on a link nothing authenticated. It vouches for the link, not the key: a policy that needs the
+ *   two to agree, such as the key a gate checked before the upgrade and the key the joiner then
+ *   proved, compares them itself.
  * - [deviceId] is **bound** to the key, since the joiner signed over it too, but it is still whatever
  *   the device chose to say. It tells you which id this key goes with, not that the id is unique.
  * - [displayName] is the joiner's **say-so** and nothing more. Show it; never decide on it. A joiner
@@ -100,12 +107,20 @@ public class AdmissionRequest @SessionInternalApi constructor(
     /** The name the joiner asked to be shown under. Unverified. */
     public val displayName: String,
     deviceId: String?,
+    /** Who the joiner's link was authenticated as, or `null` when nothing authenticated it. See above. */
+    public val principal: Principal? = null,
 ) {
     /** The app's own device id, if the joiner sent one; signed by [key]. Never empty: see above. */
     public val deviceId: String? = deviceId?.takeUnless { it.isEmpty() }
 
+    /**
+     * Names the key, the name and the device id, and says only **whether** the link was attested. A
+     * [principal] is whatever the app's authentication made of the link, which may be an account id
+     * the app would not want in a log line, so a policy that logs one reads it on purpose.
+     */
     override fun toString(): String =
-        "AdmissionRequest(key=${key.value}, displayName=$displayName, deviceId=$deviceId)"
+        "AdmissionRequest(key=${key.value}, displayName=$displayName, deviceId=$deviceId, " +
+            "principal=${if (principal == null) "none" else "attested"})"
 }
 
 /**
@@ -119,11 +134,11 @@ public class AdmissionRequest @SessionInternalApi constructor(
  *
  * The display name is the one the joiner's Hello carried: an unnamed kuilt joiner says its own peer
  * id there. The device id is the Hello's too, and the request reads an empty one as none, as the
- * proof does.
+ * proof does. [principal] is what the joiner's link was attested as: the value its member will carry.
  */
 @Suppress("UNUSED_PARAMETER") // [newcomer]'s job is its type; see the KDoc.
-internal fun newcomerRequest(newcomer: SeatDecision.Newcomer, keyed: KeyedHello): AdmissionRequest =
-    AdmissionRequest(key = keyed.key, displayName = keyed.hello.displayName, deviceId = keyed.hello.deviceId)
+internal fun newcomerRequest(newcomer: SeatDecision.Newcomer, keyed: KeyedHello, principal: Principal?): AdmissionRequest =
+    AdmissionRequest(key = keyed.key, displayName = keyed.hello.displayName, deviceId = keyed.hello.deviceId, principal = principal)
 
 /** An [AdmissionPolicy]'s answer for one newcomer. */
 public sealed interface AdmissionDecision {

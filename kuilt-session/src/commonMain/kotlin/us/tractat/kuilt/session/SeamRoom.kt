@@ -2398,7 +2398,7 @@ internal class SeamRoom(
         vetted: AdmissionDecision?,
         decidedAtMs: Long,
     ): SeatOutcome = when (vetted) {
-        null -> if (current) SeatOutcome.Vet(newcomerRequest(newcomer, keyed)) else SeatOutcome.Stale
+        null -> if (current) SeatOutcome.Vet(newcomerRequest(newcomer, keyed, principal = null)) else SeatOutcome.Stale
         is AdmissionDecision.Admit ->
             if (retire(joinerPeerId, generation)) admitNewMember(joinerPeerId, keyed, vetted.grant, decidedAtMs) else SeatOutcome.Stale
         is AdmissionDecision.Reject -> if (retire(joinerPeerId, generation)) {
