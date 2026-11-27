@@ -1028,6 +1028,11 @@ val forbidPortProbeRebind by tasks.registering {
 //     purpose). The guard catches the DEFAULT, the bind nobody chose; a spelled-out wildcard is a
 //     choice a reviewer can see.
 //   * A positional port (`embeddedServer(Netty, 0)`) and a port held in a variable are not seen.
+//   * A `host =` ANYWHERE in the argument list clears the site, even inside a nested lambda that
+//     belongs to a different call (`configure = { foo(host = "x") }`, or a module lambda reading
+//     `val host = call.request.host()`).
+//   * Explicit type arguments (`embeddedServer<…>(Netty, port = 0)`) evade the call regex.
+//   * A trailing marker on line N also clears a call on line N+1.
 //   * Other listeners are not seen: a raw `ServerSocket(0)` (the loopback proxies bind one), a
 //     Ktor `aSocket(…).bind()`, and production servers a test starts through a kuilt API
 //     (`KtorRoomHost`, `ServerCluster`).

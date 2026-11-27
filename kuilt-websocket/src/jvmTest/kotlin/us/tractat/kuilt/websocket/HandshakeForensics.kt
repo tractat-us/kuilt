@@ -118,7 +118,7 @@ internal class HandshakeForensics(
      * would otherwise carry no record. The cancellation is rethrown untouched, so it reaches the
      * caller as the cancellation it is and never as a failure. Whose it was decides only the record's
      * wording, never the control flow. [currentCoroutineContext]'s `isActive` is the predicate
-     * `ensureActive()` throws on: inactive means the caller cancelled a dial still waiting; active
+     * `ensureActive()` throws on: inactive means the caller's job was cancelled while the dial was in progress; active
      * means the dial threw a cancellation of its own, such as a bound inside it expiring.
      */
     suspend fun <T> dial(target: String, block: suspend () -> T): T {
@@ -128,7 +128,7 @@ internal class HandshakeForensics(
         } catch (cancelled: CancellationException) {
             val outcome = if (currentCoroutineContext().isActive) Outcome.CANCELLED_BY_DIAL else Outcome.CANCELLED_BY_CALLER
             record(Kind.OTHER, "client.dial-cancelled ${outcome.label} ${cancelled::class.simpleName}: ${cancelled.message}")
-            cancelled.rootCause().addSuppressed(HandshakeForensicsReport(failureReport(dialAt, outcome)))
+            cancelled.rootCause().addSuppressed(HandshakeForensicsReport(failureReport(dialAt, outcome, cancelled.cause)))
             throw cancelled
         } catch (failure: Throwable) {
             record(Kind.OTHER, "client.dial-failed ${failure::class.simpleName}: ${failure.message}")
@@ -145,13 +145,13 @@ internal class HandshakeForensics(
     }
 
     /** The whole record, a verdict on whether this server saw [dial], and the port's listeners. */
-    private fun failureReport(dial: Event, outcome: Outcome = Outcome.FAILED): String {
+    private fun failureReport(dial: Event, outcome: Outcome = Outcome.FAILED, cancelCause: Throwable? = null): String {
         val dialAtMillis = dial.atMillis
         val log = events.sortedBy { it.seq }
         val seen = log.filter { it.kind == Kind.SERVER_REQUEST && it.seq > dial.seq }
         val verdict =
             when {
-                outcome != Outcome.FAILED -> cancelledVerdict(outcome, dialAtMillis, seen.size)
+                outcome != Outcome.FAILED -> cancelledVerdict(outcome, dialAtMillis, seen.size, cancelCause)
                 seen.isNotEmpty() ->
                     "THIS server received ${seen.size} request(s) after the dial; its own answer is in the log."
                 boundHost in WILDCARD_HOSTS ->
@@ -174,13 +174,15 @@ internal class HandshakeForensics(
         }
     }
 
-    private fun cancelledVerdict(outcome: Outcome, dialAtMillis: Long, seen: Int): String {
+    private fun cancelledVerdict(outcome: Outcome, dialAtMillis: Long, seen: Int, cancelCause: Throwable?): String {
         val whose =
             if (outcome == Outcome.CANCELLED_BY_CALLER) {
-                "The dial was still waiting when its caller cancelled it: it hung, and nothing answered it."
+                "The dial was still in progress when its caller's job was cancelled" +
+                    (cancelCause?.let { " (cause: ${it::class.simpleName}: ${it.message})" } ?: "") + "."
             } else {
                 "The dial threw a cancellation of its own while its caller was still live, such as a bound " +
-                    "inside the dial expiring."
+                    "inside the dial expiring; a delegate minting one is itself a contract breach, since " +
+                    "Loom.weave must not."
             }
         val reached =
             if (seen > 0) {

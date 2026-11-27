@@ -203,7 +203,7 @@ class HandshakeForensicsTest {
         val report = hung.report()
         assertAll(
             { assertContains(report, "client.dial-cancelled by its caller") },
-            { assertContains(report, "The dial was still waiting when its caller cancelled it") },
+            { assertContains(report, "The dial was still in progress when its caller's job was cancelled") },
             { assertContains(report, "THIS server received no request after the dial") },
             { assertContains(report, "client.dial target=$url") },
             { assertContains(report, "listeners on :") },

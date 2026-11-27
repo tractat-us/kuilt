@@ -466,6 +466,8 @@ Key points:
   **rejects** the probe form, so a test written that way will not merge. For a Ktor
   `embeddedServer` the equivalent read-back is
   `server.engine.resolvedConnectors().first().port` after `start(wait = false)`.
+  Pass `host = "127.0.0.1"` to that `embeddedServer` too: test servers bind and dial
+  `127.0.0.1`, and the root build's `forbidWildcardBoundTestServer` check enforces it.
   If your fabric needs the port as an **input** — a discovery fabric advertises it, so
   the object that carries it looks like it has to be built inside the `embeddedServer`
   module lambda, which runs during `start()` and so before `resolvedConnectors()` can
