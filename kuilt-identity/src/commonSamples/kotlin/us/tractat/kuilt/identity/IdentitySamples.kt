@@ -178,3 +178,26 @@ internal suspend fun sampleDeviceProof() {
     val edited = sent.copyOf().also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }
     check(DeviceProof.decode(edited)?.isSignedBySubject() == false)
 }
+
+/** @suppress — sample only */
+internal suspend fun sampleProofNonces() {
+    // One per server process, made at start-up. Its secret never leaves it.
+    val nonces = ProofNonces.create() // 60 s each, at most 65 536 spent ones kept
+    val now = 1_700_000_000_000L // epoch ms, from your clock: it never reads one
+
+    // A device asks for a nonce, and the server keeps no record of handing it out.
+    val served = nonces.issue(now)
+
+    // The device dials with a proof over it. The server checks the nonce is its own and fresh…
+    val fresh = nonces.check(served, now + 200)
+    check(fresh is NonceCheck.Fresh)
+    // …checks the proof's signature (not shown), and only then spends the nonce.
+    check(nonces.spend(fresh, now + 210) == NonceSpend.Spent)
+
+    // The same proof again is a replay, whoever sends it.
+    val again = nonces.check(served, now + 500)
+    check(again is NonceCheck.Fresh && nonces.spend(again, now + 500) == NonceSpend.Replayed)
+
+    // A minute on, the nonce has run out: the device fetches another.
+    check(nonces.check(served, now + 60_000) == NonceCheck.Expired)
+}

@@ -41,6 +41,11 @@ The device takes the origin from the URL it dials, never from the server, so a p
 server relays to another is made out to the wrong place. It is a kuilt statement, not an app
 signature, so it is never mistaken for a room's own proof or a grant, nor they for it.
 
+The server's nonces. `ProofNonces` hands them out and spends each once. A nonce carries its own
+time and a MAC under a secret only this server process holds, so handing one out keeps no record
+and a flood of requests for them costs nothing. Spending one keeps it in a capped set until it runs
+out, a minute after it was issued, so the same proof presented twice is refused the second time.
+
 The check. When a device shows a grant, `GrantTrust` decides whether it is good in this room now:
 issued and signed by this host's own key, naming the device that proved it holds that key, for this
 room, not revoked, not dated more than five minutes ahead of the host's clock, not run out. The

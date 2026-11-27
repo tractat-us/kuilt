@@ -48,6 +48,8 @@ import kotlin.time.Duration.Companion.seconds
  * Safe under a multi-threaded dispatcher: one lock guards the spent set and the time, nothing
  * suspends while it is held, and two concurrent spends of one nonce meet at one insert, which one
  * of them wins.
+ *
+ * @sample us.tractat.kuilt.identity.sampleProofNonces
  */
 public class ProofNonces private constructor(
     private val key: HMAC.Key,
