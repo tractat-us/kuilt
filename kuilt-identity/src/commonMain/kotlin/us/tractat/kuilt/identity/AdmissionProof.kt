@@ -21,8 +21,10 @@ package us.tractat.kuilt.identity
  * ```
  *
  * The channel-binding field is reserved for a value tying the proof to the fabric connection it
- * travels on, such as a TLS exporter. Nothing fills it yet, so [sign] writes it empty and [decode]
- * refuses a proof where it is not.
+ * travels on, such as the hash of a TLS-terminating host's certificate. Nothing fills it yet, so
+ * [sign] writes it empty and [decode] refuses a proof where it is not. A binding would stop only an
+ * active relay on a member's own link: it would not stop a bystander taking a partitioned member's
+ * peer id under its own key, since that bystander binds its own link honestly.
  *
  * The proof does not carry the joiner's key: the host learns that from the joiner's Hello and checks
  * the proof under it with [isSignedBy].

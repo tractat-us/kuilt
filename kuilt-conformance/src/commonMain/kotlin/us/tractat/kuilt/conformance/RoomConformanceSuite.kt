@@ -48,6 +48,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.session.AdmissionFailure
+import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
@@ -677,6 +678,135 @@ public abstract class RoomConformanceSuite {
                 )
             } finally {
                 cleared?.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * **A known gap, pinned on purpose (Decided 33, option A):** a bystander can take a *partitioned*
+     * member's peer id under a key of its own, and the member then cannot get back in.
+     *
+     * The member's link drops and the host holds its seat partitioned. A different device arrives under
+     * the member's id with its own key: the host releases the seat at that device's Proof, as Decided 18
+     * does for a device whose key store was cleared, and seats the taker as a new member. Another member
+     * of the room sees `Left(id, PartitionExpired)` then `Joined(id)` under a different `Member.key`,
+     * which is why an app names a device by its key, never by its peer id. When the member's link comes
+     * back, its room's own reconnect says Hello under its own key, meets a connected seat under the
+     * taker's, and ends on a terminal `KeyConflict`.
+     *
+     * The host cannot tell this taker from that cleared-store device: both arrive with a fresh key under
+     * a durable id, and a channel binding would not help, since the taker binds its own link honestly.
+     * Iain kept Decided 18 and its stated gap on 2026-11-26, and declined the two changes that would
+     * close it: refusing a different key, retryably, while the seat is held (option B), and letting the
+     * id's previous key win it back (option C).
+     *
+     * **So this row is meant to go red when someone closes the gap.** Under option B the taker is
+     * refused and the bystander never sees the id change hands; under option C the member's return
+     * supersedes the taker instead of ending `KeyConflict`. Either is a design change: amend Decided 33
+     * and rewrite this row to pin the new behaviour, never relax an assertion to keep it green.
+     */
+    @Test
+    public fun aPartitionedIdTakenUnderAnotherKeyRefusesTheMembersReturn(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = returnHarnessOrDeclaredGap("a partitioned member's id taken under another key refuses the member's return")
+                ?: return@runTest
+            val vetting = VettingCount()
+            val host = h.hostFactory.host(h.hostPattern, admission = vetting.admission)
+            val victimDevice = h.newDevice()
+            val bystanderDevice = h.newDevice()
+            val app = AppCalls()
+            val victim = app.factory(victimDevice.launch()).join(h.joinTag)
+            val bystander = bystanderDevice.launch().join(h.joinTag)
+            var taker: Room? = null
+            try {
+                val me = victim.selfId
+                val admitted = host.awaitRoster("the member and the bystander are admitted") { roster ->
+                    roster.any { it.id == me } && roster.any { it.id == bystander.selfId }
+                }
+                victim.awaitRoster("the member sees the host") { it.isNotEmpty() }
+                bystander.awaitRoster("the bystander sees the member") { roster -> roster.any { it.id == me } }
+                val victimKey = admitted.single { it.id == me }.key
+                val bystanderKey = admitted.single { it.id == bystander.selfId }.key
+                val bystanderTape = EventTape(bystander, backgroundScope)
+                val victimTape = EventTape(victim, backgroundScope)
+                val callsAtDrop = app.snapshot()
+                val vettedAtDrop = vetting.keys()
+
+                victimDevice.drop()
+                host.awaitRoster("the host holds the member's seat Partitioned") { roster ->
+                    roster.any { it.id == me && it.liveness is Liveness.Partitioned }
+                }
+                val partitionedAt = testScheduler.currentTime
+                val arrived = victimDevice.impostor().join(h.joinTag).also { taker = it }
+                val takerTape = EventTape(arrived, backgroundScope)
+                val took = host.awaitRoster("the id is seated again, under the taker's key") { roster ->
+                    roster.any { it.id == me && it.key != victimKey && it.liveness == Liveness.Connected }
+                }
+                val seatedAfter = (testScheduler.currentTime - partitionedAt).milliseconds
+                val takerKey = took.single { it.id == me }.key
+                arrived.awaitRoster("the taker is admitted and sees the host") { it.isNotEmpty() }
+                runCurrent() // let the events that announce the takeover reach the tapes
+                val bystanderEdges = bystanderTape.edges()
+                assertAll(
+                    { assertEquals(me, arrived.selfId, "rig: the taker presents the member's id") },
+                    {
+                        assertEquals(
+                            listOf(bystanderKey, victimKey).sortedBy { it.value },
+                            vettedAtDrop.sortedBy { it.value },
+                            "rig: the policy vetted the member and the bystander once each, when they first joined",
+                        )
+                    },
+                    {
+                        assertEquals(
+                            listOf(takerKey),
+                            vetting.keys().drop(vettedAtDrop.size),
+                            "rig: the taker reached the host's admission, which asked about its key exactly once",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            seatedAfter < h.hostHeartbeat.reconnectWindow,
+                            "the release: the seat went at the taker's Proof, not by its hold expiring: seated $seatedAfter " +
+                                "after the seat went Partitioned, against a ${h.hostHeartbeat.reconnectWindow} hold",
+                        )
+                    },
+                    {
+                        assertEquals(
+                            listOf("Left(${me.value}, ${LeaveReason.PartitionExpired})", "Joined(${me.value})"),
+                            bystanderEdges.map { it.edge() },
+                            "the bystander sees the member let go, then the id join again",
+                        )
+                    },
+                    {
+                        val joined = bystanderEdges.filterIsInstance<MembershipEvent.Joined>().singleOrNull()
+                        assertEquals(takerKey, joined?.member?.key, "the id joins again under the taker's key")
+                    },
+                    { assertTrue(takerKey != victimKey, "under a key that is not the member's") },
+                    { assertTrue(took.none { it.key == victimKey }, "the member's key holds no seat: ${took.map { it.id to it.key }}") },
+                    { assertTrue(takerTape.events().none { it is MembershipEvent.AdmissionFailed }, "the taker was not refused") },
+                )
+
+                val healsBeforeReturn = victimDevice.heals
+                victimDevice.restore()
+                val ended = victim.awaitEvent("the member's terminal HostLost") { it as? MembershipEvent.HostLost }
+                runCurrent()
+                val seatAfterReturn = host.roster.value.singleOrNull { it.id == me }
+                assertAll(
+                    { assertEquals(listOf("join"), callsAtDrop, "rig: the call counter saw the launch's join") },
+                    { assertEquals(callsAtDrop, app.snapshot(), "the member's app made no call: its room's own reconnect came back") },
+                    { assertTrue(victimDevice.heals > healsBeforeReturn, "rig: the member's own reconnect re-wove (heals ${victimDevice.heals}, was $healsBeforeReturn)") },
+                    {
+                        val refused = ended.reason as? FailureReason.Refused
+                        assertEquals(RejectCode.KeyConflict, refused?.code, "the member's return is refused for the key, terminally: $ended")
+                    },
+                    { assertFalse(RejectCode.KeyConflict.retryable, "rig: KeyConflict is a terminal code") },
+                    { assertTrue(victimTape.events().none { it is MembershipEvent.Resumed }, "the member never got its seat back: ${victimTape.events()}") },
+                    { assertEquals(takerKey, seatAfterReturn?.key, "the id stays the taker's") },
+                )
+            } finally {
+                taker?.leave()
+                bystander.leave()
+                victim.leave()
                 host.leave()
             }
         }
