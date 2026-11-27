@@ -46,8 +46,9 @@ The rest of the surface, by what you would ask it:
   root and every group above a lane included, and `ShareLine.lag` how far the
   group stands from that share at its parent, in units of service, positive when
   it is owed; `ShareLine.had` is what the group has had beside its competing
-  siblings, and `ShareLine.forgiven` the history the scheduler let it off, both
-  read at its parent and tied to `lag` by an exact identity. A reader holding only a stored
+  siblings, `ShareLine.committed` what it holds on its edge in units, and
+  `ShareLine.forgiven` the history the scheduler let it off, all read at its
+  parent and tied to `lag` by an exact identity a host can check from them alone. A reader holding only a stored
   snapshot asks the same four of `LocalHeddleSnapshot.view(policy)` (from `persist()`), with no engine.
 - **No more than N of these at once.** A `maxConcurrent` on a group, a lane or a
   group's template is a ceiling: the most leases open beneath it at once, `0` to
