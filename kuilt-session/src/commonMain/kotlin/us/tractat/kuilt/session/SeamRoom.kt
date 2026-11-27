@@ -2984,13 +2984,14 @@ internal class SeamRoom(
      *
      * A renewal that falls due while the host holds the member as partitioned waits for the member's
      * next contact and goes then, so the member gets nothing while it is away. The pass it holds runs
-     * out at most one and a half terms after its last contact and, provided the last renewal reached
-     * it, at least a whole term after. A renewal that fails to sign or to send is tried again
+     * out at most one and a half terms after its last contact and, if the last renewal reached it, at
+     * least a whole term after. A renewal that fails to sign or to send is tried again
      * ([GrantIssuer.retryDelayMillis], #3711): first a second later, the wait doubling up to the
      * period, and never more than a quarter of the time left on the pass the device is known to hold
      * ([Membership.lastSentNotAfter]), though not under a quarter second, so the tries close up as
-     * that pass nears its end. A renewal whose frame was sent but lost on the
-     * link is not known to be lost, and is not tried again. One loop per membership, so one chain of
+     * that pass nears its end. A renewal whose frame was sent but lost on the link is not tried again:
+     * the host signed it, so [detachMember] keeps it when the membership leaves and [returnPass] lets
+     * the device back in on it (Decided 34, #3745), and the floor holds while the host remembers that. One loop per membership, so one chain of
      * retries per member. It stops for good when the membership ends — [detachMember] cancels it,
      * including when a partitioned seat's hold runs out — and when the device is revoked after this
      * membership's admission (Decided 14, R2(i)): a revoked present member keeps its seat (Decided 12)
