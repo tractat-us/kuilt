@@ -662,6 +662,11 @@ blame. None throws, and the document it was asked of is unchanged.
     val refused = document.addChild(listOf(0), TopologyDocument.Lane("batch"))
     check(refused == TopologyEdit.DuplicateName(listOf(0, 1), "batch"))
 
+    // Dragging interactive below batch reorders acme's children, which costs nobody history.
+    // The index counts them with interactive taken out, so 1 is the end.
+    val dragged = document.move(listOf(0, 0), parent = listOf(0), index = 1)
+    check(dragged is TopologyEdit.Edited && dragged.path == listOf(0, 1) && dragged.history == TopologyEdit.History.KEPT)
+
     // The warning before saving compares with the tree the editor loaded: the round trip is gone.
     val candidate = Topology.from(document)
     check(candidate is TopologyParse.Valid)
@@ -679,8 +684,11 @@ blame. None throws, and the document it was asked of is unchanged.
   path a problem comes back with is the path to edit. Two siblings of one name, or a child with
   none, still have an address each, so an editor can fix the duplicate it was just told about.
 - **An index is a place, not a node.** `remove` and `move` shift later siblings up one, and
-  `Edited.path` says where the edit landed in the new document. `addChild` and a move append, so
-  they never shift an existing sibling.
+  `Edited.path` says where the edit landed in the new document. `addChild` and `move(path, parent)`
+  append, so they never shift a sibling at the new parent. `move(path, parent, index)` puts the
+  child at `index` instead, as a tree editor does when siblings are dragged into a new order.
+  Within one parent the index counts the children with the moved one taken out, so of
+  `[a, b, c]`, moving `a` to `2` puts it last.
 - **`Edited.history` is what this one edit does, not the warning before saving.** `REPLACED` for
   a rename or a move to another parent, which drain the old group and start a new one with no
   history; `DRAINS` for a removal; `SHARE_RESTARTS` for a new weight; `NEW_TREE` for a renamed
@@ -695,8 +703,9 @@ blame. None throws, and the document it was asked of is unchanged.
   weight at any level; `DRAINS` for a template or a nested level removed.
 - **Edits check the shape, not the values.** A bad weight, an empty name, a negative ceiling or a
   group left empty go in as a file would put them, and `Topology.from` reports them. The refusals
-  are `NoSuchNode`, `NotAGroup`, `DuplicateName`, `AtRoot` (the root has no weight, ceiling,
-  template or parent) and `IntoItself` (a move under its own subtree).
+  are `NoSuchNode` (also for a move's index past the end, naming the parent's path plus the index),
+  `NotAGroup`, `DuplicateName`, `AtRoot` (the root has no weight, ceiling, template or parent) and
+  `IntoItself` (a move under its own subtree).
 
 These edits are one step of an admin page's loop. Listing what the edit changes, previewing it and
 saving it only if nobody else saved first are in

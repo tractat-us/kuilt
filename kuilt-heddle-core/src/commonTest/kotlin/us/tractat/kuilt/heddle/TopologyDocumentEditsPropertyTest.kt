@@ -32,6 +32,9 @@ import kotlin.test.assertEquals
 class TopologyDocumentEditsPropertyTest {
 
     private val seeds = 3000
+
+    /** Seeds after [seeds] that each draw a move to an index, so every edit above keeps its own trajectory. */
+    private val moveAtSeeds = 1500
     private val names = listOf("a", "b", "c", "d")
     private val weightOf = mapOf("1" to Weight.ONE, "2" to Weight.of(2), "3/2" to Weight.of(3, 2), "6/4" to Weight.of(3, 2))
     private val weights = weightOf.keys.toList()
@@ -62,15 +65,15 @@ class TopologyDocumentEditsPropertyTest {
         var validTrees = 0
         var invalidTrees = 0
         var startedWithDuplicate = 0
-        for (seed in 0 until seeds) {
+        for (seed in 0 until seeds + moveAtSeeds) {
             val r = Random(seed)
             val model = M.root("root", randomChildren(r, depth = 0))
             if (r.nextInt(6) == 0 && plantDuplicate(model, r)) startedWithDuplicate++
             val before = model.toDocument()
-            val (label, actual, expected) = drawAndApply(before, model, r)
+            val (label, actual, expected) = if (seed < seeds) drawAndApply(before, model, r) else drawMoveAt(before, model, r)
             val outcome = if (expected is TopologyEdit.Edited) "$label:edited" else expected::class.simpleName ?: "?"
             outcomes[outcome] = (outcomes[outcome] ?: 0) + 1
-            if (label == "template" && expected !is TopologyEdit.Edited) outcomes["template:$outcome"] = (outcomes["template:$outcome"] ?: 0) + 1
+            if ((label == "template" || label.startsWith("move at")) && expected !is TopologyEdit.Edited) outcomes["$label:$outcome"] = (outcomes["$label:$outcome"] ?: 0) + 1
             if (actual != expected) {
                 failures += "seed $seed $label\n  before   $before\n  actual   $actual\n  expected $expected"
                 continue
@@ -100,9 +103,10 @@ class TopologyDocumentEditsPropertyTest {
         }
         // Each floor is about half what the generator reaches on the JVM, so a generator that
         // stopped reaching an arm reds, and one that drifted a little does not.
-        val tally = listOf("weight", "ceiling", "add", "remove", "rename", "move", "template").map { "$it:edited" to (outcomes["$it:edited"] ?: 0) to 50 } +
+        val tally = listOf("weight", "ceiling", "add", "remove", "rename", "move", "move at", "move at reorder", "template").map { "$it:edited" to (outcomes["$it:edited"] ?: 0) to 50 } +
             listOf("NoSuchNode", "NotAGroup", "DuplicateName", "AtRoot", "IntoItself").map { it to (outcomes[it] ?: 0) to 50 } +
             listOf("NoSuchNode", "NotAGroup", "AtRoot").map { "template:$it" to (outcomes["template:$it"] ?: 0) to 50 } +
+            listOf("move at index:NoSuchNode" to (outcomes["move at index:NoSuchNode"] ?: 0) to 50) +
             templateHistories.map { "template ${it.name} against changesTo" to (templateAgreements[it] ?: 0) to 20 } +
             TopologyEdit.History.entries.map { it.name to (histories[it] ?: 0) to 30 } +
             TopologyEdit.History.entries.map { "${it.name} against changesTo" to (agreements[it] ?: 0) to 30 } +
@@ -155,9 +159,35 @@ class TopologyDocumentEditsPropertyTest {
             }
             else -> {
                 val target = drawPath(model, r)
-                Drawn("move", before.move(path, target), model.expectMove(path, target))
+                Drawn("move", before.move(path, target), model.expectMove(path, target) { end -> end })
             }
         }
+    }
+
+    /**
+     * Draws one move to an index, half the time into the parent the child already has so that
+     * reorders are reached, and applies it both ways.
+     */
+    private fun drawMoveAt(before: TopologyDocument, model: M, r: Random): Drawn {
+        val path = drawPath(model, r)
+        val target = if (path.isNotEmpty() && r.nextBoolean()) path.dropLast(1) else drawPath(model, r)
+        // From one before the first child to one past another parent's end, so both ends are
+        // reached and refused, as is the end of a reorder, which is the child count less one.
+        val index = r.nextInt(-1, (model.at(target)?.children?.size ?: 0) + 2)
+        val found = model.at(path) != null
+        val expected = model.expectMove(path, target) { index }
+        return Drawn(moveAtLabel(before, found, target + index, expected), before.move(path, target, index), expected)
+    }
+
+    /**
+     * Which arm a move to an index took: refused for the index itself, a reorder that changed the
+     * order, or anything else. Once the child to move was [found], the index refusal is the only
+     * one naming the [place] it was to land.
+     */
+    private fun moveAtLabel(before: TopologyDocument, found: Boolean, place: List<Int>, expected: TopologyEdit): String = when {
+        found && expected == TopologyEdit.NoSuchNode(place) -> "move at index"
+        expected is TopologyEdit.Edited && expected.history == TopologyEdit.History.KEPT && expected.document != before -> "move at reorder"
+        else -> "move at"
     }
 
     /** A path in [model] three times in four, else one that names nothing. The root is among the paths. */
@@ -314,16 +344,29 @@ class TopologyDocumentEditsPropertyTest {
         return edited(path, history)
     }
 
-    private fun M.expectMove(path: List<Int>, targetPath: List<Int>): TopologyEdit {
+    /**
+     * A move, with [place] answering where to put the child given the end. The end is read off the
+     * target with the child actually taken out, and a refused move puts the child back where it
+     * was, so no index shift is computed here either.
+     */
+    private fun M.expectMove(path: List<Int>, targetPath: List<Int>, place: (end: Int) -> Int): TopologyEdit {
         if (path.isEmpty()) return TopologyEdit.AtRoot
         val node = at(path) ?: return TopologyEdit.NoSuchNode(path)
         val target = at(targetPath) ?: return TopologyEdit.NoSuchNode(targetPath)
         if (node.pathOf(target) != null) return TopologyEdit.IntoItself(path, targetPath)
         if (!target.group) return TopologyEdit.NotAGroup(targetPath)
         val parent = parentOf(node) ?: error("a child has a parent")
-        duplicate(targetPath, target, node.name, except = node)?.let { return it }
-        parent.children.removeAll { it === node }
-        target.children += node
+        // Named before the child is out, so the clash is at its index in the document asked of.
+        val clash = duplicate(targetPath, target, node.name, except = node)
+        val was = parent.children.indexOfFirst { it === node }
+        parent.children.removeAt(was)
+        val index = place(target.children.size)
+        val refusal = if (index !in 0..target.children.size) TopologyEdit.NoSuchNode(targetPath + index) else clash
+        if (refusal != null) {
+            parent.children.add(was, node)
+            return refusal
+        }
+        target.children.add(index, node)
         val history = if (parent === target) TopologyEdit.History.KEPT else TopologyEdit.History.REPLACED
         return edited(pathOf(node) ?: error("the moved child is in the tree"), history)
     }

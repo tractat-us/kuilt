@@ -416,6 +416,11 @@ internal fun sampleTopologyDocumentEdits() {
     val refused = document.addChild(listOf(0), TopologyDocument.Lane("batch"))
     check(refused == TopologyEdit.DuplicateName(listOf(0, 1), "batch"))
 
+    // Dragging interactive below batch reorders acme's children, which costs nobody history.
+    // The index counts them with interactive taken out, so 1 is the end.
+    val dragged = document.move(listOf(0, 0), parent = listOf(0), index = 1)
+    check(dragged is TopologyEdit.Edited && dragged.path == listOf(0, 1) && dragged.history == TopologyEdit.History.KEPT)
+
     // The warning before saving compares with the tree the editor loaded: the round trip is gone.
     val candidate = Topology.from(document)
     check(candidate is TopologyParse.Valid)
