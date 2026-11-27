@@ -12,12 +12,12 @@ package us.tractat.kuilt.heddle
  * A key is in one map, the other, or both, so a change is [Added], [Removed] or [Changed], and
  * those three are the whole set.
  *
- * **Addressed the way [TopologyChange] is.** [path] holds the child indices from the root down and
- * [names] the names along it, starting with the root's. A change is addressed in the document
- * after the edit, unless its node is not there: the settings of a node that is gone, and of
- * everything beneath it, are [Removed] at their address in the document before. A key removed
- * from a node that stays is addressed in the document after, where the node is. The root carries
- * no settings, so [path] is never empty.
+ * **Addressed the way [TopologyChange] is: the arm says which document.** [path] holds the child
+ * indices from the root down and [names] the names along it, starting with the root's. A [Removed]
+ * is always addressed in the document before, since that is where its value is, whether its node
+ * is gone or still there. An [Added] or a [Changed] is always addressed in the document after. So
+ * an editor puts every marker against one document by type alone: its removals against the old
+ * tree, the rest against the new. The root carries no settings, so [path] is never empty.
  *
  * [templateDepth] says whose settings these are: `0` for the node's own, `1` for those of its
  * [template][TopologyDocument.Group.template], `2` for that template's nested one, and so on. A
@@ -40,7 +40,7 @@ public sealed interface AppSettingsChange {
     public val templateDepth: Int
     public val key: String
 
-    /** [key] is set to [value] in the document after, and was not set before. */
+    /** [key] is set to [value] in the document after, and was not set before. Addressed in the document after. */
     public data class Added(
         override val path: List<Int>,
         override val names: List<String>,
@@ -54,8 +54,8 @@ public sealed interface AppSettingsChange {
     }
 
     /**
-     * [key], set to [value] before, is not set after. Addressed in the document before when the node
-     * is gone, and in the document after when it stays.
+     * [key], set to [value] before, is not set after. Always addressed in the document before, where
+     * the value was: when the node stays, its index there may differ from its index after.
      */
     public data class Removed(
         override val path: List<Int>,
@@ -69,7 +69,7 @@ public sealed interface AppSettingsChange {
         }
     }
 
-    /** [key] went from [before] to [after]. */
+    /** [key] went from [before] to [after]. Addressed in the document after, where the node now is. */
     public data class Changed(
         override val path: List<Int>,
         override val names: List<String>,
@@ -110,6 +110,8 @@ public sealed interface AppSettingsChange {
  * first, then its template levels' by depth, then its children's in the order written, then those
  * of the children it no longer has, in the order they were written before. Within one map the
  * keys come in sorted order, so the list does not depend on which kind of `Map` the app built.
+ * The order is the walk's, not the addresses': a key removed from a node that stays sits among
+ * that node's changes, addressed in the document before.
  *
  * @sample us.tractat.kuilt.heddle.sampleAppSettings
  */
@@ -161,19 +163,26 @@ private fun MutableList<AppSettingsChange>.compareNode(
     val beforeLevels = before.settingsByDepth()
     val afterLevels = after.settingsByDepth()
     for (depth in 0 until maxOf(beforeLevels.size, afterLevels.size)) {
-        compareSettings(afterAt, depth, beforeLevels.getOrElse(depth) { emptyMap() }, afterLevels.getOrElse(depth) { emptyMap() })
+        compareSettings(beforeAt, afterAt, depth, beforeLevels.getOrElse(depth) { emptyMap() }, afterLevels.getOrElse(depth) { emptyMap() })
     }
     compareChildren(beforeAt, before.declared, afterAt, after.declared)
 }
 
-private fun MutableList<AppSettingsChange>.compareSettings(at: Address, depth: Int, before: Map<String, String>, after: Map<String, String>) {
+/** One map of a matched node: a removal is addressed at [beforeAt], an addition or a change at [afterAt]. */
+private fun MutableList<AppSettingsChange>.compareSettings(
+    beforeAt: Address,
+    afterAt: Address,
+    depth: Int,
+    before: Map<String, String>,
+    after: Map<String, String>,
+) {
     for (key in (before.keys + after.keys).sorted()) {
         val was = before[key]
         val now = after[key]
         when {
-            was == null && now != null -> add(AppSettingsChange.Added(at.path, at.names, depth, key, now))
-            was != null && now == null -> add(AppSettingsChange.Removed(at.path, at.names, depth, key, was))
-            was != null && now != null && was != now -> add(AppSettingsChange.Changed(at.path, at.names, depth, key, was, now))
+            was == null && now != null -> add(added(afterAt, depth, key, now))
+            was != null && now == null -> add(removed(beforeAt, depth, key, was))
+            was != null && now != null && was != now -> add(AppSettingsChange.Changed(afterAt.path, afterAt.names, depth, key, was, now))
         }
     }
 }
@@ -197,10 +206,8 @@ private fun removed(at: Address, depth: Int, key: String, value: String): AppSet
     AppSettingsChange.Removed(at.path, at.names, depth, key, value)
 
 /** The node's own settings at depth `0`, then each template level's in turn. A lane has only its own. */
-private fun TopologyDocument.Node.settingsByDepth(): List<Map<String, String>> = when (this) {
-    is TopologyDocument.Lane -> listOf(appSettings)
-    is TopologyDocument.Group -> listOf(appSettings) + generateSequence(template) { it.template }.map { it.appSettings }
-}
+private fun TopologyDocument.Node.settingsByDepth(): List<Map<String, String>> =
+    listOf(appSettings) + generateSequence((this as? TopologyDocument.Group)?.template) { it.template }.map { it.appSettings }
 
 private val TopologyDocument.Node.declared: List<TopologyDocument.Node>
     get() = when (this) {
