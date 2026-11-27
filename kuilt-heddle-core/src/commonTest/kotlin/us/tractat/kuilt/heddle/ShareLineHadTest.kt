@@ -6,6 +6,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -26,7 +27,8 @@ class ShareLineHadTest {
      * The decomposition itself, read on the step's own outputs: the seated ledger [FairShareAllocator.settle]
      * returns, for the seat jump `ticks − folded · G` and the base counters, and the wake memory the
      * step leaves, for the offset. Each part is counted where it is not zero, so a generator that
-     * stopped seating, clamping or relocating reds.
+     * stopped seating, clamping or relocating reds. The placement's own forgiven, which
+     * [ShareLine.forgiven] reads, is held to the same two parts.
      */
     @Test
     fun aPositionIsCommittedServicePlusWhatWasForgiven() {
@@ -35,8 +37,9 @@ class ShareLineHadTest {
         var wakeOffsets = 0
         var relocated = 0
         var refused = 0
-        forEachLine { h, ledger, view, parents ->
-            for (parent in parents) {
+        forEachLine { asked ->
+            val (h, ledger, view) = Triple(asked.h, asked.ledger, asked.view)
+            for (parent in asked.parents) {
                 val placed = h.allocator.place(parent, ledger, view) as? FairShareAllocator.Placement.Placed
                 if (placed == null) {
                     refused++
@@ -53,6 +56,7 @@ class ShareLineHadTest {
                     val expected = committed.timesWide(TICKS_PER_UNIT) + jump + offset
                     assertAll(
                         { assertEquals(expected, placed.positions[edge], "${edge.value} beneath ${parent.value}") },
+                        { assertEquals(jump + offset, placed.forgiven[edge], "${edge.value}'s forgiven beneath ${parent.value}") },
                         { assertTrue(jump >= Int128.ZERO, "${edge.value}'s seat jump is $jump") },
                         { assertTrue(offset >= Int128.ZERO, "${edge.value}'s wake offset is $offset") },
                     )
@@ -72,14 +76,131 @@ class ShareLineHadTest {
         )
     }
 
+    /**
+     * The identity the ruling asks to be pinned, exactly: at every competing parent, for each
+     * competing child `s`, `lag = share_ℓ · (N + F) − c_s − F_s`, with `share_ℓ = w_s / Σw`, `c_s`
+     * and `N = Σc` the base committed service this test reads off the ledger itself, and `F_s` and
+     * `F = ΣF` the line's [ShareLine.forgiven]. Beside it, `had` is `c_s / N` and the `had`s add up
+     * to `1` wherever `N` is not `0`.
+     *
+     * Counted: rows where something was forgiven, rows where the forgiven term moves the lag
+     * (`share_ℓ · F ≠ F_s`, so dropping it would red), rows whose effective committed service is
+     * not the base (so reading the effective figure would red), rows where `had` is not the weight's
+     * part, and parents where the siblings have had nothing.
+     */
+    @Test
+    fun lagIsTheShareOfWhatWasHadAndForgivenLessItsOwn() {
+        var rows = 0
+        var forgivenRows = 0
+        var forgivenMoves = 0
+        var relocated = 0
+        var offShare = 0
+        var nothingHad = 0
+        forEachLine { asked ->
+            val line = asked.line
+            for (parent in asked.parents) {
+                val kids = asked.competingBeneath(parent)
+                if (kids.isEmpty() || line.lag(kids.first().child) == null) continue
+                val committed = kids.map { baseCommitted(asked.ledger, it.id) }
+                val n = committed.sum()
+                val weights = sum(kids.map { weightOf(it.weight) })
+                val forgiven = kids.map { checkNotNull(line.forgiven(it.child)) { "${it.child.value} reads a lag" } }
+                val f = sum(forgiven)
+                val had = kids.map { checkNotNull(line.had(it.child)) { "${it.child.value} reads a lag" } }
+                for ((i, kid) in kids.withIndex()) {
+                    val share = weightOf(kid.weight) / weights
+                    val c = Rational.of(committed[i])
+                    val expected = share * (Rational.of(n) + f) - c - forgiven[i]
+                    assertAll(
+                        { assertEquals(expected, line.lag(kid.child), "${kid.child.value} beneath ${parent.value}: the identity") },
+                        { assertEquals(if (n == 0L) Rational.ZERO else Rational.of(committed[i], n), had[i], "${kid.child.value}'s had") },
+                        { assertTrue(forgiven[i] >= Rational.ZERO, "${kid.child.value}'s forgiven is ${forgiven[i]}") },
+                    )
+                    rows++
+                    if (forgiven[i] > Rational.ZERO) forgivenRows++
+                    if (share * f != forgiven[i]) forgivenMoves++
+                    if (checkNotNull(asked.ledger.edge(kid.id)).committedService != committed[i]) relocated++
+                    if (n != 0L && had[i] != share) offShare++
+                }
+                if (n == 0L) nothingHad++ else assertEquals(Rational.ONE, sum(had), "the hads beneath ${parent.value}")
+            }
+        }
+        println("SHARELINE-HAD identity rows=$rows forgiven=$forgivenRows forgivenMoves=$forgivenMoves relocated=$relocated offShare=$offShare nothingHad=$nothingHad")
+        assertAll(
+            { assertTrue(rows >= 2_000, "rows checked: $rows") },
+            { assertTrue(forgivenRows >= 500, "rows with something forgiven: $forgivenRows") },
+            { assertTrue(forgivenMoves >= 500, "rows the forgiven term moves: $forgivenMoves") },
+            { assertTrue(relocated >= 20, "rows whose effective committed service is not the base: $relocated") },
+            { assertTrue(offShare >= 500, "rows whose had is not the weight's part: $offShare") },
+            { assertTrue(nothingHad >= 1, "parents whose siblings had nothing: $nothingHad") },
+        )
+    }
+
+    /**
+     * `had` and `forgiven` are `null` on exactly the rows `lag` is, over every group a ledger names
+     * and the root: so a row reads all three or none.
+     */
+    @Test
+    fun hadAndForgivenAreNullExactlyWhereLagIs() {
+        var reading = 0
+        var silent = 0
+        forEachLine { asked ->
+            for (g in groupsOf(asked.ledger) + asked.h.root) {
+                val lag = asked.line.lag(g)
+                assertAll(
+                    { assertEquals(lag == null, asked.line.had(g) == null, "${g.value}'s had") },
+                    { assertEquals(lag == null, asked.line.forgiven(g) == null, "${g.value}'s forgiven") },
+                )
+                if (lag == null) silent++ else reading++
+            }
+        }
+        assertAll(
+            { assertTrue(reading >= 2_000, "rows that read: $reading") },
+            { assertTrue(silent >= 500, "rows that do not: $silent") },
+        )
+    }
+
+    /** [ShareLine.fractionOf] and [ShareLine.unitsOf] against plain [Rational] arithmetic, past `Long` where the answer still fits. */
+    @Test
+    fun theReadsAreExactAndThrowOnlyWhenTheAnswerDoesNotFit() {
+        val rng = Random(3757)
+        repeat(2_000) {
+            val part = rng.nextLong(0L, 1L shl 40)
+            val whole = part + rng.nextLong(0L, 1L shl 40)
+            assertEquals(if (whole == 0L) Rational.ZERO else Rational.of(part, whole), ShareLine.fractionOf(part, Int128.of(whole)))
+            val ticks = rng.nextLong(0L, 1L shl 50)
+            assertEquals(Rational.of(ticks, TICKS_PER_UNIT), ShareLine.unitsOf(Int128.of(ticks)))
+        }
+        val big = Int128.of(Long.MAX_VALUE) + Int128.of(Long.MAX_VALUE)
+        assertAll(
+            { assertEquals(Rational.of(1L, 2L), ShareLine.fractionOf(Long.MAX_VALUE, big), "a whole past Long that reduces") },
+            { assertFailsWith<ArithmeticException> { ShareLine.fractionOf(1L, big) } },
+            { assertEquals(Rational.of(Long.MAX_VALUE, 8L), ShareLine.unitsOf(big), "ticks past Long that reduce") },
+            { assertFailsWith<ArithmeticException> { ShareLine.unitsOf(big + Int128.of(1L)) } },
+        )
+    }
+
     // ── Fixtures ────────────────────────────────────────────────────────────────────────────────
 
     /**
-     * Each of [SEEDS] histories, with a line asked every [CHECK_EVERY] steps over a drawn waiting
-     * set: [check] gets the engine, its ledger, the waiting view a pick's step reads, and the
-     * parents a line over that set places, sorted.
+     * One line asked of a history: the engine, its [ledger], the [waiting] set drawn, the [view] a
+     * pick's step reads over it, the [parents] the line places, sorted, and the [line] itself.
      */
-    private fun forEachLine(check: (LocalHeddle, EntitlementLedger, (AttachmentId) -> Demand, List<GroupId>) -> Unit) {
+    private class Asked(
+        val h: LocalHeddle,
+        val ledger: EntitlementLedger,
+        val competing: Set<GroupId>,
+        val view: (AttachmentId) -> Demand,
+        val parents: List<GroupId>,
+        val line: ShareLine,
+    ) {
+        /** [parent]'s active children that compete, by their records, in id order. */
+        fun competingBeneath(parent: GroupId): List<AttachmentRecord> =
+            ledger.activeChildren(parent).mapNotNull { ledger.record(it.attachment) }.filter { it.child in competing }
+    }
+
+    /** Each of [SEEDS] histories, with a line asked every [CHECK_EVERY] steps over a drawn waiting set. */
+    private fun forEachLine(check: (Asked) -> Unit) {
         for (seed in 0 until SEEDS) {
             val rng = Random(seed + 3_757)
             history(seed, rng) { h, leaves ->
@@ -87,10 +208,18 @@ class ShareLineHadTest {
                 val ledger = h.snapshot().ledger
                 val competing = ledger.reachable(waiting, h.root, Leasable.ByTopology(h.persist().lastApplied))
                 val parents = groupsOf(ledger).filter { g -> ledger.activeChildren(g).any { ledger.record(it.attachment)?.child in competing } }
-                check(h, ledger, LocalHeddle.waitingOver(ledger, competing), parents)
+                check(Asked(h, ledger, competing, LocalHeddle.waitingOver(ledger, competing), parents, h.shareLine(waiting)))
             }
         }
     }
+
+    /** [edge]'s base committed service in [ledger], `baseIssued − returned`, read without the line. */
+    private fun baseCommitted(ledger: EntitlementLedger, edge: AttachmentId): Long =
+        ledger.baseIssuance(edge) - checkNotNull(ledger.edge(edge)).returned
+
+    private fun weightOf(w: Weight): Rational = Rational.of(w.numerator, w.denominator)
+
+    private fun sum(values: List<Rational>): Rational = values.fold(Rational.ZERO, Rational::plus)
 
     /** One group or lane of a generated tree: a lane when it has no [children]. */
     private class Spec(val name: String, val weight: Weight, val children: List<Spec>) {

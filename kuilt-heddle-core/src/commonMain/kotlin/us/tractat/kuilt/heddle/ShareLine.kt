@@ -9,9 +9,9 @@ import us.tractat.kuilt.math.timesOrNull
 
 /**
  * What every group is owed of the whole pool while one waiting set holds still, and how far each
- * stands from it: one read of the tree, answered group by group with [share] and [lag]. A table
- * that shows a share on every row reads one line and looks each row up, rather than asking the
- * engine once per row.
+ * stands from it: one read of the tree, answered group by group with [share] and [lag], and with
+ * what each has [had] beside its siblings and been [forgiven]. A table that shows a share on every
+ * row reads one line and looks each row up, rather than asking the engine once per row.
  *
  * Get one from [LocalHeddle.shareLine] or [LocalHeddleView.shareLine]. It is a value: it keeps
  * what it read of the tree and of the wake memory when it was taken, so it answers the same
@@ -115,6 +115,90 @@ public class ShareLine internal constructor(
     }
 
     /**
+     * How much of the service handed out beneath [group]'s parent [group] has had, as an exact
+     * fraction of `1`: its committed service over the committed service of every competing child
+     * of that parent, itself included. A team holding 3 of the 4 units its parent's competing
+     * children were handed reads `3/4`, whatever its weight.
+     *
+     * **It is level-local, and is not the whole-pool comparison [share] gives.** Both sides of the
+     * fraction are read at [group]'s parent, so `had` compares with the share [group]'s weight
+     * gives it there, `w / Σw` over the competing siblings, which this line reads as
+     * `share(group) / share(parent)`. Over one parent's competing children the `had`s add up to
+     * `1`. Multiplied up the lineage they make no fraction of the pool: service held beside a
+     * level's competing children, by a sibling that has stopped asking, on an earlier edge or by an
+     * overrun charged on no edge, is in no level's total.
+     *
+     * **The window is the life of each sibling's current edge.** A child's committed service is
+     * what was delegated down the edge it hangs from and not handed back, `baseIssued − returned`
+     * in units, spent or not: an open reservation counts as had from the moment it was granted. A
+     * reweight is a new edge, so it starts the count again, and a lease the reweight moved counts on
+     * the new edge from then on. It is the **base** count the positions are built on, so relocation
+     * credit an edge took over, which [EntitlementLedger.edge]'s effective figures include, is not
+     * counted. Siblings attached at different times are therefore counted over different windows:
+     * one attached late reads less than a sibling of its weight that has run since the parent began,
+     * though neither need be owed anything.
+     *
+     * With `c` a child's committed service, `N = Σc` and `F = Σ` [forgiven] over the competing
+     * siblings, and `share_ℓ = w / Σw`, `had = c / N`, and its position at the parent is
+     * `(c + forgiven) · G` ticks, so
+     *
+     *     lag = share_ℓ · (N + F) − c − forgiven
+     *
+     * exactly. Where nothing was forgiven at the parent that is `lag = N · (share_ℓ − had)`: a child
+     * that has had less than its weight's part is owed the difference, in units of the siblings'
+     * total. In general the forgiven history counts too, which is why a newborn seated at the front
+     * reads a lag of about `0` while its `had` is `0`.
+     *
+     * `0` for every competing child when the siblings have had nothing between them, `N = 0`: none
+     * of them has had any of it, and that is the one case where the `had`s do not add up to `1`.
+     * `null` exactly where [lag] is: for the root, for a group that does not compete, and for each
+     * child of a parent where no step can be taken. The fraction itself needs no step, but a row
+     * then reads [lag], [had] and [forgiven] together or not at all, so the identity above holds on
+     * every row that reads.
+     *
+     * @throws ArithmeticException when the fraction does not fit an exact [Rational] over `Long`,
+     *   which needs the siblings' committed total past `Long`.
+     * @sample us.tractat.kuilt.heddle.sampleShareLineHad
+     */
+    public fun had(group: GroupId): Rational? {
+        val family = placedFamilyOf(group) ?: return null
+        val committed = checkNotNull(family.committed[group]) { "${group.value} competes but has no committed service" }
+        return fractionOf(committed, family.committedTotal)
+    }
+
+    /**
+     * The service the scheduler has forgiven [group] at its parent, in units: history it is not
+     * charged for, by which its position stands past its committed service. A newborn is seated at
+     * its parent's front, past whatever it had, and its edge's [Gauge] keeps that jump. A child
+     * coming back to compete is moved forward too: clamped to the front as it wakes, less any
+     * [LocalPolicy.sleeperCredit], or carried by its parent's clock as it returns. That move is
+     * the wake offset, which the engine's wake memory holds and the ledger never does. Never
+     * negative.
+     *
+     * Read as [lag] is, after the seat and wake step a pick arriving at the parent would take, so a
+     * child the step would clamp reads its clamp already. It is level-local and over the same window
+     * as [had], the life of [group]'s current edge, and the identity [had] states ties the three:
+     * `lag = share_ℓ · (N + F) − c − forgiven`, with `F` the competing siblings' forgiven summed.
+     *
+     * `null` exactly where [lag] is.
+     *
+     * @throws ArithmeticException when it does not fit an exact [Rational] over `Long`, which needs a
+     *   position far past `Long.MAX_VALUE` ticks.
+     * @sample us.tractat.kuilt.heddle.sampleShareLineHad
+     */
+    public fun forgiven(group: GroupId): Rational? {
+        val front = placedFamilyOf(group)?.front as? Front.Fits ?: return null
+        return unitsOf(checkNotNull(front.forgiven[group]) { "${group.value} competes but was not placed" })
+    }
+
+    /** The [Family] beneath [group]'s parent when its step was placed, or `null` where [lag] is `null`. */
+    private fun placedFamilyOf(group: GroupId): Family? {
+        val parent = parentOf[group] ?: return null
+        val family = checkNotNull(families[parent]) { "${parent.value} has a competing child but no family" }
+        return family.takeIf { it.front is Front.Fits }
+    }
+
+    /**
      * [child]'s weight over the summed weights of its competing siblings beneath [parent], as
      * `[numerator, denominator]`: `(n · L / d) / S`, over the sum the [Family] formed once. The
      * numerator is at most `S`, so it fits whenever the sum does.
@@ -129,26 +213,44 @@ public class ShareLine internal constructor(
     }
 
     /**
-     * One competing parent's competing children, each with the weight of the edge it hangs from,
-     * and what a lookup reads about them all, formed once when the line is taken: their [sum], and
-     * where the parent's step left each of them, with the [front] they make. Anything else a level
-     * answers from its whole set of competing children belongs here too, so a table over many
-     * siblings stays linear.
+     * One competing parent's competing children, each with the weight of the edge it hangs from
+     * and its base [committed] service on that edge, and what a lookup reads about them all, formed
+     * once when the line is taken: their [sum], their [committedTotal], and where the parent's step
+     * left each of them, with the [front] they make. Anything else a level answers from its whole
+     * set of competing children belongs here too, so a table over many siblings stays linear.
      */
-    internal class Family(val weights: Map<GroupId, Weight>, val sum: WeightSum, val front: Front) {
+    internal class Family(
+        val weights: Map<GroupId, Weight>,
+        val sum: WeightSum,
+        val committed: Map<GroupId, Long>,
+        val committedTotal: Int128,
+        val front: Front,
+    ) {
         internal companion object {
-            /** The family of [children], each by the edge it hangs from, placed as [placement] says. */
-            fun of(children: Map<GroupId, AttachmentRecord>, placement: FairShareAllocator.Placement): Family {
+            /**
+             * The family of [children], each by the edge it hangs from with its base [committed]
+             * service there, placed as [placement] says.
+             */
+            fun of(
+                children: Map<GroupId, AttachmentRecord>,
+                committed: Map<GroupId, Long>,
+                placement: FairShareAllocator.Placement,
+            ): Family {
                 val weights = children.mapValues { (_, record) -> record.weight }
                 val front = when (placement) {
                     is FairShareAllocator.Placement.Placed -> Front.of(
                         children.mapValues { (child, record) ->
                             checkNotNull(placement.positions[record.id]) { "${child.value} competes, but its parent's step did not place it" }
                         },
+                        children.mapValues { (child, record) ->
+                            checkNotNull(placement.forgiven[record.id]) { "${child.value} competes, but its parent's step did not place it" }
+                        },
                     )
                     FairShareAllocator.Placement.Refused -> Front.Overflows
                 }
-                return Family(weights, WeightSum.of(weights.values), front)
+                val total = WideSum()
+                for (c in committed.values) total.add(c)
+                return Family(weights, WeightSum.of(weights.values), committed, total.toInt128(), front)
             }
         }
     }
@@ -185,24 +287,25 @@ public class ShareLine internal constructor(
     internal sealed interface Front {
 
         /**
-         * Each competing child's effective position after the step, ticks on its own grid, and their
-         * sum [total], the front's numerator: `front = total / (G · Σw)`.
+         * Each competing child's effective position after the step, ticks on its own grid, the part
+         * of each the scheduler [forgiven], and the positions' sum [total], the front's numerator:
+         * `front = total / (G · Σw)`.
          */
-        class Fits(val positions: Map<GroupId, Int128>, val total: Int128) : Front
+        class Fits(val positions: Map<GroupId, Int128>, val forgiven: Map<GroupId, Int128>, val total: Int128) : Front
 
         /** The step was refused, at the weight budget or the position limit, or the positions' sum leaves 128 bits. */
         data object Overflows : Front
 
         companion object {
-            /** The front over [positions], or [Overflows] when their sum leaves 128 bits. */
-            fun of(positions: Map<GroupId, Int128>): Front {
+            /** The front over [positions], each with what was [forgiven] it, or [Overflows] when their sum leaves 128 bits. */
+            fun of(positions: Map<GroupId, Int128>, forgiven: Map<GroupId, Int128>): Front {
                 val total = WideSum()
                 try {
                     for (p in positions.values) total.add(p)
                 } catch (_: ArithmeticException) {
                     return Overflows
                 }
-                return Fits(positions, total.toInt128())
+                return Fits(positions, forgiven, total.toInt128())
             }
         }
     }
@@ -236,6 +339,31 @@ public class ShareLine internal constructor(
         }
 
         /**
+         * [part] over [whole], in lowest terms, and `0` when [whole] is: `c / N` for [had]. The gcd
+         * is taken against `whole mod part`, so [whole] is never narrowed before it is divided, and
+         * this throws exactly when the reduced denominator leaves `Long`.
+         */
+        internal fun fractionOf(part: Long, whole: Int128): Rational {
+            if (whole == Int128.ZERO || part == 0L) return Rational.ZERO
+            val magnitude = if (part < 0L) -part else part
+            val rest = whole % magnitude
+            val g = gcdOf(magnitude, if (rest < 0L) -rest else rest)
+            val denominator = whole.divideOrNull(g, Rounding.FLOOR) ?: throw ArithmeticException("a had's denominator leaves Long: $whole / $g")
+            return Rational.of(part / g, denominator)
+        }
+
+        /**
+         * [ticks] of service as units, `ticks / G`, in lowest terms: [forgiven]'s read. It throws
+         * exactly when the reduced numerator leaves `Long`.
+         */
+        internal fun unitsOf(ticks: Int128): Rational {
+            val rest = ticks % TICKS_PER_UNIT
+            val g = gcdOf(TICKS_PER_UNIT, if (rest < 0L) -rest else rest)
+            val numerator = ticks.divideOrNull(g, Rounding.FLOOR) ?: throw ArithmeticException("a forgiven's numerator leaves Long: $ticks / $g")
+            return Rational.of(numerator, TICKS_PER_UNIT / g)
+        }
+
+        /**
          * The product of [fractions], each `[numerator, denominator]` and positive, in lowest terms.
          * Every numerator is cancelled against every denominator first, which leaves the two
          * products coprime, so they are the answer itself and overflow only when it does not fit.
@@ -260,7 +388,9 @@ public class ShareLine internal constructor(
         /**
          * The line over [competing], a set [reachable] lifted: every group in it but [root] hangs
          * from its parent by the one ACTIVE edge its lineage ends in, which is what the lift checked.
-         * Each parent's [Family] is summed and placed here, once.
+         * Each parent's [Family] is summed and placed here, once, and each child's base committed
+         * service, `baseIssued − returned`, is read here from [ledger]: the base the positions count,
+         * not the effective figure [EntitlementLedger.edge] reports, which adds relocation credit.
          *
          * Each competing parent is placed by the step a pick arriving there would take
          * ([FairShareAllocator.place]) against [waiting], the view a pick's step reads, on [ledger]
@@ -276,14 +406,19 @@ public class ShareLine internal constructor(
         ): ShareLine {
             val parentOf = HashMap<GroupId, GroupId>()
             val children = HashMap<GroupId, HashMap<GroupId, AttachmentRecord>>()
+            val committed = HashMap<GroupId, HashMap<GroupId, Long>>()
             for (group in competing) {
                 if (group == root) continue
                 val edge = checkNotNull(ledger.lineageOf(group)?.lastOrNull()) { "${group.value} competes but has no lineage" }
                 val record = checkNotNull(ledger.record(edge)) { "lineage edge ${edge.value} has no record" }
+                val returned = checkNotNull(ledger.edge(edge)) { "lineage edge ${edge.value} has no summary" }.returned
                 parentOf[group] = record.parent
                 children.getOrPut(record.parent) { HashMap() }[group] = record
+                committed.getOrPut(record.parent) { HashMap() }[group] = checkedSub(ledger.baseIssuance(edge), returned)
             }
-            val families = children.mapValues { (parent, family) -> Family.of(family, memory.place(parent, ledger, waiting)) }
+            val families = children.mapValues { (parent, family) ->
+                Family.of(family, committed.getValue(parent), memory.place(parent, ledger, waiting))
+            }
             return ShareLine(root, parentOf, families)
         }
     }
