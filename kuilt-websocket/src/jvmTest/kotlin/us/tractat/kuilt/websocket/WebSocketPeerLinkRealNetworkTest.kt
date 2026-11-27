@@ -49,7 +49,7 @@ class WebSocketPeerLinkRealNetworkTest {
         // the probe closes before Netty binds, so another process on a loaded box can take the port
         // in that window (`BindException: Address already in use` — #1590). Binding 0 has no window.
         server =
-            embeddedServer(Netty, port = 0) {
+            embeddedServer(Netty, port = 0, host = LOOPBACK_HOST) {
                 serverFactory = KtorServerLoom(this, path)
             }
         server.start(wait = false)
@@ -116,7 +116,7 @@ class WebSocketPeerLinkRealNetworkTest {
             val clientLink =
                 clientFactory.join(
                     WebSocketAdvertisement(
-                        url = "ws://localhost:$port$path",
+                        url = "ws://$LOOPBACK_HOST:$port$path",
                         serverPeerId = serverFactory.selfPeerId,
                         sessionName = "real-net-client",
                     ),

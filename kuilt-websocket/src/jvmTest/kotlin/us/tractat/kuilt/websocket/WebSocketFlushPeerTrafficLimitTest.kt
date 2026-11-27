@@ -66,7 +66,7 @@ class WebSocketFlushPeerTrafficLimitTest {
     // `CoroutineScope` overload and parent the server to the blocking job.
     @BeforeTest
     fun setUp() {
-        server = embeddedServer(Netty, port = 0) { serverLoom = KtorServerLoom(this, PATH) }
+        server = embeddedServer(Netty, port = 0, host = LOOPBACK_HOST) { serverLoom = KtorServerLoom(this, PATH) }
         server.start(wait = false)
         port = runBlocking { server.engine.resolvedConnectors().first().port }
         httpClient = HttpClient(CIO) { install(ClientWebSockets) }
@@ -84,7 +84,7 @@ class WebSocketFlushPeerTrafficLimitTest {
     private suspend fun connectedPair(): Pair<Seam, Seam> = coroutineScope {
         val host = async { serverLoom.host(Pattern("limit")) }
         val advertisement = WebSocketAdvertisement(
-            url = "ws://127.0.0.1:$port$PATH",
+            url = "ws://$LOOPBACK_HOST:$port$PATH",
             serverPeerId = serverLoom.selfPeerId,
             sessionName = "limit",
         )

@@ -277,7 +277,7 @@ class WeaveCancelledMidDialTest {
         val answer = CompletableDeferred<Unit>()
         val heard = CompletableDeferred<CloseReason?>()
         val netty = startHeldRoute(requestSeen, answer, heard)
-        val url = "ws://127.0.0.1:${netty.engine.resolvedConnectors().first().port}$NETTY_PATH"
+        val url = "ws://$LOOPBACK_HOST:${netty.engine.resolvedConnectors().first().port}$NETTY_PATH"
 
         cancelAsTheSessionArrives(clientLoom(client()), url, requestSeen::await, { answer.complete(Unit) })
 
@@ -293,7 +293,7 @@ class WeaveCancelledMidDialTest {
         answer: CompletableDeferred<Unit>,
         heard: CompletableDeferred<CloseReason?>,
     ): EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration> {
-        val netty = embeddedServer(Netty, port = 0) {
+        val netty = embeddedServer(Netty, port = 0, host = LOOPBACK_HOST) {
             install(ServerWebSockets)
             intercept(ApplicationCallPipeline.Plugins) {
                 requestSeen.complete(Unit)
