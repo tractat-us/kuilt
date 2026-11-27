@@ -129,7 +129,7 @@ class AdmissionRequestPrincipalTest {
     private class Relinked(
         val asked: List<AdmissionRequest>,
         val reRegistrations: Int,
-        val roster: List<Member>,
+        val roster: Set<Member>,
         val heardByTheNewLink: List<AdmitMessage>,
         val ended: List<String>,
     )
@@ -217,7 +217,7 @@ class AdmissionRequestPrincipalTest {
             assertAll(
                 { assertEquals(1, seen.reRegistrations, "rig: the hub re-registered the joiner's id as Mallory while the policy decided") },
                 { assertEquals(listOf(ADA), seen.asked.map { it.principal }, "the policy was asked once, about Ada's link") },
-                { assertEquals(emptyList(), seen.roster, "nobody is seated under that exchange") },
+                { assertEquals(emptySet(), seen.roster, "nobody is seated under that exchange") },
                 { assertEquals(emptyList(), seen.heardByTheNewLink.filterIsInstance<AdmitMessage.Welcome>(), "the link that took the id over is sent no Welcome") },
             )
         }
@@ -235,7 +235,7 @@ class AdmissionRequestPrincipalTest {
             assertAll(
                 { assertEquals(1, seen.reRegistrations, "rig: the hub re-registered the joiner's id as Mallory while the policy decided") },
                 { assertEquals(listOf(ADA), seen.asked.map { it.principal }, "the policy was asked once, about Ada's link") },
-                { assertEquals(emptyList(), seen.roster, "nobody is seated under that exchange") },
+                { assertEquals(emptySet(), seen.roster, "nobody is seated under that exchange") },
                 { assertEquals(emptyList(), seen.heardByTheNewLink.filterIsInstance<AdmitMessage.Reject>(), "the link that took the id over is sent no refusal") },
             )
         }
