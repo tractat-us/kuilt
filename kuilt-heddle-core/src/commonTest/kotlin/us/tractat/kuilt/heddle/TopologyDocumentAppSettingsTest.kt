@@ -56,6 +56,29 @@ class TopologyDocumentAppSettingsTest {
         )
     }
 
+    /**
+     * Under `encodeDefaults = true` every other default is written out, and an empty settings map
+     * still is not: a 0.7.7 reader decoding strictly refuses an `appSettings` key it does not know,
+     * even an empty one, so a document with no settings must not carry the key in any `Json`.
+     */
+    @Test
+    fun emptySettingsAreLeftOutEvenWhenDefaultsAreEncoded() {
+        val withDefaults = Json { encodeDefaults = true }
+        val bare = TopologyDocument("pool", listOf(Group("ci", children = listOf(Lane("main")), template = Template(template = Template())), Lane("web")))
+        val golden = """{"root":"pool","children":[{"type":"group","name":"ci","weight":"1","children":[{"type":"lane","name":"main","weight":"1","maxConcurrent":null}],""" +
+            """"template":{"weight":"1","maxConcurrent":null,"template":{"weight":"1","maxConcurrent":null,"template":null}},"maxConcurrent":null},""" +
+            """{"type":"lane","name":"web","weight":"1","maxConcurrent":null}]}"""
+        val set = TopologyDocument("pool", listOf(Group("ci", template = Template(appSettings = mapOf("split" to "repository")), appSettings = match)))
+        val setGolden = """{"root":"pool","children":[{"type":"group","name":"ci","weight":"1","children":[],""" +
+            """"template":{"weight":"1","maxConcurrent":null,"template":null,"appSettings":{"split":"repository"}},"maxConcurrent":null,"appSettings":{"match":"repo:*"}}]}"""
+        assertAll(
+            { assertEquals(golden, withDefaults.encodeToString(TopologyDocument.serializer(), bare)) },
+            { assertEquals(bare, Json.decodeFromString(TopologyDocument.serializer(), golden)) },
+            { assertEquals(setGolden, withDefaults.encodeToString(TopologyDocument.serializer(), set), "a map with keys is written as ever") },
+            { assertEquals(set, Json.decodeFromString(TopologyDocument.serializer(), setGolden)) },
+        )
+    }
+
     @Test
     fun settingsEncodeBesideTheNodeTheyBelongTo() {
         val document = TopologyDocument(
@@ -218,7 +241,7 @@ class TopologyDocumentAppSettingsTest {
     }
 
     @Test
-    fun aKeyRemovedFromANodeThatStaysIsAddressedInTheDocumentAfter() {
+    fun aRemovalIsAddressedInTheDocumentBeforeWhetherOrNotItsNodeStays() {
         val shifted = assertIs<TopologyEdit.Edited>(doc.remove(listOf(0, 0))).document
         val cleared = assertIs<TopologyEdit.Edited>(shifted.setAppSettings(listOf(0, 0), emptyMap())).document
         val pr = TopologyDocument("pool", listOf(Group("ci", children = listOf(Lane("x"), Lane("pr", appSettings = match)))))
@@ -228,16 +251,88 @@ class TopologyDocumentAppSettingsTest {
                 assertEquals(
                     listOf(AppSettingsChange.Removed(listOf(0, 0), listOf("pool", "ci", "main"), 0, "match", "branch:main")),
                     doc.appSettingsChangesTo(cleared),
-                    "main is gone: addressed before",
+                    "main is gone",
                 )
             },
             {
                 assertEquals(
-                    listOf(AppSettingsChange.Removed(listOf(0, 0), listOf("pool", "ci", "pr"), 0, "match", "repo:*")),
+                    listOf(AppSettingsChange.Removed(listOf(0, 1), listOf("pool", "ci", "pr"), 0, "match", "repo:*")),
                     pr.appSettingsChangesTo(prAfter),
-                    "pr stays, at index 0 after and 1 before: addressed after",
+                    "pr stays, at index 1 before and 0 after: addressed before",
                 )
             },
+        )
+    }
+
+    /**
+     * Before `[a, b]`, after `[b, c]`: a's removal and b's change both have path `[0]`, and the arm
+     * says which document that is. Were the removal addressed in the document after, a marker for
+     * it would land on b.
+     */
+    @Test
+    fun theArmSaysWhichDocumentAPathIsIn() {
+        val before = TopologyDocument("r", listOf(Lane("a", appSettings = mapOf("k" to "1")), Lane("b", appSettings = mapOf("k" to "1"))))
+        val after = TopologyDocument("r", listOf(Lane("b", appSettings = mapOf("k" to "2")), Lane("c")))
+        assertEquals(
+            listOf(
+                AppSettingsChange.Changed(listOf(0), listOf("r", "b"), 0, "k", "1", "2"),
+                AppSettingsChange.Removed(listOf(0), listOf("r", "a"), 0, "k", "1"),
+            ),
+            before.appSettingsChangesTo(after),
+            "the change is at after[0], which is b; the removal at before[0], which is a",
+        )
+    }
+
+    /**
+     * The documented order, under one parent that has every kind of child: the parent's own
+     * change, then its template level's, then its children in the order written after (a kept
+     * child, a kept group's changed grandchild, an added child), then the child it lost. The kept
+     * child moved from index 1 to 0, so its removed key and its changed one carry different paths
+     * while sitting together, keys sorted.
+     */
+    @Test
+    fun changesComeInDocumentOrder() {
+        val before = TopologyDocument(
+            "pool",
+            listOf(
+                Group(
+                    "ci",
+                    children = listOf(
+                        Lane("old", appSettings = mapOf("match" to "o")),
+                        Lane("main", appSettings = mapOf("extra" to "e", "match" to "m1")),
+                        Group("web", children = listOf(Lane("x", appSettings = mapOf("match" to "x1")))),
+                    ),
+                    template = Template(appSettings = mapOf("split" to "repository")),
+                    appSettings = mapOf("owner" to "a"),
+                ),
+            ),
+        )
+        val after = TopologyDocument(
+            "pool",
+            listOf(
+                Group(
+                    "ci",
+                    children = listOf(
+                        Lane("main", appSettings = mapOf("match" to "m2")),
+                        Group("web", children = listOf(Lane("x", appSettings = mapOf("match" to "x2")))),
+                        Lane("new", appSettings = mapOf("match" to "n")),
+                    ),
+                    template = Template(appSettings = mapOf("split" to "team")),
+                    appSettings = mapOf("owner" to "b"),
+                ),
+            ),
+        )
+        assertEquals(
+            listOf(
+                AppSettingsChange.Changed(listOf(0), listOf("pool", "ci"), 0, "owner", "a", "b"),
+                AppSettingsChange.Changed(listOf(0), listOf("pool", "ci"), 1, "split", "repository", "team"),
+                AppSettingsChange.Removed(listOf(0, 1), listOf("pool", "ci", "main"), 0, "extra", "e"),
+                AppSettingsChange.Changed(listOf(0, 0), listOf("pool", "ci", "main"), 0, "match", "m1", "m2"),
+                AppSettingsChange.Changed(listOf(0, 1, 0), listOf("pool", "ci", "web", "x"), 0, "match", "x1", "x2"),
+                AppSettingsChange.Added(listOf(0, 2), listOf("pool", "ci", "new"), 0, "match", "n"),
+                AppSettingsChange.Removed(listOf(0, 0), listOf("pool", "ci", "old"), 0, "match", "o"),
+            ),
+            before.appSettingsChangesTo(after),
         )
     }
 
