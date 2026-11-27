@@ -1993,14 +1993,14 @@ internal class SeamRoom(
     ) {
         var asked: AskedWindow? = null
         var released: PeerId? = null
-        var vetted: AdmissionDecision? = null
+        var vetted: Vetted? = null
         while (true) {
             val seating = settleSeat(joinerPeerId, keyed, generation, pass, asked, released, vetted, exchange)
             seatSettledForTest?.invoke(seating::class.simpleName.orEmpty())
             when (seating) {
                 SeatOutcome.Stale -> return logStaleAdmission(joinerPeerId)
                 is SeatOutcome.Vet -> when (val answer = askPolicy(joinerPeerId, seating.request, deadline)) {
-                    is PolicyAnswer.Decided -> vetted = answer.decision
+                    is PolicyAnswer.Decided -> vetted = Vetted(seating.request, answer.decision)
                     // The challenge ran out while the policy decided: nothing is owed, and the joiner's
                     // own admit deadline ends the attempt. A later Hello is asked about afresh.
                     PolicyAnswer.TimedOut -> return
@@ -2181,6 +2181,14 @@ internal class SeamRoom(
         return PolicyAnswer.Decided(decision)
     }
 
+    /**
+     * The policy's [decision], and the [request] it was asked about. The request is kept because a
+     * decision is about one link: the principal it names is checked against the link's own each time
+     * the decision is to be acted on ([stillAbout]), since the link can be attested anew while the
+     * policy decides.
+     */
+    private class Vetted(val request: AdmissionRequest, val decision: AdmissionDecision)
+
     /** What [settleSeat] decided, for [seatProvenJoiner] to act on outside [lock]. */
     private sealed interface SeatOutcome {
         /** The challenge is no longer current: seat nobody. */
@@ -2268,7 +2276,9 @@ internal class SeamRoom(
      * [asked] is the controller's answer, when it was asked, and the partition episode it was asked
      * about. [released] is the seat an earlier pass released, if any. [vetted] is the policy's answer,
      * once it was asked: it is acted on only while the verdict is still a [SeatDecision.Newcomer], so a
-     * seat the key gained meanwhile is restored instead.
+     * seat the key gained meanwhile is restored instead, and only while the link is still attested as
+     * the principal the policy was asked about ([stillAbout]), so a link attested anew meanwhile is
+     * asked about again.
      */
     private fun settleSeat(
         joinerPeerId: PeerId,
@@ -2277,7 +2287,7 @@ internal class SeamRoom(
         pass: ReturnPass?,
         asked: AskedWindow?,
         released: PeerId?,
-        vetted: AdmissionDecision?,
+        vetted: Vetted?,
         exchange: SeatExchange,
     ): SeatOutcome = lock.withLock {
         // Read in the section that decides, so a recovery the controller is told of after the lock
@@ -2285,10 +2295,11 @@ internal class SeamRoom(
         // next drop, and the controller would take it as the end of that newer window (#3675).
         val decidedAtMs = clock().toEpochMilliseconds()
         val current = pendingChallenges.isCurrent(joinerPeerId, generation)
+        val stillVetted = vetted?.stillAbout(joinerPeerId)
         val decision = decideUnderRevocation(joinerPeerId, keyed.key, pass, decidedAtMs)
         val outcome = settleSpentWindow(joinerPeerId, current, decision, asked) ?: toldSuperseded(joinerPeerId, keyed, generation, asked) ?: when (decision) {
             is SeatDecision.Restore -> settleRestore(joinerPeerId, generation, current, asked, decidedAtMs)
-            is SeatDecision.ReleaseAndAdmit -> settleRelease(joinerPeerId, keyed, generation, current, decision.released, pass, vetted, decidedAtMs)
+            is SeatDecision.ReleaseAndAdmit -> settleRelease(joinerPeerId, keyed, generation, current, decision.released, pass, stillVetted, decidedAtMs)
             SeatDecision.KeyConflict -> if (retire(joinerPeerId, generation)) {
                 SeatOutcome.Refused(
                     AdmitMessage.Reject("key-conflict: ${joinerPeerId.value} is held by another device", RejectCode.KeyConflict, keyed.joinerNonce),
@@ -2297,7 +2308,7 @@ internal class SeamRoom(
                 SeatOutcome.Stale
             }
             is SeatDecision.RestoreUnderNewId -> settleRestoreUnderNewId(joinerPeerId, generation, current, decision.previous, asked, decidedAtMs)
-            is SeatDecision.Newcomer -> settleNewcomer(joinerPeerId, keyed, generation, current, decision, vetted, decidedAtMs)
+            is SeatDecision.Newcomer -> settleNewcomer(joinerPeerId, keyed, generation, current, decision, stillVetted, decidedAtMs)
             SeatDecision.Returning ->
                 if (retire(joinerPeerId, generation)) admitReturning(joinerPeerId, keyed, checkNotNull(pass) { "only a pass decides Returning" }, decidedAtMs) else SeatOutcome.Stale
         }
@@ -2368,12 +2379,12 @@ internal class SeamRoom(
         current: Boolean,
         released: PeerId,
         pass: ReturnPass?,
-        vetted: AdmissionDecision?,
+        vetted: Vetted?,
         decidedAtMs: Long,
     ): SeatOutcome {
         if (!current) return SeatOutcome.Stale
         val afterRelease = decideUnderRevocation(joinerPeerId, keyed.key, pass, decidedAtMs, without = released)
-        if (afterRelease is SeatDecision.Newcomer && vetted !is AdmissionDecision.Admit) {
+        if (afterRelease is SeatDecision.Newcomer && vetted?.decision !is AdmissionDecision.Admit) {
             return settleNewcomer(joinerPeerId, keyed, generation, current, afterRelease, vetted, decidedAtMs)
         }
         return SeatOutcome.Released(released, releaseHeldSeat(released), decidedAtMs)
@@ -2388,6 +2399,10 @@ internal class SeamRoom(
      * joiner with its terms, [AdmissionDecision.Reject] refuses it with its code. A challenge no
      * longer current seats nobody and refuses nobody: a newer Hello from the same sender owes the
      * answer now, and a refusal would end that joiner (census P6).
+     *
+     * [vetted] is only ever an answer about the principal the link is attested as now ([stillAbout]),
+     * and the admitted member carries the one the request named, so [Member.principal] is the
+     * principal the policy admitted.
      */
     private fun settleNewcomer(
         joinerPeerId: PeerId,
@@ -2395,18 +2410,38 @@ internal class SeamRoom(
         generation: Long,
         current: Boolean,
         newcomer: SeatDecision.Newcomer,
-        vetted: AdmissionDecision?,
+        vetted: Vetted?,
         decidedAtMs: Long,
-    ): SeatOutcome = when (vetted) {
-        null -> if (current) SeatOutcome.Vet(newcomerRequest(newcomer, keyed, attestedPrincipal(joinerPeerId))) else SeatOutcome.Stale
-        is AdmissionDecision.Admit ->
-            if (retire(joinerPeerId, generation)) admitNewMember(joinerPeerId, keyed, vetted.grant, decidedAtMs) else SeatOutcome.Stale
-        is AdmissionDecision.Reject -> if (retire(joinerPeerId, generation)) {
-            logger.info { "room.admit.policy-refused peer=${joinerPeerId.value} code=${vetted.code.id}" }
-            SeatOutcome.Refused(AdmitMessage.Reject("refused by the host's admission policy", vetted.code, keyed.joinerNonce))
-        } else {
-            SeatOutcome.Stale
+    ): SeatOutcome {
+        if (vetted == null) {
+            return if (current) SeatOutcome.Vet(newcomerRequest(newcomer, keyed, attestedPrincipal(joinerPeerId))) else SeatOutcome.Stale
         }
+        if (!retire(joinerPeerId, generation)) return SeatOutcome.Stale
+        return when (val decision = vetted.decision) {
+            is AdmissionDecision.Admit -> admitNewMember(joinerPeerId, keyed, decision.grant, decidedAtMs, principal = vetted.request.principal)
+            is AdmissionDecision.Reject -> {
+                logger.info { "room.admit.policy-refused peer=${joinerPeerId.value} code=${decision.code.id}" }
+                SeatOutcome.Refused(AdmitMessage.Reject("refused by the host's admission policy", decision.code, keyed.joinerNonce))
+            }
+        }
+    }
+
+    /**
+     * **Under [lock].** This answer, while [joinerPeerId]'s link is still attested as the principal its
+     * request named; else null, so the joiner is asked about again.
+     *
+     * The link can change while the policy decides, outside [lock]: a hub re-registers an id from a
+     * fresh connection on its first frame, and a peer id is no secret, so a second link authenticated
+     * as someone else can take the id over without a Hello, and the challenge stays current (#3773's
+     * review). An answer about one principal is then never acted on for another, in either direction:
+     * neither an admit, which would seat the second link's principal under the first one's decision,
+     * nor a release made for it ([settleRelease]), nor a refusal. Asking again is how the loop already
+     * treats a world that moved while the policy was out, and the challenge's deadline bounds it.
+     */
+    private fun Vetted.stillAbout(joinerPeerId: PeerId): Vetted? {
+        if (request.principal == attestedPrincipal(joinerPeerId)) return this
+        logger.info { "room.admit.principal-changed peer=${joinerPeerId.value}: its link was attested anew while the policy decided; asking again" }
+        return null
     }
 
     /**
@@ -2636,7 +2671,7 @@ internal class SeamRoom(
         // Before the joiner is added, which forgets its own id should it have been superseded once.
         supersededIds.record(previous, held.key, successor = joinerPeerId)
         logger.info { "room.seat.superseded peer=${previous.value} by=${joinerPeerId.value}" }
-        val admitted = admitMember(joinerPeerId, held.identity, held.key, inherited.admittedAtMs, inherited.terms)
+        val admitted = admitMember(joinerPeerId, held.identity, held.key, inherited.admittedAtMs, inherited.terms, attestedPrincipal(joinerPeerId))
         // The device holds the pass it had under its old id (#3711), and the host the last it signed (#3745).
         admitted.burst.membership.lastSentNotAfter = inherited.lastSentNotAfter
         admitted.burst.membership.lastPass = inherited.lastPass
@@ -2718,12 +2753,20 @@ internal class SeamRoom(
      * and the key it proved, which becomes [Member.key] and rides every Welcome that names the joiner.
      * [terms] are what the policy gave it, or the pass it came back on carried (#3222), recorded with
      * its membership for the pass it is to be issued (#3221). It is admitted at [admittedAtMs].
-     * [returning] marks a device let back in on its pass ([SeatDecision.Returning]).
+     * [returning] marks a device let back in on its pass ([SeatDecision.Returning]). [principal] is the
+     * one [Member.principal] carries: see [admitMember].
      */
-    private fun admitNewMember(joinerPeerId: PeerId, keyed: KeyedHello, terms: GrantTerms, admittedAtMs: Long, returning: ReturningMark? = null): SeatOutcome.Admitted {
+    private fun admitNewMember(
+        joinerPeerId: PeerId,
+        keyed: KeyedHello,
+        terms: GrantTerms,
+        admittedAtMs: Long,
+        principal: Principal?,
+        returning: ReturningMark? = null,
+    ): SeatOutcome.Admitted {
         val hello = keyed.hello
         val identity = MemberIdentity(displayName = hello.displayName, sessionId = hello.sessionId, deviceId = hello.deviceId)
-        return admitMember(joinerPeerId, identity, keyed.key, admittedAtMs, terms, returning)
+        return admitMember(joinerPeerId, identity, keyed.key, admittedAtMs, terms, principal, returning)
     }
 
     /**
@@ -2737,7 +2780,9 @@ internal class SeamRoom(
     private fun admitReturning(joinerPeerId: PeerId, keyed: KeyedHello, pass: ReturnPass, admittedAtMs: Long): SeatOutcome.Admitted {
         val previousId = checkNotNull(departedMembers) { "only a host admits a return" }.take(keyed.key, admittedAtMs)
         logger.info { "room.admit.returning peer=${joinerPeerId.value} previous=${previousId?.value} recorded=${pass.grant != pass.presented}" }
-        return admitNewMember(joinerPeerId, keyed, GrantIssuer.termsOf(pass.grant), admittedAtMs, ReturningMark(previousId))
+        // No policy is asked, so no request named a principal: the link's own is read here, under the
+        // lock that admits.
+        return admitNewMember(joinerPeerId, keyed, GrantIssuer.termsOf(pass.grant), admittedAtMs, attestedPrincipal(joinerPeerId), ReturningMark(previousId))
             .also {
                 // The device holds the good pass it presented, if any (#3711): not one only the host kept.
                 it.burst.membership.lastSentNotAfter = pass.presented?.notAfter
@@ -2749,8 +2794,11 @@ internal class SeamRoom(
 
     /**
      * Who the fabric attested [peerId]'s link as, or null when nothing did: the one source for both the
-     * admitted [Member.principal] and the [AdmissionRequest.principal] the policy decides on (#3750),
-     * so the two cannot name different principals. The map-keyed roster comes first (hub path:
+     * admitted [Member.principal] and the [AdmissionRequest.principal] the policy decides on (#3750).
+     * It is read at two instants, when the request is built and when the answer is acted on, and the
+     * link can be attested anew between them, so the two agree only because an answer whose request
+     * names a different principal from the link's now is never acted on ([stillAbout]), and a newcomer
+     * is admitted with its request's principal rather than a third read. The map-keyed roster comes first (hub path:
      * `RoomHubSeam` / `Mesh` keys a principal per peer), then the single-value marker (2-peer relay
      * path: `Seam.withPrincipal`).
      */
@@ -2779,6 +2827,10 @@ internal class SeamRoom(
      * [returning] rides the `Joined` this emits and the roster `Welcome` this enqueues (#3222), so the
      * host and every member present hear the same device return, ordered on each lane as the
      * `Welcome` is (#1781).
+     *
+     * [principal] becomes [Member.principal], and is required so each caller says where it comes from:
+     * the policy's request for a newcomer ([settleNewcomer]), the link's own, read under this lock,
+     * where no policy was asked ([attestedPrincipal]).
      */
     private fun admitMember(
         joinerPeerId: PeerId,
@@ -2786,6 +2838,7 @@ internal class SeamRoom(
         key: DidKey,
         admittedAtMs: Long,
         terms: GrantTerms,
+        principal: Principal?,
         returning: ReturningMark? = null,
     ): SeatOutcome.Admitted {
         val member = Member(
@@ -2793,7 +2846,7 @@ internal class SeamRoom(
             identity = identity,
             key = key,
             liveness = Liveness.Connected,
-            principal = attestedPrincipal(joinerPeerId),
+            principal = principal,
         )
         val existing = admittedById.values.toList()
         addToRoster(member, returning)
