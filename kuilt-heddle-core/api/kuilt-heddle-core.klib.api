@@ -2157,6 +2157,8 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
     final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.toString|toString(){}[0]
 
     sealed interface Node { // us.tractat.kuilt.heddle/TopologyDocument.Node|null[0]
+        abstract val appSettings // us.tractat.kuilt.heddle/TopologyDocument.Node.appSettings|{}appSettings[0]
+            abstract fun <get-appSettings>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.heddle/TopologyDocument.Node.appSettings.<get-appSettings>|<get-appSettings>(){}[0]
         abstract val maxConcurrent // us.tractat.kuilt.heddle/TopologyDocument.Node.maxConcurrent|{}maxConcurrent[0]
             abstract fun <get-maxConcurrent>(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.Node.maxConcurrent.<get-maxConcurrent>|<get-maxConcurrent>(){}[0]
         abstract val name // us.tractat.kuilt.heddle/TopologyDocument.Node.name|{}name[0]

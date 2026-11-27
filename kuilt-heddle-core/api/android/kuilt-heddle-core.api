@@ -1857,7 +1857,7 @@ public final class us/tractat/kuilt/heddle/TopologyDocument$Group : us/tractat/k
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyDocument$Group;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyDocument$Group;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyDocument$Group;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;Ljava/lang/Long;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyDocument$Group;
 	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAppSettings ()Ljava/util/Map;
+	public fun getAppSettings ()Ljava/util/Map;
 	public final fun getChildren ()Ljava/util/List;
 	public fun getMaxConcurrent ()Ljava/lang/Long;
 	public fun getName ()Ljava/lang/String;
@@ -1901,7 +1901,7 @@ public final class us/tractat/kuilt/heddle/TopologyDocument$Lane : us/tractat/ku
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyDocument$Lane;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyDocument$Lane;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyDocument$Lane;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyDocument$Lane;
 	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAppSettings ()Ljava/util/Map;
+	public fun getAppSettings ()Ljava/util/Map;
 	public fun getMaxConcurrent ()Ljava/lang/Long;
 	public fun getName ()Ljava/lang/String;
 	public fun getWeight ()Ljava/lang/String;
@@ -1926,6 +1926,7 @@ public final class us/tractat/kuilt/heddle/TopologyDocument$Lane$Companion {
 
 public abstract interface class us/tractat/kuilt/heddle/TopologyDocument$Node {
 	public static final field Companion Lus/tractat/kuilt/heddle/TopologyDocument$Node$Companion;
+	public abstract fun getAppSettings ()Ljava/util/Map;
 	public abstract fun getMaxConcurrent ()Ljava/lang/Long;
 	public abstract fun getName ()Ljava/lang/String;
 	public abstract fun getWeight ()Ljava/lang/String;
