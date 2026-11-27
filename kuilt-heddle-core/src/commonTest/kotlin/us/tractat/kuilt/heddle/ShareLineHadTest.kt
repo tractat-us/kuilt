@@ -10,7 +10,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * What [ShareLine.had] and [ShareLine.forgiven] rest on (#3757): at one parent, a competing child's
+ * What [ShareLine.had], [ShareLine.committed] and [ShareLine.forgiven] rest on (#3757): at one parent, a competing child's
  * position after the step a pick takes there is `p_s = c_s · G + F_s · G`, where `c_s` is its base
  * committed service on its current edge, `baseIssued − returned`, and `F_s · G` is what the
  * scheduler forgave it, its seat jump plus its wake offset.
@@ -57,6 +57,7 @@ class ShareLineHadTest {
                     assertAll(
                         { assertEquals(expected, placed.positions[edge], "${edge.value} beneath ${parent.value}") },
                         { assertEquals(jump + offset, placed.forgiven[edge], "${edge.value}'s forgiven beneath ${parent.value}") },
+                        { assertEquals(committed, placed.committed[edge], "${edge.value}'s committed beneath ${parent.value}") },
                         { assertTrue(jump >= Int128.ZERO, "${edge.value}'s seat jump is $jump") },
                         { assertTrue(offset >= Int128.ZERO, "${edge.value}'s wake offset is $offset") },
                     )
@@ -77,11 +78,16 @@ class ShareLineHadTest {
     }
 
     /**
-     * The identity the ruling asks to be pinned, exactly: at every competing parent, for each
-     * competing child `s`, `lag = share_ℓ · (N + F) − c_s − F_s`, with `share_ℓ = w_s / Σw`, `N = Σc`
-     * the base committed service this test reads off the ledger itself, `c_s = had · N` read back
-     * through the line, and `F_s` and `F = ΣF` the line's [ShareLine.forgiven]. Beside it, `had` is
-     * the ledger's `c_s / N` and the `had`s add up to `1` wherever `N` is not `0`.
+     * The identity the ruling asks to be pinned, exactly, and from the line's public reads alone, as
+     * a host would check it: at every competing parent, for each competing child `s`,
+     * `lag = share_ℓ · (N + F) − c_s − F_s`, with `share_ℓ = share(s) / share(parent)`, `c_s` the
+     * line's [ShareLine.committed], `N = Σc` summed from it over the siblings, and `F_s` and
+     * `F = ΣF` the line's [ShareLine.forgiven]. Beside it, `had = c_s / N` and the `had`s add up to
+     * `1` wherever `N` is not `0`.
+     *
+     * The one read that is not the line's is the oracle for `c_s` itself: the base committed
+     * service this test reads off the ledger, `baseIssued − returned`, so a line that read the
+     * effective figure, or any other `c` the identity happened to close over, still reds.
      *
      * Counted: rows where something was forgiven, rows where the forgiven term moves the lag
      * (`share_ℓ · F ≠ F_s`, so dropping it would red), rows whose effective committed service is
@@ -99,30 +105,31 @@ class ShareLineHadTest {
         forEachLine { asked ->
             val line = asked.line
             for (parent in asked.parents) {
-                val kids = asked.competingBeneath(parent)
-                if (kids.isEmpty() || line.lag(kids.first().child) == null) continue
-                val committed = kids.map { baseCommitted(asked.ledger, it.id) }
-                val n = committed.sum()
-                val weights = sum(kids.map { weightOf(it.weight) })
-                val forgiven = kids.map { checkNotNull(line.forgiven(it.child)) { "${it.child.value} reads a lag" } }
+                val records = asked.competingBeneath(parent)
+                val kids = records.map { it.child }
+                if (kids.isEmpty() || line.lag(kids.first()) == null) continue
+                val committed = kids.map { checkNotNull(line.committed(it)) { "${it.value} reads a lag" } }
+                val n = sum(committed)
+                val forgiven = kids.map { checkNotNull(line.forgiven(it)) { "${it.value} reads a lag" } }
                 val f = sum(forgiven)
-                val had = kids.map { checkNotNull(line.had(it.child)) { "${it.child.value} reads a lag" } }
+                val had = kids.map { checkNotNull(line.had(it)) { "${it.value} reads a lag" } }
                 for ((i, kid) in kids.withIndex()) {
-                    val share = weightOf(kid.weight) / weights
-                    // c_s read back through the line, `had · N`, so the identity holds the line's had too.
-                    val expected = share * (Rational.of(n) + f) - had[i] * Rational.of(n) - forgiven[i]
+                    val share = line.share(kid) / line.share(parent)
+                    val expected = share * (n + f) - committed[i] - forgiven[i]
+                    val oracle = baseCommitted(asked.ledger, records[i].id)
                     assertAll(
-                        { assertEquals(expected, line.lag(kid.child), "${kid.child.value} beneath ${parent.value}: the identity") },
-                        { assertEquals(if (n == 0L) Rational.ZERO else Rational.of(committed[i], n), had[i], "${kid.child.value}'s had") },
-                        { assertTrue(forgiven[i] >= Rational.ZERO, "${kid.child.value}'s forgiven is ${forgiven[i]}") },
+                        { assertEquals(expected, line.lag(kid), "${kid.value} beneath ${parent.value}: the identity") },
+                        { assertEquals(if (n == Rational.ZERO) Rational.ZERO else committed[i] / n, had[i], "${kid.value}'s had") },
+                        { assertEquals(Rational.of(oracle), committed[i], "${kid.value}'s committed against the ledger's base") },
+                        { assertTrue(forgiven[i] >= Rational.ZERO, "${kid.value}'s forgiven is ${forgiven[i]}") },
                     )
                     rows++
                     if (forgiven[i] > Rational.ZERO) forgivenRows++
                     if (share * f != forgiven[i]) forgivenMoves++
-                    if (checkNotNull(asked.ledger.edge(kid.id)).committedService != committed[i]) relocated++
-                    if (n != 0L && had[i] != share) offShare++
+                    if (checkNotNull(asked.ledger.edge(records[i].id)).committedService != oracle) relocated++
+                    if (n != Rational.ZERO && had[i] != share) offShare++
                 }
-                if (n == 0L) nothingHad++ else assertEquals(Rational.ONE, sum(had), "the hads beneath ${parent.value}")
+                if (n == Rational.ZERO) nothingHad++ else assertEquals(Rational.ONE, sum(had), "the hads beneath ${parent.value}")
             }
         }
         println("SHARELINE-HAD identity rows=$rows forgiven=$forgivenRows forgivenMoves=$forgivenMoves relocated=$relocated offShare=$offShare nothingHad=$nothingHad")
@@ -137,11 +144,11 @@ class ShareLineHadTest {
     }
 
     /**
-     * `had` and `forgiven` are `null` on exactly the rows `lag` is, over every group a ledger names
-     * and the root: so a row reads all three or none.
+     * `had`, `committed` and `forgiven` are `null` on exactly the rows `lag` is, over every group a
+     * ledger names and the root: so a row reads all four or none.
      */
     @Test
-    fun hadAndForgivenAreNullExactlyWhereLagIs() {
+    fun hadCommittedAndForgivenAreNullExactlyWhereLagIs() {
         var reading = 0
         var silent = 0
         forEachLine { asked ->
@@ -149,6 +156,7 @@ class ShareLineHadTest {
                 val lag = asked.line.lag(g)
                 assertAll(
                     { assertEquals(lag == null, asked.line.had(g) == null, "${g.value}'s had") },
+                    { assertEquals(lag == null, asked.line.committed(g) == null, "${g.value}'s committed") },
                     { assertEquals(lag == null, asked.line.forgiven(g) == null, "${g.value}'s forgiven") },
                 )
                 if (lag == null) silent++ else reading++
@@ -216,8 +224,6 @@ class ShareLineHadTest {
     /** [edge]'s base committed service in [ledger], `baseIssued − returned`, read without the line. */
     private fun baseCommitted(ledger: EntitlementLedger, edge: AttachmentId): Long =
         ledger.baseIssuance(edge) - checkNotNull(ledger.edge(edge)).returned
-
-    private fun weightOf(w: Weight): Rational = Rational.of(w.numerator, w.denominator)
 
     private fun sum(values: List<Rational>): Rational = values.fold(Rational.ZERO, Rational::plus)
 

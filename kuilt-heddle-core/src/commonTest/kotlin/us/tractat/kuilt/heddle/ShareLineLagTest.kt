@@ -356,7 +356,7 @@ class ShareLineLagTest {
             { assertEquals(Rational.ZERO, checkNotNull(line.lag(ids.p)) + checkNotNull(line.lag(ids.x)), "the root's row still reads") },
             { assertNull(line.had(ids.a), "a row reads lag, had and forgiven together or not at all") },
             { assertNull(line.forgiven(ids.b)) },
-            { assertEquals(Rational.ONE, checkNotNull(line.had(ids.p)) + checkNotNull(line.had(ids.x)), "the root.s hads still read") },
+            { assertEquals(Rational.ONE, checkNotNull(line.had(ids.p)) + checkNotNull(line.had(ids.x)), "the root's hads still read") },
             { assertEquals(Rational.of(1L, 6L), line.share(ids.a)) },
         )
     }
