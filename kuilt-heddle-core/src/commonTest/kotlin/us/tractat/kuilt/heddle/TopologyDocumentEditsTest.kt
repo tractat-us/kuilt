@@ -74,6 +74,83 @@ class TopologyDocumentEditsTest {
         )
     }
 
+    private val row = TopologyDocument("pool", listOf(Lane("a"), Lane("b"), Lane("c"), Lane("d")))
+
+    private fun TopologyEdit.order(): List<String> = assertIs<TopologyEdit.Edited>(this).document.children.map { it.name }
+
+    @Test
+    fun aReorderCountsTheIndexWithTheChildTakenOut() {
+        // Forward: `a` is out, so of [b, c, d] index 2 is before `d`, not before `c`.
+        val forward = assertIs<TopologyEdit.Edited>(row.move(listOf(0), parent = emptyList(), index = 2))
+        // Backward: `d` is out, and it lands before `b`.
+        val backward = assertIs<TopologyEdit.Edited>(row.move(listOf(3), parent = emptyList(), index = 1))
+        assertAll(
+            { assertEquals(listOf("b", "c", "a", "d"), forward.order()) },
+            { assertEquals(listOf(2), forward.path) },
+            { assertEquals(TopologyEdit.History.KEPT, forward.history) },
+            { assertEquals(listOf("a", "d", "b", "c"), backward.order()) },
+            { assertEquals(listOf(1), backward.path) },
+            { assertEquals(TopologyEdit.History.KEPT, backward.history) },
+        )
+    }
+
+    @Test
+    fun theLastIndexWithTheChildOutIsTheEndTheTwoArgumentMovePutsItAt() {
+        // Three children are left once `b` is out, so index 3 is the end.
+        val atEnd = row.move(listOf(1), parent = emptyList(), index = 3)
+        assertAll(
+            { assertEquals(TopologyEdit.Edited(TopologyDocument("pool", listOf(Lane("a"), Lane("c"), Lane("d"), Lane("b"))), listOf(3), TopologyEdit.History.KEPT), atEnd) },
+            { assertEquals(row.move(listOf(1), parent = emptyList()), atEnd) },
+            // Its own index again changes nothing.
+            { assertEquals(TopologyEdit.Edited(row, listOf(1), TopologyEdit.History.KEPT), row.move(listOf(1), parent = emptyList(), index = 1)) },
+        )
+    }
+
+    @Test
+    fun aMoveToAnIndexUnderAnotherParentLandsThereAndReplacesTheChild() {
+        // `acme` leaves the root, so `hobby` is [0] after the move, and acme lands at [0, 0].
+        val doc = TopologyDocument("pool", listOf(Group("acme", children = listOf(Lane("a"))), Group("hobby", children = listOf(Lane("b"), Lane("c")))))
+        val first = doc.move(listOf(0), parent = listOf(1), index = 0)
+        val middle = assertIs<TopologyEdit.Edited>(doc.move(listOf(0), parent = listOf(1), index = 1))
+        // Another parent loses none of its children, so its end is its child count.
+        val end = doc.move(listOf(0), parent = listOf(1), index = 2)
+        val moved = Group("acme", children = listOf(Lane("a")))
+        assertAll(
+            { assertEquals(TopologyEdit.Edited(TopologyDocument("pool", listOf(Group("hobby", children = listOf(moved, Lane("b"), Lane("c"))))), listOf(0, 0), TopologyEdit.History.REPLACED), first) },
+            { assertEquals(listOf(0, 1), middle.path) },
+            { assertEquals(listOf(Lane("b"), moved, Lane("c")), (middle.document.children.single() as Group).children) },
+            { assertEquals(doc.move(listOf(0), parent = listOf(1)), end) },
+            { assertEquals(listOf(0, 2), assertIs<TopologyEdit.Edited>(end).path) },
+        )
+    }
+
+    @Test
+    fun anIndexPastTheEndOrNegativeIsRefusedAtThePlaceItNames() {
+        val doc = TopologyDocument("pool", listOf(Group("acme", children = listOf(Lane("a"))), Group("hobby", children = listOf(Lane("b"), Lane("c")))))
+        assertAll(
+            // Within one parent the end is one lower than the child count, since the child is out.
+            { assertEquals(TopologyEdit.NoSuchNode(listOf(4)), row.move(listOf(0), parent = emptyList(), index = 4)) },
+            { assertEquals(TopologyEdit.NoSuchNode(listOf(-1)), row.move(listOf(0), parent = emptyList(), index = -1)) },
+            { assertEquals(TopologyEdit.NoSuchNode(listOf(1, 3)), doc.move(listOf(0), parent = listOf(1), index = 3)) },
+            { assertEquals(TopologyEdit.NoSuchNode(listOf(1, -1)), doc.move(listOf(0), parent = listOf(1), index = -1)) },
+        )
+    }
+
+    @Test
+    fun anIndexIsCheckedAfterTheAddressAndBeforeTheName() {
+        // Each edit has a bad index and one other fault; the order says which is reported.
+        assertAll(
+            { assertEquals(TopologyEdit.AtRoot, doc.move(emptyList(), parent = listOf(1), index = 9)) },
+            { assertEquals(TopologyEdit.NoSuchNode(listOf(5)), doc.move(listOf(5), parent = listOf(1), index = 9)) },
+            { assertEquals(TopologyEdit.NoSuchNode(listOf(7)), doc.move(listOf(0), parent = listOf(7), index = 9)) },
+            { assertEquals(TopologyEdit.IntoItself(listOf(0), listOf(0)), doc.move(listOf(0), parent = listOf(0), index = 9)) },
+            { assertEquals(TopologyEdit.NotAGroup(listOf(0, 0)), doc.move(listOf(1), parent = listOf(0, 0), index = 9)) },
+            // `batch` is already a child of `hobby`: a good index reports the name, a bad one the index.
+            { assertEquals(TopologyEdit.DuplicateName(listOf(1, 0), "batch"), doc.move(listOf(0, 1), parent = listOf(1), index = 0)) },
+            { assertEquals(TopologyEdit.NoSuchNode(listOf(1, 9)), doc.move(listOf(0, 1), parent = listOf(1), index = 9)) },
+        )
+    }
+
     @Test
     fun aRenameIsADeletePlusAnAdd() {
         val renamed = assertIs<TopologyEdit.Edited>(doc.rename(listOf(0), "acme-corp"))
