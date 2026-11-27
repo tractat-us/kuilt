@@ -53,7 +53,10 @@ links returns `ReturnFixture.Unsupported` with the issue that tracks the gap.
 Inside the harness, two hooks reach what no honest device sends:
 `PassPlanting` puts a forged pass into a device's Proof, and `ReusedIdLaunch`
 starts a process under an id a newer one took over. A harness over a real
-fabric declares either one `Unsupported` rather than build a forging path.
+fabric declares either one `Unsupported` rather than build a forging path. A
+third, `RenewalLoss`, makes a device's link lose the pass renewals its host
+sends while carrying everything else, so the rows reach a device holding an
+older pass than the one its host signed last.
 
 ## The cluster harness
 
