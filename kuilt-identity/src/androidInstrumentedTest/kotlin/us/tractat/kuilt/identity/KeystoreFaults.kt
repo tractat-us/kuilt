@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicReference
  * Android 12 (API 31) and later keep keys in keystore2's SQLite database, `persistent.sqlite`, one
  * `keyentry` row per alias and the key's encrypted blob in `blobentry` (subcomponent 0); the daemon is
  * the `keystore2` service. Android 11 and earlier keep one file per key under `user_0`, named
- * `<uid>_USRPKEY_<alias>`, and the daemon is `keystore`. Every rig needs root, and assumes it.
+ * `<uid>_USRPKEY_<alias>`, and the daemon is `keystore`. Every rig except [plantKeyInvalidatedByRemovingTheScreenLock] needs root, and assumes it.
  */
 internal object KeystoreFaults {
     private val keystore2 get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S

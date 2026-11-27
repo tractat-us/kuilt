@@ -166,7 +166,7 @@ kotlin {
         // (#3226): the androidUnitTest suites above run over FakeKeystore, which reads AOSP but measures
         // nothing. Its own tree, not commonTest's, so a device run is these classes alone. Run it with
         // `:kuilt-identity:connectedDebugAndroidTest`; nothing in `build` or `check` does, since a PR
-        // runner has no device. `build` still compiles it, through lint's androidTest analysis.
+        // runner has no device. `check` compiles it, through the wiring further down.
         getByName("androidInstrumentedTest").dependencies {
             implementation(project(":kuilt-conformance"))
             implementation(project(":kuilt-test"))

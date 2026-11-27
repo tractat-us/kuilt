@@ -131,7 +131,11 @@ class AndroidKeystoreDeviceKeyStoreDeviceConformanceTest : DeviceKeyStoreConform
     }
 
     private companion object {
-        /** A fixed clock: no rig here is of unknown cause on the versions it runs on. */
+        /**
+         * A fixed clock, so no rig ever reaches the hour. On API 33 and later the unreadable-key rig
+         * (a stopped Keystore) throws a bare NPE, which `judge` calls Unknown. "Refused, not replaced"
+         * here therefore means refused within the hour.
+         */
         const val NOW = 1_700_000_000_000L
 
         val PROBE_WRITE = StoreKey("probe-write")
