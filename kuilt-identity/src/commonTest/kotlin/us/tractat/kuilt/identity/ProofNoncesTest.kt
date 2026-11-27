@@ -9,46 +9,52 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
+import kotlin.time.Clock
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
+import kotlin.time.TestTimeSource
 
 /**
- * Nonces issued with no state and spent once. Every instance draws from a seeded [Random], so the
- * secret and each random part are pinned, and every call is given its `now`, so no clock is read.
- * Each refusal arm carries a control that is accepted, so it shows the check can fail rather than
- * only that it passed.
+ * Nonces issued with no state and spent once. Every instance draws from a seeded [Random], so each
+ * secret and each random part is pinned, and runs on a [TestTimeSource] and a wall clock the test
+ * moves, so no real clock is read. [Rig.advance] moves the two together; [Rig.stepWall] and
+ * [Rig.sleep] move one alone, which is what makes them disagree. Each refusal arm carries a control
+ * that is accepted, so it shows the check can fail rather than only that it passed.
  */
 class ProofNoncesTest {
     @Test
     fun aNonceIsTheDocumentedBytes() = runTest {
-        val nonces = nonces(seed = 7)
-        val nonce = nonces.issue(T)
+        val rig = rig(seed = 7)
+        rig.advance(0x1234.milliseconds)
+        val nonce = rig.nonces.issue()
         // The secret and the random part, drawn again from the same seed in the same order: an
         // independent construction of the bytes, through the provider's HMAC and not ProofNonces'.
         val replay = Random(7)
         val secret = replay.nextBytes(32)
         val randomPart = replay.nextBytes(16)
-        val body = byteArrayOf(0x01) + "0000018bcfe56800".hexToByteArray() + randomPart
+        val body = byteArrayOf(0x01) + "0000000000001234".hexToByteArray() + randomPart
         val mac = platformProvider().get(HMAC).keyDecoder(SHA256).decodeFromByteArray(HMAC.Key.Format.RAW, secret)
             .signatureGenerator().generateSignature(body).copyOf(16)
         assertAll(
             { assertEquals(ProofNonces.NONCE_SIZE, nonce.size, "41 bytes") },
-            { assertEquals(T, 0x18bcfe56800L, "precondition: T is the issuedAt written above") },
-            { assertEquals((body + mac).toHexString(), nonce.toHexString(), "format ‖ issuedAt ‖ random ‖ truncated MAC") },
+            { assertEquals((body + mac).toHexString(), nonce.toHexString(), "format ‖ ms on the time source ‖ random ‖ truncated MAC") },
         )
     }
 
     @Test
     fun spentOnceThenReplayed() = runTest {
-        val nonces = nonces()
-        val nonce = nonces.issue(T)
-        val other = nonces.issue(T)
-        val first = nonces.spend(fresh(nonces, nonce, T), T)
+        val rig = rig()
+        val nonce = rig.nonces.issue()
+        val other = rig.nonces.issue()
+        val first = rig.nonces.spend(rig.fresh(nonce))
+        rig.advance(1.milliseconds)
         // A check reads no spent set, so the nonce is still Fresh there: the spend is where the replay shows.
-        val again = nonces.check(nonce, T + 1)
-        val second = nonces.spend(assertIs<NonceCheck.Fresh>(again), T + 1)
-        val otherSpend = nonces.spend(fresh(nonces, other, T + 2), T + 2)
+        val second = rig.nonces.spend(rig.fresh(nonce))
+        val otherSpend = rig.nonces.spend(rig.fresh(other))
         assertAll(
             { assertEquals(NonceSpend.Spent, first, "the first spend") },
             { assertEquals(NonceSpend.Replayed, second, "the second spend of the same nonce") },
@@ -57,41 +63,43 @@ class ProofNoncesTest {
     }
 
     @Test
-    fun expiredAtIssuedAtPlusTtlAndNotOneMillisecondBefore() = runTest {
-        // Two instances, since an instance's time never moves back: one asked just before, one at.
-        val before = nonces()
-        val at = nonces()
-        val beforeNonce = before.issue(T)
-        val atNonce = at.issue(T)
-        val lastMoment = T + TTL.inWholeMilliseconds - 1
-        val checkedBefore = before.check(beforeNonce, lastMoment)
-        val spentBefore = before.spend(assertIs<NonceCheck.Fresh>(checkedBefore), lastMoment)
-        val checkedAt = at.check(atNonce, lastMoment + 1)
+    fun expiryFallsAtExactlyTheTtlOnTheTimeSource() = runTest {
+        // The wall clock never moves, so the time source alone decides. At the end the two
+        // disagree by exactly the ttl, which is still agreement: had a new secret been drawn, the
+        // second nonce would be Unknown rather than Expired.
+        val rig = rig()
+        val spentJustBefore = rig.nonces.issue()
+        val checkedAt = rig.nonces.issue()
+        rig.time += TTL - 1.milliseconds
+        val lastMoment = rig.nonces.spend(rig.fresh(spentJustBefore))
+        rig.time += 1.milliseconds
+        val atTtl = rig.nonces.check(checkedAt)
         assertAll(
-            { assertEquals(NonceSpend.Spent, spentBefore, "one millisecond before issuedAt + ttl") },
-            { assertEquals(NonceCheck.Expired, checkedAt, "at issuedAt + ttl") },
+            { assertEquals(NonceSpend.Spent, lastMoment, "one millisecond before the ttl") },
+            { assertEquals(NonceCheck.Expired, atTtl, "at the ttl") },
         )
     }
 
     @Test
     fun aNonceThatExpiresBetweenItsCheckAndItsSpendIsNotSpent() = runTest {
-        val nonces = nonces()
-        val nonce = nonces.issue(T)
-        val lastMoment = T + TTL.inWholeMilliseconds - 1
-        val checked = assertIs<NonceCheck.Fresh>(nonces.check(nonce, lastMoment), "the rig: fresh at its check")
-        assertEquals(NonceSpend.Expired, nonces.spend(checked, lastMoment + 1), "spent at issuedAt + ttl")
+        val rig = rig()
+        val nonce = rig.nonces.issue()
+        rig.advance(TTL - 1.milliseconds)
+        val checked = rig.fresh(nonce)
+        rig.advance(1.milliseconds)
+        assertEquals(NonceSpend.Expired, rig.nonces.spend(checked), "spent at the ttl")
     }
 
     @Test
     fun anotherInstancesNonceIsUnknown() = runTest {
-        val mine = nonces(seed = 1)
-        val theirs = nonces(seed = 2)
-        val nonce = theirs.issue(T)
-        val own = mine.issue(T)
+        val mine = rig(seed = 1)
+        val theirs = rig(seed = 2)
+        val nonce = theirs.nonces.issue()
+        val own = mine.nonces.issue()
         // Their instance accepts it, so the refusal below is about whose secret it carries.
-        val theirsAccepts = theirs.check(nonce, T)
-        val mineRefuses = mine.check(nonce, T)
-        val mineAcceptsOwn = mine.check(own, T)
+        val theirsAccepts = theirs.nonces.check(nonce)
+        val mineRefuses = mine.nonces.check(nonce)
+        val mineAcceptsOwn = mine.nonces.check(own)
         assertAll(
             { assertIs<NonceCheck.Fresh>(theirsAccepts, "precondition: the issuing instance accepts it") },
             { assertEquals(NonceCheck.Unknown, mineRefuses, "another instance's nonce") },
@@ -101,8 +109,8 @@ class ProofNoncesTest {
 
     @Test
     fun aDamagedNonceIsUnknownWithoutThrowing() = runTest {
-        val nonces = nonces()
-        val nonce = nonces.issue(T)
+        val rig = rig()
+        val nonce = rig.nonces.issue()
         val rows = listOf(
             "a flipped format byte" to nonce.withLowBitFlipped(0),
             "a flipped issuedAt bit, which would move its window" to nonce.withLowBitFlipped(8),
@@ -111,8 +119,8 @@ class ProofNoncesTest {
             "one byte short" to nonce.copyOf(40),
             "one byte long" to nonce.copyOf(42),
             "no bytes" to byteArrayOf(),
-        ).map { (what, bytes) -> what to nonces.check(bytes, T) }
-        val control = nonces.check(nonce, T)
+        ).map { (what, bytes) -> what to rig.nonces.check(bytes) }
+        val control = rig.nonces.check(nonce)
         assertAll(
             *rows.map { (what, verdict) -> { assertEquals(NonceCheck.Unknown, verdict, what) } }.toTypedArray(),
             { assertIs<NonceCheck.Fresh>(control, "the control: the nonce as issued") },
@@ -121,22 +129,24 @@ class ProofNoncesTest {
 
     @Test
     fun aFullSetAnswersOverloadedThenFreesSpaceAsItsEntriesExpire() = runTest {
-        val nonces = nonces(capacity = 3)
-        val step = 400L
-        // Three spent, issued at T, T + step and T + 2·step, so each expires at its own instant.
-        val spent = (0..2).map { i -> nonces.issue(T + i * step) }
-        val fills = spent.mapIndexed { i, n -> nonces.spend(fresh(nonces, n, T + i * step), T + i * step) }
-        val now = T + 2 * step
-        val overflow = nonces.issue(now)
-        val overloaded = nonces.spend(fresh(nonces, overflow, now), now)
+        val rig = rig(capacity = 3)
+        val step = 400.milliseconds
+        // Three spent, issued step apart, so each expires at its own instant.
+        val spent = (0..2).map { i ->
+            if (i > 0) rig.advance(step)
+            rig.nonces.issue()
+        }
+        val fills = spent.map { rig.nonces.spend(rig.fresh(it)) }
+        val overflow = rig.nonces.issue()
+        val overloaded = rig.nonces.spend(rig.fresh(overflow))
         // A replay is still a replay when the set is full: the spent record answers first.
-        val replayWhileFull = nonces.spend(fresh(nonces, spent[0], now), now)
-        val stillOverloaded = nonces.spend(fresh(nonces, overflow, now + 1), now + 1)
-        // The first entry expires at T + ttl, and its slot is free from then on: one slot, not three.
-        val firstGone = T + TTL.inWholeMilliseconds
-        val afterOne = nonces.spend(fresh(nonces, overflow, firstGone), firstGone)
-        val next = nonces.issue(firstGone)
-        val fullAgain = nonces.spend(fresh(nonces, next, firstGone), firstGone)
+        val replayWhileFull = rig.nonces.spend(rig.fresh(spent[0]))
+        rig.advance(1.milliseconds)
+        val stillOverloaded = rig.nonces.spend(rig.fresh(overflow))
+        // The first entry expires at the ttl, and its slot is free from then on: one slot, not three.
+        rig.advance(TTL - 2 * step - 1.milliseconds)
+        val afterOne = rig.nonces.spend(rig.fresh(overflow))
+        val fullAgain = rig.nonces.spend(rig.fresh(rig.nonces.issue()))
         assertAll(
             { assertEquals(List(3) { NonceSpend.Spent }, fills, "precondition: the set filled") },
             { assertEquals(NonceSpend.Overloaded, overloaded, "a fourth live nonce") },
@@ -148,101 +158,188 @@ class ProofNoncesTest {
     }
 
     @Test
-    fun aClockSetBackNeverReopensASpentNonce() = runTest {
-        val nonces = nonces()
-        val nonce = nonces.issue(T)
-        val first = nonces.spend(fresh(nonces, nonce, T + 500), T + 500)
-        // Back before the spend, and back before the issue: the instance still answers as of T + 500 ms.
-        val backToIssue = nonces.check(nonce, T)
-        val spendBack = nonces.spend(assertIs<NonceCheck.Fresh>(backToIssue), T)
-        val longAgo = nonces.check(nonce, 0)
-        val spendLongAgo = nonces.spend(assertIs<NonceCheck.Fresh>(longAgo), 0)
+    fun aWallStepBackLongerThanTheTtlDrawsANewSecretAndAShorterOneDoesNot() = runTest {
+        // Two instances alike in every byte, a set of one so a full set shows. One sees the wall
+        // clock set back by a millisecond more than the ttl, the other by exactly the ttl.
+        val longer = rig(capacity = 1)
+        val shorter = rig(capacity = 1)
+        val (longNonce, shortNonce) = longer.nonces.issue() to shorter.nonces.issue()
+        val filled = listOf(longer.nonces.spend(longer.fresh(longNonce)), shorter.nonces.spend(shorter.fresh(shortNonce)))
+        longer.stepWall(-(TTL + 1.milliseconds))
+        shorter.stepWall(-TTL)
+        // The time source has not moved, so the old nonce is still inside its ttl. Unknown, not
+        // Fresh or Expired, is the outcome only a new secret gives.
+        val longOld = longer.nonces.check(longNonce)
+        val longNext = longer.nonces.spend(longer.fresh(longer.nonces.issue()))
+        val shortOld = shorter.nonces.check(shortNonce)
+        val shortReplay = shorter.nonces.spend(assertIs<NonceCheck.Fresh>(shortOld, "the control: the old nonce is still good"))
+        val shortNext = shorter.nonces.spend(shorter.fresh(shorter.nonces.issue()))
         assertAll(
-            { assertEquals(NonceSpend.Spent, first, "precondition: spent once") },
-            { assertEquals(NonceSpend.Replayed, spendBack, "the clock set back to the issue") },
-            { assertEquals(NonceSpend.Replayed, spendLongAgo, "the clock set back to the epoch") },
+            { assertEquals(List(2) { NonceSpend.Spent }, filled, "precondition: each set is full of a live nonce") },
+            { assertEquals(NonceCheck.Unknown, longOld, "longer than the ttl: the old nonce is unknown") },
+            { assertEquals(NonceSpend.Spent, longNext, "and the spent set started empty") },
+            { assertEquals(NonceSpend.Replayed, shortReplay, "exactly the ttl: the old secret and its spent set remain") },
+            { assertEquals(NonceSpend.Overloaded, shortNext, "so the set is still full") },
         )
     }
 
     @Test
-    fun aClockSetForwardThenBackNeverReopensASpentNonce() = runTest {
-        // Capacity one, so the next spend must sweep the first nonce's entry to succeed: the rig
-        // shows the record really is gone before the clock comes back.
-        val nonces = nonces(capacity = 1)
-        val nonce = nonces.issue(T)
-        val first = nonces.spend(fresh(nonces, nonce, T), T)
-        val far = T + 10 * TTL.inWholeMilliseconds
-        val forward = nonces.check(nonce, far)
-        val later = nonces.issue(far)
-        val sweptToFit = nonces.spend(fresh(nonces, later, far), far)
-        // Back inside the first nonce's window by the caller's clock. Without the instance's own
-        // time, the check would answer Fresh and the spend Spent: the record was swept.
-        val back = nonces.check(nonce, T + 1)
+    fun aSleepTheTimeSourceDidNotCountDrawsANewSecret() = runTest {
+        // Some platforms' monotonic time stops while the machine sleeps. Without the wall clock a
+        // nonce issued before an hour's sleep would still be Fresh on waking.
+        val rig = rig()
+        val beforeSleep = rig.nonces.issue()
+        rig.sleep(1.hours)
+        val onWaking = rig.nonces.check(beforeSleep)
+        val issuedAwake = rig.nonces.check(rig.nonces.issue())
         assertAll(
-            { assertEquals(NonceSpend.Spent, first, "precondition: spent once") },
-            { assertEquals(NonceCheck.Expired, forward, "the clock set forward past its window") },
-            { assertEquals(NonceSpend.Spent, sweptToFit, "the rig: the first entry was swept to make room") },
-            { assertEquals(NonceCheck.Expired, back, "the clock set back inside its window again") },
+            { assertEquals(NonceCheck.Unknown, onWaking, "a nonce from before the sleep") },
+            { assertIs<NonceCheck.Fresh>(issuedAwake, "the control: one issued after it") },
         )
     }
 
     @Test
-    fun aNonceIssuedWhileTheClockIsBehindCarriesTheInstancesTime() = runTest {
-        val nonces = nonces()
-        nonces.issue(T + 30_000)
-        val behind = nonces.issue(T)
-        val issuedAt = StatementCodec.timeOrNull(behind.copyOfRange(1, 9))
-        // Good for its whole ttl from the instance's time, not from the clock that fell behind.
-        val lastMoment = T + 30_000 + TTL.inWholeMilliseconds - 1
-        val atLastMoment = nonces.check(behind, lastMoment)
+    fun aWallClockSetForwardThenBackNeverReopensASpentNonce() = runTest {
+        val rig = rig()
+        val nonce = rig.nonces.issue()
+        val first = rig.nonces.spend(rig.fresh(nonce))
+        rig.stepWall(10 * TTL)
+        val forward = rig.nonces.check(nonce)
+        rig.stepWall(-10 * TTL)
+        val back = rig.nonces.check(nonce)
         assertAll(
-            { assertEquals(T + 30_000, issuedAt, "stamped with the latest time seen") },
-            { assertIs<NonceCheck.Fresh>(atLastMoment, "good to the end of its window") },
+            { assertEquals(NonceSpend.Spent, first, "precondition: spent once") },
+            { assertEquals(NonceCheck.Unknown, forward, "the wall clock set forward past its ttl") },
+            { assertEquals(NonceCheck.Unknown, back, "and back to where it was: still not good again") },
+        )
+    }
+
+    @Test
+    fun aCheckThatStraddlesANewSecretCannotBeSpent() = runTest {
+        // Spend sees the clocks disagree itself, before anything has drawn the new secret.
+        val unseen = rig()
+        val unseenNonce = unseen.nonces.issue()
+        val unseenChecked = unseen.fresh(unseenNonce)
+        unseen.stepWall(-2 * TTL)
+        val unseenSpend = unseen.nonces.spend(unseenChecked)
+        val unseenAfter = unseen.nonces.check(unseenNonce)
+        // The new secret is already drawn, so the clocks agree again by the time of the spend:
+        // only the secret the check was made under can refuse it.
+        val drawn = rig()
+        val drawnNonce = drawn.nonces.issue()
+        val drawnChecked = drawn.fresh(drawnNonce)
+        drawn.stepWall(-2 * TTL)
+        val issuedUnderNew = drawn.nonces.issue()
+        val drawnSpend = drawn.nonces.spend(drawnChecked)
+        val newSpend = drawn.nonces.spend(drawn.fresh(issuedUnderNew))
+        assertAll(
+            { assertEquals(NonceSpend.Expired, unseenSpend, "checked before the step, spent after it") },
+            { assertEquals(NonceCheck.Unknown, unseenAfter, "the rig: the next check drew a new secret") },
+            { assertEquals(NonceSpend.Expired, drawnSpend, "checked under the old secret, spent under the new one") },
+            { assertEquals(NonceSpend.Spent, newSpend, "the control: a nonce checked under the new secret") },
+        )
+    }
+
+    @Test
+    fun aSpentNonceIsNeverReopenedHoweverEitherClockMoves() = runTest {
+        // A seeded walk: the clocks move together, the time source alone (a sleep it did count
+        // while the wall clock did not), or the wall clock alone, by steps either side of the ttl.
+        // Checks are spent at once or held for a later step, so some straddle a new secret.
+        val tally = mutableMapOf<String, Int>()
+        val violations = mutableListOf<String>()
+        for (seed in 0 until SEEDS) {
+            val rig = rig(seed = seed, capacity = 2)
+            val walk = Random(1_000 + seed)
+            val issued = mutableListOf<ByteArray>()
+            val held = mutableListOf<Pair<ByteArray, NonceCheck.Fresh>>()
+            val spentOnce = mutableSetOf<String>()
+            fun spend(nonce: ByteArray, fresh: NonceCheck.Fresh, step: Int) {
+                val verdict = rig.nonces.spend(fresh)
+                tally[verdict.toString()] = (tally[verdict.toString()] ?: 0) + 1
+                if (verdict == NonceSpend.Spent && !spentOnce.add(nonce.toHexString())) violations += "seed $seed step $step"
+            }
+            repeat(STEPS) { step ->
+                when (walk.nextInt(6)) {
+                    0 -> rig.advance(walk.nextLong(0, 600).milliseconds)
+                    1 -> rig.time += walk.nextLong(0, 600).milliseconds
+                    2 -> rig.stepWall(walk.nextLong(-3_000, 3_000).milliseconds)
+                    3 -> issued += rig.nonces.issue()
+                    4 -> if (issued.isNotEmpty()) {
+                        val nonce = issued[walk.nextInt(issued.size)]
+                        when (val checked = rig.nonces.check(nonce)) {
+                            is NonceCheck.Fresh -> if (walk.nextBoolean()) spend(nonce, checked, step) else held += nonce to checked
+                            else -> tally["check $checked"] = (tally["check $checked"] ?: 0) + 1
+                        }
+                    }
+                    else -> if (held.isNotEmpty()) held.removeAt(walk.nextInt(held.size)).let { (nonce, fresh) -> spend(nonce, fresh, step) }
+                }
+            }
+        }
+        val reached = listOf("Spent", "Replayed", "Expired", "Overloaded", "check Unknown", "check Expired")
+        assertAll(
+            { assertEquals(emptyList(), violations, "a nonce spent a second time") },
+            *reached.map { arm -> { assertTrue((tally[arm] ?: 0) > 0, "the walk reached $arm: $tally") } }.toTypedArray(),
         )
     }
 
     @Test
     fun aCheckFromAnotherInstanceCannotBeSpentHere() = runTest {
-        val mine = nonces(seed = 1)
-        val theirs = nonces(seed = 2)
-        val checked = fresh(theirs, theirs.issue(T), T)
-        assertFailsWith<IllegalArgumentException>("their check, spent here") { mine.spend(checked, T) }
-        assertEquals(NonceSpend.Spent, theirs.spend(checked, T), "the control: spent where it was checked")
-    }
-
-    @Test
-    fun aTimeOutsideTheRangeIsRefused() = runTest {
-        val nonces = nonces()
-        val nonce = nonces.issue(T)
-        assertFailsWith<IllegalArgumentException>("a negative now at issue") { nonces.issue(-1) }
-        assertFailsWith<IllegalArgumentException>("a now past MAX_NOW at check") { nonces.check(nonce, ProofNonces.MAX_NOW + 1) }
-        assertFailsWith<IllegalArgumentException>("Long.MAX_VALUE at spend") { nonces.spend(fresh(nonces, nonce, T), Long.MAX_VALUE) }
-        assertEquals(NonceSpend.Spent, nonces.spend(fresh(nonces, nonce, T), T), "the control: a time in range")
+        val mine = rig(seed = 1)
+        val theirs = rig(seed = 2)
+        val checked = theirs.fresh(theirs.nonces.issue())
+        assertFailsWith<IllegalArgumentException>("their check, spent here") { mine.nonces.spend(checked) }
+        assertEquals(NonceSpend.Spent, theirs.nonces.spend(checked), "the control: spent where it was checked")
     }
 
     @Test
     fun createRefusesATtlOrCapacityOutOfRange() = runTest {
-        assertFailsWith<IllegalArgumentException>("a zero ttl") { nonces(ttl = Duration.ZERO) }
-        assertFailsWith<IllegalArgumentException>("a ttl past MAX_TTL") { nonces(ttl = ProofNonces.MAX_TTL + 1.milliseconds) }
-        assertFailsWith<IllegalArgumentException>("a zero capacity") { nonces(capacity = 0) }
-        val smallest = nonces(ttl = 1.milliseconds, capacity = 1)
+        assertFailsWith<IllegalArgumentException>("a zero ttl") { rig(ttl = Duration.ZERO) }
+        assertFailsWith<IllegalArgumentException>("a ttl past MAX_TTL") { rig(ttl = ProofNonces.MAX_TTL + 1.milliseconds) }
+        assertFailsWith<IllegalArgumentException>("a zero capacity") { rig(capacity = 0) }
+        val smallest = rig(ttl = 1.milliseconds, capacity = 1).nonces
         val longest = ProofNonces.create(ttl = ProofNonces.MAX_TTL)
         assertAll(
             { assertEquals(1.milliseconds, smallest.ttl, "the control: the smallest ttl") },
-            { assertEquals(ProofNonces.MAX_TTL, longest.ttl, "the control: the longest ttl, on the platform CSPRNG") },
+            { assertEquals(ProofNonces.MAX_TTL, longest.ttl, "the control: the longest ttl, on the platform CSPRNG and clocks") },
             { assertEquals(ProofNonces.DEFAULT_CAPACITY, longest.capacity, "the default capacity") },
         )
     }
 
-    private suspend fun nonces(seed: Int = 0, ttl: Duration = TTL, capacity: Int = ProofNonces.DEFAULT_CAPACITY): ProofNonces =
-        ProofNonces.create(Random(seed), ttl, capacity)
+    /** An instance on a test time source and a wall clock this test moves. */
+    private class Rig(val time: TestTimeSource, private val wall: WallClock, val nonces: ProofNonces) {
+        /** Both clocks forward by [by]: time passing. */
+        fun advance(by: Duration) {
+            time += by
+            wall.at += by
+        }
 
-    private suspend fun fresh(nonces: ProofNonces, nonce: ByteArray, now: Long): NonceCheck.Fresh =
-        assertIs<NonceCheck.Fresh>(nonces.check(nonce, now), "the rig: the nonce checks fresh")
+        /** The wall clock alone, by [by], either way: a clock set by hand or by NTP. */
+        fun stepWall(by: Duration) {
+            wall.at += by
+        }
+
+        /** The wall clock alone, forward by [by]: a sleep the time source did not count. */
+        fun sleep(by: Duration) = stepWall(by)
+
+        suspend fun fresh(nonce: ByteArray): NonceCheck.Fresh =
+            assertIs<NonceCheck.Fresh>(nonces.check(nonce), "the rig: the nonce checks fresh")
+    }
+
+    private class WallClock(var at: Instant) : Clock {
+        override fun now(): Instant = at
+    }
+
+    private suspend fun rig(seed: Int = 0, ttl: Duration = TTL, capacity: Int = ProofNonces.DEFAULT_CAPACITY): Rig {
+        val time = TestTimeSource()
+        val wall = WallClock(Instant.fromEpochMilliseconds(T))
+        return Rig(time, wall, ProofNonces.create(Random(seed), ttl, capacity, time, wall))
+    }
 
     private companion object {
-        /** 2023-11-14T22:13:20Z: a real epoch-ms time, well inside the accepted range. */
+        /** 2023-11-14T22:13:20Z: where every wall clock starts. */
         const val T = 1_700_000_000_000L
         val TTL = 1.seconds
+        const val SEEDS = 8
+        const val STEPS = 400
     }
 }

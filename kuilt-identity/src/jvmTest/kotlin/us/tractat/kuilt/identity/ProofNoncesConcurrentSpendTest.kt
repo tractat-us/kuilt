@@ -11,6 +11,9 @@ import java.util.concurrent.Executors
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.time.Clock
+import kotlin.time.Instant
+import kotlin.time.TestTimeSource
 
 /**
  * Two spends of one good nonce at once, on a two-thread dispatcher: exactly one wins. `spend` never
@@ -25,16 +28,16 @@ class ProofNoncesConcurrentSpendTest {
         try {
             val dispatcher = pool.asCoroutineDispatcher()
             val rounds = runBlocking {
-                val nonces = ProofNonces.create(Random(0), ProofNonces.DEFAULT_TTL, ProofNonces.DEFAULT_CAPACITY)
+                // A time source and a wall clock that never move: every round is inside one ttl, under one secret.
+                val nonces = ProofNonces.create(Random(0), ProofNonces.DEFAULT_TTL, ProofNonces.DEFAULT_CAPACITY, TestTimeSource(), WALL)
                 (1..ROUNDS).map { round ->
-                    val now = T + round
-                    val fresh = nonces.check(nonces.issue(now), now) as NonceCheck.Fresh
+                    val fresh = nonces.check(nonces.issue()) as NonceCheck.Fresh
                     val barrier = CyclicBarrier(THREADS)
                     val outcomes = withContext(dispatcher) {
                         List(THREADS) {
                             async {
                                 barrier.await()
-                                nonces.spend(fresh, now)
+                                nonces.spend(fresh)
                             }
                         }.awaitAll()
                     }
@@ -55,6 +58,8 @@ class ProofNoncesConcurrentSpendTest {
     private companion object {
         const val THREADS = 2
         const val ROUNDS = 2_000
-        const val T = 1_700_000_000_000L
+        val WALL = object : Clock {
+            override fun now(): Instant = Instant.fromEpochMilliseconds(1_700_000_000_000L)
+        }
     }
 }
