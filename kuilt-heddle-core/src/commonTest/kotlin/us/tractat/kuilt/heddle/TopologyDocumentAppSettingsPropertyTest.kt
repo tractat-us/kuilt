@@ -35,7 +35,7 @@ import kotlin.test.assertEquals
  */
 class TopologyDocumentAppSettingsPropertyTest {
 
-    private val seeds = 1500
+    private val seeds = 3000
     private val names = listOf("a", "b", "c", "d")
     private val weights = listOf("1", "2", "3/2")
     private val ceilings = listOf(null, 0L, 2L)
@@ -112,7 +112,8 @@ class TopologyDocumentAppSettingsPropertyTest {
             tagsMoved(document, edited, lost = emptySet(), gained = emptySet())
                 ?: edited.document.at(edited.path)?.tags().orEmpty().let { if (it == subtree) null else "landed with $it, had $subtree" }
         }
-        return when (r.nextInt(9)) {
+        // Moves are drawn twice as often as the rest: most land on a name the target already has.
+        return when (r.nextInt(11)) {
             0 -> keeps("weight", document.setWeight(path, weights.draw(r)))
             1 -> keeps("ceiling", document.setMaxConcurrent(path, ceilings.draw(r)))
             2 -> {
@@ -124,14 +125,14 @@ class TopologyDocumentAppSettingsPropertyTest {
             }
             3 -> Drawn("remove", document.remove(path), carried) { edited -> tagsMoved(document, edited, lost = subtree.toSet(), gained = emptySet()) }
             4 -> keeps("rename", document.rename(path, names.draw(r)))
-            5 -> keeps("move", document.move(path, drawPath(document, r)))
-            6 -> {
+            5, 6 -> keeps("move", document.move(path, drawPath(document, r)))
+            7, 8 -> {
                 // Half the time into the parent the child already has, so reorders are reached.
                 val target = if (path.isNotEmpty() && r.nextBoolean()) path.dropLast(1) else drawPath(document, r)
                 val size = if (target.isEmpty()) document.children.size else (document.at(target) as? Group)?.children?.size ?: 0
                 keeps("move at", document.move(path, target, r.nextInt(-1, size + 1)))
             }
-            7 -> {
+            9 -> {
                 val template = randomTemplate(r, tags)
                 Drawn("template", document.setTemplate(path, template), carried) { edited ->
                     tagsMoved(document, edited, lost = node?.templateTags().orEmpty().toSet(), gained = template.chainTags().toSet())
@@ -213,7 +214,8 @@ class TopologyDocumentAppSettingsPropertyTest {
     /**
      * What is wrong with `before.appSettingsChangesTo(after)` against the flattened diff, or `null`.
      * Compared as sorted lists, so the order is checked on its own: within one node and depth the
-     * keys come sorted.
+     * keys come sorted. Only two changes addressed in the same document are compared, since a
+     * gone node's [AppSettingsChange.Removed] may share a path with a node of the document after.
      */
     private fun checkReport(before: TopologyDocument, after: TopologyDocument, count: (String) -> Unit): String? {
         val was = before.flatten()
@@ -241,10 +243,12 @@ class TopologyDocumentAppSettingsPropertyTest {
         if (changes.isEmpty()) count("report empty")
         if (changes.isNotEmpty() && before.root != after.root) count("report across a renamed root")
         if (changes.isNotEmpty() && (was.duplicated || now.duplicated)) count("report between duplicate siblings")
+        val gone = changes.filter { it is AppSettingsChange.Removed && "${it.path} ${it.names}" !in now.addresses.values }.toSet()
         val actual = changes.map { it.rendered() }.sorted()
         if (actual != expected) return "listed $actual, expected $expected"
         val unsorted = changes.zipWithNext().firstOrNull { (a, b) ->
-            a.path == b.path && a.names == b.names && a.templateDepth == b.templateDepth && a.key >= b.key
+            val sameDocument = (a in gone) == (b in gone)
+            sameDocument && a.path == b.path && a.names == b.names && a.templateDepth == b.templateDepth && a.key >= b.key
         }
         return unsorted?.let { "keys out of order: $it" }
     }
