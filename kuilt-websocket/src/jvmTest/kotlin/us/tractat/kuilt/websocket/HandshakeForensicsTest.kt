@@ -117,8 +117,9 @@ class HandshakeForensicsTest {
      * The shape #3754 and #3603 recorded, reproduced on purpose. On macOS a socket bound to
      * 127.0.0.1:P is accepted while the rig's server holds the wildcard on P, and it takes every
      * loopback dial to P. A `localhost` dial then gets a 404 from an application that never had
-     * the route, and the rig's server sees nothing. Linux refuses the second bind, so this arm runs
-     * on macOS only, where it is also the receipt that the steal is possible at all.
+     * the route, and the rig's server sees nothing. The arm runs on macOS only, because it rests on a
+     * BSD binding rule and Linux's rule differs. There it is also the receipt that the steal happens:
+     * if a macOS release stops permitting the second bind, this reds on the bind, not on the report.
      */
     @Test
     fun aLoopbackListenerOnTheRigPortIsNamedAsTheThief(): Unit = runBlocking {

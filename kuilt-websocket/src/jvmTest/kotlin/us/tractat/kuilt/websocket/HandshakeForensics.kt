@@ -15,9 +15,13 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.TransportCapability
+import java.io.IOException
 import java.time.Instant
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.time.TimeSource
 
 /**
@@ -169,24 +173,48 @@ private fun ApplicationCall.describe(): String =
     "${request.httpMethod.value} ${request.uri} from=${request.origin.remoteAddress}:${request.origin.remotePort}"
 
 /**
- * The TCP listeners on [port], from `lsof`, which both macOS and the Linux runners carry. Bounded,
- * and never throws: a missing tool is reported rather than masking the dial failure it explains.
+ * The TCP listeners on [port], from `lsof`, which both macOS and the Linux runners carry, and the
+ * command line of every listening process that is not this one. A Gradle test worker's command line
+ * names the checkout it runs from, which is what says whose server took the port. Bounded, and never
+ * throws: a missing tool is reported rather than masking the dial failure it explains.
  */
-internal fun listenersOn(port: Int): String =
+internal fun listenersOn(port: Int): String {
+    val self = ProcessHandle.current().pid()
+    val lsof = runBounded("lsof", "-w", "-nP", "-iTCP:$port", "-sTCP:LISTEN")
+    val owners =
+        lsof.lines().drop(1)
+            .mapNotNull { it.trim().split(WHITESPACE).getOrNull(1)?.toLongOrNull() }
+            .distinct()
+            .filter { it != self }
+            .map { pid -> "  pid=$pid: " + runBounded("ps", "-o", "command=", "-p", "$pid").take(MAX_COMMAND_CHARS) }
+    return buildString {
+        append("listeners on :$port:\n").append(lsof.ifEmpty { "  (none)" })
+        if (owners.isNotEmpty()) append("\nother listening processes:\n").append(owners.joinToString("\n"))
+    }
+}
+
+/**
+ * The stdout of [command], trimmed, or a line saying why there is none. The output is read while the
+ * process runs, since a long command line can fill the pipe and stall a process nobody is reading.
+ */
+private fun runBounded(vararg command: String): String =
     try {
-        val process =
-            ProcessBuilder("lsof", "-nP", "-iTCP:$port", "-sTCP:LISTEN")
-                .redirectErrorStream(true)
-                .start()
-        if (!process.waitFor(LSOF_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            "listeners on :$port: lsof did not answer within ${LSOF_TIMEOUT_SECONDS}s"
+        val process = ProcessBuilder(*command).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+        val output = CompletableFuture.supplyAsync { process.inputStream.bufferedReader().readText().trimEnd() }
+        if (process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            output.get(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         } else {
-            val out = process.inputStream.bufferedReader().readText().trimEnd()
-            "listeners on :$port (lsof exit=${process.exitValue()}):\n" + out.ifEmpty { "  (none)" }
+            process.destroyForcibly()
+            "${command.first()} did not answer within ${PROCESS_TIMEOUT_SECONDS}s"
         }
-    } catch (failure: java.io.IOException) {
-        "listeners on :$port: lsof unavailable — ${failure.message}"
+    } catch (failure: IOException) {
+        "${command.first()} unavailable — ${failure.message}"
+    } catch (failure: ExecutionException) {
+        "${command.first()} output unreadable — ${failure.cause}"
+    } catch (failure: TimeoutException) {
+        "${command.first()} output not read within ${PROCESS_TIMEOUT_SECONDS}s — $failure"
     }
 
-private const val LSOF_TIMEOUT_SECONDS = 5L
+private val WHITESPACE = Regex("""\s+""")
+private const val PROCESS_TIMEOUT_SECONDS = 5L
+private const val MAX_COMMAND_CHARS = 400
