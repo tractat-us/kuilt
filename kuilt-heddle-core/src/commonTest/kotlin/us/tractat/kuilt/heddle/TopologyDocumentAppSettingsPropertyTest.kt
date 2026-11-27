@@ -71,21 +71,29 @@ class TopologyDocumentAppSettingsPropertyTest {
             checkReport(start, document, ::count)?.let { failures += "seed $seed whole sequence report: $it" }
         }
         // Each floor is about half what the generator reaches on the JVM.
-        val floors = listOf("weight", "ceiling", "add", "remove", "rename", "move", "move at", "template", "settings").map { "$it:edited" to 150 } +
-            listOf(
-                "refused" to 300,
-                "started with a duplicate" to 100,
-                "moved with its own settings" to 150,
-                "renamed with its own settings" to 150,
-                "report Added" to 1000,
-                "report Removed of a gone node" to 1000,
-                "report Removed of a node that stays" to 100,
-                "report Changed" to 150,
-                "report Changed at a template depth" to 50,
-                "report across a renamed root" to 30,
-                "report between duplicate siblings" to 50,
-                "report empty" to 1000,
-            )
+        val floors = listOf(
+            "weight:edited" to 250,
+            "ceiling:edited" to 250,
+            "add:edited" to 130,
+            "remove:edited" to 250,
+            "rename:edited" to 250,
+            "move:edited" to 140,
+            "move at:edited" to 160,
+            "template:edited" to 85,
+            "settings:edited" to 250,
+            "refused" to 3000,
+            "started with a duplicate" to 190,
+            "moved with its own settings" to 70,
+            "renamed with its own settings" to 130,
+            "report Added" to 2800,
+            "report Removed of a gone node" to 2900,
+            "report Removed of a node that stays" to 380,
+            "report Changed" to 450,
+            "report Changed at a template depth" to 170,
+            "report across a renamed root" to 190,
+            "report between duplicate siblings" to 240,
+            "report empty" to 1600,
+        )
         val short = floors.filter { (what, floor) -> (counts[what] ?: 0) < floor }.map { (what, floor) -> "$what: ${counts[what] ?: 0} < $floor" }
         assertAll(
             { assertEquals(emptyList(), failures.take(5), "${failures.size} failures") },
@@ -215,11 +223,14 @@ class TopologyDocumentAppSettingsPropertyTest {
      * What is wrong with `before.appSettingsChangesTo(after)` against the flattened diff, or `null`.
      * Compared as sorted lists, so the order is checked on its own: within one node and depth the
      * keys come sorted. Only two changes addressed in the same document are compared, since a
-     * gone node's [AppSettingsChange.Removed] may share a path with a node of the document after.
+     * gone node's [AppSettingsChange.Removed] may share its path and names with a node of the
+     * document after: with two siblings named `a`, renaming the first leaves the second matched to
+     * the first's settings at the same address as its own, which are removed.
      */
     private fun checkReport(before: TopologyDocument, after: TopologyDocument, count: (String) -> Unit): String? {
         val was = before.flatten()
         val now = after.flatten()
+        val goneValues = HashSet<String>()
         val expected = (was.values.keys + now.values.keys).mapNotNull { setting ->
             val old = was.values[setting]
             val new = now.values[setting]
@@ -228,6 +239,7 @@ class TopologyDocumentAppSettingsPropertyTest {
                 new == null -> {
                     val stays = now.addresses[setting.node]
                     count(if (stays == null) "report Removed of a gone node" else "report Removed of a node that stays")
+                    if (stays == null) goneValues += old
                     "Removed ${stays ?: was.addresses[setting.node]} ${setting.depth} ${setting.key}=$old"
                 }
                 old != new -> {
@@ -243,7 +255,8 @@ class TopologyDocumentAppSettingsPropertyTest {
         if (changes.isEmpty()) count("report empty")
         if (changes.isNotEmpty() && before.root != after.root) count("report across a renamed root")
         if (changes.isNotEmpty() && (was.duplicated || now.duplicated)) count("report between duplicate siblings")
-        val gone = changes.filter { it is AppSettingsChange.Removed && "${it.path} ${it.names}" !in now.addresses.values }.toSet()
+        // Every value is a unique tag, so a value says which removal is of a gone node.
+        val gone = changes.filter { it is AppSettingsChange.Removed && it.value in goneValues }.toSet()
         val actual = changes.map { it.rendered() }.sorted()
         if (actual != expected) return "listed $actual, expected $expected"
         val unsorted = changes.zipWithNext().firstOrNull { (a, b) ->
