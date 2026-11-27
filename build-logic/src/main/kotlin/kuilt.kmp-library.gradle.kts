@@ -170,10 +170,13 @@ afterEvaluate {
 //
 // The edge is derived from the kotlin-logging declaration rather than listed per module, so a new
 // module that logs is covered the day it lands, and a module that does not log (`:kuilt-math`,
-// `:kuilt-base`) stays free of it. The hierarchy is read in afterEvaluate, once the module's own
-// script has declared its source sets and dependencies; the `commonMain` check fails the build if a
-// Kotlin Gradle plugin ever finalizes that hierarchy later, rather than letting it select nothing.
-afterEvaluate {
+// `:kuilt-base`) stays free of it. The hierarchy is read once every project is evaluated: at
+// afterEvaluate the default hierarchy template has not yet joined `androidMain` to `commonMain`
+// (measured on Kotlin 2.4.21). The `commonMain` check fails the build if a Kotlin Gradle plugin ever
+// finalizes it later still, rather than letting the edge quietly select nothing.
+val slf4jModule = project
+gradle.projectsEvaluated {
+    val configurations = slf4jModule.configurations
     val isKotlinLogging = { dependency: Dependency ->
         dependency.group == "io.github.oshai" && dependency.name.startsWith("kotlin-logging")
     }
@@ -183,8 +186,8 @@ afterEvaluate {
             layer.flatMap { it.dependsOn }.toSet().takeIf { it.isNotEmpty() }
         }.flatten().toSet()
         check(feeding.any { it.name == "commonMain" }) {
-            "${project.path}: $leafName does not reach commonMain at afterEvaluate, so the slf4j-api " +
-                "edge (#3744) cannot see what it runs. Read the hierarchy later."
+            "${slf4jModule.path}: $leafName does not reach commonMain once projects are evaluated, so " +
+                "the slf4j-api edge (#3744) cannot see what it runs. Read the hierarchy later."
         }
         val runsKotlinLogging = feeding.any { sourceSet ->
             listOf(
