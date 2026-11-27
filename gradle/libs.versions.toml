@@ -73,13 +73,15 @@ ktor-serverCio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
 ktor-serverTestHost = { module = "io.ktor:ktor-server-test-host-jvm", version.ref = "ktor" }
 # jmdns — JVM/Android Bonjour/mDNS service discovery for kuilt-mdns:
 jmdns = { module = "org.jmdns:jmdns", version.ref = "jmdns" }
-# kotlin-logging — structured logging facade (SLF4J on JVM) for kuilt-webrtc and kuilt-multipeer:
+# kotlin-logging — the logging facade every kuilt module that logs uses (through SLF4J on JVM and
+# Android, which it does not depend on; the kuilt.kmp-library plugin adds slf4j-api beside it, #3744):
 kotlin-logging = { module = "io.github.oshai:kotlin-logging", version.ref = "kotlinLogging" }
 # JNA — JVM/macOS native bridge for kuilt-multipeer dylib:
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 # logback — JVM logging backend for kuilt-multipeer tests and the kuilt-otel-logback appender:
 logback = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
-# slf4j-api — compile surface for the kuilt-otel-logback install helper (LoggerFactory):
+# slf4j-api — beside kotlin-logging on JVM/Android in every module that logs (kuilt.kmp-library, #3744),
+# and the compile surface for the kuilt-otel-logback install helper (LoggerFactory):
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 # log4j2 — JVM logging backend for the kuilt-otel-log4j2 appender (compile surface +
 # a real backend in that module's tests; the log4j2 sibling of the logback add-on):
